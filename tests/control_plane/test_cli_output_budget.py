@@ -466,21 +466,6 @@ def _surface_commands(
         + ["todo", "list", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]],
         "history_limited": common
         + ["history", "--goal-id", GOAL_ID, "--limit", "5"],
-        "evidence_log_thin": common
-        + [
-            "evidence-log",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--limit",
-            "5",
-            "--history-limit",
-            "10",
-            "--rollout-limit",
-            "20",
-            "--thin",
-        ],
     }
 
 
@@ -509,11 +494,7 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                 if (surface_id, scenario.name, output_format) == (
                     "loopx_turn_plan", "crowded", "json"
                 ):
-                    # Budget compaction must not discard the writeback target.
-                    action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
-                    argv = shlex.split(action)
-                    assert argv[argv.index("--registry") + 1] == str(registry_path)
-                    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
+                    _assert_turn_plan_writeback_routes(measurement, registry_path, runtime)
                 spec = CLI_OUTPUT_BUDGET_BY_ID[surface_id]
                 assert_cli_output_baseline(
                     spec,
@@ -524,6 +505,16 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                 )
                 results.setdefault(surface_id, {})[output_format] = measurement
     return results
+
+
+def _assert_turn_plan_writeback_routes(
+    measurement: dict, registry_path: Path, runtime: Path
+) -> None:
+    # Budget compaction must not discard or redirect the writeback target.
+    action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
+    argv = shlex.split(action)
+    assert argv[argv.index("--registry") + 1] == str(registry_path)
+    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
 
 
 def _mode_variant_commands(
@@ -769,7 +760,6 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_thin",
         "todo_list",
         "history_limited",
-        "evidence_log_thin",
     }
     manifest = public_manifest()
     assert set(CLI_OUTPUT_BUDGET_BY_ID) == expected
@@ -817,15 +807,30 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
             assert classification.surface_id is None
 
 
-def test_real_cli_output_stays_inside_the_characterized_baseline(
+def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
     tmp_path: Path,
 ) -> None:
+    scenarios = {
+        scenario.name: _measure_scenario(tmp_path / scenario.name, scenario)
+        for scenario in SCENARIOS
+    }
+    _assert_scenario_matrix(scenarios)
+
+
+def _assert_scenario_matrix(scenarios: dict[str, dict[str, dict[str, dict]]]) -> None:
+    """Keep the pytest and base/head probe on the same matrix assertions."""
+
     for scenario in SCENARIOS:
-        results = _measure_scenario(tmp_path / scenario.name, scenario)
+        results = scenarios[scenario.name]
         for formats in results.values():
             assert formats["json"]["json_parseable"] is True
             assert formats["json"]["pretty_print_overhead_chars"] > 0
             assert formats["markdown"]["json_parseable"] is False
+    # Growth and duplication describe this same output matrix. Reuse its
+    # observations instead of executing small/crowded CLI fixtures a second time.
+    _assert_collection_growth_and_bootstrap_duplication(
+        scenarios["small"], scenarios["crowded"]
+    )
 
 
 def test_quota_should_run_no_format_uses_machine_contract_json(
@@ -1405,9 +1410,9 @@ def test_status_and_quota_json_ignore_compatibility_reexport_bindings(
         assert semantic_receipts() == baseline
 
 
-def test_collection_growth_and_bootstrap_duplication_are_explicit(tmp_path: Path) -> None:
-    small = _measure_scenario(tmp_path / "small", SCENARIOS[0])
-    crowded = _measure_scenario(tmp_path / "crowded", SCENARIOS[1])
+def _assert_collection_growth_and_bootstrap_duplication(
+    small: dict[str, dict[str, dict]], crowded: dict[str, dict[str, dict]]
+) -> None:
     added_todos = SCENARIOS[1].todo_count - SCENARIOS[0].todo_count
     added_runs = SCENARIOS[1].run_count - SCENARIOS[0].run_count
     for spec in CLI_OUTPUT_BUDGET_SPECS:
@@ -1423,7 +1428,17 @@ def test_collection_growth_and_bootstrap_duplication_are_explicit(tmp_path: Path
             - small[spec.surface_id]["json"]["chars"]
         )
         fixed_semantic_growth = spec.max_json_fixed_semantic_growth_chars
-        if fixed_semantic_growth:
+        if fixed_semantic_growth and spec.surface_id == "quota_should_run":
+            context = crowded[spec.surface_id]["json"]["payload"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+            assert len(context["coverage_ledger"]) <= 24
+            assert context["from_full_index"] is True
+            assert len(context["evidence"]) == SCENARIOS[1].run_count
+            assert all("--evidence-ref" in row["read_action"] for row in context["evidence"])
+        elif fixed_semantic_growth and spec.surface_id == "diagnose":
+            context = crowded[spec.surface_id]["json"]["payload"]["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+        elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
             small_packet = small[spec.surface_id]["json"]["payload"][
                 "turn_envelope"
@@ -1501,7 +1516,9 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
     # ever-growing temp/worker prefix. Do not shorten rendered paths or raise
     # the absolute output ceiling to make this case pass.
-    parent = Path(tempfile.gettempdir()).resolve()
+    # Reuse the other budget fixtures' short namespace. A canary's nested
+    # TMPDIR can already exceed 128 characters before we create this root.
+    parent = Path("/tmp").resolve()
     # tempfile contributes an eight-character random suffix. Hold input size
     # constant across Linux /tmp and macOS's longer temporary-directory root.
     prefix = "loopx-brief-".ljust(128 - len(str(parent)) - 1 - 8, "p")
@@ -1509,6 +1526,16 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
         _assert_mode_variant_budgets(root, only="heartbeat_prompt_brief")
+
+
+def test_long_path_budget_is_independent_of_runner_temp_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    parent = tmp_path / ("nested-canary-" + "p" * 128)
+    parent.mkdir()
+    assert len(str(parent.resolve())) > 128
+    monkeypatch.setattr(tempfile, "tempdir", str(parent))
+    test_brief_budget_retains_full_commands_on_real_long_paths()
 
 
 def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(

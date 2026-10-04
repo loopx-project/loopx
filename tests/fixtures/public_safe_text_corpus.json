@@ -1,94 +1,374 @@
 {
-  "schema_version": "public_safe_text_corpus_v0",
+  "schema_version": "public_safe_text_corpus_v2",
   "purpose": "One corpus for every real public-safe text validator owner: loopx/public_safe_text.py (used by feedback, authority, and boundary_authority) and the TypeScript Vision checkpoint. Both runtimes must agree on every sample.",
   "sample_encoding": "Each sample is a template. Substitute every {NAME} placeholder with the joined parts of tokens[NAME], and {NAME_LOWER} with the lowercased join. Samples are assembled at test time so this fixture carries no literal credential-looking string.",
+  "bucket_semantics": "public_safe is accepted by every owner and by the publication policy. private_looking is rejected by every owner and by the publication policy. internal_state_prose is the two-tier set from Refs #5136 direction 2: the four owners validate LoopX's own state and accept it, while the stricter publication policy (ALL_CATEGORIES / find_private_text_match) still rejects it.",
+  "contract_signals": {
+    "assignment_punctuation": "A credential label followed by ':' or '=' carries whatever follows it, including when the label is a quoted object key. No value shape and no length applies, because the label already asserts an assignment.",
+    "shaped_value_token": "A connector (whitespace, comma, semicolon, dash, or a copula such as 'is' or 'set to') followed by a token that contains a digit or one of the base64-only characters + / =.",
+    "quoted_value": "The same connector followed by a quoted run. Quoting is its own signal, so a letter-only passphrase written as a quoted value is still a value.",
+    "opaque_value_run": "The same connector followed by an unbroken letter-only run of OPAQUE_VALUE_MIN_LENGTH (16) characters or longer.",
+    "credential_word_only": "The label stands beside ordinary words: no assignment punctuation, and the next token is a letter-only run below the ceiling. This is prose to the internal-state tier and is still a credential word to the publication tier.",
+    "unlabeled_secret_shape": "A credential value that arrives with no label at all -- a raw token, a private key block -- caught by the ported shape detector.",
+    "non_credential_local_path": "A local filesystem path, which every tier in scope rejects.",
+    "non_credential_prose": "Text with no credential label and no other recognized category.",
+    "remote_location_undecided": "A raw remote location. The internal-state policy these four owners enforce never rejected a URL and still does not; the publication tier recognizes it, and deciding per face whether internal state may carry one is the caller migration still open in #5136."
+  },
   "tokens": {
-    "AUTHZ": ["Author", "ization"],
-    "BASIC": ["Bas", "ic"],
-    "BEARER": ["Bear", "er"],
-    "TOKEN": ["tok", "en"],
-    "PASSWORD": ["pass", "word"],
-    "SECRET": ["sec", "ret"],
-    "HOME_PATH": ["/Us", "ers/"]
+    "AUTHZ": [
+      "Author",
+      "ization"
+    ],
+    "BASIC": [
+      "Bas",
+      "ic"
+    ],
+    "BEARER": [
+      "Bear",
+      "er"
+    ],
+    "TOKEN": [
+      "tok",
+      "en"
+    ],
+    "PASSWORD": [
+      "pass",
+      "word"
+    ],
+    "SECRET": [
+      "sec",
+      "ret"
+    ],
+    "HOME_PATH": [
+      "/Us",
+      "ers/"
+    ],
+    "GH_TOKEN_PREFIX": [
+      "gh",
+      "p_"
+    ],
+    "KEY_HEAD": [
+      "---",
+      "---"
+    ],
+    "PRIVATE_KEY": [
+      "PRIVATE KE",
+      "Y"
+    ],
+    "LONG_LETTER_RUN": [
+      "correct",
+      "horse",
+      "batter",
+      "ystaple"
+    ],
+    "SHORT_LETTER_RUN": [
+      "short",
+      "letter",
+      "valu"
+    ],
+    "ORDINARY_LONG_WORD": [
+      "authentic",
+      "ation"
+    ],
+    "DIGIT_VALUE": [
+      "abc",
+      "123def"
+    ],
+    "ONE_DIGIT": [
+      "1"
+    ],
+    "ONE_LETTER": [
+      "a"
+    ],
+    "OPAQUE_VALUE": [
+      "aB3",
+      "d9QkLm"
+    ]
   },
   "public_safe": [
     {
       "id": "governance_prose_needs_owner_authorization",
-      "template": "needs owner {AUTHZ_LOWER} before delivery."
+      "template": "needs owner {AUTHZ_LOWER} before delivery.",
+      "shape": "non_credential_prose"
     },
     {
       "id": "governance_prose_owner_authorized_pr",
-      "template": "the owner-authorized pull request is open"
+      "template": "the owner-authorized pull request is open",
+      "shape": "non_credential_prose"
     },
     {
       "id": "governance_prose_sentence_initial",
-      "template": "{AUTHZ} remains with the human owner"
+      "template": "{AUTHZ} remains with the human owner",
+      "shape": "non_credential_prose"
     },
     {
       "id": "governance_prose_release_gate",
-      "template": "Release publication waits for explicit owner {AUTHZ_LOWER}."
+      "template": "Release publication waits for explicit owner {AUTHZ_LOWER}.",
+      "shape": "non_credential_prose"
     },
     {
       "id": "ordinary_word_basic",
-      "template": "the {BASIC_LOWER} control-plane contract stays unchanged"
+      "template": "the {BASIC_LOWER} control-plane contract stays unchanged",
+      "shape": "non_credential_prose"
     },
     {
       "id": "ordinary_word_token_without_assignment",
-      "template": "the action kind is a public-safe {TOKEN_LOWER}"
+      "template": "the action kind is a public-safe {TOKEN_LOWER}",
+      "shape": "non_credential_prose",
+      "note": "No credential word arm covers the token label, so this is public-safe in both tiers; the word arms are the scheme name and the two vault words."
+    },
+    {
+      "id": "ordinary_public_url",
+      "template": "metrics published at https://example.com/run-7/metrics.json",
+      "shape": "remote_location_undecided",
+      "note": "The internal-state tier does not decide URLs: the rule these four owners enforced before never rejected one either, and per-face URL policy is the caller-migration work still open in #5136."
     }
   ],
   "private_looking": [
     {
       "id": "raw_header_basic",
-      "template": "{AUTHZ}: {BASIC} QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+      "template": "{AUTHZ}: {BASIC} QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
+      "shape": "assignment_punctuation"
     },
     {
       "id": "raw_header_bearer",
-      "template": "{AUTHZ}: {BEARER} abc123def456"
+      "template": "{AUTHZ}: {BEARER} abc123def456",
+      "shape": "shaped_value_token"
     },
     {
       "id": "assignment_bearer",
-      "template": "{AUTHZ_LOWER}={BEARER} abc123def456"
+      "template": "{AUTHZ_LOWER}={BEARER} abc123def456",
+      "shape": "shaped_value_token"
     },
     {
       "id": "assignment_spaced_basic",
-      "template": "{AUTHZ_LOWER} = {BASIC} QWxhZGRpbjpvcGVu"
+      "template": "{AUTHZ_LOWER} = {BASIC} QWxhZGRpbjpvcGVu",
+      "shape": "assignment_punctuation"
     },
     {
       "id": "quoted_json_key_basic",
-      "template": "{\"{AUTHZ}\": \"{BASIC} QWxhZGRpbjpvcGVu\"}"
+      "template": "{\"{AUTHZ}\": \"{BASIC} QWxhZGRpbjpvcGVu\"}",
+      "shape": "assignment_punctuation"
     },
     {
       "id": "quoted_json_key_lowercase_bearer",
-      "template": "{\"{AUTHZ_LOWER}\": \"{BEARER} abc123def456\"}"
+      "template": "{\"{AUTHZ_LOWER}\": \"{BEARER} abc123def456\"}",
+      "shape": "shaped_value_token"
     },
     {
       "id": "single_quoted_key_basic",
-      "template": "{'{AUTHZ}': '{BASIC} QWxhZGRpbjpvcGVu'}"
+      "template": "{'{AUTHZ}': '{BASIC} QWxhZGRpbjpvcGVu'}",
+      "shape": "assignment_punctuation"
+    },
+    {
+      "id": "quoted_password_key_single_digit_value",
+      "template": "{\"{PASSWORD_LOWER}\": {ONE_DIGIT}}",
+      "shape": "assignment_punctuation",
+      "note": "A quoted credential key still states an assignment; the short value does not create a length exemption."
+    },
+    {
+      "id": "quoted_secret_key_single_letter_string",
+      "template": "{\"{SECRET_LOWER}\": \"{ONE_LETTER}\"}",
+      "shape": "assignment_punctuation"
+    },
+    {
+      "id": "single_quoted_password_key_short_value",
+      "template": "{'{PASSWORD_LOWER}': '{ONE_LETTER}'}",
+      "shape": "assignment_punctuation"
+    },
+    {
+      "id": "quoted_secret_key_empty_assignment",
+      "template": "{\"{SECRET_LOWER}\": }",
+      "shape": "assignment_punctuation",
+      "note": "The assignment signal belongs to the labeled operator, so even an empty right-hand side remains a rejected credential assignment."
     },
     {
       "id": "bare_basic_credential_value",
-      "template": "{BASIC} QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+      "template": "{BASIC} QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
+      "shape": "unlabeled_secret_shape",
+      "note": "The scheme value needs no label: the ported shape arm carries it."
     },
     {
       "id": "bare_bearer_scheme",
-      "template": "{BEARER} abc123def456"
+      "template": "{BEARER} abc123def456",
+      "shape": "shaped_value_token",
+      "note": "Carries a digit, so the shape signal rejects it at any length; the bearer arm this replaced needed eight characters and nothing else."
+    },
+    {
+      "id": "bearer_value_at_named_floor",
+      "template": "{BEARER} abc123de",
+      "shape": "shaped_value_token",
+      "note": "Eight characters, the shortest value the retired length floor used to catch by size alone. It is now caught by shape."
+    },
+    {
+      "id": "bearer_digit_value_below_old_floor",
+      "template": "{BEARER} abc123d",
+      "shape": "shaped_value_token",
+      "note": "Moved out of the prose bucket: it was a word mention only because it was one character below the retired floor, while it carries a digit."
     },
     {
       "id": "token_assignment",
-      "template": "{TOKEN_LOWER}=abc123def456"
+      "template": "{TOKEN_LOWER}=abc123def456",
+      "shape": "assignment_punctuation"
     },
     {
-      "id": "password_word",
-      "template": "the {PASSWORD_LOWER} is stored in the vault"
+      "id": "token_space_digit_value",
+      "template": "{TOKEN_LOWER} {DIGIT_VALUE}",
+      "shape": "shaped_value_token",
+      "note": "Newly rejected in BOTH tiers: neither the old word-only rule nor the previous value arms saw a token label with a space-separated value."
     },
     {
-      "id": "secret_word",
-      "template": "read the {SECRET_LOWER} from the environment"
+      "id": "copula_password_digit_value",
+      "template": "{PASSWORD_LOWER} is {DIGIT_VALUE}",
+      "shape": "shaped_value_token",
+      "note": "The copula spelling the whitespace-only arm missed."
+    },
+    {
+      "id": "copula_token_single_digit_value",
+      "template": "{TOKEN_LOWER} is {ONE_DIGIT}",
+      "shape": "shaped_value_token",
+      "note": "The token-shape signal has no length floor: a one-character digit is still a credential value."
+    },
+    {
+      "id": "composite_copula_password_digit_value",
+      "template": "{PASSWORD_LOWER} set to {DIGIT_VALUE}",
+      "shape": "shaped_value_token",
+      "note": "The composite copula is one connector; matching only 'set' or 'to' would strand the value behind the other word."
+    },
+    {
+      "id": "composite_copula_secret_quoted_value",
+      "template": "{SECRET_LOWER} set to \"{ONE_LETTER}\"",
+      "shape": "quoted_value"
+    },
+    {
+      "id": "composite_copula_bearer_opaque_value",
+      "template": "{BEARER} set to {LONG_LETTER_RUN}",
+      "shape": "opaque_value_run"
+    },
+    {
+      "id": "space_secret_opaque_value",
+      "template": "{SECRET_LOWER} {OPAQUE_VALUE}",
+      "shape": "shaped_value_token"
+    },
+    {
+      "id": "comma_bearer_opaque_value",
+      "template": "{BEARER}, {OPAQUE_VALUE}",
+      "shape": "shaped_value_token",
+      "note": "A comma before the value is still an assignment in prose spelling; the previous adjacency rule called this one prose."
+    },
+    {
+      "id": "dash_secret_opaque_value",
+      "template": "{SECRET_LOWER} - {OPAQUE_VALUE}",
+      "shape": "shaped_value_token"
+    },
+    {
+      "id": "quoted_password_passphrase",
+      "template": "the {PASSWORD_LOWER} is \"{LONG_LETTER_RUN}\"",
+      "shape": "quoted_value",
+      "note": "Letter-only and un-quantifiable by shape, but quoted: the quote is the signal."
+    },
+    {
+      "id": "quoted_password_single_letter_value",
+      "template": "the {PASSWORD_LOWER} is \"{ONE_LETTER}\"",
+      "shape": "quoted_value",
+      "note": "A non-empty quoted value is rejected without a length floor."
+    },
+    {
+      "id": "bearer_opaque_letter_run_at_ceiling",
+      "template": "{BEARER} {LONG_LETTER_RUN}",
+      "shape": "opaque_value_run"
+    },
+    {
+      "id": "bearer_assignment_colon_bare_word",
+      "template": "{BEARER}: env",
+      "shape": "assignment_punctuation"
+    },
+    {
+      "id": "password_assignment_short_value",
+      "template": "{PASSWORD_LOWER}=hunter2",
+      "shape": "assignment_punctuation",
+      "note": "The assignment form carries no value-length floor, so a 6-char value is still rejected after the word arm moved to credential_word."
+    },
+    {
+      "id": "secret_assignment_colon",
+      "template": "{SECRET_LOWER}: env",
+      "shape": "assignment_punctuation",
+      "note": "Newly rejected by the assignment arm the old rule spelled only with an equals sign."
+    },
+    {
+      "id": "token_assignment_colon",
+      "template": "{TOKEN_LOWER}: abc123",
+      "shape": "assignment_punctuation",
+      "note": "Newly rejected: the old text-owner rule knew the equals spelling of this label but not the colon one."
     },
     {
       "id": "local_home_path",
-      "template": "{HOME_PATH}operator/work/loopx/state.json"
+      "template": "{HOME_PATH}operator/work/loopx/state.json",
+      "shape": "non_credential_local_path"
+    },
+    {
+      "id": "raw_github_token_unlabeled",
+      "template": "carry {GH_TOKEN_PREFIX}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa forward",
+      "shape": "unlabeled_secret_shape",
+      "note": "Newly rejected by the internal-state tier: the word-only rule had no arm for a credential value that arrives without a label."
+    },
+    {
+      "id": "private_key_block_unlabeled",
+      "template": "{KEY_HEAD}BEGIN RSA {PRIVATE_KEY}-----",
+      "shape": "unlabeled_secret_shape",
+      "note": "Same class as a label-free value: recognized only by the ported value-shape arm."
+    }
+  ],
+  "internal_state_prose": [
+    {
+      "id": "quoted_password_word_in_prose",
+      "template": "the \"{PASSWORD_LOWER}\" field stays unset",
+      "shape": "credential_word_only",
+      "note": "Quoting a credential word does not make it a key unless an assignment operator follows."
+    },
+    {
+      "id": "bearer_word_in_prose",
+      "template": "the {BEARER} token expired",
+      "shape": "credential_word_only",
+      "note": "The maintainer's own example in #5136: a sentence about an expired scheme is not a leak."
+    },
+    {
+      "id": "password_word_in_prose",
+      "template": "the {PASSWORD_LOWER} is stored in the vault",
+      "shape": "credential_word_only"
+    },
+    {
+      "id": "secret_word_in_prose",
+      "template": "read the {SECRET_LOWER} from the environment",
+      "shape": "credential_word_only"
+    },
+    {
+      "id": "rotation_note_names_two_schemes",
+      "template": "{AUTHZ_LOWER} rotation is pending; reissue the {BEARER} value and the vault {SECRET_LOWER}.",
+      "shape": "credential_word_only"
+    },
+    {
+      "id": "bearer_before_long_ordinary_word",
+      "template": "{BEARER} {ORDINARY_LONG_WORD} is required here",
+      "shape": "credential_word_only",
+      "note": "The false positive the review reported: an ordinary English word of eleven letters beside the scheme name is prose, not a token."
+    },
+    {
+      "id": "password_copula_ordinary_word",
+      "template": "the {PASSWORD_LOWER} is configured per environment",
+      "shape": "credential_word_only"
+    },
+    {
+      "id": "password_composite_copula_ordinary_word",
+      "template": "the {PASSWORD_LOWER} set to rotate after expiry",
+      "shape": "credential_word_only",
+      "note": "Recognizing the complete composite connector must not turn a short ordinary word into a value."
+    },
+    {
+      "id": "disclosed_residual_short_letter_value",
+      "template": "{SECRET_LOWER} is {SHORT_LETTER_RUN}",
+      "shape": "credential_word_only",
+      "note": "The contract's stated limit, pinned rather than argued: a letter-only run of fifteen characters or fewer beside the label, with no quotes and no assignment punctuation, is prose to this owner. The publication tier still rejects the mention, and the tier documents itself as not a credential-storage exemption. Fifteen letters is one below the ceiling."
     }
   ]
 }

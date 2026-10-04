@@ -106,10 +106,73 @@ credentials, and private notes remain provider-private.
   `external_evidence.discover`, `external_evidence.plan`,
   `external_evidence.receipt`, `external_evidence.admit`, and
   `external_evidence.retire`.
-- Frontend and Lark are companion slices. They should render the same plan and
-  admission projection; neither gets an independent provider registry or
-  evidence state machine.
+- CLI `readback` renders the same validated plan, source, parent decision,
+  actual deepresearch-ledger coverage and retirement as Markdown. Existing
+  conversation answer/report and Lark Markdown transports consume that output;
+  no new UI configuration or evidence state machine is introduced.
 
 TypeScript 是 discovery 真值边界、请求身份、provider 准入、provenance 校验、父 Agent 采纳、紧凑投影与
 退休条件的唯一语义 owner。Python 仅适配 CLI 与 effect-runtime transport。Managed
-Turn 复用同一方法；frontend/Lark 后续只渲染同源投影，不新建 registry 或状态机。
+Turn 复用同一方法；CLI `readback` 的同源 Markdown 可由现有会话答复/报告和 Lark Markdown 运输路径展示，不新建 registry 或状态机。
+
+## Public GitHub method / 公开 GitHub 方法
+
+The bundled `method:public-github` provider performs anonymous, bounded HTTPS
+GETs only. It reads UTF-8 files from explicitly selected full commit SHA URLs.
+No token, cookie, private repository, branch-head URL, redirect, proxy credential,
+raw page persistence or automatic admission is used. Repository public visibility
+is checked at planning and again for each execution read. A saved ready row alone
+cannot authorize or prove a successful read.
+
+该内置 method 只做匿名、有界 HTTPS GET，只接受显式选择的完整 commit SHA 文件 URL。
+规划和执行均检查仓库当前公开性；不使用 token、cookie、私有仓库、分支 head、重定向、
+代理凭据、原文持久化或自动采纳。保留的 ready 行本身不证明执行成功。
+
+```bash
+loopx external-evidence plan --public-github \
+  --objective "Inspect public source" --user-activity "Choose a source" \
+  --decision "Whether a literal is present" --evidence-kind literal_match \
+  --source https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/README.md \
+  --search-term LoopX --format json > plan.json
+loopx external-evidence execute --plan-json plan.json --execute --format json > execution.json
+loopx external-evidence readback --plan-json plan.json --receipt-json execution.json
+# The parent separately inspects findings and chooses admit/reject.
+loopx external-evidence admit --plan-json plan.json --receipt-json execution.json \
+  --decision admit --reason "Direct source answers this bounded decision" \
+  --admit-source https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/README.md \
+  --format json > admission.json
+loopx deepresearch start --project research --question "Inspect public source"
+loopx external-evidence readback --plan-json plan.json --receipt-json execution.json \
+  --admission-json admission.json --project research --execute --format json
+loopx external-evidence readback --plan-json plan.json --receipt-json execution.json \
+  --admission-json admission.json --project research
+```
+
+`execute --execute` authorizes source reads only. `readback --execute` authorizes
+writing already explicitly admitted compact sources to the **existing** research
+ledger. It requires the active research question to match the plan objective.
+Retries for the same admission are idempotent. Wrong questions, unrelated existing
+sources and exhausted source budgets remain blockers; partial projection stays
+retained until every admitted source is actually read back with matching lineage.
+Omit `--execute` for read-only projection; omit `--public-github` to avoid the
+provider readiness probe. There is no persistent provider enablement to uninstall.
+Original sources remain available on partial, empty and failed results. Literal
+matches prove neither semantic conclusions nor evidence completeness.
+
+`execute --execute` 只授权读取来源；`readback --execute` 只把已明确采纳的紧凑证据
+写入现有研究账本，且要求研究问题与 plan objective 相同。同一 admission 可幂等重试；
+问题不匹配、已有不相关来源或预算耗尽仍为 blocker。部分下游投影保持 retained，
+直至全部已采纳来源以匹配 lineage 实际回读。省略 `--execute` 可只读回读；省略
+`--public-github` 不探测该 provider。没有持久开关需要卸载。部分、空或失败证据
+保留原始来源退路；字面匹配不证明语义结论或证据完整性。
+
+Real qualification (anonymous network reads, disposable synthetic ledger):
+`uv run --extra test python examples/public-github-evidence-live-smoke.py --execute-public-provider --source https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/README.md`.
+Packaged conversation readback: set `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1` and
+`LOOPX_PERSONAL_WORKSPACE_SCENARIO=external-evidence-readback`, then run
+`node examples/personal-workspace-browser-smoke.mjs`.
+Live authenticated connector and Lark delivery qualification remain separate;
+this method grants no connector credentials or outbound-message authority.
+
+真实验收会进行匿名网络读取并使用一次性合成账本；打包会话验收沿用上述环境变量和命令。
+真实带凭据 connector 与 Lark 送达资格仍是独立边界；本方法不授予 connector 凭据或外发消息权限。

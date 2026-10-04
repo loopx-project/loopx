@@ -18,6 +18,20 @@ def summary(items, **options):
     return compact_todo_group(items, source_section="Agent Todo", role="agent", item_limit=None, **options)
 
 
+@pytest.mark.parametrize("reuse", [False, True])
+def test_empty_succession_has_no_transport_or_evidence_to_validate(monkeypatch, reuse):
+    from loopx.control_plane.todos import succession_warning
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("empty succession rows must not start an RPC")
+
+    monkeypatch.setattr(succession_warning, "effect_runtime_result", forbidden)
+    assert succession_warning.project_succession([], reuse=reuse) == []
+    # Nonempty rows still invoke the typed owner; there is no general bypass.
+    with pytest.raises(pytest.fail.Exception, match="must not start an RPC"):
+        succession_warning.project_succession([work("todo_nonempty")], reuse=reuse)
+
+
 @pytest.mark.parametrize("successors", [["todo_missing"], ["todo_source"]])
 def test_unresolved_or_self_reference_does_not_certify_closure(successors):
     result = summary([work("todo_source", successor_todo_ids=successors)])

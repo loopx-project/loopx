@@ -487,6 +487,7 @@ def test_turn_start_sync_can_capture_history_as_quiet_context_only(
                     "create_time": "2026-08-26T09:59:00Z",
                     "content": "@Fixture Bot an old request must not replay.",
                     "mentions": [{"name": "Fixture Bot"}],
+                    "sender": {"sender_type": "app", "id": "cli_fixture_worker"},
                     "deleted": False,
                 }
             )
@@ -506,6 +507,8 @@ def test_turn_start_sync_can_capture_history_as_quiet_context_only(
     captured = json.loads((inbox / "om_old_addressed_message.json").read_text())
     assert captured["addressed_to_bot"] is False
     assert captured["historical_context_only"] is True
+    assert captured["sender_type"] == "app"
+    assert captured["sender_id"] == "cli_fixture_worker"
     assert captured["historical_was_addressed_to_bot"] is True
     assert captured["historical_addressing_source"] == "provider_mention"
     urgency = project_lark_event_inbox_urgency(

@@ -1,4 +1,4 @@
-import {planUserCompletion} from "../todos/user_completion.ts";
+import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import {normalizeTodoUpdateInput, prepareUpdatedTodo, type CoordinationTodoUpdateInput, type TodoCompletionEdit} from "./todo_update_intent.ts";
 import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
@@ -1204,6 +1204,14 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "decision_rejection",
     );
   }
+  if (update === undefined && input.command === "complete" && authority.outcome === "apply") {
+    try {
+      requireCompletionDecisionOutcome(todo, input.decision_outcome);
+    } catch (error) {
+      return terminalFailure("invalid_coordination_todo_terminal_lifecycle",
+        error instanceof Error ? error.message : "invalid completion outcome");
+    }
+  }
   const implicitMonitorNoChange =
     normalized.operation_identity.kind === "current_monitor_cycle" && authority.outcome === "no_change";
 
@@ -1221,6 +1229,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {goal_acceptance_guard: acceptance}, "decision_rejection");
   }
   const acceptanceRequirements = acceptanceCompletionRequirements(completionHead, input.goal_id, input.todo_id);
+  if (input.completion_result != null && acceptanceRequirements === null) {
+    return terminalFailure("completion_result_rejected",
+      "--result-file requires Goal acceptance criteria bound to this Todo; a Todo validator alone does not establish Goal acceptance. " +
+      "Use --evidence for a local artifact pointer, or bind approved Goal acceptance criteria before retrying --result-file.",
+      {next_action: "Keep the same Todo/Turn and complete with --evidence, or configure approved bound Goal acceptance criteria."},
+      "decision_rejection");
+  }
   const acceptanceBinding = acceptanceRequirements === null ? null
     : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
   let acceptanceEvidence: JsonObject | null = null;
@@ -1589,6 +1604,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_identity_source:
       completion === null ? null : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
+    completion_receipt_id: target.todo.completion_receipt_id ?? null,
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     // A preview that omits this would show an unconditional close for work the

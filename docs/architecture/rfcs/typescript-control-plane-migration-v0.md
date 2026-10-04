@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-09-26
+- Last revised: 2026-10-01
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -29,20 +29,22 @@ required for the first App outcome. These are planned product consumers of
 T0–T4, not additional provider promotion or completed migration claims.
 
 
-## Current delivery frontier (2026-09-28)
+## Current delivery frontier (2026-10-02)
 
-Audit `ce3862e33`: #5054, #5140, #5144, #5156, #5173, #5175 and #5169
-are merged. Do not count event retirement, archive recovery, managed process
-supervision, reviewed local cutover or native drain as new pending PRs.
-#4931 remains an open SQLite optimization, not a completed D2 qualification.
+At main `9b0486dc1`, #4931, #5251, #5395, #5417 and #5436 are merged.
+Do not recount their storage improvements or Python retirement as pending work.
+The [current validation, migration and deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02)
+prioritizes #5413/#5466/#5283 closeout, installed reversible qualification,
+bounded opt-in adoption, canonical creation/defaults and last-caller deletion.
+Existing Goal migration, two-policy ownership retirement and storage-format
+upgrade have separate receipts and exits. Original-receipt recovery does not
+justify retaining `legacy` as a live policy. Required migration readers remain.
 
-Next: qualify whole-Goal execution/consumer integration and matched local
-profiles in parallel; then unify new-Goal/install/settings and supported upgrade
-entrypoints, deleting each replaced writer with its last caller. Retain necessary
-Host IO, original receipts and migration readers. No additional dead Python
-module is certified by this audit, and no fixed remaining-PR total is promised.
-[Deletion inventory, engineering windows, local evidence and remaining work](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
-supersedes older current-count estimates; their execution evidence stays historical.
+A bounded cohort can start after its installed recovery and relevant execution
+controls pass; it does not certify a released default or formal ten-day D2.
+Frozen failures/missing evidence remain visible. T4 deletes proven redundant
+owners alongside implementation, without waiting for R6 or all Python to vanish.
+This replaces stale current-count estimates, not historical execution evidence.
 
 ## Native authority qualification and prototype retirement (2026-09-26)
 
@@ -429,6 +431,27 @@ characterization precedes the move; the intentional correction is executable
 authoring for all vision triggers, with real bound CLI closeout/readback and
 negative qualification-scope cases. Checkpoint recovery and in-flight rules
 remain in their existing owners; no new capability, provider or setting is added.
+
+Known blocker qualification also consumes the host-projected coverage ledger.
+Changing a Turn/work-item binding or refreshing evidence cannot make the same
+blocker a new replan outcome. Python normalizes the observations and reports
+identity reuse; the TypeScript outcome owner rejects that claim for every
+replan source while retaining independently evidenced vision paths. This
+corrects false advancement admission; it does not add a blocked-wait settlement
+route or certify Goal completion.
+
+Replan decision context now follows the same boundary: `work_items/replan_context.ts`
+owns scoping, chronology, repetition reduction, result/route diversity and bounded
+coverage projection. Its Python codec reads the existing Goal and compact index,
+normalizes historical observations and reuses the private snapshot transport.
+The core Goal, scoped acceptance contract, evidence and uncovered frontier enter
+one context; the standalone evidence command is retired. Selection reads beyond
+the status display window. The readable view retains up to 24 distinct
+observations, while writeback novelty checks retain complete available history.
+Real CLI references, file/SQLite receipt reentry, wrong-scope/stale reads and
+omitted-old-blocker rejection qualify this S3/S6 slice. Ordinary guard output
+remains unchanged; the required-replan information budget increases explicitly.
+This does not complete T3, qualify ten-day costs or establish S11 score gains.
 
 The delivery-history boundary now treats `classification`, `health_check`, and
 `recommended_action` as narrative. They cannot create or discharge a
@@ -1151,6 +1174,27 @@ debit. This closes the demonstrated T3 consumer gap, not D1–D3, provider
 promotion, or the remaining Python transaction adapters. See the
 [operating contract](../../quota-allocation.md#receipt-backed-settlement-progress).
 
+**Canonical claim contention.** The TS claim command now retries a conclusive
+provider revision CAS rejection at most twice, using the same operation and
+lease keys. Every attempt rereads the receipt and complete authority and
+revalidates source registration, Todo eligibility, acceptance and lease scopes.
+An explicit provider revision or transfer grant stays pinned; ambiguous writes
+retain existing receipt recovery. Independent claims can both finish while
+same-Todo or overlapping-scope claims still admit one owner. This adopts the
+shared-authority conflict contract at the canonical writer; it does not reserve
+recommendations, change local writer serialization, or qualify sustained
+multi-host throughput. CLI claim callers inherit the behavior; no frontend or
+Lark action contract changes.
+
+**Scoped gate action readback.** The final quota packet now projects the scoped
+User gate/action override through a typed quota rule after selection, capability,
+workspace, receipt and notification decisions. Its optional `selected_action`
+comes only from the final selected Todo when the interaction allows delivery;
+selection-required, repair and settled packets omit it. Admission diagnostics
+and receipt identity remain intact. This corrects misleading CLI JSON readback
+for peer-scoped gates; it does not migrate the remaining route or primary-action
+builders, reserve recommendations, or complete T3/D1–D3.
+
 **Long-history transport boundary.** Replan history still has one TS decision
 owner. Small requests retain the inline codec; larger complete fact snapshots
 travel through a private, digest-bound local file reference. The same reducer
@@ -1420,6 +1464,52 @@ Consumers treat a missing envelope as unknown freshness, and disclose an
 alerting one before stating any conclusion that depends on it. Field
 semantics and the consumer rule are in the
 [projection envelope contract](../../reference/contracts/projection-envelope-contract.md).
+
+### 2.7 Legal domain values and deterministic decisions
+
+Keep external/historical wire values separate from validated internal domain
+values. Decode `unknown`, preserve supported omitted/null/clear semantics, then
+construct a constrained domain value. Use products for independent dimensions
+and discriminated unions for alternatives whose fields depend on one another.
+For example, a settlement binding selects either a Todo or a replan obligation;
+a required user decision cannot simultaneously be a non-blocking notice. Do
+not remove persisted compatibility fields merely because they are redundant in
+the internal model. Keep their codec and migration owner explicit.
+
+The pure decision core receives an immutable snapshot, command and explicit
+facts supplied by the trusted authority, including time or allocated identity
+when required. It must not read a clock, environment, filesystem, network or
+mutable global. Local mutation is acceptable when it cannot change observable
+inputs or escape through shared aliases. The effect shell retains IO, current
+source/permission revalidation, CAS and durable receipts. Decoding once does
+not mean authorizing once: temporal validity is checked at the owning commit
+or effect-acceptance boundary.
+
+Use the existing runtime decoder/schema owner and exhaustive TypeScript
+branches. Brands distinguish identifiers or revision domains only where real
+callers confuse them; a brand never proves current authorization. Domain-local
+expected rejection should remain a typed result, distinct from malformed input
+and unexpected defects. No new FP dependency or universal `Result`/effect layer
+is required. Existing `AgentInteractionChannel` and `SettlementResult` provide
+bounded patterns to reuse; an open JSON carrier is appropriate at a transport
+boundary, not a substitute for known internal state relationships.
+
+A selected replacement must prove compile-time illegal-state rejection, runtime
+boundary rejection, supported wire compatibility and production caller readback.
+Use the [composition verification contract](composable-state-machines-recovery-verification-v0.md)
+for cross-domain recovery. These are acceptance requirements for future slices,
+not a claim that all existing TypeScript domains already satisfy them.
+
+### 2.8 Change locality as migration payoff
+
+Extend the existing payoff table for a representative changed rule: identify
+semantic owners and callers changed, cross-runtime requests per complete
+transaction, remaining compatibility branches and the path from a failure to
+its deciding owner. Compare the same base/head workload and record deleted
+rules as well as added bridge code. Do not impose arbitrary whole-tree counts
+or count more registered types as progress. A cohesive replacement should make
+the next rule change easier to localize, test and revert; directory moves alone
+do not establish that payoff.
 
 ## 3. Current baseline and phase transition
 
@@ -1974,3 +2064,8 @@ This advances T3/L5; it does not replace D2/D3 or flip a provider default.
 2026-09-24: [Leased continuation and remaining local-default packages](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.md).
 
 Event replay and the reconciled cutover inventory: [2026-09-25](ledger/shared-goal-authority-state-provider-v0/2026-09-25-event-replay.md).
+
+### Settlement-addressed Turn journal readback
+
+The native query now owns recovery lookup and completion capability evidence,
+with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.

@@ -33,6 +33,7 @@ import {
   isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
   isAcceptedInFlightWriteback,
+  isAcceptedReplanWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
@@ -56,6 +57,13 @@ import {
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
 import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaOwnerOwnsProjection,
+  withBorrowedQuotaAccountingOwner,
+  withQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
   "loopx_quota_settlement_readback_request_v0";
@@ -76,7 +84,9 @@ interface ReadbackRequest {
   infer_turn_instance_id: boolean;
   allow_unbound_binding: boolean;
   resolve_original_binding: boolean;
+  borrow_source_admission: boolean;
   refresh_retry: RefreshRetryRequest | null;
+  owner: QuotaAccountingOwner;
 }
 
 export interface QuotaSettlementReadbackSnapshot {
@@ -153,7 +163,10 @@ function normalizeAgentId(value: unknown): string | null {
   return candidate && AGENT_ID_PATTERN.test(candidate) ? candidate : null;
 }
 
-function decodeRequest(value: unknown): ReadbackRequest {
+function decodeRequest(
+  value: unknown,
+  admittedOwner?: QuotaAccountingOwner,
+): ReadbackRequest {
   const request = requireJsonObject(value, "quota settlement readback request");
   if (request.schema_version !== QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA) {
     throw new EffectRuntimeRequestError(
@@ -177,6 +190,44 @@ function decodeRequest(value: unknown): ReadbackRequest {
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
   }
+  if (
+    request.borrow_source_admission !== undefined
+    && typeof request.borrow_source_admission !== "boolean"
+  ) {
+    throw new EffectRuntimeRequestError(
+      "borrow_source_admission must be a boolean",
+    );
+  }
+  if (
+    admittedOwner !== undefined
+    && (request.goal_ref !== undefined || request.source_admission !== undefined)
+  ) {
+    throw new EffectRuntimeRequestError(
+      "admitted settlement readback must use its parsed quota owner",
+      "quota_source_admission_invalid",
+    );
+  }
+  if (
+    admittedOwner?.kind === "exact_source"
+    && admittedOwner.goalRef.goalId.value !== goalId
+  ) {
+    throw new EffectRuntimeRequestError(
+      "admitted quota owner does not match settlement goal_id",
+      "quota_source_admission_invalid",
+    );
+  }
+  const owner = admittedOwner ?? parseQuotaAccountingOwner({
+    goalRefValue: request.goal_ref,
+    sourceAdmissionValue: request.source_admission,
+    runtimeRoot,
+    goalId,
+  });
+  if (request.borrow_source_admission === true && owner.kind !== "exact_source") {
+    throw new EffectRuntimeRequestError(
+      "borrow_source_admission requires exact source admission",
+      "quota_source_admission_invalid",
+    );
+  }
   return {
     runtime_root: runtimeRoot,
     goal_id: goalId,
@@ -193,7 +244,9 @@ function decodeRequest(value: unknown): ReadbackRequest {
     infer_turn_instance_id: request.infer_turn_instance_id,
     allow_unbound_binding: request.allow_unbound_binding,
     resolve_original_binding: request.resolve_original_binding === true,
+    borrow_source_admission: request.borrow_source_admission === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
+    owner,
   };
 }
 
@@ -334,6 +387,7 @@ function indexedRuns(
 export function committedMonitorPollFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
   identity: Pick<SettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id" | "todo_id">,
+  owner: QuotaAccountingOwner = {kind: "alias"},
 ): JsonObject | null {
   if (snapshot.goalId !== identity.goal_id) {
     throw new EffectRuntimeRequestError("monitor poll snapshot scope mismatch");
@@ -342,6 +396,7 @@ export function committedMonitorPollFromSnapshot(
     turnKey(identity.goal_id, identity.agent_id, identity.turn_instance_id)!,
   ) ?? [];
   return [...runs].reverse().find((run) =>
+    quotaOwnerOwnsProjection(owner, run.goal_ref) &&
     run.classification === "quota_monitor_poll" &&
     optionalString(run.goal_id) === identity.goal_id &&
     optionalString(run.agent_id) === identity.agent_id &&
@@ -948,6 +1003,12 @@ function readQuotaSettlementFromRequest(
     );
   }
   const explicitAgentId = normalizeAgentId(request.agent_id);
+  const ownerRuns = snapshot.runs.filter((run) =>
+    quotaOwnerOwnsProjection(request.owner, run.goal_ref)
+  );
+  const ownerEvents = snapshot.events.filter((event) =>
+    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
+  );
   const explicitEvents = !request.infer_turn_instance_id &&
       explicitAgentId !== null && request.turn_instance_id !== null
     ? indexedEvents(
@@ -955,12 +1016,14 @@ function readQuotaSettlementFromRequest(
       request.goal_id,
       explicitAgentId,
       request.turn_instance_id,
+    ).filter((event) =>
+      quotaOwnerOwnsProjection(request.owner, event.goal_ref)
     )
-    : snapshot.events;
+    : ownerEvents;
   const identityResult = resolveIdentity(
     request,
     explicitEvents,
-    snapshot.runs,
+    ownerRuns,
   );
   if (identityResult === null) {
     return {
@@ -984,8 +1047,12 @@ function readQuotaSettlementFromRequest(
     identity.goal_id,
     identity.agent_id,
     identity.turn_instance_id,
+  ).filter((event) =>
+    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
   );
-  const runs = indexedRuns(snapshot, identity);
+  const runs = indexedRuns(snapshot, identity).filter((run) =>
+    quotaOwnerOwnsProjection(request.owner, run.goal_ref)
+  );
   const heartbeatReceipt = effectiveHeartbeatReceipt(events, identity);
   if (heartbeatReceipt === null) {
     return failedReadback(
@@ -999,7 +1066,9 @@ function readQuotaSettlementFromRequest(
   const writebackRun = findWriteback(runs, identity);
   const writebackEvent = findStepEvent(events, identity, "refresh_state");
   const spendRun = findSpend(
-    spendCandidateRuns(snapshot, identity, runs),
+    spendCandidateRuns(snapshot, identity, runs).filter((run) =>
+      quotaOwnerOwnsProjection(request.owner, run.goal_ref)
+    ),
     identity,
   );
   const spendEvent = findStepEvent(events, identity, "quota_spend");
@@ -1026,7 +1095,11 @@ function readQuotaSettlementFromRequest(
   const withWriteback = settlementBindReduce(identityResult, writeback);
   const settled = blockedNoSpend ? withWriteback : settlementBindReduce(withWriteback, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
-  const monitorPoll = committedMonitorPollFromSnapshot(snapshot, identity);
+  const monitorPoll = committedMonitorPollFromSnapshot(
+    snapshot,
+    identity,
+    request.owner,
+  );
   const nestedCausality = typeof receiptDetails.delivery_workspace_causality === "object" &&
       receiptDetails.delivery_workspace_causality !== null &&
       !Array.isArray(receiptDetails.delivery_workspace_causality)
@@ -1048,9 +1121,20 @@ function readQuotaSettlementFromRequest(
     semanticReplanGuard.selected_obligation_id !== null;
   const inFlightWriteback = writeback.failure === null &&
     isAcceptedInFlightWriteback(writebackRun, identity);
-  const replayPhase = receiptBoundReplayPhase({
+  const replanWriteback = writeback.failure === null &&
+    isAcceptedReplanWriteback(writebackRun, identity);
+  const monitorPhase = receiptBoundMonitorPhase({
+    poll_present: monitorPoll !== null,
+    material_change: isMaterialMonitorPoll(monitorPoll),
+    durable_writeback_present: writeback.failure === null,
+    quota_spend_present: spend.failure === null,
+  });
+  // A committed observation closes its exact Turn independently of whether
+  // the monitor still appears in the current Todo frontier. Reuse the monitor
+  // reducer so completion, retirement or archival cannot reopen that Turn.
+  const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
-    writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
+    writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback || replanWriteback,
     completion_receipt_present: completionEvent !== null,
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,
@@ -1064,6 +1148,8 @@ function readQuotaSettlementFromRequest(
     workspaceCausality?.requirement,
     writebackRun !== null && snapshot.runs.slice(
       (snapshot.runPositions.get(writebackRun) ?? -1) + 1,
+    ).filter((run) =>
+      quotaOwnerOwnsProjection(request.owner, run.goal_ref)
     ).some((run) =>
       run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
@@ -1095,12 +1181,7 @@ function readQuotaSettlementFromRequest(
     writeback_event: writebackEvent,
     spend_event: spendEvent,
     completion_event: completionEvent,
-    monitor_phase: receiptBoundMonitorPhase({
-      poll_present: monitorPoll !== null,
-      material_change: isMaterialMonitorPoll(monitorPoll),
-      durable_writeback_present: writeback.failure === null,
-      quota_spend_present: spend.failure === null,
-    }),
+    monitor_phase: monitorPhase,
     replay_phase: replayPhase,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
@@ -1114,7 +1195,31 @@ export function readQuotaSettlementFromSnapshot(
   value: unknown,
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
+  const request = decodeRequest(value);
+  if (request.owner.kind !== "alias") {
+    throw new EffectRuntimeRequestError(
+      "exact source settlement readback requires live owner admission",
+      "quota_source_admission_invalid",
+    );
+  }
+  return readQuotaSettlementFromRequest(request, snapshot);
+}
+
+/** Read under a source admission already adopted by the enclosing transaction. */
+export function readAdmittedQuotaSettlementFromSnapshot(
+  value: unknown,
+  snapshot: QuotaSettlementReadbackSnapshot,
+): JsonObject {
   return readQuotaSettlementFromRequest(decodeRequest(value), snapshot);
+}
+
+/** Read under the parsed owner already admitted by the enclosing transaction. */
+export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
+  value: unknown,
+  owner: QuotaAccountingOwner,
+  snapshot: QuotaSettlementReadbackSnapshot,
+): JsonObject {
+  return readQuotaSettlementFromRequest(decodeRequest(value, owner), snapshot);
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
@@ -1125,8 +1230,14 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     return prepareBlockedWait(value);
   }
   const request = decodeRequest(value);
-  return readQuotaSettlementFromRequest(
-    request,
-    await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id),
+  const withOwner = request.borrow_source_admission
+    ? withBorrowedQuotaAccountingOwner
+    : withQuotaAccountingOwner;
+  return await withOwner(
+    request.owner,
+    async () => readQuotaSettlementFromRequest(
+      request,
+      await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id),
+    ),
   );
 }

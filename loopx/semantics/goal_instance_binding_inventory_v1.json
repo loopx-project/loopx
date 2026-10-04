@@ -37,25 +37,42 @@
     },
     {
       "owner_id": "first_party_host_runtime",
-      "locator": "<runtime_root>/goals/<goal_id>/sessions and host runtime state",
+      "locator": "<runtime_root>/goals/<goal_id>/sessions and host runtime state; <registry_dir>/.loopx/lifecycle/goal-instance/turn-settlement/<goal_alias_digest>/{gate.json,admissions/*.json}",
       "revision_signal": "turn_instance_id",
       "content_digest_signal": "turn_key",
       "observed_reference": "goal_id + goal_instance_id for source_session_v1; goal_id otherwise",
       "producer_sites": [
         "loopx/control_plane/goals/first_party_host_admission.py::capture_first_party_host_goal_ref",
+        "loopx/control_plane/goals/source_session_recreation.py::recreate_goal_instance",
+        "loopx/control_plane/goals/source_session_turn_effects.py::drain_releasable_source_turn_effects",
+        "loopx/control_plane/goals/source_session_turn_effects.py::prepare_source_turn_effect",
+        "loopx/control_plane/goals/source_session_turn_effects.py::release_source_turn_effect",
+        "loopx/control_plane/goals/source_session_turn_effects.py::write_source_turn_effect_gate_locked",
         "loopx/control_plane/turn_driver/codex_cli.py::codex_cli_session_binding",
-        "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"
+        "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan",
+        "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.hold_tail",
+        "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.release_tail"
       ],
       "consumer_sites": [
         "loopx/control_plane/goals/first_party_host_runtime.ts::decideFirstPartyHostRuntime",
+        "loopx/control_plane/goals/source_session_recreation.py::recreate_goal_instance",
+        "loopx/control_plane/goals/source_session_turn_effects.py::decide_source_turn_effect_close_locked",
+        "loopx/control_plane/goals/source_session_turn_effects.py::decide_source_turn_effect_publish_locked",
+        "loopx/control_plane/goals/source_session_turn_effects.py::decide_source_turn_effect_repair_locked",
+        "loopx/control_plane/goals/source_session_turn_effects.py::drain_releasable_source_turn_effects",
+        "loopx/control_plane/goals/source_session_turn_effects.py::prepare_source_turn_effect",
+        "loopx/control_plane/goals/source_session_turn_effects.py::release_source_turn_effect",
+        "loopx/control_plane/goals/source_session_turn_effects.py::source_turn_effect_allows_absent_reexecute",
         "loopx/control_plane/turn_driver/executor.py::run_loopx_turn_once",
+        "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.hold_tail",
+        "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.release_tail",
         "loopx/dsh_goal_mode/turn_host_adapter.py::run_dsh_host",
         "loopx/kunluncode_goal_mode/runtime.py::run_native_goal"
       ],
-      "effect_boundary": "loopx/control_plane/goals/first_party_host_admission.py::FirstPartyHostGoalAdmission.accept_result",
+      "effect_boundary": "loopx/control_plane/goals/source_session_turn_effects.py::prepare_source_turn_effect",
       "authority_role": "host_execution_binding",
       "current_identity_strength": "source_exact_partial",
-      "cleanup_support": "host_session_discard",
+      "cleanup_support": "host_session_discard_and_source_turn_effect_drain",
       "m1_disposition": "source_exact_partial_enforcement",
       "target_milestone": "M3"
     },
@@ -180,19 +197,22 @@
       "locator": "<runtime_root>/goals/<goal_id>/runs/index.jsonl#quota_event",
       "revision_signal": "run_generated_at and effect_id",
       "content_digest_signal": "quota accounting artifact digest",
-      "observed_reference": "goal_id",
+      "observed_reference": "goal_id + goal_instance_id for source_session_v1; goal_id otherwise",
       "producer_sites": [
-        "loopx/control_plane/quota/spend_commit.py::record_quota_slot_spend_from_preview"
+        "loopx/control_plane/quota/accounting_admission.py::quota_accounting_admission",
+        "loopx/control_plane/quota/spend_commit.py::record_quota_slot_spend_from_preview",
+        "loopx/control_plane/quota/void_commit.py::commit_quota_slot_void"
       ],
       "consumer_sites": [
-        "loopx/control_plane/quota/settlement_readback.ts::readQuotaSettlementFromSnapshot",
-        "loopx/control_plane/quota/slot_accounting.py::net_quota_slot_spend"
+        "loopx/control_plane/quota/ledger_readback.py::net_quota_slot_spend",
+        "loopx/control_plane/quota/settlement_readback.ts::readQuotaSettlement",
+        "loopx/control_plane/quota/slot_accounting.py::_latest_unspent_turn_settlement_run"
       ],
       "effect_boundary": "loopx/control_plane/quota/accounting_artifact_transaction.ts::commitQuotaAccountingArtifactTransaction",
       "authority_role": "quota_accounting_ledger",
-      "current_identity_strength": "goal_alias_only",
+      "current_identity_strength": "exact_goal_ref_enforced",
       "cleanup_support": "typed_quota_void",
-      "m1_disposition": "alias_only_inventory",
+      "m1_disposition": "m3_qualified",
       "target_milestone": "M3"
     },
     {

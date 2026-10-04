@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -12,13 +11,24 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...runtime import validate_goal_id_path_segment
-from ...file_lock import exclusive_file_lock
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
-from .driver import selected_turn_todo
+from ...extensions.codex_native_child import native_child_observer
+from .codex_sessions import (
+    CODEX_CLI_SESSION_SCHEMA_VERSION as CODEX_CLI_SESSION_SCHEMA_VERSION,
+    _discard_codex_cli_session,
+    _lineage,
+    _store_codex_cli_session,
+    _valid_session_id,
+    codex_cli_session_binding as codex_cli_session_binding,
+    load_codex_cli_session as load_codex_cli_session,
+    select_codex_cli_session,
+    codex_session_profile_digest,
+    require_codex_session_profile,
+)
+from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
     HOST_AGENT_VISION_JSON_MAX_CHARS,
     HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
@@ -31,7 +41,6 @@ from .host_process_transport import HostOutputLines, run_host_process
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
 
-CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION = "codex_stdio_mcp_server_v0"
 CODEX_CLI_RESULT_KINDS = (
     "validated_progress",
@@ -42,7 +51,6 @@ CODEX_CLI_RESULT_KINDS = (
     "iteration_failed",
 )
 CODEX_CLI_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
-SESSION_ID_MAX_CHARS = 256
 OUTPUT_DRAIN_TIMEOUT_SECONDS = 2.0
 SESSION_INVALIDATING_FAILURE_CATEGORIES = frozenset(
     {
@@ -171,219 +179,6 @@ def _codex_mcp_config_arguments(
         f"mcp_servers.{name}.tool_timeout_sec=60",
     ]
     return [item for pair in pairs for item in ("-c", pair)]
-
-
-def _lineage(request: Mapping[str, Any]) -> dict[str, str]:
-    envelope = _mapping(request.get("turn_envelope"))
-    todo = selected_turn_todo(envelope)
-    lineage = {
-        "goal_id": str(envelope.get("goal_id") or "").strip(),
-        "agent_id": str(envelope.get("agent_id") or "").strip(),
-        "todo_id": str(todo.get("todo_id") or "").strip(),
-    }
-    if not all(lineage.values()):
-        raise ValueError("Codex CLI host request has incomplete turn lineage")
-    lineage["goal_id"] = validate_goal_id_path_segment(lineage["goal_id"])
-    return lineage
-
-
-def _session_path(runtime_root: Path, lineage: Mapping[str, str]) -> Path:
-    digest = hashlib.sha256(
-        json.dumps(
-            dict(lineage),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    return (
-        runtime_root
-        / "goals"
-        / validate_goal_id_path_segment(lineage["goal_id"])
-        / "turn-sessions"
-        / f"{digest}.json"
-    )
-
-
-def _valid_session_id(value: Any) -> str | None:
-    session_id = str(value or "").strip()
-    if not session_id or len(session_id) > SESSION_ID_MAX_CHARS:
-        return None
-    if any(character in session_id for character in ("\x00", "\r", "\n")):
-        return None
-    return session_id
-
-
-def load_codex_cli_session(
-    runtime_root: Path,
-    *,
-    lineage: Mapping[str, str],
-) -> dict[str, Any] | None:
-    path = _session_path(runtime_root, lineage)
-    if not path.exists():
-        return None
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(value, dict):
-        return None
-    if value.get("schema_version") != CODEX_CLI_SESSION_SCHEMA_VERSION:
-        return None
-    if any(value.get(field) != lineage[field] for field in lineage):
-        return None
-    session_id = _valid_session_id(value.get("session_id"))
-    if not session_id:
-        return None
-    return {**value, "session_id": session_id}
-
-
-def _codex_session_goal_ref(
-    value: Mapping[str, Any],
-    *,
-    lineage: Mapping[str, str],
-) -> object:
-    if (
-        value.get("schema_version") != CODEX_CLI_SESSION_SCHEMA_VERSION
-        or any(value.get(field) != lineage[field] for field in lineage)
-        or _valid_session_id(value.get("session_id")) is None
-    ):
-        return {"malformed": True}
-    goal_ref = value.get("goal_ref")
-    if goal_ref is not None:
-        return goal_ref
-    return {"goal_id": value.get("goal_id")}
-
-
-def _read_codex_cli_session_document(
-    runtime_root: Path,
-    *,
-    lineage: Mapping[str, str],
-) -> dict[str, Any] | None:
-    path = _session_path(runtime_root, lineage)
-    if not path.exists():
-        return None
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"malformed": True}
-    return value if isinstance(value, dict) else {"malformed": True}
-
-
-def codex_cli_session_binding(
-    runtime_root: Path,
-    turn_envelope: Mapping[str, Any],
-    *,
-    goal_admission: FirstPartyHostGoalAdmission | None = None,
-) -> dict[str, str] | None:
-    request = {"turn_envelope": dict(turn_envelope)}
-    lineage = _lineage(request)
-    if goal_admission is None:
-        session = load_codex_cli_session(runtime_root, lineage=lineage)
-    else:
-        selected = goal_admission.select_state(
-            read_state=lambda: _read_codex_cli_session_document(
-                runtime_root,
-                lineage=lineage,
-            ),
-            goal_ref_of=lambda value: _codex_session_goal_ref(
-                value,
-                lineage=lineage,
-            ),
-        )
-        session = dict(selected) if selected is not None else None
-    if session is None:
-        return None
-    return {
-        "schema_version": "loopx_turn_session_binding_v0",
-        **lineage,
-    }
-
-
-def _store_codex_cli_session(
-    runtime_root: Path,
-    *,
-    lineage: Mapping[str, str],
-    session_id: str,
-    goal_ref: Mapping[str, Any] | None = None,
-    operation_profile_digest: str | None = None,
-    operation_model: str | None = None,
-    operation_reasoning_effort: str | None = None,
-) -> None:
-    with exclusive_file_lock(_session_path(runtime_root, lineage)):
-        _write_codex_cli_session(
-            runtime_root,
-            lineage=lineage,
-            session_id=session_id,
-            goal_ref=goal_ref,
-            operation_profile_digest=operation_profile_digest,
-            operation_model=operation_model,
-            operation_reasoning_effort=operation_reasoning_effort,
-        )
-
-
-def _write_codex_cli_session(
-    runtime_root: Path,
-    *,
-    lineage: Mapping[str, str],
-    session_id: str,
-    goal_ref: Mapping[str, Any] | None = None,
-    operation_profile_digest: str | None = None,
-    operation_model: str | None = None,
-    operation_reasoning_effort: str | None = None,
-) -> None:
-    normalized_session_id = _valid_session_id(session_id)
-    if not normalized_session_id:
-        raise ValueError("Codex CLI returned an invalid session id")
-    path = _session_path(runtime_root, lineage)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        if hasattr(os, "fchmod"):
-            os.fchmod(descriptor, 0o600)
-        handle = os.fdopen(descriptor, "w", encoding="utf-8")
-        descriptor = -1
-        with handle:
-            payload = {
-                "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
-                **lineage,
-                "host": "codex-cli",
-                "session_id": normalized_session_id,
-            }
-            if goal_ref is not None:
-                payload["goal_ref"] = dict(goal_ref)
-            if operation_profile_digest is not None:
-                payload["operation_transport"] = "app-server-operation-tools-v0"
-                payload["operation_profile_digest"] = operation_profile_digest
-                payload["operation_model"] = operation_model
-                payload["operation_reasoning_effort"] = operation_reasoning_effort
-            json.dump(
-                payload,
-                handle,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            handle.write("\n")
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        temporary.unlink(missing_ok=True)
-
-
-def _discard_codex_cli_session(
-    runtime_root: Path,
-    *,
-    lineage: Mapping[str, str],
-) -> None:
-    path = _session_path(runtime_root, lineage)
-    with exclusive_file_lock(path):
-        path.unlink(missing_ok=True)
 
 
 def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
@@ -789,8 +584,8 @@ def _codex_command(
     *,
     codex_bin: str,
     project: Path,
-    schema_path: Path,
-    output_path: Path,
+    schema_path: Path | None,
+    output_path: Path | None,
     sandbox: str,
     model: str | None,
     reasoning_effort: str | None,
@@ -807,10 +602,6 @@ def _codex_command(
             "resume",
             "-c",
             f'sandbox_mode="{sandbox}"',
-            "--output-schema",
-            str(schema_path),
-            "--output-last-message",
-            str(output_path),
             "--json",
         ]
     else:
@@ -822,12 +613,12 @@ def _codex_command(
             sandbox,
             "-C",
             str(project),
-            "--output-schema",
-            str(schema_path),
-            "--output-last-message",
-            str(output_path),
             "--json",
         ]
+    if schema_path is not None:
+        command.extend(["--output-schema", str(schema_path)])
+    if output_path is not None:
+        command.extend(["--output-last-message", str(output_path)])
     if model:
         command.extend(["--model", model])
     if reasoning_effort:
@@ -871,25 +662,23 @@ def run_codex_cli_host(
     planned_session = _mapping(request.get("session"))
     planned_action = str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))
+    if context_policy.get("mode") is not None and context_policy["mode"] not in SUPPORTED_ITERATION_CONTEXT_POLICIES:
+        raise ValueError("iteration context policy must be fresh or resume")
     fresh_iteration = context_policy.get("mode") == "fresh"
-    if goal_admission is None:
-        binding = (
-            None
-            if fresh_iteration
-            else load_codex_cli_session(runtime_root, lineage=lineage)
-        )
-    else:
-        selected = goal_admission.select_state(
-            read_state=lambda: _read_codex_cli_session_document(
-                runtime_root,
-                lineage=lineage,
-            ),
-            goal_ref_of=lambda value: _codex_session_goal_ref(
-                value,
-                lineage=lineage,
-            ),
-        )
-        binding = None if fresh_iteration else selected
+    session_scope = str(context_policy.get("binding_scope") or "todo")
+    if fresh_iteration and goal_admission is not None:
+        goal_admission.require_current()
+    binding = None if fresh_iteration else select_codex_cli_session(
+        runtime_root, lineage=lineage, session_scope=session_scope,
+        goal_admission=goal_admission,
+    )
+    profile_digest = (codex_session_profile_digest(
+        project=project, codex_bin=str(resolved),
+        home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
+        model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, mcp_server=mcp_server,
+    ) if session_scope == "agent" else None)
+    if binding and profile_digest:
+        require_codex_session_profile(binding, profile_digest)
     if planned_action == "resume" and binding is None:
         raise RuntimeError("Codex CLI resume binding disappeared after planning")
     if planned_action == "start_new" and binding is not None:
@@ -910,6 +699,8 @@ def run_codex_cli_host(
                 runtime_root,
                 lineage=lineage,
                 session_id=observed_session_id,
+                session_scope=session_scope,
+                session_profile_digest=profile_digest,
                 goal_ref=exact_goal_ref,
             )
 
@@ -923,12 +714,22 @@ def run_codex_cli_host(
             _discard_codex_cli_session(
                 runtime_root,
                 lineage=lineage,
+                session_scope=session_scope,
             )
 
         if goal_admission is None:
             commit()
         else:
             goal_admission.accept_result(commit)
+
+    child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
+        registry_path=goal_admission.registry_path if goal_admission is not None else None)
+    invocation_id = ""
+    if child_observer is not None:
+        attempt = request.get("host_attempt")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ValueError("native child CLI observation requires the durable host attempt")
+        invocation_id = f"exec:{request['turn_key']}:{attempt}"
 
     with tempfile.TemporaryDirectory(prefix="loopx-turn-codex-") as directory:
         temporary = Path(directory)
@@ -964,8 +765,18 @@ def run_codex_cli_host(
                 return
             if isinstance(event, dict):
                 candidate = codex_cli_event_session_id(event)
-                if candidate and not observed_session:
+                if candidate and candidate not in observed_session:
                     observed_session.append(candidate)
+                item = event.get("item")
+                if (child_observer is not None and observed_session
+                        and event.get("type") == "item.completed" and isinstance(item, Mapping)):
+                    def record_child() -> None:
+                        child_observer.observe(item, session_id=observed_session[0], invocation_id=invocation_id)
+
+                    if goal_admission is None:
+                        record_child()
+                    else:
+                        goal_admission.accept_result(record_child)
                 structured, diagnostic = _event_failure_categories(event)
                 if structured:
                     structured_failure_categories.add(structured)
@@ -989,6 +800,12 @@ def run_codex_cli_host(
         output_observation_incomplete = not (observed["output_complete"] and events.complete and diagnostics.complete)
         if observed["outcome"] not in {"exited", "timeout"}:
             raise BuiltInHostError("codex_cli_process_" + observed["outcome"])
+        if session_scope == "agent" and (
+            len(observed_session) > 1 or (returncode == 0 and not observed_session)
+        ):
+            raise BuiltInHostError("codex_cli_session_identity_unconfirmed")
+        if session_id and any(candidate != session_id for candidate in observed_session):
+            raise BuiltInHostError("codex_cli_resume_session_identity_changed")
         if timed_out:
             if observed_session:
                 store_session(observed_session[0])
@@ -1006,7 +823,7 @@ def run_codex_cli_host(
                 or "exit_nonzero"
             )
         )
-        if returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
+        if session_scope == "todo" and returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
             discard_session()
         if observed_session and (
             returncode == 0 or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES

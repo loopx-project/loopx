@@ -22,6 +22,7 @@ import { requireNonEmptyString as requiredString } from "../runtime_decode.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import {
   interpretTurnJournalEffect,
+  journalPhaseViolation,
   parseTurnJournalGoalBinding,
   supportedJournalStatuses,
   transactionPhases,
@@ -138,6 +139,11 @@ function requireJournalState(journal: JsonObject): JournalState {
     effectId: effectId ?? "",
   });
   if (attemptViolation) conflict(attemptViolation.message);
+  const receipt = asObject(journal.receipt);
+  const failedPhase = typeof receipt.failed_phase === "string" ? receipt.failed_phase : null;
+  const statusViolation = journalPhaseViolation(context.journal_status, context.completed_phases, failedPhase);
+  if (statusViolation !== null) conflict(statusViolation);
+
   if (!context.journal_consistent || !effectId) {
     throw new EffectRuntimeRequestError(
       `Turn journal snapshot is inconsistent: ${context.violations.join(", ")}`,
@@ -157,30 +163,6 @@ function requireJournalState(journal: JsonObject): JournalState {
       "Turn journal status is unsupported",
       "journal_snapshot_invalid",
     );
-  }
-  const receipt = asObject(journal.receipt);
-  const failedPhase = typeof receipt.failed_phase === "string"
-    ? receipt.failed_phase
-    : null;
-  if (status === "committed" && completedPhases.length !== transactionPhases.length) {
-    conflict("Committed Turn journal must contain the complete transaction prefix");
-  }
-  if (status === "stopped" && completedPhases.length !== 3) {
-    conflict("Stopped Turn journal must end after validation");
-  }
-  if (status === "scheduler_action_required" && completedPhases.length !== 5) {
-    conflict("Scheduler-pending Turn journal must end after quota spend");
-  }
-  if (status === "in_progress" && completedPhases.length > 5) {
-    conflict("In-progress Turn journal cannot claim scheduler completion");
-  }
-  if (status === "failed") {
-    const nextPhase = transactionPhases[completedPhases.length] ?? null;
-    const terminalCloseoutFailure =
-      failedPhase === "terminal_closeout" && completedPhases.length === 5;
-    if (!failedPhase || (failedPhase !== nextPhase && !terminalCloseoutFailure)) {
-      conflict("Failed Turn journal must name the next uncompleted phase");
-    }
   }
   const state = { status, completedPhases, effectId, failedPhase };
   return state;

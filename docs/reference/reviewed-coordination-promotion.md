@@ -14,11 +14,14 @@ fencing and receipt proof; Python only loads the file and transports the request
 
 Use an explicitly enabled, bootstrapped and qualified runtime shadow. Its
 qualification must cover real mutations and required event classes; an empty
-shadow or a saved JSON file cannot substitute for that evidence. Without an explicit migration, v0
-promotion still requires `hard_lease`. Use `--handoff-mode-migration preserve`
-to retain the current mode, or `hard_lease` to review a claim-preserving mode
-transition. Saved execution retains that choice and does not accept overrides.
+shadow or a saved JSON file cannot substitute for that evidence. Fresh CLI
+previews default to `preserve`, retaining the current ownership policy while
+changing storage authority. Use `--handoff-mode-migration hard_lease` to review
+an explicit claim-preserving upgrade. Historical saved v0 hard-only plans
+retain their original contract; saved execution never accepts overrides.
 Neither strategy weakens source, capture or transaction qualification.
+Already canonical Goals can use the separately backed-up
+[handoff-mode migration](handoff-mode.md) without promoting again.
 
 ```bash
 loopx --format json coordination-shadow promote \
@@ -40,8 +43,7 @@ envelope. Keep it in operator-owned local storage: it carries a runtime path and
 Goal identity, so it is not a public collaboration artifact.
 
 `--reviewed-plan` owns the operation id and qualification policy. Combining it
-with `--minimum-operations` or `--require-event-kind` is an error. A normal
-`promote` command without a saved plan retains its existing defaults.
+with `--minimum-operations` or `--require-event-kind` is an error. A fresh CLI preview defaults to preserving ownership policy.
 
 Execution captures and qualifies the source again under the existing locks. If
 the computed plan digest differs, it returns
@@ -143,7 +145,7 @@ transaction/readback contract through its service-owned factory; a local CLI
 selector alone does not provide a PostgreSQL connection or tenant authority.
 
 The merged claim-preserving migration and saved-plan paths are now exercised
-together: default, `preserve` and `hard_lease` strategies on File/SQLite share
+together: historical saved v0 plans and fresh preserve/hard CLI strategies on File/SQLite share
 the same qualification and recovery owners.
 
 Default-on promotion, SQLite long-duration qualification, post-promotion export

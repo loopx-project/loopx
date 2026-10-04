@@ -2993,7 +2993,7 @@ resolved. The two lanes must not collapse into each other.
 
 Replan closeout is semantic and causally bound. A normal validated progress
 refresh may record useful work, but it must not silently close the
-`autonomous_replan_obligation_v0`. Quota first projects the evidence-log into a
+`autonomous_replan_obligation_v0`. Quota first projects compact run history into a
 compact coverage ledger and emits an opaque `obligation_id`; after the bounded
 slice, the agent writes one typed observation. When the result is a runnable
 successor, the Todo transition itself is the receipt:

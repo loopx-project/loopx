@@ -27,6 +27,32 @@ vision drift or missing closeout satisfy, block, or wake another role.
 `goal_frontier_projection`. It should not grow per-agent vision storage,
 budgeting, dreaming, or product-specific replan logic.
 
+## Accepted successor recommendations
+
+After a replan records an accepted `new_runnable_successor`, fresh quota planning
+recommends that exact successor as the action portfolio's `primary`, ahead of an
+older default or prior delivery continuation. The recommendation, selected Todo
+and Agent next action share the existing TypeScript delivery-route decision.
+This intentionally changes the default recommendation; it does not rewrite Todo
+priorities, authorize execution, or bind the Turn before explicit selection.
+Other eligible work remains selectable as `alternative`.
+
+Only the latest accepted ACK in the current Agent lane supplies this preference.
+The current canonical Todo must still belong to that Agent, match the successor's
+exact origin obligation, and pass execution/capability gates. A replaced ACK,
+missing, blocked, deferred, completed or reassigned successor leaves ordinary
+selection in effect. An explicit choice, bound Turn receipt, human/control gate
+or required replan keeps its existing precedence. A prose-only vision change
+does not identify a preferred Todo; use the existing typed successor binding.
+
+replan 持久记录已接受的 `new_runnable_successor` 后，新一轮 quota 默认将该
+确切后续任务作为 `primary`，优先于旧默认任务或上一轮交付延续。推荐、选中任务
+及 Agent next action 共用现有 TS 路由判断。这是默认推荐行为变化，不改 Todo
+优先级、不授予执行权限，也不提前绑定 Turn；其他合格任务仍可作为 `alternative`
+被显式选择。仅当前 Agent 最新已接受的 ACK 提供偏好；后续任务必须仍归属该
+Agent、匹配确切来源义务并通过准入。方案被替换或任务失效时恢复普通选择；
+显式选择、已绑定回执及现有 Gate 保持优先。纯文字 Vision 不能标识要推荐的任务。
+
 ## CLI Budget
 
 Per-agent vision is an executable control-plane field, so the CLI/write API must
@@ -261,9 +287,12 @@ memory or owner reminders.
 ## Vision Checkpoint
 
 `refresh-state` always emits a per-agent `vision_checkpoint_v0`, and defaults
-to the `semantic_closeout` delivery boundary. A material delivery outcome or a
-durable `## Next Action` update at that boundary requires an explicit vision
-decision:
+to the `semantic_closeout` delivery boundary. A material delivery outcome at
+that boundary requires an explicit vision decision. A within-Todo recommendation
+step (`refresh-state --next-action`) is not a durable mainline change and does
+not, by itself, trigger a Vision checkpoint or settle a replan. Direction changes
+still use the existing Vision/`path_delta` owner. Historical durable prose-update
+receipts retain their checkpoint semantics:
 
 ```json
 {
@@ -296,8 +325,8 @@ loopx refresh-state \
 ```
 
 This boundary is valid only for the selected agent-bound or unclaimed open
-advancement Todo while it is still in flight. It rejects Todo completion, a
-durable Next Action update, autonomous replan writeback, and any outcome other
+advancement Todo while it is still in flight. It permits a bound within-Todo
+step, but rejects Todo completion, autonomous replan writeback, and any outcome other
 than `outcome_progress`. Its checkpoint has `decision=not_required`,
 `required=false`, and a typed
 `in_flight_continuation` trigger carrying the Todo id. The next quota decision
@@ -550,8 +579,9 @@ The audit also exposes a compact deterministic `vision_gap_judge_v0`
 instruction packet for the agent. It borrows the strict done-judge stance used
 by autonomous goal loops without calling an LLM: the agent is told to compare
 the active vision `acceptance_summary` with the host-projected coverage ledger,
-then permitted registry-declared material references. The agent-scoped
-`loopx evidence-log` remains an operator diagnostic, not a mandatory model ritual.
+then permitted registry-declared material references. `replan_context` supplies
+scoped readable evidence and exact history read actions; no separate evidence
+command or mandatory model read ritual remains.
 Bounded public web research is the next
 fallback when those sources are missing or stale and the gap depends on public
 facts. `done=true` is only valid
@@ -702,6 +732,19 @@ obligations; an outstanding pre-upgrade Turn should refresh its guard.
 义务身份使用 typed owner 给出的 owned 实质 revision，同伴修改共享池不会让正在
 处理的义务换 ID；自己任务的实质修改仍重新触发。证据补充或更新时间不重新触发。
 
+The Agent-lane claimed advancement total comes from the evaluated full-source
+frontier index, before bounded claimant/status display. Adding peer Todos or
+reordering the display cannot turn 15 owned commitments into a smaller chain.
+Historical indexes without the evaluated count retain observed lower bounds;
+incomplete identities cannot supply a complete count. This read fact changes
+neither the threshold nor checkpoint/ACK identity, claim/exclusion selection,
+lease, acceptance, or settlement authority. It does not make hidden work executable.
+
+Agent lane 的已认领推进总数来自展示裁剪前、已评估的完整 frontier 索引。同伴新增
+Todo 或展示重排不能把 15 项自身承诺变成更短的任务链。没有该计数的历史索引仍使用
+已观察下界；身份不完整不能提供完整计数。计数事实不修改阈值、checkpoint／ACK
+身份、认领／排除选择、租约、验收或结算权限，也不让隐藏任务获得执行资格。
+
 ## Replan Output
 
 A valid replan writes at least one bounded delta:
@@ -807,6 +850,14 @@ contradictory, the agent may use bounded public-safe search and write back
 source references with the typed observation.
 
 ## Write / Correction Mechanism
+
+For optional history drill-down, `history --goal-id ... --agent-id ... --limit N`
+filters the complete available compact index by Agent before applying `N`.
+Its run lists and latest status refer to that same scoped source; newer Peer
+records cannot hide the requested lane. Goal quota accounting remains Goal-wide.
+This query limit is independent of status/quota's bounded replan decision
+lookback. The generated omitted-evidence read action must recover older distinct
+observations without a context-access receipt or state mutation.
 
 After a material milestone, `vision_outcome_checkpoint_required` remains a
 completion guard. When the checkpoint is satisfied and current, the path outcome
@@ -916,6 +967,9 @@ The default thresholds remain two equivalent typed observations, two blocked
 successor waits, six executed unchanged Monitor turns, twenty material turns
 for periodic review, and five persisted unchanged polls for a Monitor-only
 lane. Trigger precedence remains progress, Monitor, then periodic review.
+No-change `quota_monitor_poll` receipts do not advance the periodic material-turn
+counter; a poll with an explicit material transition does. Monitor repetition
+and persisted streak checks still inspect their own poll evidence.
 Accepted ACKs reset the historical window; clearing another frontier obligation
 still requires its existing typed semantic outcome and revision rules. A future
 blocking Monitor suppresses premature wait replanning only while its schedule

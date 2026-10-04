@@ -24,20 +24,34 @@
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
 
-## Current delivery frontier (2026-09-28)
+## Current delivery frontier (2026-10-02)
 
-Audit `ce3862e33`: #5054, #5140, #5144, #5156, #5173, #5175 and #5169
-are merged. Do not count event retirement, archive recovery, managed process
-supervision, reviewed local cutover or native drain as new pending PRs.
-#4931 remains an open SQLite optimization, not a completed D2 qualification.
+At main `9b0486dc1`, #4931, #5251, #5395, #5417 and #5436 are merged.
+Do not recount their storage improvements or Python retirement as pending work.
+The [current validation, migration and deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02)
+prioritizes #5413/#5466/#5283 closeout, installed reversible qualification,
+bounded opt-in adoption, canonical creation/defaults and last-caller deletion.
+Existing Goal migration, two-policy ownership retirement and storage-format
+upgrade have separate receipts and exits. Original-receipt recovery does not
+justify retaining `legacy` as a live policy. Required migration readers remain.
 
-Next: qualify whole-Goal execution/consumer integration and matched local
-profiles in parallel; then unify new-Goal/install/settings and supported upgrade
-entrypoints, deleting each replaced writer with its last caller. Retain necessary
-Host IO, original receipts and migration readers. No additional dead Python
-module is certified by this audit, and no fixed remaining-PR total is promised.
-[Deletion inventory, engineering windows, local evidence and remaining work](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
-supersedes older current-count estimates; their execution evidence stays historical.
+A bounded cohort can start after its installed recovery and relevant execution
+controls pass; it does not certify a released default or formal ten-day D2.
+Frozen failures/missing evidence remain visible. T4 deletes proven redundant
+owners alongside implementation, without waiting for R6 or all Python to vanish.
+This replaces stale current-count estimates, not historical execution evidence.
+
+**Fresh creation opt-in (2026-10-04, proposed).** The existing
+[device setting and CLI/App creation owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
+can freeze a File/SQLite target and `soft_claim`/`hard_lease` policy, initialize
+empty canonical authority and recover the original creation receipt. Isolated
+real-provider CLI/HTTP and packaged settings checks cover original-operation
+retry, writer fencing, lost completed authority and rejected policy recovery.
+Completed retries no longer parse the Python Markdown source; unfinished fresh
+creation still captures it only when the typed owner requests it. Default-off
+and released v0 behavior remain; live legacy writers retain callers. This is a
+bounded L9 prerequisite, not installed upgrade, whole-Goal recovery, D2, cohort
+admission or release-default acceptance. Those existing exits remain open.
 
 File retained-state storage now reuses the existing TS checkpoint/delta codec,
 stacked on #5063's verified read cache and RPC budgets. Original revisions,
@@ -47,6 +61,23 @@ format migration; legacy decoding exists only in the migration owner. File and
 SQLite reuse logical archives for cross-provider isolated recovery.
 This adds no provider/default promotion and retires no Python business owner.
 [Automatic backup/migration, cold costs and qualification limits](../../reference/file-authority-state-log.md).
+[Configuration checkpoints](../../reference/configuration-backup.md) additionally preserve machine defaults and source-owned Goal settings. Their isolated recovery does not adopt a live provider, restore Host bindings or close D1–D3; live configuration adoption and reviewed cutover remain with the existing owners.
+
+**Ownership simplification stage (2026-10-01).** R5/T4 separate storage
+promotion from policy migration. Fresh CLI promotion preserves policy; normal
+policy targets are soft/hard. Canonical policy migration reuses the promotion
+rules, complete archive and command receipt owner, preserving assignments,
+lease grants/counters and full history in one CAS. The same admission accepts
+standalone leases with additional scopes while retaining every named task
+requirement. See [operation and recovery](../../reference/handoff-mode.md).
+
+Next qualify Host acquire/renew/release/blocked settlement before choosing
+defaults: explicit single executor→soft; local parallel or shared cloud work→hard.
+Creation defaults remain unchanged here. Then back up and migrate remaining
+legacy Goals, prove last callers, and delete their legacy execution/Python
+business branches together. Keep historical readers only in migration/recovery.
+This stage does not close SQLite D2, default onboarding, D1–D3 or PostgreSQL
+deployment, and creates no parallel migration framework.
 
 ## Todo event retirement (2026-09-25)
 
@@ -1283,9 +1314,34 @@ For the 64 KiB live-state axis at 10,000 versus 100,000 commits:
   1 MiB axis and 300,000-commit headroom separately; failures narrow the supported
   profile rather than disappearing into averaged results.
 
-These thresholds are proposed engineering budgets, not current measurements.
-Review them against the first matched baseline before activation; do not relax
-correctness, silently change the workload, or advertise an unqualified horizon.
+These thresholds are proposed engineering budgets, not current measurements or
+a universal prerequisite for merging an improvement or trying an opt-in provider.
+Use the current supported implementation as the performance control, on the same
+host, runtime, complete data, history, durability and command mix. Retain the
+original pre-migration baseline as a product comparison; it cannot hide a
+regression against the current supported release. Report both absolute latency
+and relative change. A percentage increase on a short store operation is not,
+by itself, a user-visible regression; trace it through the affected command or
+consumer before deciding whether the tradeoff is acceptable. Conversely, parity
+with an already unusable baseline is not sufficient.
+
+Make three distinct decisions using the existing qualification evidence:
+
+| Decision | Required evidence and scope |
+| --- | --- |
+| Merge a bounded provider improvement | Exact-source correctness, metadata/history/receipt preservation, affected real backends and callers, and matched measurements of the changed paths. Disclose local regressions and their consumer impact; a missed proposed latency target alone is not a merge blocker. |
+| Invite a small opt-in developer cohort | A recoverable installed workflow: verified backup, migration, restart, ordinary commands, new writes and return to the previous provider without losing those writes. Relevant concurrency and interruption controls must pass. Bound the advertised workload to demonstrated evidence, expose actionable failures, and observe natural operation. A ten-day certificate is not required to begin this reversible trial. |
+| Select the release default | Installation and runtime support, new-Goal creation, upgrade, migration, recovery and rollback must work on the supported profiles. Representative sustained operation must show no material degradation of common user journeys against the current release, with acceptable growth, resource use and recovery space. Reconcile existing soak results with changed boundaries; do not restart elapsed-time evidence for unrelated changes. |
+
+Data loss, duplicate effects, altered original receipts, incorrect decisions,
+broken fencing or unrecoverable migration remain blockers at the affected
+boundary. Performance targets may be calibrated from matched evidence with an
+explicit tradeoff; correctness is not calibrated away. Preserve frozen workload
+and budget identities in existing reports, including failures and missing rows.
+If a budget is revised, record a new declared comparison rather than relabeling
+an old failed report as passing. The formal ten-day/100,000-commit qualification
+and its unmeasured axes remain explicit; neither a merged PR nor a successful
+cohort trial advertises that horizon or settles the release-default decision.
 
 #### Retention, recovery and delivery gates
 
@@ -1321,9 +1377,11 @@ to an independent reference; no lost acknowledged commit or repeated effect is
 acceptable. Use disposable goals, never active user state. Compressed clocks do
 not qualify wall-clock endurance; publishing this RFC starts no soak or monitor.
 
-A code PR can land while soak evidence remains pending, with promotion held.
-Promotion requires both exits, explicit import/fencing/export rehearsal and
-maintainer review. Publish compact reproducible evidence, not raw private logs.
+A code PR can land while formal soak evidence remains pending. Formal profile
+promotion requires both exits, explicit import/fencing/export rehearsal and
+maintainer review. A separately authorized, bounded opt-in cohort uses the
+installed recovery decision above; it does not claim that formal profile.
+Publish compact reproducible evidence, not raw private logs.
 
 #### SQLite-for-file transition milestones (proposal)
 
@@ -1337,8 +1395,9 @@ is gated by evidence below, not by calendar dates or this PR's merge status.
 | --- | --- | --- |
 | Candidate conformance | Review #4121's atomic commits, original receipts, cursor/digest integrity, typed provider-open failures, real CLI and OS/runtime tests. | Candidate only. File remains default; no live migration or promotion. |
 | Bounded local profile (L) | Meet this section's unchanged workload/budget matrix, including 64 KiB matched 10k/100k runs, 1 MiB and 300k headroom, cold startup, lock wait, RSS and logical write growth. Qualify bounded checkpoints/deltas and receipt lookup while preserving exact historical scans. | No default flip. Keep integrity checks; if their cost grows beyond the profile, fix the design or narrow the explicitly supported profile. |
-| Fenced migration and recovery (I/F prerequisites) | On disposable Goals, prove file-to-SQLite import, exact receipt/replay equivalence, consumer cursor/outbox preservation, crash/disk-full recovery and reverse export/rollback. Include the required independent legacy/file/PostgreSQL read-only rehearsal where shared routing or projections change. | Tooling and migration manifest must be reviewed first. Today's empty-goal selector is not an existing-goal migration API. Never test on an active user's Goal. |
-| Elapsed qualification and opt-in canary | Complete an actual >=10-day synthetic soak, including the specified restart, sleep, day-1 retry and 24 h consumer-lag cases. Then request separate authorization for a small opt-in operator canary with recorded stop/rollback criteria. | All C/I and selected-provider holds still apply. Evidence from accelerated volume cannot replace elapsed time; a canary does not authorize a general default. |
+| Fenced migration and recovery (I/F prerequisites) | On disposable Goals, prove file-to-SQLite import, exact receipt/replay equivalence, consumer cursor/outbox preservation, crash/disk-full recovery and reverse export/rollback. Include the required independent legacy/file/PostgreSQL read-only rehearsal where shared routing or projections change. | Tooling and migration manifest must be reviewed first. Use the reviewed existing-Goal archive/cutover API; an empty-goal selector alone is insufficient. Never test on an active user's Goal. |
+| Recoverable opt-in canary | Verified installed backup/migration/restart, ordinary commands, relevant interruption/concurrency controls and reverse migration preserving new writes; separately authorized and limited to the demonstrated workload. | May precede formal ten-day qualification. Record stop/rollback criteria; no general default or formal-horizon claim. |
+| Formal elapsed qualification | Complete the actual >=10-day synthetic soak with specified restart, sleep, day-1 retry and 24 h consumer lag; reconcile existing evidence with changed boundaries. | Accelerated volume does not replace elapsed time; formal profile holds and frozen reports remain explicit. |
 | New-Goal default decision (F) | Maintainers accept the qualified profile and canary results, operational diagnostics, backup/restore procedure, release instructions and default-disable path. Ship the default change in a separate disclosed release change. | Apply only to newly created eligible local Goals. Existing explicit file selections remain pinned. Unsupported runtimes/filesystems require an explicit supported choice; no silent backend switch on open failure. |
 | Existing-Goal migration and file retirement | Migrate opt-in cohorts using the reviewed fenced workflow; reconcile receipts, history, projections and rollback after each cohort. Inventory the last file-primary callers and compatibility windows before removing any path. | Each Goal needs explicit migration authority. Retire file as the ordinary primary only after that evidence; retain reference/import/export support until its own callers and retention duties end. |
 
@@ -2413,13 +2472,15 @@ remain reviewable in the same bounded slice.
    preserved. The maintainer must approve the named removal explicitly in the
    RFC decision log or PR review; absence of a discovered consumer is not
    approval.*
-9. Does v0 promotion cover only `hard_lease` goals? *Resolved answer: the
-   backward-compatible default still requires a qualified `hard_lease` source.
-   A reviewed operator may explicitly choose `preserve` to canonicalize a
-   `legacy` or `soft_claim` Goal without changing its policy, or `hard_lease` to
-   perform the one supported claim-preserving upgrade inside the fenced
-   cutover. No lease is invented, and every other mode change still uses the
-   Appendix B quiescence rule.*
+9. Does promotion require `hard_lease`? *Resolved answer (2026-10-01): fresh CLI
+   previews default to `preserve`; storage promotion does not implicitly change
+   ownership policy. Explicit `hard_lease` reviews a claim-preserving upgrade
+   in the fenced cutover. Historical saved v0 hard-only plans keep their original
+   decision. Already canonical Goals use the same typed ownership rules through
+   an immutable reviewed plan, verified complete archive backup and provider CAS;
+   ordinary `set` keeps Appendix B quiescence. No lease is invented. New policy
+   targets are soft/hard; legacy remains an upgrade source and original-receipt
+   input until its last execution caller is retired.*
 10. After the provider-first read flip, Markdown and lease files are
     projections and the kernel forbids fallback to them. Which data belongs in
     the head, and how are compatibility views rendered? *Proposed answer:
@@ -2631,6 +2692,23 @@ superseded；前提是没有仍在有效期内的租约，也未提交旧执行�
 会把遗留的过期租约代际与 Todo 状态一并更新。重新打开不授予执行权限，下一次
 执行必须重新获取租约。`complete`、挤占有效租约、跨负责人修改及混入执行内容的
 更新仍受原有门禁约束。
+
+Owner suspension closes the reverse transition as well: an open Agent Todo's
+current claim/lease holder may atomically set `deferred` with an explicit wait
+and reason while releasing that live execution generation. No work-content or
+ownership edits are bundled. Retained lease lineage applies in legacy mode too;
+reopening then follows the same no-live-holder rule. The shared TS owner and
+provider CAS preserve receipts and retries. Pending registered Todo/monitor
+waits remain eligible for blocked, no-spend closeout after deferral, retaining
+the original Turn binding. See [causal closeout](../../reference/protocols/quota-blocked-causal-closeout-v0.md).
+This closes an S3 owner-wait lifecycle gap; it does not qualify general shared
+amendment or SQLite default admission.
+
+反向转换也由同一 TS owner 负责：当前 claim／lease 持有者可凭有效证明，把开放任务
+原子延期并释放租约；不混入任务内容或所有权修改。有租约历史的 legacy 模式同样
+适用，恢复遵守无活跃持有者规则。延期后的已注册 Todo／monitor 等待仍能按原 Turn
+身份完成无扣额阻塞结算。该交付收敛 S3 等待生命周期，不等于通用 amendment 或
+SQLite 默认准入已验收。
 
 ### Relation to Staged Delivery
 
@@ -3246,7 +3324,8 @@ new implementation work; changing languages or moving a helper is not an exit.
 **Earlier 2026-09-24 implementation context.** Display refresh advances
 projection recovery/client closure without claiming every consumer qualified. SQLite #4910 added the larger measurement axes; #4224 records
 failed 1 MiB receipt/scan budgets and still-missing recovery/soak evidence.
-#4931 is the in-review read-proof optimization, not proof that D2 passed.
+At that checkpoint #4931 was still in review. Its subsequent merge supplies
+read-proof optimization, not proof that D2 passed.
 Snapshot pagination #4922 has merged and still must be qualified at its accepted
 head. None of these PR statuses grants cutover or changes the selected profile.
 

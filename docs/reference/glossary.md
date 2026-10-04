@@ -109,7 +109,7 @@ Authority handoff mode between agents.
 
 - Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
 - python: [`HandoffMode`](../../loopx/control_plane/coordination/authority_core.py).
-- typescript: [`HANDOFF_MODES`](../../loopx/control_plane/coordination/handoff_mode_policy.ts).
+- typescript: [`HANDOFF_MODES`](../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts).
 - Values / 值: `legacy`, `soft_claim`, `hard_lease`.
 
 ## lease_action

@@ -2,7 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {AGENT_OPERATION_REVISION, MANAGED_OPERATION_REVISION, managedOperationBindingCurrent, deriveAgentOperationActor, normalizeAgentOperationExecutor, planAgentOperationHandoff,
-  projectAgentOperationInbox, projectManagedOperationTransport} from "../../loopx/control_plane/work_items/operation_agent_handoff.ts";
+  projectAgentOperationInbox, projectManagedOperationTransport, resolveOperationSourceRoute} from "../../loopx/control_plane/work_items/operation_agent_handoff.ts";
+
+test("registered return audience is explicit under ambiguity and never executor identity", () => {
+  const route = {agent_id: "agent", host_surface: "codex-app", thread_id: "original"};
+  const value = {goal_id: "goal", agent_id: "agent", bindings: [route]};
+  assert.deepEqual(resolveOperationSourceRoute(value).source_route, {goal_id: "goal", ...route});
+  assert.deepEqual(resolveOperationSourceRoute({...value, bindings: [route, route]}), resolveOperationSourceRoute(value));
+  assert.equal(resolveOperationSourceRoute({...value, bindings: []}).source_route, null);
+  const multiple = {...value, bindings: [route, {...route, thread_id: "historical"}]};
+  assert.throws(() => resolveOperationSourceRoute(multiple), {code: "operation_source_route_ambiguous"});
+  const selector = {host_surface: route.host_surface, thread_id: route.thread_id};
+  assert.deepEqual(resolveOperationSourceRoute({...multiple, selected_route: selector}), resolveOperationSourceRoute(value));
+  for (const selected_route of ["original", {...selector, thread_id: "unregistered"},
+    {...selector, host_surface: "other-host"}, {...selector, verified: true}]) {
+    assert.throws(() => resolveOperationSourceRoute({...multiple, selected_route}));
+  }
+  assert.throws(() => resolveOperationSourceRoute({...multiple, agent_id: "other-agent", selected_route: selector}));
+});
+
+test("source routing preserves owner-normalized audience tokens, not executor ID grammar", () => {
+  const route = {agent_id: "agent", host_surface: "custom-host", thread_id: "source@current"};
+  const value = {goal_id: "goal", agent_id: "agent", bindings: [route]};
+  assert.deepEqual(resolveOperationSourceRoute(value).source_route, {goal_id: "goal", ...route});
+  const multiple = {...value, bindings: [route, {...route, thread_id: "safe-second"}]};
+  assert.throws(() => resolveOperationSourceRoute(multiple), {code: "operation_source_route_ambiguous"});
+  const selected_route = {host_surface: route.host_surface, thread_id: route.thread_id};
+  assert.deepEqual(resolveOperationSourceRoute({...multiple, selected_route}), resolveOperationSourceRoute(value));
+  assert.throws(() => resolveOperationSourceRoute({...multiple, selected_route: {...selected_route, thread_id: "unregistered+source"}}));
+});
 
 function input(): JsonObject {
   const executor = {kind: "agent_session", host_surface: "codex-app", thread_id: "original-thread",
@@ -69,6 +97,109 @@ function managedInput(): JsonObject {
     thread_id: "owned-thread", todo_id: "todo-worker", profile_digest: "a".repeat(64), host_turn_id: "native-turn"};
   return value;
 }
+
+function nativeStartInput(): JsonObject {
+  const value = managedInput();
+  value.action = "observe_host_start";
+  value.turn_key = "sha256:" + "d".repeat(64);
+  Object.assign(value.actor as JsonObject, {model: "test-model", reasoning_effort: "xhigh"});
+  Object.assign(operation(value).confirmation as JsonObject,
+    {event_id: "authenticated-confirmation-event", confirmed_at: "2029-12-31T23:59:59Z"});
+  return value;
+}
+
+test("callback wake is an exact-session launch fence, never domain execution authority", () => {
+  const value = {...nativeStartInput(), action: "wake",
+    launch_context: {host: "codex-cli", operation_tools: true, iteration_context: "resume"}};
+  value.executor_route = value.actor;
+  const plan = planAgentOperationHandoff(value);
+  assert.equal(plan.wake_allowed, true);
+  assert.equal(plan.execution_allowed, false);
+  assert.equal(plan.host_delivery, "not_attempted");
+  assert.equal(plan.write_host_start, undefined);
+  assert.equal(plan.write_handoff, undefined);
+  const changes: Array<(row: JsonObject) => void> = [
+    row => {row.binding_current = false;},
+    row => {(row.executor_route as JsonObject).todo_id = "other";},
+    row => {(row.executor_route as JsonObject).thread_id = "replacement";},
+    row => {(row.executor_route as JsonObject).profile_digest = "b".repeat(64);},
+    row => {(row.executor_route as JsonObject).model = "different";},
+    row => {(row.executor_route as JsonObject).reasoning_effort = "high";},
+    row => {(row.launch_context as JsonObject).host = "dsh";},
+    row => {(row.launch_context as JsonObject).operation_tools = false;},
+    row => {(row.launch_context as JsonObject).iteration_context = "fresh";},
+    row => {operation(row).confirmation = null;},
+    row => {operation(row).host_start = {host_turn_id: "already-started"};},
+    row => {operation(row).agent_handoff = {consumption_id: "consumed"};},
+    row => {operation(row).outcome = {outcome: "submission_unknown"};},
+    row => {row.now = "2030-01-01T01:00:00Z";},
+  ];
+  for (const change of changes) {
+    const row = structuredClone(value); change(row);
+    assert.throws(() => planAgentOperationHandoff(row));
+  }
+  assert.throws(() => planAgentOperationHandoff({...input(), action: "wake",
+    executor_route: value.executor_route, launch_context: value.launch_context}));
+});
+
+test("transport accepted start joins the original confirmation and claim without granting execution", () => {
+  const value = nativeStartInput();
+  const plan = planAgentOperationHandoff(value);
+  const receipt = plan.write_host_start as JsonObject;
+  assert.equal(plan.execution_allowed, false);
+  assert.equal(plan.recorded, true);
+  assert.equal(receipt.confirmation_event_id, "authenticated-confirmation-event");
+  assert.equal(receipt.claim_id, "claim-1");
+  assert.equal(receipt.host_turn_id, "native-turn");
+  assert.equal(receipt.turn_key, value.turn_key);
+  assert.equal(receipt.trigger_kind, "canonical_operation_inbox");
+  assert.equal(receipt.accepted_at, value.now);
+  assert.equal(receipt.external_write_performed, false);
+  assert.equal(operation(value).agent_handoff, undefined);
+  operation(value).host_start = receipt;
+  // First observation is immutable even after another normally admitted Turn.
+  const replay = planAgentOperationHandoff({...value, now: "2030-01-01T00:10:00Z",
+    actor: {...value.actor as JsonObject, host_turn_id: "later-native-turn"}});
+  assert.equal(replay.recorded, false);
+  assert.equal(replay.write_host_start, undefined);
+  assert.deepEqual(replay.host_start, receipt);
+  assert.equal(replay.host_delivery, "native_start_accepted");
+  assert.equal(planAgentOperationHandoff({...value, action: "consume"}).execution_allowed, true);
+});
+
+test("native start refuses drift, expiry, missing acceptance identity and effect/reconciliation state", () => {
+  const changes: Array<(value: JsonObject) => void> = [
+    value => {value.binding_current = false;},
+    value => {(value.actor as JsonObject).todo_id = "other-todo";},
+    value => {(value.actor as JsonObject).thread_id = "source-thread";},
+    value => {(value.actor as JsonObject).profile_digest = "b".repeat(64);},
+    value => {(value.actor as JsonObject).model = "other-model";},
+    value => {(value.actor as JsonObject).reasoning_effort = "high";},
+    value => {(value.actor as JsonObject).host_turn_id = null;},
+    value => {value.turn_key = "unaccepted-process-launch";},
+    value => {value.now = "2030-01-01T01:00:00Z";},
+    value => {(operation(value).confirmation as JsonObject).confirmed_at = "2030-01-01T00:01:00Z";},
+    value => {operation(value).confirmation = null;},
+    value => {operation(value).claim = null;},
+    value => {operation(value).agent_handoff = {consumption_id: "already-consumed"};},
+    value => {operation(value).outcome = {outcome: "submission_unknown"};},
+  ];
+  for (const change of changes) {
+    const value = nativeStartInput(); change(value);
+    assert.throws(() => planAgentOperationHandoff(value));
+  }
+  assert.throws(() => planAgentOperationHandoff({...input(), action: "observe_host_start"}));
+});
+
+test("exact managed scope is filtered before bounded inbox pagination", () => {
+  const route = nativeStartInput().actor as JsonObject;
+  const items = Array.from({length: 25}, (_, index) => ({operation_id: `operation-${index}`, route: {...route, todo_id: "other-todo"}}));
+  items.push({operation_id: "operation-matching", route: {...route}});
+  const projected = projectAgentOperationInbox({items, executor_route: route, cursor_scope: "a".repeat(64)});
+  assert.equal(projected.pending_count, 1);
+  assert.equal((projected.items as JsonObject[])[0].operation_id, "operation-matching");
+  assert.equal(projected.next_cursor, null);
+});
 
 test("source context is not managed execution identity and old approvals never migrate", () => {
   const value = managedInput();

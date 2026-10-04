@@ -16,8 +16,10 @@ import { AnswerReportPage } from "./features/personal-workspace/answer-report-pa
 
 const searchSchema = z.object({
   goalId: z.string().optional().default(""),
+  // Scopes the steward conversation to a host-granted workspace; selecting a Goal clears it.
+  workspace: z.string().regex(/^[A-Za-z0-9]{1,80}$/).optional().catch(undefined),
   statusUrl: z.string().optional().default(""),
-  view: z.literal("conversation").optional(),
+  view: z.enum(["conversation", "overview", "tasks", "files"]).optional(),
   reportSessionId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
   reportMessageId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
 });

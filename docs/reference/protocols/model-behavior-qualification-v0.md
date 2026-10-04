@@ -296,7 +296,7 @@ target. The terminal-settlement scenario requires the model to validate a real
 fixture artifact, then follow the quota-projected `durable_writeback ->
 quota_spend -> terminal_closeout` sequence under one stable effect identity; a
 premature no-follow-up or spend-before-writeback fails. The replan scenario
-requires the exact agent-scoped evidence-log
+requires the exact agent-scoped replan
 context projected by a hermetic typed-repeat replan state, then a real
 frontier/source read and either a typed `refresh-state` delta or one
 obligation-bound successor `todo add`; the third requires a

@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 from ..capabilities.pr_review_queue import (
     DEFAULT_REVIEW_PRIORITY,
@@ -28,7 +29,8 @@ from ..capabilities.pr_review_queue.github_source import (
     scan_github_pull_request_targets,
 )
 from ..file_lock import exclusive_file_lock
-from ..history import load_registry
+from ..codex_app_thread_activity import current_codex_execution_identity
+from ..control_plane.projects.registry_codec import load_registry
 from ..pr_review import (
     build_pr_review_packet,
     load_pr_fixture,
@@ -60,7 +62,7 @@ def _file_digest(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _read_json_object(path: Path, *, label: str) -> dict[str, object]:
+def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise TypeError(f"{label} must be an object")
@@ -111,6 +113,10 @@ def register_pr_review_command(
     parser.add_argument(
         "--check-result",
         help="Check a saved review result for verdict/evidence consistency; no GitHub writes.",
+    )
+    parser.add_argument(
+        "--check-approval-closeout", metavar="NUMBER@HEAD_OID",
+        help="Read effective blocking reviews after exact-head approval; no GitHub writes or merge authority.",
     )
     parser.add_argument(
         "--check-merge-readiness",
@@ -260,6 +266,20 @@ def handle_pr_review_command(
                 raise ValueError("PR review Goal was not found: " + goal_id)
         review_configuration = resolve_configuration(goal, machine_configuration)
         wait_for_ci = review_configuration["wait_for_ci"]
+        ci_options: dict[str, Any] = {"wait_for_ci": False} if not wait_for_ci else {}
+        if getattr(args, "check_approval_closeout", None):
+            from ..capabilities.pr_review_queue.approval_closeout import read_github_approval_closeout
+            if any((args.check_result, args.packet, args.check_merge_readiness, args.fixture,
+                    args.autonomous_observation, args.observation_state_file,
+                    args.previous_observation_json, args.handled_exact_head,
+                    args.projected_exact_head, args.since, args.fresh_audit_exact_head, target_exact_heads)):
+                raise ValueError("approval closeout cannot be combined with scan, fixture, result, or readiness options")
+            repository = args.repo or resolve_current_github_repository()
+            if not repository:
+                raise ValueError("approval closeout requires a GitHub repository")
+            payload = read_github_approval_closeout(repository=repository, exact_head=args.check_approval_closeout)
+            print_payload(payload, output_format(args), lambda value: json.dumps(value, indent=2))
+            return 1 if payload["status"] == "hold" else 0
         if goal_id:
             if runtime_root is None:
                 raise ValueError("--goal-id requires an available runtime root")
@@ -297,7 +317,13 @@ def handle_pr_review_command(
                 raise ValueError(
                     "review packet or result is unreadable; check the supplied files"
                 ) from None
-            payload = check_review_result(saved_packet, saved_result)
+            packet_request = saved_packet.get("request")
+            payload = check_review_result(
+                saved_packet, saved_result,
+                current_execution=({"status": "unavailable", "reason": "fixture_mode"}
+                                   if isinstance(packet_request, dict) and packet_request.get("source") == "fixture"
+                                   else current_codex_execution_identity()),
+            )
             print_payload(
                 payload, output_format(args), lambda value: json.dumps(value, indent=2)
             )
@@ -305,6 +331,7 @@ def handle_pr_review_command(
         if args.check_merge_readiness:
             if not goal_id:
                 raise ValueError("merge readiness requires --goal-id")
+            assert runtime_root is not None  # the Goal configuration guard already checked this
             if (
                 args.autonomous_observation
                 or args.observation_state_file
@@ -359,7 +386,7 @@ def handle_pr_review_command(
                 pull_request = fetch_github_pull_request(
                     repo=repository,
                     number=number,
-                    **({"wait_for_ci": False} if not wait_for_ci else {}),
+                    **ci_options,
                 )
                 review_threads = fetch_github_review_thread_summary(
                     repo=repository,
@@ -480,7 +507,7 @@ def handle_pr_review_command(
                 source_scan = scan_github_pull_request_targets(
                     repository=repository,
                     exact_heads=target_exact_heads,
-                    **({"wait_for_ci": False} if not wait_for_ci else {}),
+                    **ci_options,
                 )
                 source = "github_cli_exact_targets"
             else:
@@ -489,17 +516,17 @@ def handle_pr_review_command(
                     limit=max(1, args.limit) + 1,
                     state_filter=resolved_state_filter,
                     since=args.since,
-                    **({"wait_for_ci": False} if not wait_for_ci else {}),
+                    **ci_options,
                 )
             pull_requests = source_scan["pull_requests"]
         if readiness_observations:
             observed_rows = []
             for row in pull_requests:
-                number = row.get("number")
+                observed_number = row.get("number")
                 head_oid = str(row.get("headRefOid") or "").strip().casefold()
                 exact_head = (
-                    f"{number}@{head_oid}"
-                    if isinstance(number, int) and head_oid
+                    f"{observed_number}@{head_oid}"
+                    if isinstance(observed_number, int) and head_oid
                     else ""
                 )
                 if observation_key(str(repository or ""), exact_head) not in readiness_observations:
@@ -623,5 +650,20 @@ def handle_pr_review_command(
             },
             "error": error,
         }
+    # Queue inventory does not need execution metadata. Bind the invoking
+    # session only when this packet actually asks a reviewer to execute work.
+    if not args.fixture and any(item.get("review_action_kind") for item in payload.get("pull_requests", [])):
+        execution = current_codex_execution_identity()
+        payload["reviewer_execution"] = execution
+        if execution["status"] == "runtime_reported":
+            for item in payload["pull_requests"]:
+                plan = item.get("review_plan")
+                if isinstance(plan, dict):
+                    plan["result_template"]["reviewer"] = {
+                        "actor_kind": "model_agent", "declaration_source": "runtime_reported",
+                        "declared_model": execution["model"], "declared_provider": execution["provider"],
+                        "declared_reasoning_effort": execution["reasoning_effort"],
+                        "execution_observation_id": execution["observation_id"],
+                    }
     print_payload(payload, output_format(args), render_pr_review_markdown)
     return 0 if payload.get("ok") else 1

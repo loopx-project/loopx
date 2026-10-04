@@ -90,7 +90,7 @@ TODO_ARCHIVE_STATE_ACTIVE = "active"
 # facts: repeating every key name per Todo pushed a long-history request past the
 # effect-runtime request budget. The typed owner decodes the declared columns
 # back into row objects before validating them, so no cell changes meaning.
-SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION = "todo_summary_projection_request_v1"
+SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION = "todo_summary_projection_request_v2"
 SUMMARY_PROJECTION_COLUMNS = (
     "status", "done", "task_class", "has_resume", "resume_ready", "resume_evaluated",
     "acceptance_blocked", "claimed", "preferred", "watch_only", "due_at", "expires_at",
@@ -789,6 +789,7 @@ def _structured_todo_group_items(
     *,
     source_section: str | None,
     role: str | None,
+    text_limit: int | None,
 ) -> list[dict[str, Any]]:
     return [
         structured_todo_item(
@@ -796,6 +797,7 @@ def _structured_todo_group_items(
             role=role,
             source_section=source_section,
             archive_state=todo_archive_state(item),
+            text_limit=text_limit,
         )
         if isinstance(item, dict)
         else item
@@ -845,7 +847,7 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
     """Adapt evaluated facts and materialize one typed summary decision."""
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
-    from .succession_warning import project_succession
+    from .succession_warning import succession_evaluations, succession_request
 
     # Display may never invent the source's resume decision. Assert the
     # full-source precondition before any RPC that reuses the evaluation, so an
@@ -855,7 +857,10 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
         resume = normalize_todo_resume_when(item.get("resume_when"))
         if resume and not _resume_condition_evaluated(item, resume):
             raise ValueError("Todo display requires a matching full-source resume evaluation")
-    succession = project_succession(items, reuse=True)
+    # Evidence is merely carried here. The shared TS summary owner validates
+    # the same full-source hashes/semantics before using any summary fact,
+    # avoiding a separate RPC for every role/filter (including empty roles).
+    succession = succession_evaluations(items)
     handoff_gates = build_todo_handoff_gate_states(items, evaluations=succession)
     replan_gates = {gate.get("todo_id") for gate in handoff_gates
         if gate.get("route_continuation_replan_required") is True}
@@ -892,6 +897,7 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
             "schema_version": SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION,
             "columns": list(SUMMARY_PROJECTION_COLUMNS),
             "rows": [[row[name] for name in SUMMARY_PROJECTION_COLUMNS] for row in rows],
+            "succession": succession_request(items, reuse=True),
             "observed_at": now_utc().timestamp(),
             "selection": selection, "role": role, "source_section": source_section,
             "item_limit": item_limit, "full_selection": full_selection,
@@ -963,6 +969,7 @@ def compact_todo_group(
     rollout_events: list[dict[str, Any]] | None = None,
     available_capabilities: Any = None,
     item_limit: int | None = MAX_STATUS_TODOS_PER_ROLE,
+    text_limit: int | None = 500,
     include_task_orchestration_authority: bool = False,
     vision_runs: list[dict[str, Any]] | None = None,
     evaluated_at: str | None = None,
@@ -973,6 +980,7 @@ def compact_todo_group(
         items,
         source_section=source_section,
         role=role,
+        text_limit=text_limit,
     )
     _apply_resume_conditions(
         items,

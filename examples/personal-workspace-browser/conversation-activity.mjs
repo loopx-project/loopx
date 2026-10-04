@@ -24,7 +24,14 @@ export const conversationActivityScenario = {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { page, api } = context;
     try {
-      await page.route("**/events/**", route => route.continue({ url: `http://127.0.0.1:${server.address().port}${new URL(route.request().url()).pathname}` }));
+      for (const pattern of ["**/events/**", "**/api/chat/sessions/*/turns/*/events"]) {
+        await page.route(pattern, route => {
+          const path = new URL(route.request().url()).pathname;
+          const restored = path.match(/^\/api\/chat\/sessions\/([^/]+)\/turns\/([^/]+)\/events$/);
+          const streamPath = restored ? `/events/${restored[1]}/${restored[2]}` : path;
+          return route.continue({ url: `http://127.0.0.1:${server.address().port}${streamPath}` });
+        });
+      }
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const send = async message => {
         await page.getByLabel("向 LoopX 发送消息").fill(message);
@@ -36,6 +43,9 @@ export const conversationActivityScenario = {
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await page.clock.install();
       await page.clock.fastForward(25000);
+      // Compare the same instant across views; clock.install alone keeps
+      // advancing and can cross a second boundary while navigation completes.
+      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
@@ -48,21 +58,44 @@ export const conversationActivityScenario = {
       assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
       await page.clock.resume();
       const adjustments = [];
+      const composerAdjustments = [];
       await page.route("**/steer", async route => {
         const body = route.request().postDataJSON();
-        adjustments.push(body);
         const [sessionId, turnId] = new URL(route.request().url()).pathname.match(/sessions\/([^/]+)\/turns\/([^/]+)\/steer/).slice(1);
+        if (body.message === "保留完整结论。") {
+          composerAdjustments.push(body);
+          if (composerAdjustments.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: "主输入框指令未确认" } });
+          return route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
+        }
+        adjustments.push(body);
         if (adjustments.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: "执行器暂时未确认接收，草稿已保留。" } });
         if (adjustments.length === 3) return route.fulfill({ status: 409, json: { ok: false, error: "执行器暂时不可用。", error_code: "live_steering_session_not_attached", delivery_state: "not_delivered" } });
-        return route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: adjustments.length === 2 ? "wrong-turn" : turnId, client_ingress_id: body.client_ingress_id, status: "delivered" } });
+        return route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: adjustments.length === 2 ? "wrong-turn" : turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
       });
       await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
       await pending.getByLabel("追加给本轮的指令").fill("先核对依赖，再继续当前任务。");
       await pending.getByRole("button", { name: "发送调整", exact: true }).click();
       await pending.getByRole("alert").filter({ hasText: "暂时未确认" }).waitFor();
       assert.equal(await pending.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。");
+      await page.getByLabel("向 LoopX 发送消息").fill("保留完整结论。");
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "主输入框指令未确认" }).waitFor();
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
+      await tray.getByLabel("追加给本轮的指令").waitFor({ timeout: 5000 });
+      assert.equal(await tray.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。", "uncertain adjustment survives a view switch");
+      await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
       await pending.getByRole("button", { name: "发送调整", exact: true }).click();
       await pending.getByRole("alert").filter({ hasText: "回执不匹配" }).waitFor();
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await pending.getByLabel("追加给本轮的指令").waitFor();
+      assert.equal(await pending.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。", "reload retains the uncertain adjustment");
+      assert.equal(adjustments.length, 2, "restoration never resends an adjustment");
+      assert.equal(api.turnRequests.length, 1, "restoration never starts work");
+      assert.equal(await page.getByLabel("向 LoopX 发送消息").inputValue(), "保留完整结论。", "composer and inline drafts coexist");
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      assert.equal(composerAdjustments[1].client_ingress_id, composerAdjustments[0].client_ingress_id, "inline writes preserve the composer's retry identity");
       await page.screenshot({ path: resolve(outputDir, "conversation-steering-draft.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       await pending.getByLabel("追加给本轮的指令").scrollIntoViewIfNeeded();
@@ -80,6 +113,14 @@ export const conversationActivityScenario = {
       assert.equal(api.turnRequests.length, 1, "steering never starts another turn");
       assert.equal(streams.size, 1, "steering keeps the original output stream");
       assert.equal(await page.locator(".personal-message.is-user").filter({ hasText: "先核对依赖" }).count(), 1);
+      const conversation = await page.locator(".personal-channel-timeline > .personal-message").evaluateAll(rows => rows.map(row => ({
+        user: row.classList.contains("is-user"), text: row.textContent,
+      })));
+      const originalIndex = conversation.findIndex(row => row.user && row.text.includes(turn.message));
+      const workIndex = conversation.findIndex(row => !row.user && row.text.includes("中断本轮"));
+      const correctionIndex = conversation.findIndex(row => row.user && row.text.includes("先核对依赖"));
+      assert.ok(originalIndex >= 0 && originalIndex < workIndex && workIndex < correctionIndex,
+        "The request, ongoing work and accepted correction remain together in conversation order");
       await pending.locator("summary").filter({ hasText: "最近活动" }).click();
       assert.deepEqual((await pending.locator(".personal-message-activity li").allTextContents()).slice(-3), ["Agent 正在执行命令", "Agent 正在检索", "Agent 正在执行命令"]);
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-desktop.png"), animations: "disabled" });
@@ -145,6 +186,10 @@ export const conversationActivityScenario = {
       assert.equal(await page.getByRole("button", { name: "中断本轮", exact: true }).count(), 0);
       assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "保留我的未发送草稿。");
       assert.equal(await page.getByRole("button", { name: "发送调整", exact: true }).isDisabled(), true);
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "保留我的未发送草稿。", "finished turn retains the unsent draft across unmount");
+      assert.equal(await page.getByRole("button", { name: "发送调整", exact: true }).isDisabled(), true, "finished draft cannot steer another turn");
       await page.unroute("**/interrupt");
 
       // The same interaction is present in Goal Chat, through the same timeline.
@@ -152,13 +197,20 @@ export const conversationActivityScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const goalTurn = await send("请检查这个 Goal 的当前状态。");
       await page.getByRole("button", { name: "调整本轮", exact: true }).click();
+      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "", "another conversation never inherits the old draft");
+      await page.evaluate(() => { window.sessionStorage.setItem = () => { throw new Error("storage unavailable"); }; });
       await page.getByLabel("追加给本轮的指令").fill("先检查最新证据。");
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "任务", exact: true }).click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "先检查最新证据。", "blocked storage preserves drafts within this page");
       await page.getByRole("button", { name: "发送调整", exact: true }).click();
-      await page.getByText("执行器已接收本轮追加指令。", { exact: true }).waitFor();
+      await page.locator(".personal-message")
+        .filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) })
+        .getByRole("status").filter({ hasText: "执行器已接收本轮追加指令。" }).waitFor();
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
       assert.deepEqual(api.interrupts.at(-1), { sessionId: goalTurn.sessionId, turnId: goalTurn.turnId });
-      return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity, exact-turn steering and interruption, receipt mismatch, idempotent retry, preserved drafts/partial output and completion races." };
+      return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, coexisting composer identity, blocked storage, terminal draft isolation, interruption and completion races." };
     } finally {
       for (const response of streams.values()) response.destroy();
       server.closeAllConnections();

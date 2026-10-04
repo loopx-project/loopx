@@ -1,14 +1,35 @@
 import { Fragment, type ReactNode } from "react";
+import LinkifyIt from "linkify-it";
 
 /**
  * Minimal, safe Markdown renderer for visible Agent prose.
  * Builds React nodes directly (no dangerouslySetInnerHTML), so raw HTML in
  * model output renders as inert text. Supports the subset LoopX Agents
- * actually emit in chat and reports: fenced code, inline code, bold, links,
+ * actually emit in chat and reports: fenced code, inline code, bold, web links,
  * headings, ordered/unordered lists and tables.
  */
 
 const INLINE_PATTERN = /(`[^`\n]+`)|(\*\*[^*\n]+(\*[^*\n]*)?\*\*)|(\[[^\]\n]{1,120}\]\(https?:\/\/[^)\s]+\))/g;
+const webLinks = new LinkifyIt({
+  fuzzyLink: false, fuzzyEmail: false,
+}).add("ftp:", null).add("mailto:", null).add("//", null);
+
+function renderPlainText(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  // Unescaped CJK punctuation separates prose from bare URLs. Named Markdown
+  // destinations bypass this split, retaining literal punctuation in the URL.
+  for (const [partIndex, part] of text.split(/([。，、；：！？])/u).entries()) {
+    let last = 0;
+    for (const match of webLinks.match(part) ?? []) {
+      if (match.index > last) nodes.push(part.slice(last, match.index));
+      nodes.push(<a className="personal-md-link" href={match.url}
+        key={`${keyPrefix}-p${partIndex}-${match.index}`} rel="noreferrer" target="_blank">{match.text}</a>);
+      last = match.lastIndex;
+    }
+    if (last < part.length) nodes.push(part.slice(last));
+  }
+  return nodes;
+}
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -16,13 +37,13 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   let index = 0;
   for (const match of text.matchAll(INLINE_PATTERN)) {
     const at = match.index ?? 0;
-    if (at > last) nodes.push(text.slice(last, at));
+    if (at > last) nodes.push(...renderPlainText(text.slice(last, at), `${keyPrefix}-t${index}`));
     const token = match[0];
     const key = `${keyPrefix}-i${index++}`;
     if (token.startsWith("`")) {
       nodes.push(<code className="personal-md-code" key={key}>{token.slice(1, -1)}</code>);
     } else if (token.startsWith("**")) {
-      nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+      nodes.push(<strong key={key}>{renderInline(token.slice(2, -2), key)}</strong>);
     } else {
       const close = token.indexOf("](");
       const label = token.slice(1, close);
@@ -31,7 +52,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     }
     last = at + token.length;
   }
-  if (last < text.length) nodes.push(text.slice(last));
+  if (last < text.length) nodes.push(...renderPlainText(text.slice(last), `${keyPrefix}-t${index}`));
   return nodes;
 }
 

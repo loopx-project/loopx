@@ -1108,10 +1108,10 @@ def test_retained_selection_reentry_stays_packet_free_and_signed(
     status_payload = _ordinary_status_payload()
     status_item = status_payload["attention_queue"]["items"][0]
 
-    import loopx.todos
+    from loopx.control_plane.todos import list_readback
 
     monkeypatch.setattr(
-        loopx.todos,
+        list_readback,
         "list_goal_todos",
         lambda **_kwargs: {
             "ok": True,
@@ -1237,9 +1237,9 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
             "user_todos": fresh_user_todos,
         }
 
-    import loopx.todos
+    from loopx.control_plane.todos import list_readback
 
-    monkeypatch.setattr(loopx.todos, "list_goal_todos", fresh_todos)
+    monkeypatch.setattr(list_readback, "list_goal_todos", fresh_todos)
 
     payload = build_live_quota_should_run_decision(
         stale_status,

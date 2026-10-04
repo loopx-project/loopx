@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...file_lock import exclusive_file_lock
 
 COMMAND = "/loopx-deepresearch"
@@ -238,6 +239,8 @@ def add_source(
     tool: str,
     title: str | None,
     claims: list[dict[str, Any]],
+    external_evidence: dict[str, str] | None = None,
+    expected_question: str | None = None,
 ) -> dict[str, Any]:
     # Load, validate the whole batch, allocate ids, mutate, and save all under
     # one project-level lock: concurrent deepresearch commands are a normal
@@ -245,13 +248,31 @@ def add_source(
     # when the atomic rename itself succeeds.
     with exclusive_file_lock(state_path(project), operation="deepresearch_add_source"):
         state = _require_active_state(project)
+        if expected_question is not None and state["question"] != expected_question:
+            raise ValueError("external evidence objective does not match the active research question")
+        if external_evidence is not None:
+            fields = {"plan_id", "admission_id", "receipt_digest", "content_digest"}
+            if set(external_evidence) != fields or any(
+                not isinstance(value, str) or not ENVELOPED_SHA256_PATTERN.fullmatch(value)
+                for value in external_evidence.values()
+            ):
+                raise ValueError("external evidence lineage requires exact content-addressed identities")
         url_or_path = url_or_path.strip()
         tool = tool.strip() or "unspecified"
         if not url_or_path:
             raise ValueError("--url-or-path must be non-empty")
         normalized = _normalize_source_ref(url_or_path)
         for source in state["sources"]:
-            if _normalize_source_ref(str(source["url_or_path"])) == normalized:
+            same_source = (
+                str(source["url_or_path"]).strip().rstrip("/") == url_or_path.rstrip("/")
+                if external_evidence is not None else
+                _normalize_source_ref(str(source["url_or_path"])) == normalized
+            )
+            if same_source:
+                if (external_evidence is not None and source.get("external_evidence") == external_evidence
+                    and [claim["text"] for claim in state["claims"] if claim["id"] in source["claims"]]
+                    == [str(claim.get("text", "")).strip() for claim in claims]):
+                    return {"source_id": source["id"], "claim_ids": source["claims"], "state": state}
                 raise ValueError(
                     f"source already recorded as {source['id']} "
                     f"({source['url_or_path']}); reuse its claims instead of re-reading"
@@ -325,6 +346,7 @@ def add_source(
                 "title": (title or "").strip() or None,
                 "accessed_at": _now_iso(),
                 "claims": claim_ids,
+                **({"external_evidence": dict(external_evidence)} if external_evidence is not None else {}),
             }
         )
         _save_state(project, state)

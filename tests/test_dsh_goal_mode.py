@@ -15,6 +15,7 @@ from loopx.cli_commands import turn_dsh_host
 from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
 )
+from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from loopx.control_plane.turn_driver.host_failure import (
     BuiltInHostError,
     build_host_failure_record,
@@ -363,6 +364,26 @@ def test_prompt_requests_one_typed_public_safe_json_result() -> None:
     assert "credentials" in prompt
 
 
+def test_prompt_carries_the_signed_authority_without_prose_reconstruction() -> None:
+    request = _signed_request()
+    authority = turn_host_adapter.extract_turn_authority(request)
+    envelope = request["turn_envelope"]
+    assert authority["primary_action"] == "Do the signed thing."
+    assert authority["required_reads"] == envelope["required_reads"]
+    assert authority["write_scope"] == envelope["boundary"]["write_scope"]
+    assert authority["workspace_guard"] == envelope["boundary"]["workspace_guard"]
+
+    prompt = turn_host_adapter.render_prompt(authority)
+    assert "legacy action must not win" not in prompt
+    for expected in (
+        '"primary_action":"Do the signed thing."',
+        '"command":"git status --short"',
+        '"write_scope":["docs/**","tests/**"]',
+        '"workspace_guard":{"action":"continue"',
+    ):
+        assert expected in prompt, expected
+
+
 def test_parse_model_json_tolerates_prose_and_fences() -> None:
     payload = {"result_kind": "wait", "summary": "nothing to do"}
     assert turn_host_adapter.parse_model_json(json.dumps(payload)) == payload
@@ -427,6 +448,68 @@ def test_build_result_shapes_material_results_with_required_fields() -> None:
     # Sparse material blocks get bounded fallbacks, never empty authority text.
     assert result["recommended_action"]
     assert result["vision_unchanged_reason"]
+
+
+def _turn_plan(request: dict) -> dict:
+    return {
+        "transaction": {"turn_key": request["turn_key"]},
+        "turn_envelope": request["turn_envelope"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected_kind"),
+    [
+        (
+            {
+                "result_kind": "validated_progress",
+                "classification": "single surface change",
+                "summary": "edited one file",
+                "next_action": "review the diff",
+            },
+            "validated_progress",
+        ),
+        (
+            {
+                "result_kind": "wait",
+                "classification": "throttled",
+                "next_action": "retry after cadence",
+            },
+            "wait",
+        ),
+        (None, "wait"),
+        ({"result_kind": "not_a_loopx_kind", "summary": "bad"}, "wait"),
+    ],
+    ids=["material", "wait", "missing_block", "unsupported_kind"],
+)
+def test_build_result_is_accepted_by_the_real_host_result_validator(
+    candidate: dict | None, expected_kind: str
+) -> None:
+    # Shaping alone is not enough: every adapter output, including fail-closed
+    # waits, must pass the same validator the Turn executor applies.
+    request = _signed_request()
+    result = turn_host_adapter.build_result(request, candidate)
+    assert result["result_kind"] == expected_kind
+    if expected_kind == "wait":
+        assert "delivery_batch_scale" not in result
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+
+
+def test_build_result_bounds_every_free_text_field() -> None:
+    result = turn_host_adapter.build_result(
+        _signed_request(),
+        {
+            "result_kind": "user_action_required",
+            "classification": "x" * 500,
+            "summary": "y" * 900,
+            "next_action": "z" * 5000,
+        },
+    )
+    # Independent limits from the Turn result contract, not the adapter's table.
+    assert len(result["classification"]) <= 120
+    assert len(result["summary"]) <= 400
+    assert len(result["next_action"]) <= 1_200
 
 
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:

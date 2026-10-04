@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...history import load_registry
-from ...state_refresh import resolve_goal_state
+from ..goals.state_resolution import resolve_goal_state
 
 
 def resolve_todo_state_path(

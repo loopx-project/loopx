@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
+from ...public_safe_text import PUBLIC_SAFE_REFERENCE_PATTERN as _EXISTING_TOKEN_RE
 from .application import (
     APPLICATION_OUTCOMES,
     RECALL_MODES,
@@ -31,7 +32,6 @@ EVIDENCE_BASES = frozenset(
     }
 )
 
-_EXISTING_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
 _OPAQUE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _MEMORY_REF_DIGEST_RE = re.compile(r"^(?:[0-9a-f]{16}|sha256:[0-9a-f]{64})$")
 _MAX_MEMORY_DIGESTS = 16
@@ -120,6 +120,23 @@ _OBSERVATION_FIELDS = frozenset(
     }
 )
 
+_OBSERVATION_WRITE_BOUNDARY_FIELDS = frozenset(
+    {
+        "grants_new_action_authority",
+        "provider_write_performed",
+        "external_writes_performed",
+        "raw_content_captured",
+    }
+)
+
+
+class RewardMemoryUtilityObservationValidationError(ValueError):
+    """Stage-1 validation failure with a stable machine-readable reason code."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 def _object(value: object, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
@@ -203,7 +220,10 @@ def _compact_text(value: object, label: str, *, maximum: int) -> str:
 def _confidence(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("confidence must be a finite number between 0 and 1")
-    result = float(value)
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("confidence must be a finite number between 0 and 1") from exc
     if not math.isfinite(result) or not 0.0 <= result <= 1.0:
         raise ValueError("confidence must be a finite number between 0 and 1")
     return result
@@ -647,6 +667,58 @@ def _normalize_observation(value: object) -> dict[str, Any]:
     return normalized
 
 
+def _observation_validation_reason_code(value: object) -> str:
+    """Classify observation input from typed fields, never exception prose."""
+
+    if not isinstance(value, Mapping):
+        return "observation_malformed"
+    if value.get("schema_version") != MEMORY_UTILITY_OBSERVATION_SCHEMA_VERSION:
+        return "observation_schema_mismatch"
+    if any(
+        key in value and value.get(key) is not False
+        for key in _OBSERVATION_WRITE_BOUNDARY_FIELDS
+    ):
+        return "observation_write_boundary_violation"
+    try:
+        _scope(value.get("scope"), "observation.scope")
+    except (TypeError, ValueError):
+        return "observation_malformed_scope"
+    try:
+        _opaque_ref(
+            value.get("retrieval_snapshot_ref"),
+            "observation.retrieval_snapshot_ref",
+        )
+        _opaque_ref(
+            value.get("policy_snapshot_ref"),
+            "observation.policy_snapshot_ref",
+        )
+    except (TypeError, ValueError):
+        return "observation_malformed_snapshot"
+    try:
+        observation_id = _opaque_ref(
+            value.get("observation_id"), "observation.observation_id"
+        )
+        identity_fields = {
+            "schema_version",
+            "scope",
+            "application_receipt_id",
+            "memory_ref_digests",
+            "retrieval_snapshot_ref",
+            "policy_snapshot_ref",
+            "outcome_ref",
+            "attribution_level",
+            "evidence_basis",
+            "evidence_refs",
+            "evaluator_ref",
+            "evaluation_version",
+        }
+        if identity_fields <= set(value) and observation_id != _observation_id(value):
+            return "observation_identity_invalid"
+    except (KeyError, TypeError, ValueError):
+        return "observation_identity_invalid"
+    return "observation_malformed"
+
+
 def build_reward_memory_utility_observation(
     application_receipt: Mapping[str, Any],
     verified_outcome: Mapping[str, Any],
@@ -708,7 +780,12 @@ def validate_reward_memory_utility_observation(
 ) -> dict[str, Any]:
     """Validate structure alone, or also bind all supplied trusted facts."""
 
-    normalized = _normalize_observation(observation)
+    try:
+        normalized = _normalize_observation(observation)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise RewardMemoryUtilityObservationValidationError(
+            _observation_validation_reason_code(observation), str(exc)
+        ) from exc
     trusted_values = (application_receipt, verified_outcome, attribution_context)
     if all(value is None for value in trusted_values):
         return normalized

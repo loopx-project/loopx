@@ -20,7 +20,19 @@ process.stdin.on("data", (chunk: Buffer) => {
   accepted = true;
   const line = pending.subarray(0, newline).toString("utf8"); pending = Buffer.alloc(0);
   void (async () => {
-    try { await emit(await runHostProcess(decodeHostProcessRequest(JSON.parse(line)), emit, owner.signal)); }
+    try {
+      const raw = JSON.parse(line);
+      const lease = raw.delegated_lease;
+      delete raw.delegated_lease;
+      const request = decodeHostProcessRequest(raw);
+      // The owned process group is reported before either path can run unaccounted.
+      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit}));
+      else {
+        // Ordinary Hosts do not load canonical lease/provider modules.
+        const {decodeDelegatedHostLease, runLeasedHostProcess} = await import("./leased_host_process.ts");
+        await emit(await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal, emit));
+      }
+    }
     catch { process.exitCode = 1; }
     finally { process.stdin.destroy(); }
   })();

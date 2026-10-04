@@ -25,6 +25,13 @@ from .source_session_registry_state import (
     session_binding_records,
     write_journal,
 )
+from .source_session_turn_effects import (
+    decide_source_turn_effect_close_locked,
+    decide_source_turn_effect_publish_locked,
+    decide_source_turn_effect_repair_locked,
+    drain_releasable_source_turn_effects,
+    write_source_turn_effect_gate_locked,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +40,18 @@ class RecreateGoalRequest:
     goal_id: str
     goal_instance_id: str
     operation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RecreationState:
+    registry: dict[str, Any]
+    active_goal_ref: dict[str, str]
+    reserved_goal_ref: dict[str, str]
+    bindings: list[dict[str, Any]]
+    session_receipts: list[dict[str, Any]]
+    lifetime_receipts: list[dict[str, Any]]
+    retiring_bindings: list[dict[str, Any]]
+    decision: dict[str, Any]
 
 
 def _recreation_journal_path(
@@ -120,8 +139,132 @@ def _recreation_result(
     }
 
 
+def _evaluate_recreation(
+    registry: dict[str, Any],
+    request: RecreateGoalRequest,
+    *,
+    requested_goal_ref: dict[str, str],
+    request_digest: str,
+    journal: dict[str, Any] | None,
+) -> _RecreationState:
+    active_goal_ref, _goal = current_goal_ref(
+        registry,
+        goal_id=request.goal_id,
+    )
+    bindings = session_binding_records(registry)
+    session_receipts = required_list(registry, "session_receipts")
+    lifetime_receipts = required_list(registry, "lifetime_receipts")
+    prior_receipt = prior_operation_receipt(
+        lifetime_receipts,
+        operation_id=request.operation_id,
+    )
+    session_operation_receipt = prior_operation_receipt(
+        session_receipts,
+        operation_id=request.operation_id,
+    )
+    if session_operation_receipt is not None and (
+        session_operation_receipt.get("schema_version")
+        != "loopx_source_session_retirement_receipt_v1"
+        or session_operation_receipt.get("request_digest") != request_digest
+    ):
+        raise ValueError(
+            "source-session operation_id was reused across lifecycle operations"
+        )
+    if journal is not None:
+        reserved_goal_ref = copy.deepcopy(journal["new_goal_ref"])
+    elif prior_receipt is not None:
+        candidate = prior_receipt.get("new_goal_ref")
+        if not isinstance(candidate, dict):
+            raise ValueError("Goal recreation receipt new_goal_ref is invalid")
+        reserved_goal_ref = copy.deepcopy(candidate)
+    else:
+        reserved_goal_ref = {
+            "goal_id": request.goal_id,
+            "goal_instance_id": f"ginst_{uuid4().hex}",
+        }
+    retiring_bindings = [
+        binding
+        for binding in bindings
+        if binding.get("foreground_goal_ref") == requested_goal_ref
+    ]
+    decision = effect_runtime_result(
+        "goal.source_session.recreate.decide",
+        {
+            "profile_id": registry["profile_id"],
+            "operation_id": request.operation_id,
+            "request_digest": request_digest,
+            "requested_goal_ref": requested_goal_ref,
+            "current_goal_ref": active_goal_ref,
+            "reserved_goal_ref": reserved_goal_ref,
+            "prior_receipt": prior_receipt,
+            "lifetime_receipt_count": len(lifetime_receipts),
+            "session_receipt_count": len(session_receipts),
+            "retiring_binding_count": len(retiring_bindings),
+        },
+    )
+    if not isinstance(decision, dict):
+        raise RuntimeError("Goal recreation decision must be an object")
+    if decision.get("kind") == "reject":
+        raise ValueError(f"source-session recreation rejected: {decision.get('code')}")
+    if decision.get("kind") not in {"commit", "replay"}:
+        raise RuntimeError("Goal recreation decision kind is unsupported")
+    return _RecreationState(
+        registry=registry,
+        active_goal_ref=active_goal_ref,
+        reserved_goal_ref=reserved_goal_ref,
+        bindings=bindings,
+        session_receipts=session_receipts,
+        lifetime_receipts=lifetime_receipts,
+        retiring_bindings=retiring_bindings,
+        decision=decision,
+    )
+
+
+def _reserved_journal(
+    request: RecreateGoalRequest,
+    *,
+    requested_goal_ref: dict[str, str],
+    reserved_goal_ref: dict[str, str],
+    request_digest: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "loopx_goal_recreation_journal_v1",
+        "operation_id": request.operation_id,
+        "request_digest": request_digest,
+        "retired_goal_ref": copy.deepcopy(requested_goal_ref),
+        "new_goal_ref": copy.deepcopy(reserved_goal_ref),
+        "reserved_at": now_local_iso(),
+        "phase": "reserved",
+    }
+
+
+def _drain_required_result(
+    request: RecreateGoalRequest,
+    *,
+    requested_goal_ref: dict[str, str],
+    pending_effects: list[dict[str, str]],
+    changed: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema_version": "loopx_goal_recreation_v1",
+        "status": "drain_required",
+        "changed": changed,
+        "replayed": not changed,
+        "gate_state": "closing",
+        "registry": str(request.registry_path),
+        "retired_goal_ref": copy.deepcopy(requested_goal_ref),
+        "pending_effects": pending_effects,
+        "recovery_action": (
+            "Resolve every pending Turn effect, then retry recreate-goal "
+            "with the same operation_id."
+        ),
+        "execution_authority": False,
+    }
+
+
 def recreate_goal_instance(request: RecreateGoalRequest) -> dict[str, Any]:
-    """Retire exact A and publish one reserved B under the alias guard."""
+    """Close A's effect gate, drain admitted work, then publish reserved B."""
 
     requested_goal_ref = exact_goal_ref(
         request.goal_id,
@@ -134,9 +277,10 @@ def recreate_goal_instance(request: RecreateGoalRequest) -> dict[str, Any]:
         goal_id=request.goal_id,
         operation_id=request.operation_id,
     )
+
     with exclusive_cross_runtime_file_lock(
         guard,
-        operation="source_session_goal_lifetime",
+        operation="source_session_goal_lifetime_close",
     ):
         journal = _read_recreation_journal(journal_path)
         if journal is not None and (
@@ -145,139 +289,170 @@ def recreate_goal_instance(request: RecreateGoalRequest) -> dict[str, Any]:
             or journal["retired_goal_ref"] != requested_goal_ref
         ):
             raise ValueError("Goal recreation operation_id conflicts with its journal")
+        with source_session_registry_transaction(
+            request.registry_path,
+            operation="source_session_goal_recreate_prepare",
+        ) as transaction:
+            state = _evaluate_recreation(
+                transaction.payload_copy(),
+                request,
+                requested_goal_ref=requested_goal_ref,
+                request_digest=request_digest,
+                journal=journal,
+            )
+        if state.decision["kind"] == "replay":
+            replay_receipt = state.decision.get("receipt")
+            if not isinstance(replay_receipt, dict):
+                raise RuntimeError("Goal recreation replay omitted its receipt")
+            next_gate = decide_source_turn_effect_repair_locked(
+                registry_path=request.registry_path,
+                goal_id=request.goal_id,
+                requested_goal_ref=requested_goal_ref,
+                current_goal_ref=state.active_goal_ref,
+                reserved_goal_ref=state.reserved_goal_ref,
+                operation_id=request.operation_id,
+                request_digest=request_digest,
+            )
+            if next_gate is not None:
+                write_source_turn_effect_gate_locked(
+                    registry_path=request.registry_path,
+                    goal_id=request.goal_id,
+                    gate=next_gate,
+                )
+            if journal is None:
+                journal = {
+                    **_reserved_journal(
+                        request,
+                        requested_goal_ref=requested_goal_ref,
+                        reserved_goal_ref=state.reserved_goal_ref,
+                        request_digest=request_digest,
+                    ),
+                    "reserved_at": replay_receipt["committed_at"],
+                }
+            write_journal(journal_path, {**journal, "phase": "published"})
+            return _recreation_result(
+                request,
+                receipt=replay_receipt,
+                replayed=True,
+            )
+        closing_gate, gate_changed = decide_source_turn_effect_close_locked(
+            registry_path=request.registry_path,
+            goal_id=request.goal_id,
+            requested_goal_ref=requested_goal_ref,
+            current_goal_ref=state.active_goal_ref,
+            reserved_goal_ref=state.reserved_goal_ref,
+            operation_id=request.operation_id,
+            request_digest=request_digest,
+        )
+        if journal is None:
+            journal = _reserved_journal(
+                request,
+                requested_goal_ref=requested_goal_ref,
+                reserved_goal_ref=state.reserved_goal_ref,
+                request_digest=request_digest,
+            )
+            write_journal(journal_path, journal)
+        write_source_turn_effect_gate_locked(
+            registry_path=request.registry_path,
+            goal_id=request.goal_id,
+            gate=closing_gate,
+        )
 
+    drain_result = drain_releasable_source_turn_effects(
+        registry_path=request.registry_path,
+        goal_id=request.goal_id,
+        requested_goal_ref=requested_goal_ref,
+    )
+    if drain_result.pending_effects:
+        return _drain_required_result(
+            request,
+            requested_goal_ref=requested_goal_ref,
+            pending_effects=drain_result.pending_effects,
+            changed=gate_changed or drain_result.changed,
+        )
+
+    with exclusive_cross_runtime_file_lock(
+        guard,
+        operation="source_session_goal_lifetime_publish",
+    ):
+        journal = _read_recreation_journal(journal_path)
+        if journal is None:
+            raise RuntimeError("Goal recreation reservation journal is missing")
         with source_session_registry_transaction(
             request.registry_path,
             operation="source_session_goal_recreate",
         ) as transaction:
-            registry = transaction.payload_copy()
-            active_goal_ref, _goal = current_goal_ref(
-                registry,
-                goal_id=request.goal_id,
+            state = _evaluate_recreation(
+                transaction.payload_copy(),
+                request,
+                requested_goal_ref=requested_goal_ref,
+                request_digest=request_digest,
+                journal=journal,
             )
-            bindings = session_binding_records(registry)
-            session_receipts = required_list(registry, "session_receipts")
-            lifetime_receipts = required_list(registry, "lifetime_receipts")
-            prior_receipt = prior_operation_receipt(
-                lifetime_receipts,
-                operation_id=request.operation_id,
-            )
-            session_operation_receipt = prior_operation_receipt(
-                session_receipts,
-                operation_id=request.operation_id,
-            )
-            if session_operation_receipt is not None and (
-                session_operation_receipt.get("schema_version")
-                != "loopx_source_session_retirement_receipt_v1"
-                or session_operation_receipt.get("request_digest") != request_digest
-            ):
-                raise ValueError(
-                    "source-session operation_id was reused across lifecycle operations"
-                )
-            if journal is not None:
-                reserved_goal_ref = copy.deepcopy(journal["new_goal_ref"])
-            elif prior_receipt is not None:
-                candidate = prior_receipt.get("new_goal_ref")
-                if not isinstance(candidate, dict):
-                    raise ValueError("Goal recreation receipt new_goal_ref is invalid")
-                reserved_goal_ref = copy.deepcopy(candidate)
-            else:
-                reserved_goal_ref = {
-                    "goal_id": request.goal_id,
-                    "goal_instance_id": f"ginst_{uuid4().hex}",
-                }
-
-            retiring_bindings = [
-                binding
-                for binding in bindings
-                if binding.get("foreground_goal_ref") == requested_goal_ref
-            ]
-            decision = effect_runtime_result(
-                "goal.source_session.recreate.decide",
-                {
-                    "profile_id": registry["profile_id"],
-                    "operation_id": request.operation_id,
-                    "request_digest": request_digest,
-                    "requested_goal_ref": requested_goal_ref,
-                    "current_goal_ref": active_goal_ref,
-                    "reserved_goal_ref": reserved_goal_ref,
-                    "prior_receipt": prior_receipt,
-                    "lifetime_receipt_count": len(lifetime_receipts),
-                    "session_receipt_count": len(session_receipts),
-                    "retiring_binding_count": len(retiring_bindings),
-                },
-            )
-            if not isinstance(decision, dict):
-                raise RuntimeError("Goal recreation decision must be an object")
-            if decision.get("kind") == "reject":
-                raise ValueError(
-                    f"source-session recreation rejected: {decision.get('code')}"
-                )
-            if decision.get("kind") == "replay":
-                replay_receipt = decision.get("receipt")
+            if state.decision["kind"] == "replay":
+                replay_receipt = state.decision.get("receipt")
                 if not isinstance(replay_receipt, dict):
                     raise RuntimeError("Goal recreation replay omitted its receipt")
-                if journal is None:
-                    journal = {
-                        "schema_version": "loopx_goal_recreation_journal_v1",
-                        "operation_id": request.operation_id,
-                        "request_digest": request_digest,
-                        "retired_goal_ref": copy.deepcopy(requested_goal_ref),
-                        "new_goal_ref": copy.deepcopy(replay_receipt["new_goal_ref"]),
-                        "reserved_at": replay_receipt["committed_at"],
-                        "phase": "published",
-                    }
-                    write_journal(journal_path, journal)
-                elif journal["phase"] != "published":
-                    write_journal(journal_path, {**journal, "phase": "published"})
+                next_gate = decide_source_turn_effect_repair_locked(
+                    registry_path=request.registry_path,
+                    goal_id=request.goal_id,
+                    requested_goal_ref=requested_goal_ref,
+                    current_goal_ref=state.active_goal_ref,
+                    reserved_goal_ref=state.reserved_goal_ref,
+                    operation_id=request.operation_id,
+                    request_digest=request_digest,
+                )
+                if next_gate is not None:
+                    write_source_turn_effect_gate_locked(
+                        registry_path=request.registry_path,
+                        goal_id=request.goal_id,
+                        gate=next_gate,
+                    )
+                write_journal(journal_path, {**journal, "phase": "published"})
                 return _recreation_result(
                     request,
                     receipt=replay_receipt,
                     replayed=True,
                 )
-            if decision.get("kind") != "commit":
-                raise RuntimeError("Goal recreation decision kind is unsupported")
 
-            if journal is None:
-                journal = {
-                    "schema_version": "loopx_goal_recreation_journal_v1",
-                    "operation_id": request.operation_id,
-                    "request_digest": request_digest,
-                    "retired_goal_ref": copy.deepcopy(requested_goal_ref),
-                    "new_goal_ref": copy.deepcopy(reserved_goal_ref),
-                    "reserved_at": now_local_iso(),
-                    "phase": "reserved",
-                }
-                write_journal(journal_path, journal)
-
+            next_gate = decide_source_turn_effect_publish_locked(
+                registry_path=request.registry_path,
+                goal_id=request.goal_id,
+                requested_goal_ref=requested_goal_ref,
+                current_goal_ref=state.active_goal_ref,
+                reserved_goal_ref=state.reserved_goal_ref,
+                operation_id=request.operation_id,
+                request_digest=request_digest,
+            )
             committed_at = now_local_iso()
             retired_session_ids = sorted(
-                str(binding["session_id"]) for binding in retiring_bindings
+                str(binding["session_id"]) for binding in state.retiring_bindings
             )
             receipt = {
                 "schema_version": "loopx_goal_recreation_receipt_v1",
                 "operation_id": request.operation_id,
                 "request_digest": request_digest,
                 "retired_goal_ref": copy.deepcopy(requested_goal_ref),
-                "new_goal_ref": copy.deepcopy(reserved_goal_ref),
+                "new_goal_ref": copy.deepcopy(state.reserved_goal_ref),
                 "retired_session_ids": retired_session_ids,
                 "committed_at": committed_at,
             }
-            registry["goals"] = [
+            state.registry["goals"] = [
                 {
                     **candidate,
-                    "goal_instance_id": reserved_goal_ref["goal_instance_id"],
+                    "goal_instance_id": state.reserved_goal_ref["goal_instance_id"],
                     "execution_authority": False,
                 }
                 if candidate.get("id") == request.goal_id
                 else candidate
-                for candidate in required_list(registry, "goals")
+                for candidate in required_list(state.registry, "goals")
             ]
-            registry["session_bindings"] = [
+            state.registry["session_bindings"] = [
                 binding
-                for binding in bindings
+                for binding in state.bindings
                 if binding.get("foreground_goal_ref") != requested_goal_ref
             ]
+            session_receipts = state.session_receipts
             if retired_session_ids:
                 session_receipts = [
                     *session_receipts,
@@ -293,26 +468,34 @@ def recreate_goal_instance(request: RecreateGoalRequest) -> dict[str, Any]:
                         "committed_at": committed_at,
                     },
                 ]
-            registry["session_receipts"] = session_receipts
-            retired = registry.get("retired_goal_instances", [])
+            state.registry["session_receipts"] = session_receipts
+            retired = state.registry.get("retired_goal_instances", [])
             if not isinstance(retired, list) or any(
                 not isinstance(item, dict) for item in retired
             ):
                 raise ValueError(
                     "source-session retired_goal_instances must be a list of objects"
                 )
-            registry["retired_goal_instances"] = [
+            state.registry["retired_goal_instances"] = [
                 *retired,
                 {
                     "goal_ref": copy.deepcopy(requested_goal_ref),
-                    "successor_goal_ref": copy.deepcopy(reserved_goal_ref),
+                    "successor_goal_ref": copy.deepcopy(state.reserved_goal_ref),
                     "operation_id": request.operation_id,
                     "retired_at": committed_at,
                 },
             ]
-            registry["lifetime_receipts"] = [*lifetime_receipts, receipt]
-            registry["updated_at"] = committed_at
-            transaction.commit(registry)
+            state.registry["lifetime_receipts"] = [
+                *state.lifetime_receipts,
+                receipt,
+            ]
+            state.registry["updated_at"] = committed_at
+            transaction.commit(state.registry)
+            write_source_turn_effect_gate_locked(
+                registry_path=request.registry_path,
+                goal_id=request.goal_id,
+                gate=next_gate,
+            )
             write_journal(journal_path, {**journal, "phase": "published"})
             return _recreation_result(
                 request,

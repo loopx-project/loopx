@@ -117,9 +117,14 @@ the work it shows.
 
 When a user names an existing peer for review or other work, keep that Agent
 identity. The directory's `peer_route` is a candidate list, not a selected or
-verified host task. On a trusted host with CLI access, use `resolve-peer-route`
-for the exact Goal and Agent; when several historical bindings exist, use the
-user's exact task link or report the ambiguity. If a host message tool is
+verified host task. In App/Goal conversations use the existing read tool with
+`view=agent_route`, exact `goal_id` and `agent_id` after discovery. This reuses
+the shared local route observation and audience scope; it is not executor
+readiness or a message submission. Remote sources remain explicitly unsupported
+by this read view. On a trusted host with CLI access, use `resolve-peer-route`
+for the exact Goal and Agent. It may select one readable task when every other
+binding is explicitly archived. If it still reports ambiguity, use the user's
+exact task link or report the gap; never treat unknown as archived. If a host message tool is
 authorized, verify the selected task through that host, record the stable
 `manager-inbox request --require-host-route`, then send its content-free
 `host_delivery.message` to the selected task. Treat its `not_attempted` state

@@ -9,7 +9,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
-from .bootstrap import bootstrap_project
+from .bootstrap import GoalCreationConflictError, bootstrap_project
+from .capabilities.machine_configuration.goal_storage import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
 from .chat_action_normalization import ChatActionNormalizationMixin
 from .chat_action_store import ActionConflictError, ChatActionStore
@@ -24,9 +25,12 @@ from .control_plane.goals.configure_goal_service import (
 )
 from .control_plane.runtime.time import now_utc, parse_timestamp
 from .control_plane.scheduler.monitor_todo import monitor_next_due_at
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from .control_plane.todos.contract import TODO_DECISION_OUTCOME_VALUES
 from .history import load_registry
 from .host_loop_activation import build_host_loop_activation_packet
 from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
+from .paths import resolve_runtime_root
 from .quota import build_quota_should_run
 from .registry import registry_goals
 from .todos import add_goal_todo, update_goal_todo
@@ -552,11 +556,33 @@ class ChatActionService(
             ),
             None,
         )
+        project, source_goal = self._project_for_goal_create(proposal)
+        workspace_digest = _digest(str(project))
+        conflict = ProtectedActionGate(
+            "goal.create",
+            gate={
+                "kind": "goal_id_conflict",
+                "summary": "The Goal id is not bound to this creation operation and workspace.",
+                "next_action": "Inspect the existing Goal; choose another Goal id for a new creation.",
+            },
+        )
         if existing_goal is not None:
-            project = Path(str(existing_goal.get("repo") or "")).expanduser().resolve()
-            source_goal = existing_goal
-        else:
-            project, source_goal = self._project_for_goal_create(proposal)
+            workspace_receipt = (
+                (proposal.get("checkpoint") or {}).get("steps", {}).get("workspace_validated", {})
+            )
+            if (
+                Path(str(existing_goal.get("repo") or "")).expanduser().resolve() != project
+                or existing_goal.get("creation_operation_id") != proposal_id
+                or workspace_receipt.get("workspace_digest") != workspace_digest
+            ):
+                raise conflict
+        elif current_fingerprint != proposal.get("expected_state_fingerprint"):
+            stale = self.store.apply(
+                proposal_id,
+                current_state_fingerprint=current_fingerprint,
+                receipt={},
+            )
+            return {"proposal": stale, "turn": None}
         self._agent_eligibility(
             str(parameters.get("agent_id") or "codex"), project=project
         )
@@ -566,68 +592,50 @@ class ChatActionService(
             receipt={
                 "outcome": "workspace_validated",
                 "workspace_ref": str(parameters.get("workspace_ref") or "current"),
+                "workspace_digest": workspace_digest,
             },
         )
-        recovering = existing_goal is not None
-        if recovering:
-            existing_project = (
-                Path(str(existing_goal.get("repo") or "")).expanduser().resolve()
-            )
-            if existing_project != project:
-                raise ProtectedActionGate(
-                    "goal.create",
-                    gate={
-                        "kind": "goal_id_conflict",
-                        "summary": "The Goal id now belongs to a different registered workspace.",
-                        "next_action": "Choose another Goal id and regenerate the preview.",
-                    },
-                )
-        elif current_fingerprint != proposal.get("expected_state_fingerprint"):
-            stale = self.store.apply(
-                proposal_id,
-                current_state_fingerprint=current_fingerprint,
-                receipt={},
-            )
-            return {"proposal": stale, "turn": None}
         registry = self._registry()
-        runtime_root_value = registry.get("common_runtime_root")
-        runtime_root = (
-            Path(str(runtime_root_value)).expanduser().resolve()
-            if runtime_root_value
-            else None
-        )
+        runtime_root = resolve_runtime_root(registry, registry_path=self.registry_path).resolve()
         objective = str(parameters.get("objective") or parameters["title"])
-        result = (
-            {"ok": True}
-            if recovering
-            else bootstrap_project(
-                project=project,
-                registry_path=self.registry_path,
-                runtime_root=runtime_root,
-                goal_id=goal_id,
-                objective=objective,
-                domain=str(source_goal.get("domain") or "project-goal-control-plane"),
-                role="primary",
-                parent_goal_id=str(source_goal.get("id") or "") or None,
-                state_file=None,
-                goal_doc=None,
-                adapter_kind=str(
-                    (source_goal.get("adapter") or {}).get("kind")
-                    or "generic_project_goal_v0"
-                ),
-                adapter_status="connected",
-                display_name=str(parameters.get("title") or "").strip() or None,
-                next_probe=None,
-                spawn_allowed=False,
-                max_children=0,
-                allowed_domains=[],
-                write_scope=[],
-                preserve_todos=True,
-                force=False,
-                dry_run=False,
-                sync_global=False,
-            )
-        )
+        if existing_goal is not None:
+            # Registry publication precedes storage initialization. Resume the
+            # frozen target through its TS owner before any downstream effects;
+            # re-running Markdown bootstrap could overwrite a promoted Goal.
+            initialize_goal_storage_target(runtime_root, existing_goal, registry_path=self.registry_path)
+            result = {"ok": True}
+        else:
+            try:
+                result = bootstrap_project(
+                    project=project,
+                    creation_operation_id=proposal_id,
+                    registry_path=self.registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    objective=objective,
+                    domain=str(source_goal.get("domain") or "project-goal-control-plane"),
+                    role="primary",
+                    parent_goal_id=str(source_goal.get("id") or "") or None,
+                    state_file=None,
+                    goal_doc=None,
+                    adapter_kind=str(
+                        (source_goal.get("adapter") or {}).get("kind")
+                        or "generic_project_goal_v0"
+                    ),
+                    adapter_status="connected",
+                    display_name=str(parameters.get("title") or "").strip() or None,
+                    next_probe=None,
+                    spawn_allowed=False,
+                    max_children=0,
+                    allowed_domains=[],
+                    write_scope=[],
+                    preserve_todos=True,
+                    force=False,
+                    dry_run=False,
+                    sync_global=False,
+                )
+            except GoalCreationConflictError as exc:
+                raise conflict from exc
         if not result.get("ok"):
             raise ProtectedActionGate(
                 "goal.create",
@@ -1176,6 +1184,22 @@ class ChatActionService(
                 else "The monitor execution request is bound to the current Goal state."
             ]
             permission = "durable_write"
+        elif action_kind == "gate.resolve" and normalized["decision"] in TODO_DECISION_OUTCOME_VALUES:
+            canonical_update_basis = self._canonical_update_basis(
+                normalized["goal_id"], completion_todo_id=normalized["todo_id"], decision=True)
+            try:
+                canonical_preview = self._run_gate_resolve(
+                    normalized, dry_run=True, basis=canonical_update_basis)
+            except LocalCoordinationAuthorityUnavailable as error:
+                raise ValueError(str(error)) from error
+            if canonical_preview.get("ok") is not True:
+                raise ValueError(str(canonical_preview.get("error")
+                                     or "Decision failed canonical dry-run validation"))
+            fingerprint = (_digest({"goal_id": normalized["goal_id"],
+                "canonical_update_basis": canonical_update_basis}) if canonical_update_basis is not None
+                else self._goal_state_fingerprint(normalized["goal_id"]))
+            evidence = ["Canonical LoopX User completion dry-run validated this decision."]
+            permission = "durable_write"
         elif action_kind == "agent.bind":
             binding = read_goal_agent_binding_with_source_route(
                 registry_path=self.registry_path,
@@ -1320,11 +1344,21 @@ class ChatActionService(
             return self._apply_monitor_create(proposal_id, proposal, parameters)
         if action_kind == "team.plan":
             return self._apply_team_plan(proposal_id, proposal, parameters)
-        if action_kind == "todo.update":
+        if action_kind == "todo.update" or (
+                action_kind == "gate.resolve" and parameters.get("decision") in TODO_DECISION_OUTCOME_VALUES):
             return self._apply_todo_update(proposal_id, proposal, parameters)
         if action_kind == "monitor.update":
             return self._apply_monitor_update(proposal_id, proposal, parameters)
-        if action_kind in {"goal.update", "gate.resolve"}:
+        if action_kind == "gate.resolve":
+            raise ProtectedActionGate(
+                action_kind,
+                gate={
+                    "kind": "decision_outcome_required",
+                    "summary": "Deferring records no decision; the request stays open.",
+                    "next_action": "Approve, reject or cancel the request when ready.",
+                },
+            )
+        if action_kind == "goal.update":
             raise ProtectedActionGate(
                 action_kind,
                 gate={

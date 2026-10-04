@@ -6,23 +6,34 @@ import pytest
 
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TODO_ID,
+    AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD, _append_surface_only_runs,
     _configure_autonomous_replan_fixture, _configure_selected_todo_replan_fixture,
     _configure_selectable_alternative, _heartbeat_receipt_count, _projected_cli_args,
     _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
 )
 
 
-@pytest.mark.parametrize("binding", ["todo", "autonomous_replan"])
-def test_deferred_selection_recovers_same_turn_and_settles_once(tmp_path, binding):
+@pytest.mark.parametrize(("binding", "initial_replan"), [
+    ("todo", False), ("autonomous_replan", False), ("todo", True),
+])
+def test_deferred_selection_recovers_same_turn_and_settles_once(tmp_path, binding, initial_replan):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    if initial_replan:
+        _configure_selected_todo_replan_fixture(project, registry)
+        _append_surface_only_runs(runtime, count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--scan-path", str(project))
     rc, first = _run_cli(registry, runtime, *guard)
-    assert rc == 0 and first["decision"] == "run"
+    assert rc == 0, first
+    assert first["decision"] == ("autonomous_replan_required" if initial_replan else "run")
     assert first["interaction_contract"]["cli_channel"]["selection_required"]
     assert "settlement_identity" not in first["heartbeat_receipt"]
+    if initial_replan:
+        assert "periodic_review_due" in {
+            trigger["kind"] for trigger in first["autonomous_replan_obligation"]["triggers"]
+        }
     if binding == "todo":
         _configure_selected_todo_replan_fixture(project, registry)
         selected_id = SELECTED_REPLAN_TODO_ID
@@ -170,15 +181,25 @@ def test_deferred_selection_recovers_same_turn_and_settles_once(tmp_path, bindin
     assert _spend_run_count(runtime) == 1
 
 
-def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_path):
+@pytest.mark.parametrize("initial_replan", [False, True])
+def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_path, initial_replan):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    if initial_replan:
+        _configure_selected_todo_replan_fixture(project, registry)
     turn = "turn-selection-recommendation-drift"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--scan-path", str(project))
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     assert first["interaction_contract"]["cli_channel"]["selection_required"]
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    rc, preferences = _run_cli(
+        registry, runtime, "semantic-preference", "agent", "read",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+    )
+    assert rc == 0, preferences
+    assert _heartbeat_receipt_count(runtime, turn) == 1
 
     # The original explicit choice leaves the refreshed frontier while a
     # different recommended Todo becomes visible under a hard replan.
@@ -215,6 +236,40 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
         "--replan-obligation-id" in action and "--todo-id" not in action
         for action in resumed["interaction_contract"]["cli_channel"]["next_cli_actions"]
     )
+    actions = resumed["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    refresh = next(c for c in actions if "refresh-state" in c)
+    decision = tmp_path / "recommendation-drift-replan.json"
+    decision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {
+            "vision_summary": "Review the chain before selecting the next delivery.",
+            "acceptance_summary": "Independent validation still precedes dependent work.",
+            "advancement_policy": "as_needed",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0", "outcome": "replan",
+            "prior_assumption": "A projected recommendation represented the explicit choice.",
+            "observed_reality": "The explicit choice and recommendation are different Todos.",
+            "retained": ["Existing acceptance and delivery boundaries"],
+            "changed": ["Complete the review before a fresh delivery Turn"],
+            "evidence_refs": ["evidence:recommendation-drift"],
+        },
+    }) + "\n", encoding="utf-8")
+    refresh = refresh.replace("<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(decision))
+    for key, value in {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
+                       "<surface-id>": "accepted-artifact", "<hypothesis-id>": "adoption",
+                       "<probe-kind>": "acceptance", "<evidence-id>": "evidence:readback"}.items():
+        refresh = refresh.replace(key, value)
+    rc, result = _run_cli(registry, runtime, *_projected_cli_args(refresh, turn_instance_id=turn))
+    assert rc == 0 and result["settlement_result"]["ok"], json.dumps(result, indent=2)
+    spend = next(c for c in actions if "spend-slot" in c)
+    for replay in (False, True):
+        rc, result = _run_cli(registry, runtime, *_projected_cli_args(spend, turn_instance_id=turn))
+        assert rc == 0 and result["settlement_result"]["ok"], result
+        if replay:
+            assert result["idempotent_replay"] and not result["appended"]
+    assert _spend_run_count(runtime) == 1
     rc, conflict = _run_cli(
         registry, runtime, *guard, "--todo-id", SELECTED_REPLAN_TODO_ID
     )

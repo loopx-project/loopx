@@ -44,6 +44,8 @@ export function planLegacyHandoffMode(value: unknown): JsonObject {
   if (typeof input.frontmatter_text !== "string") throw new Error("frontmatter_text must be a string");
   const previous = persistedHandoffMode(input.previous_value);
   const fields = {...previousModeFields(previous), handoff_mode: requested};
+  if (requested === "legacy") return {schema_version: RESULT_SCHEMA,
+    ...decideHandoffMode(previous, requested, 0, 0), ...fields};
   // An identical valid mode grants no new behavior. Preserve the compatibility
   // no-op even when leases exist or the legacy state has no frontmatter.
   if (previous.kind === "valid" && previous.value === requested) {

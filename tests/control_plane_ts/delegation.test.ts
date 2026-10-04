@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -8,6 +8,18 @@ const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", wor
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
 const params = {agent_id: "coordinator", binding_id: "review",
   config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]}};
+
+test("wake observation preserves conversation and current Goal-reference scope", () => {
+  const goalRef = {goal_id: "goal", goal_instance_id: "original-instance"};
+  const intent = {requester: {goal_id: "goal", agent_id: "lead", goal_ref: goalRef},
+    conversation: {session_id: "origin", turn_id: "original-turn"}};
+  const observer = {goal_id: "goal", agent_id: "lead", goal_ref: goalRef, session_id: "origin"};
+  assert.equal(decideDelegationWakeObservation({intent, observer}).observed, true);
+  for (const delta of [{session_id: "other"}, {goal_id: "other"}, {agent_id: "other"},
+    {goal_ref: {...goalRef, goal_instance_id: "replacement-instance"}}]) {
+    assert.equal(decideDelegationWakeObservation({intent, observer: {...observer, ...delta}}).observed, false);
+  }
+});
 
 const declaration = {validation_command: null, validation_command_argv: ["node", "validate.ts"],
   validation_label: "Independent verification", validation_timeout_seconds: 5};
@@ -94,12 +106,176 @@ test("malformed operator binding fails before launch", () => {
   }
 });
 
+const acceptedRequester = {goal_id: "research", agent_id: "coordinator", goal_ref: null,
+  operation_id: "analysis-1", request_id: "req-1", artifacts: [{ref: "output.json", sha256: "a".repeat(64)}]};
+const acceptedFacts = {canonical_done: true, acceptance_ready: true, artifacts_current: true, requester: acceptedRequester};
+
 test("message receipt and model return do not imply accepted work", () => {
   assert.throws(() => transitionDelegationObservation({from: "prepared", to: "accepted"}), /transition/);
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted"}), /canonical/);
   assert.throws(() => transitionDelegationObservation({from: "rejected", to: "running"}), /transition/);
+  const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
+  assert.equal(accepted.status, "accepted");
+});
+
+test("only a conversation-origin accepted result leaves a wake intent for the exact requester", () => {
+  // An ordinary CLI/MCP delegation has no conversation. It must keep the
+  // transition it always had: no intent, no wake state, no widened readback.
+  const conversationless = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
+  assert.deepEqual(conversationless, {status: "accepted"});
+  assert.equal(conversationless.wake_intent, undefined);
+
+  // With an originating conversation the intent is produced and pinned to it.
+  const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1", extra: "dropped"}}});
+  const intent = accepted.wake_intent as Record<string, unknown>;
+  assert.equal(intent.schema_version, "loopx_delegation_wake_intent_v0");
+  assert.match(String(intent.intent_id), /^[a-f0-9]{64}$/);
+  assert.deepEqual(intent.requester, {goal_id: "research", agent_id: "coordinator", goal_ref: null});
+  assert.equal(intent.operation_id, "analysis-1");
+  assert.equal(intent.request_id, "req-1");
+  assert.deepEqual(intent.conversation, {session_id: "s-1", turn_id: "t-1"});
+  // Another conversation of the same requester yields a different identity.
+  const pinned = accepted;
+  const pinnedIntent = intent;
+  const elsewhere = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-2", turn_id: "t-1"}}});
+  assert.notEqual((elsewhere.wake_intent as Record<string, unknown>).intent_id, pinnedIntent.intent_id);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1"}}}), /conversation/);
+  // Same requester and result: same intent, so a replayed transition cannot mint a second wake.
+  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1"}}}), accepted);
+  const changed = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1"},
+      artifacts: [{ref: "output.json", sha256: "b".repeat(64)}]}});
+  assert.notEqual((changed.wake_intent as Record<string, unknown>).intent_id, intent.intent_id);
+  // accepted -> accepted is an idempotent readback, never a new wake.
+  assert.deepEqual(transitionDelegationObservation({from: "accepted", to: "accepted", ...acceptedFacts}), {status: "accepted"});
+  // A transition to accepted without any requester identity is not a wake, and a
+  // conversation-origin one with a forged digest is rejected.
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted",
     canonical_done: true, acceptance_ready: true, artifacts_current: true}), {status: "accepted"});
+  const conversation = {session_id: "s-1", turn_id: "t-1"};
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation, artifacts: [{ref: "output.json", sha256: "short"}]}}), /artifact/);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation, artifacts: []}}), /artifacts/);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation, goal_ref: ["not", "a", "reference"]}}), /goal reference/);
+  // Rejection is terminal and wakes nobody.
+  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "rejected"}), {status: "rejected"});
+});
+
+test("stopped is terminal and reachable only from open observations", () => {
+  for (const from of ["prepared", "running", "turn_returned"])
+    assert.deepEqual(transitionDelegationObservation({from, to: "stopped"}), {status: "stopped"});
+  assert.deepEqual(transitionDelegationObservation({from: "stopped", to: "stopped"}), {status: "stopped"});
+  for (const from of ["accepted", "rejected"])
+    assert.throws(() => transitionDelegationObservation({from, to: "stopped"}), /transition/);
+  for (const to of ["running", "turn_returned", "accepted", "rejected"])
+    assert.throws(() => transitionDelegationObservation({from: "stopped", to}), /transition/);
+  const observation = {operation_id: "op-1", request_id: "req", agent_id: "reviewer", todo_id: "todo_review",
+    status: "stopped", worker_active: false, recovery_required: false};
+  assert.equal(delegationInventoryItem({record: {record_id: "a".repeat(64), operation_id: "op-1"},
+    observation}).status, "stopped");
+});
+
+const stopRecord = (phase: string, reason: string) =>
+  ({action: "record", phase, terminal: phase === "settled" || phase === "unknown", reason});
+
+test("a stop settles only on an acknowledgement plus released holders; time alone proves nothing", () => {
+  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, worker_lane_released: false,
+    host_process: "drained", lease: "unchecked"};
+  assert.deepEqual(decideDelegationStop(open), stopRecord("requested", "awaiting_acknowledgement"));
+  assert.deepEqual(decideDelegationStop({...open, timed_out: true}),
+    stopRecord("requested", "holder_still_running_after_grace"));
+  // A lane release without a free operation lock is not a vanished holder.
+  assert.deepEqual(decideDelegationStop({...open, worker_lane_released: true, timed_out: true}),
+    stopRecord("requested", "holder_still_running_after_grace"));
+  // A free operation lock with an unattributed lane holder proves nothing yet.
+  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, timed_out: true}),
+    stopRecord("requested", "worker_lane_release_unproven"));
+  const gone = {...open, operation_lock_free: true, worker_lane_released: true};
+  assert.deepEqual(decideDelegationStop(gone), {action: "resolve_lease"});
+  assert.deepEqual(decideDelegationStop({...gone, lease: "not_owed"}),
+    stopRecord("unknown", "holder_gone_without_acknowledgement"));
+  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, worker_lane_released: false,
+    host_process: "drained", lease: "unchecked"};
+  assert.deepEqual(decideDelegationStop(acked), stopRecord("acknowledged", "operation_lock_still_held"));
+  assert.deepEqual(decideDelegationStop({...acked, worker_lane_released: true}),
+    stopRecord("acknowledged", "operation_lock_still_held"));
+  assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true}),
+    stopRecord("acknowledged", "worker_lane_release_unproven"));
+  const released = {...acked, operation_lock_free: true, worker_lane_released: true};
+  for (const patch of [{phase: "requested"}, {timed_out: true}]) {
+    assert.deepEqual(decideDelegationStop({...released, ...patch}), {action: "resolve_lease"});
+    assert.deepEqual(decideDelegationStop({...released, ...patch, lease: "not_owed"}),
+      stopRecord("settled", "acknowledged_worker_and_host_released"));
+  }
+  for (const patch of [{phase: "settled"}, {phase: "unknown"}, {phase: "noop"}, {acknowledged: "yes"},
+    {host_process: undefined}, {host_process: "exited"}, {host_process: true},
+    {operation_lock_free: 1}, {worker_lane_released: undefined}, {lane_lock_free: true, worker_lane_released: undefined},
+    {timed_out: "later"}, {phase: "acknowledged", acknowledged: false}])
+    assert.throws(() => decideDelegationStop({...open, ...patch}));
+});
+
+test("a released worker and lane never settle a stop while the native Host still drains", () => {
+  const released = {phase: "acknowledged", acknowledged: true, operation_lock_free: true, worker_lane_released: true,
+    lease: "unchecked"};
+  assert.deepEqual(decideDelegationStop({...released, host_process: "draining", timed_out: true}),
+    stopRecord("acknowledged", "host_process_still_running"));
+  // Without an attributable drain the stop stays open for a later same-identity read.
+  assert.deepEqual(decideDelegationStop({...released, host_process: "unattributable"}),
+    stopRecord("acknowledged", "host_process_drain_unproven"));
+  for (const host_process of ["drained", "not_launched"])
+    assert.deepEqual(decideDelegationStop({...released, host_process, lease: "released"}),
+      stopRecord("settled", "acknowledged_worker_and_host_released"));
+  // A held lock still dominates a drained Host.
+  assert.deepEqual(decideDelegationStop({...released, operation_lock_free: false, host_process: "drained"}),
+    stopRecord("acknowledged", "operation_lock_still_held"));
+  // A vanished holder is unknown only once its Host is no longer seen running;
+  // with a Host that cannot be attributed nothing more can be learned, and its
+  // lease is left unresolved rather than handed on beside a possible Host.
+  const vanished = {...released, phase: "requested", acknowledged: false};
+  assert.deepEqual(decideDelegationStop({...vanished, host_process: "draining"}),
+    stopRecord("requested", "host_process_still_running"));
+  assert.deepEqual(decideDelegationStop({...vanished, host_process: "unattributable"}),
+    stopRecord("unknown", "holder_gone_without_acknowledgement"));
+  for (const host_process of ["drained", "not_launched"])
+    assert.deepEqual(decideDelegationStop({...vanished, host_process, lease: "not_owed"}),
+      stopRecord("unknown", "holder_gone_without_acknowledgement"));
+});
+
+test("the lease is resolved only once the execution is gone, and only a resolved lease ends a stop", () => {
+  const facts = {operation_lock_free: true, worker_lane_released: true, host_process: "drained"};
+  const stops = [
+    {stop: {phase: "acknowledged", acknowledged: true, ...facts}, open: "acknowledged",
+      terminal: stopRecord("settled", "acknowledged_worker_and_host_released")},
+    {stop: {phase: "requested", acknowledged: false, ...facts}, open: "requested",
+      terminal: stopRecord("unknown", "holder_gone_without_acknowledgement")},
+  ];
+  for (const {stop, open, terminal} of stops) {
+    // Not checked yet is a next step, never a receipt, and never "nothing owed".
+    assert.deepEqual(decideDelegationStop({...stop, lease: "unchecked"}), {action: "resolve_lease"});
+    for (const lease of ["not_owed", "released"]) assert.deepEqual(decideDelegationStop({...stop, lease}), terminal);
+    // A held lease whose release is unproven, and an obligation canonical
+    // authority could not confirm, both keep the stop open, distinguishably.
+    assert.deepEqual(decideDelegationStop({...stop, lease: "release_unproven"}),
+      stopRecord(open, "required_lease_release_unproven"));
+    assert.deepEqual(decideDelegationStop({...stop, lease: "obligation_unproven"}),
+      stopRecord(open, "lease_obligation_unproven"));
+    // Omission no longer reads as "no lease"; the old boolean is not a lease fact.
+    for (const patch of [{}, {lease: undefined}, {lease: "held"}, {lease: true}, {lease_released: true}])
+      assert.throws(() => decideDelegationStop({...stop, ...patch}), /lease fact required/);
+  }
+  // A lease is never resolved beside an execution that may still run.
+  for (const pending of [{operation_lock_free: false}, {worker_lane_released: false},
+    {host_process: "draining"}, {host_process: "unattributable"}]) {
+    for (const lease of ["not_owed", "released", "release_unproven", "obligation_unproven"])
+      assert.throws(() => decideDelegationStop({...stops[0].stop, ...pending, lease}), /proven gone/);
+    assert.notEqual(decideDelegationStop({...stops[0].stop, ...pending, lease: "unchecked"}).action, "resolve_lease");
+  }
 });
 
 test("a false rejection can reopen only for exact validated settlement recovery", () => {
@@ -248,7 +424,7 @@ test("requester adoption needs accepted downstream use, not reading, revision or
   }
 });
 
-test("preflight reports unavailable canonical authority without pretending to inspect a Turn", () => {
+test("preflight reports unavailable current authority without granting execution", () => {
   const result = delegationPreflight({binding, authority: {ready: false,
     reason: "Goal acceptance requires an existing canonical authority"}, preview: null,
   acceptance: null, validation_files_current: false});
@@ -261,6 +437,8 @@ test("preflight reports unavailable canonical authority without pretending to in
   assert.equal(result.executor, null);
   assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
   assert.match(String(result.authority_reason), /canonical authority/);
+  assert.doesNotMatch(String(result.note), /no Turn or provider was inspected/);
+  assert.match(String(result.note), /no executable permission is returned/);
   const legacy = delegationPreflight({binding, authority: {ready: false,
     reason: "canonical authority absent", state: "promotion_required",
     next_action: "preview_reviewed_goal_authority_promotion"}, preview: null,

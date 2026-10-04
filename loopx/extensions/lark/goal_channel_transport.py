@@ -7,12 +7,16 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
+# Re-exported for the existing callers of this module; the shapes themselves are
+# decided once, in ``identity_shapes``.
+from .identity_shapes import (  # noqa: F401
+    LARK_CHAT_ID_SEARCH as CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN,
+    LARK_OPEN_ID_SEARCH as OPEN_ID_PATTERN,
+)
 from .presentation.kanban import CommandRunner
 
-CHAT_ID_PATTERN = re.compile(r"oc_[A-Za-z0-9_-]+")
-MESSAGE_ID_PATTERN = re.compile(r"om_[A-Za-z0-9_-]+")
 APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
-OPEN_ID_PATTERN = re.compile(r"ou_[A-Za-z0-9_-]+")
 SAFE_PROFILE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 REQUIRED_GOAL_TOPIC_SCOPES = ("im:message", "im:message:readonly")
 REQUIRED_BOT_GROUP_HISTORY_SCOPES = (

@@ -1,47 +1,46 @@
 # Operate the LoopX 1.0 Workspace
 
-The LoopX 1.0 milestone is not merely a new Dashboard. It brings long-running work across sessions and
-Agents into one inspectable, operable Personal Workspace. The Workspace presents state and proposes
-governed actions; the control-plane sources still own Goals, Todos, Gates, events, configuration, and
-receipts.
+`v1.0.0` is the **Personal Workspace milestone**: it gathers long-running work spanning sessions and Agents into an inspectable, operable local operator surface. This chapter explains how that operator surface relates to the control-plane sources of truth, and why actions taken in the UI must follow a governed path.
 
-This chapter connects the 1.0 operator surface to the control-plane model in the first six chapters. By
-the end, you should be able to:
+## An afternoon where the UI looked fine {#pause-readback}
 
-- start the Workspace and confirm that the page and status projection come from one LoopX runtime;
-- move from the Manager overview into one Goal and distinguish active, attention, monitoring, and
-  completed work;
-- explain why Workspace writes pass through typed preview, governed apply, and verified receipt;
-- distinguish Capability visibility, Goal configuration, Provider readiness, and current-Turn eligibility;
-- understand what authority Goal Channels, periodic reports, and desktop updates add, and how to disable
-  each path.
+This is a synthetic diagnostic situation, not a verified production incident.
 
-## What 1.0 actually ships
+```text
+14:02  The operator opens the Workspace. The Manager overview shows three
+       Goals, with two cards in the "in progress" lane.
+14:03  They open one Goal and see Todos, an Agent lane, and a report summary.
+14:05  They click Pause. HTTP returns 200.
+14:06  The page still shows the Goal as active.
+14:08  They refresh. Still active.
+14:20  They check the CLI: `loopx quota status` says this Goal is already paused.
+14:21  They identify disagreement and check the Goal, source, read times
+       and receipt for that particular operation.
+```
 
-`v1.0.0` is the **Personal Workspace milestone**. It brings these entrypoints into one local operator
-surface:
+These observations do not establish that the 14:05 action failed to apply, and CLI paused alone does not prove the click succeeded. A commit may have succeeded while projection lagged, or another control state may explain paused. Verify the same object and source, then locate the matching operation receipt.
 
-| Workspace surface | Question it answers | Authority boundary |
+| Additional evidence | Supported conclusion | Next step |
 | --- | --- | --- |
-| Manager overview | Which Goals need me, are running, are being observed, or are scheduled? | Derived from status projections; it does not redefine Todo lifecycle |
-| Goal / Tasks | Which Agent lanes, decisions, active Todos, Monitors, and completed items exist? | Todo and Gate decisions remain with their control-plane owners |
-| Chat | How do I continue with the current Goal, Agent, and Session? | A conversation is not durable Goal state |
-| Files / Reports | What did a run deliver, and which reports were verified? | Shows public-safe previews and evidence pointers |
-| Context / Settings | How are the repository, Session, Goal Channel, and optional features configured? | Writes require preview, apply, and readback |
+| Valid original stop receipt and current stopped source | The operation was accepted; old active display is no longer applicable | Repair projection or read routing, not repeat stop |
+| Original entrypoint explicitly rejected or confirmed non-commit | That request did not complete the intended change | Repair the refusal condition and preview through the current owner |
+| Original outcome unreadable or identity mismatched | That operation remains unconfirmed | Preserve the request and restore readback, not repeated clicks |
 
-This is not a new source of truth. The browser cannot bypass the Kernel to edit registries, Todos, quota,
-or Host automation. Remote SSH projections remain read-only except for the
-explicit Goal stop/resume control routed through an exact configured Host alias;
-manual URLs cannot acquire that authority. Stage 2C authority and other candidate
-Providers are still promoted in stages; the 1.0 label does not mean that every tenant has migrated.
+An operation receipt explains historical causality; current source explains present state; the page reflects a particular projection. They relate but do not substitute for one another. Use the [appendix](appendix-reference.md#diagnostic-routing) for field evidence.
 
-Use the [LoopX v1.0.0 release](https://github.com/huangruiteng/loopx/releases/tag/v1.0.0) for shipped
-facts and the [Personal Workspace guide](/loopx/docs/guides/personal-workspace-user-guide/) for detailed
-UI and recovery instructions.
+## Why "what the page shows is what is true" does not hold {#action-owners}
 
-## Start and verify one runtime
+The Workspace presents and initiates governed actions, but Goal, Todo, Gate, events, configuration, and receipts remain owned by the control-plane sources of truth. Three consequences follow unavoidably:
 
-Confirm the installed version and environment, then start the local Workspace:
+- **Projections lag.** The state on the page is a read model from some moment; between your seeing it and its being generated, the source may already have changed.
+- **HTTP success is not write completion.** A request being accepted and an action completing are two different things, and the second may be stopped by a Gate or rejected by a stale check.
+- **A button is not an independent authority.** Goal stop/resume checks owner authority and the reviewed fingerprint; Todo actions use lifecycle rules; quota governs eligibility for automated Turns.
+
+The whole chapter compresses into one sentence: **the Workspace is where you observe and initiate; it is not a new source of truth.**
+
+## Confirm the runtime before trusting the page
+
+A page appearing does not mean the control plane is healthy. Check version and diagnostics before starting or reusing the service; `dashboard --no-open` is not merely a state query:
 
 ```bash
 loopx --version
@@ -49,65 +48,57 @@ loopx doctor
 loopx dashboard --no-open
 ```
 
-The command prints the actual loopback URL. The default page and status projection can be read back with:
+The command prints the actual loopback URL. The default page and status projection can be read back like this:
 
 ```bash
 curl -fsS http://127.0.0.1:8767/chat/ >/dev/null
 curl -fsS http://127.0.0.1:8767/status.json
 ```
 
-`loopx dashboard` serves the packaged Workspace, status projection, and Agent Chat together. If a matching
-desktop shell already runs the service, the command reuses the process only after validating its capability
-fingerprint; it does not start a second source of truth. Ports are defaults, not permanent contracts, so
-automation should consume the URL printed by the command.
+`loopx dashboard` serves the packaged Workspace, the status projection, and Agent Chat together. If a desktop shell of the same version has already started the service, it reuses the process verified through the capability fingerprint rather than starting a second source of truth. **The port is only a default**; automated checks should read the command output instead of treating the default URL as a permanent contract.
 
-After opening the Workspace, perform three readbacks:
+Once the Workspace is open, make three matching checks:
 
-1. compare the Manager Goal count with `loopx status`;
-2. compare the selected Goal's Agent lanes and Task states with
-   `loopx todo list --goal-id <goal-id>`;
-3. confirm that Context names the host and worktree you intend to operate.
+1. whether the Goal count in the Manager overview matches `loopx status`;
+2. whether the target Goal's Agent lane and Task states match `loopx todo list --goal-id <goal-id>`;
+3. whether the repository / source in Context points at the host and worktree you mean to operate on.
 
-A rendered page is not proof of a healthy control plane. If `status.json`, Goal details, or the selected
-source fails, recover that runtime or projection before attempting a write.
+If any of the three disagrees, restore the corresponding runtime or projection before performing a write.
 
-## Read one unit of work from the Workspace
+## Read the page back into control-plane questions
 
 The Manager's four lanes are operator projections, not four new Todo states:
 
-- **Needs you:** User Todos, authority Gates, and decisions reserved for the owner;
-- **In progress:** runnable Agent Todos and active lanes;
-- **Observing:** Monitors with a cadence, trigger, or external-fact wait;
-- **Scheduled:** Host schedules that are bound but not currently due.
+| Lane | What it actually means |
+|---|---|
+| Needs you | User Todos, permission Gates, or actions only the owner can decide |
+| In progress | Agent Todos currently advancing, and active lanes |
+| Watching | Monitors with a cadence, trigger condition, or external fact to wait on |
+| Scheduled | Work bound to a Host schedule that is not yet due |
 
-Inside a Goal, reduce a card back to the control-plane questions:
+Inside a Goal, translate cards back into control-plane questions:
 
 ```text
 Goal / Acceptance
-  -> selected Todo and owner
-  -> Gate, capability and workspace eligibility
-  -> current Session / Host
-  -> evidence, receipt and successor
+  → selected Todo and owner
+  → Gate, capability and workspace eligibility
+  → current Session / Host
+  → evidence, receipt and successor
 ```
 
-Completed history is read-only evidence and does not re-enter the frontier. Files and report summaries are
-not the complete raw artifact. For an audit, follow the `todo_id`, run identity, evidence pointer, or
-versioned artifact back to its authoritative source.
+Completed history is read-only evidence and does not re-enter the frontier. Reports and artifact summaries under Files are not the complete original either; to audit, follow the `todo_id`, run identity, evidence pointer, or versioned artifact back to the authoritative source.
 
 ## Writes: preview, apply, receipt
 
-Workspace changes to Goals, Todos, Heartbeats, Monitors, and settings follow one safety chain:
+Goal, Todo, Heartbeat, Monitor, and settings changes in the Workspace all follow one safety chain:
 
 ```text
 typed preview -> human or policy review -> governed apply -> verified receipt -> refreshed projection
 ```
 
-A preview freezes normalized parameters, scope, and the current revision. Apply may execute only while that
-preview still matches current state; changed state returns stale or a Gate rather than silently reusing an
-old decision. Only the receipt and readback prove the write. A button click or successful HTTP response is
-not enough.
+**Preview** freezes the normalized arguments, blast radius, and current revision. **Apply** may only execute an action that still matches that preview; if state has changed it must return stale or a Gate rather than quietly applying an old decision. **Receipt and readback** are what prove the write completed — a button click or a successful HTTP response is not enough.
 
-For example, the first Goal-stop command is preview-only:
+Taking a Goal pause as the example, the first command only previews:
 
 ```bash
 loopx goal-lifecycle --goal-id <goal-id> --operation stop
@@ -115,24 +106,20 @@ loopx goal-lifecycle --goal-id <goal-id> --operation stop --actor-kind owner --e
 loopx quota status --goal-id <goal-id>
 ```
 
-Executed lifecycle transitions require an explicit `--actor-kind owner` or
-`controller`; anonymous previews remain read-only.
+Executing a lifecycle transition requires explicitly passing `--actor-kind owner` or `controller`; anonymous preview stays read-only.
 
-Stopping a Goal removes it from active attention and projects zero effective automatic-run quota while
-preserving Todos, history, evidence, and configuration. Explicit `resume --execute` restores scheduling
-eligibility but does not bypass Todo, Gate, or quota rules. Do not describe stop as completing the Goal, and
-do not use a quota edit to accidentally resume an owner-stopped Goal.
+A pause removes that Goal from active attention and projects effective automated-run quota to zero, while Todos, history, evidence, and configuration remain. Resuming requires an explicit `resume --execute` and does not bypass Todo, Gate, or quota. Do not describe stop as "completing the Goal," and do not accidentally resume an owner-stopped Goal by editing quota.
 
-## Configure Capabilities and machine policy
+## Four kinds of "enabled" must stay separate
 
-The 1.0 Workspace exposes Goal capabilities and typed machine policy, but four facts remain distinct:
+The 1.0 Workspace can display Goal capability and typed machine policy, but four facts must be judged separately:
 
-| Fact | Read surface | What it does not prove |
-| --- | --- | --- |
-| Capability shipped | `loopx capability list/show` | The current Goal enabled it |
-| Goal configured | `loopx configure-goal --goal-id <goal-id>` | A Provider is ready |
-| Provider ready | The matching Extension / Provider doctor | The current Turn passed its Gates |
-| Current Turn eligible | Capability / workspace results from `quota should-run` | Any additional external authority |
+| Fact | Read it with | What it does not mean |
+|---|---|---|
+| Capability published | `loopx capability list/show` | The current Goal has enabled it |
+| Goal configured | `loopx configure-goal --goal-id <goal-id>` | The Provider is ready |
+| Provider ready | the relevant Extension / Provider doctor | The current Turn passes its Gate |
+| Current Turn eligible | the capability / workspace result of `quota should-run` | It grants extra external permission |
 
 Start with read-only discovery:
 
@@ -143,65 +130,51 @@ loopx machine-config inspect --format json
 loopx configure-goal --goal-id <goal-id>
 ```
 
-Machine policy and Goal settings must first produce a delta or plan, then be explicitly executed and read
-back at the resulting revision. Do not guess flags from Capability names or turn “visible in the catalog”
-into “enabled.” Enabling optional adaptive child-agent capacity does not force parallel execution or grant
-new Goal, repository, credential, publication, or production authority.
+Machine policy and Goal settings both require generating a delta / plan, then explicitly executing and reading the revision back. Do not guess configuration flags from a Capability name, and do not write "visible in the catalog" as "enabled." Enabling an optional capability such as adaptive sub-Agents does not force parallelism and grants no new Goal, repository, credential, release, or production permission.
 
-## Goal Channels: messages are not implicit authority
+## Goal Channel: a message is not implicit authority
 
-The Workspace's Lark settings can connect a Goal to an exact Topic and target Agent. Capture scope selects
-which messages enter the connection; it does not enlarge Agent authority. Ingress mode determines how a
-message enters the runtime:
+Workspace Lark / Feishu settings can connect a Goal to a specific Topic and target Agent. Capture scope decides only which messages enter the connection; **it does not widen Agent permissions.** Ingress mode decides how messages enter the runtime:
 
-- `live_steering` targets the exact active Turn of that Agent;
-- `session_queue` enters a bounded FIFO for the same exact Session and runs after the current Turn;
-- `async_inbox` enters the Agent's local private inbox for an explicit later drain.
+| Mode | Behavior |
+|---|---|
+| `live_steering` | Delivered only to that Agent's exact currently active Turn |
+| `session_queue` | Enter a bounded FIFO on the same exact Session, processed after the current Turn |
+| `async_inbox` | Enter the Agent's local private inbox, awaiting an explicit drain |
 
-After configuration, read back the Goal, Agent, Topic, ingress mode, Session binding, and listener state.
-To validate `async_inbox`, send a new test message yourself and then run:
+After configuring, read back the Goal, Agent, Topic, ingress mode, Session binding, and listen state. To verify `async_inbox`, send a new test message yourself and then run:
 
 ```bash
 loopx lark-inbox drain --goal-id <goal-id> --agent-id <agent-id>
 ```
 
-Disconnect removes only this Goal's Topic route; it does not delete the Goal, Session, history, or another
-connection. Message arrival does not grant sending, repository-write, or production authority. Those
-effects continue through their own Gates and Provider readbacks.
+Disconnect removes only that Goal's Topic route; it does not delete the Goal, Session, history, or other connections. A message arriving also does not mean the Agent gained send, repository-write, or production permission; those actions still pass through their own Gates and Provider readback.
 
-## Reports: one generation and standing delivery are separate
+## One-off generation and continuous delivery are two authorization chains
 
-An explicit request to “generate this week's project report” in an active project session enables one
-provider-free Markdown and HTML generation. Inspect the built-in profile first:
+Explicitly requesting "generate this week's project report" in an active project session enables a single provider-free Markdown / HTML generation. Inspect the built-in profile read-only first:
 
 ```bash
 loopx periodic-report inspect-profile --preset weekly --format json
 ```
 
-The receipt should report both `active: true` and `generation_allowed: true`. The built-in weekly profile
-has no schedule and no sink, so one generation does not create a recurring task or send a message.
+`active` and `generation_allowed` in the receipt should both be `true`. The built-in weekly profile has no schedule and no sink, so **one generation creates no recurring task and sends no message**.
 
-Standing reports use a separate authority chain: a custom profile declares cadence, a Host Automation
-wakes the work, and `enabled: true` plus an explicit `route_ref` on a machine or Goal subscription grants
-standing delivery. Pause the Automation, disable the profile, or disable the subscription to stop its
-corresponding path. Successful generation is not proof of successful external delivery; Provider, sender
-identity, route, and message readback are verified separately.
+Continuous reporting is a separate authorization chain: a custom profile declares the cadence, Host Automation performs the waking, and `enabled: true` on a machine or Goal subscription together with an explicit `route_ref` constitutes continuous-delivery authority. Pausing the Automation, disabling the profile, or closing the subscription stops the corresponding path. A successful generation does not mean a successful external send; the Provider, sending identity, route, and message readback each still need verification.
 
-## Desktop updates and recovery
+## Cost and boundary
 
-The 1.0 macOS updater pairs the App and bundled runtime at one revision. Older desktop shells require one
-manual replacement. Afterwards, use **Recovery & updates** to select stable or main explicitly, install,
-and restart.
+**Cost one: operations get longer.** A change is no longer "one click" but preview → review → apply → readback. For familiar actions this feels laborious.
 
-- **Validate:** compare the App version, Workspace runtime identity, `loopx --version`, and `loopx doctor`;
-- **Repair:** **Repair this version** reinstalls the runtime bundled with the current App;
-- **Roll back:** when a verified backup exists, use **Restore previous version**, restart, and recheck identity;
-- **Boundary:** updates use fixed official feeds. macOS uses updater signatures plus ad-hoc code signing and
-  must not be described as notarized. Restoring an install does not promise to reverse a future incompatible
-  Goal schema.
+**Cost two: the UI must be re-read, never judged from a stale screen.** What you see may lag at any moment, so any consequential judgment needs a fresh read of the source.
 
-Browser and PWA users continue through the CLI update flow. A CLI update cannot repair native shell startup
-or updater defects.
+**Cost three: four kinds of "enabled" must be distinguished.** Collapsing them into one switch misjudges capability availability, and keeping them apart carries real mental overhead.
+
+**Boundary one: the Workspace does not own facts.** A broken UI proves neither a healthy control plane nor stopped execution. Distinguish source, runtime and projection first. Only after confirming source and execution conditions can the fault be limited to display recovery, not manual state edits through the UI. It also does not constitute Stage 2C authority — qualification and promotion of a shared-authority provider come from separate shadow and conformance work, not from the existence of an operator surface.
+
+**Boundary two: desktop updates are narrowly scoped.** Updates can only come from the fixed official feed; macOS uses updater signature and ad-hoc code signing and should not be described as notarized. Restoring a previous version also does not promise to reverse a future-incompatible Goal schema.
+
+**Boundary three: a CLI update cannot repair native-shell defects.** Browser / PWA users continue through the CLI update flow; launcher or updater problems in the desktop shell need desktop-side handling.
 
 ## 1.0 acceptance checklist
 
@@ -211,11 +184,16 @@ For one Workspace acceptance pass, confirm at least that:
 - the Workspace and `status.json` come from the same verified runtime;
 - Manager and Goal views can be explained by existing Goal, Todo, Gate, and Monitor state;
 - every write has a preview, apply, receipt, and refreshed readback;
-- Capability, Goal config, Provider readiness, and Turn eligibility are not collapsed into one “enabled” bit;
+- Capability, Goal config, Provider readiness, and Turn eligibility are not collapsed into one "enabled" bit;
 - Goal Channel and report delivery have exact route, identity, and readback evidence;
 - staged authority, SSH sources, and browser presentation are not mistaken for new write authority.
 
-Continue according to your task: return to [Connect an existing Git project](./05-connect-existing-project.md)
-for project operation, use the [Developer contribution map](./source-protocol-map.md) when changing the
-Workspace or control-plane implementation, or open the
-[Personal Workspace guide](/loopx/docs/guides/personal-workspace-user-guide/) for detailed UI behavior.
+## Invariants
+
+1. **The UI is a projection, not a source of truth.** Re-read the source before any consequential judgment.
+2. **HTTP success does not prove the write completed.** Only a receipt and readback do.
+3. **A click is not authorization.** Goal lifecycle accepts owner operations, Todo lifecycle checks work transitions, and the current quota contract admits automated Turns. The page grants none of these permissions.
+4. **The four kinds of "enabled" need separate evidence.** They may be prerequisites for one another; one switch does not establish that every condition holds.
+5. **A message arriving does not widen permission.** Neither capture scope nor ingress mode grants new write authority.
+
+These five answer one question: **when the interface tells you everything is fine, what makes that believable?**

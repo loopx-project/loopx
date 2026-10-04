@@ -152,6 +152,62 @@ def test_apps_snapshot_keeps_ordinary_files_with_excluded_directory_names(tmp_pa
     assert all((destination / name).read_text() == "ordinary source file" for name in names)
 
 
+@pytest.mark.parametrize("cache_kind", ["directory", "symlink", "dangling_symlink"])
+def test_apps_snapshot_excludes_cargo_cache_without_excluding_target_assets(tmp_path, cache_kind):
+    source, destination = tmp_path / "source apps", tmp_path / "release apps"
+    crate = source / "desktop" / "control-plane" / "src-tauri"
+    crate.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text('[package]\nname = "desktop"\nversion = "0.1.0"\n')
+    (crate / "main.rs").write_text("fn main() {}\n")
+    cache = crate / "target"
+    if cache_kind == "directory":
+        cache.mkdir()
+        (cache / "compiler-output").write_text("development output")
+    else:
+        external = tmp_path / "compiler cache"
+        if cache_kind == "symlink":
+            external.mkdir()
+            (external / "compiler-output").write_text("development output")
+        cache.symlink_to(external, target_is_directory=True)
+    asset = crate / "assets" / "target"
+    asset.mkdir(parents=True)
+    (asset / "keep.txt").write_text("ordinary target asset")
+
+    result = run_apps_copy(source, destination)
+    assert result.returncode == 0, result.stderr
+    delivered = destination / "desktop" / "control-plane" / "src-tauri"
+    assert not (delivered / "target").exists()
+    assert not (delivered / "target").is_symlink()
+    assert (delivered / "Cargo.toml").read_bytes() == (crate / "Cargo.toml").read_bytes()
+    assert (delivered / "main.rs").read_bytes() == (crate / "main.rs").read_bytes()
+    assert (delivered / "assets" / "target" / "keep.txt").read_text() == "ordinary target asset"
+    assert cache.exists() or cache.is_symlink()
+
+
+@pytest.mark.parametrize("manifest_kind", ["missing", "directory", "file"])
+def test_apps_snapshot_preserves_ordinary_target_files_and_directories(tmp_path, manifest_kind):
+    source, destination = tmp_path / "source", tmp_path / "release"
+    source.mkdir()
+    manifest = source / "Cargo.toml"
+    if manifest_kind == "directory":
+        manifest.mkdir()
+    elif manifest_kind == "file":
+        manifest.write_text('[package]\nname = "example"\nversion = "0.1.0"\n')
+    target = source / "target"
+    if manifest_kind == "file":
+        target.write_text("ordinary target file")
+    else:
+        target.mkdir()
+        (target / "keep.txt").write_text("ordinary target asset")
+    result = run_apps_copy(source, destination)
+    assert result.returncode == 0, result.stderr
+    delivered = destination / "target"
+    if target.is_file():
+        assert delivered.read_bytes() == target.read_bytes()
+    else:
+        assert (delivered / "keep.txt").read_text() == "ordinary target asset"
+
+
 def test_apps_snapshot_preserves_root_symlink_and_absent_source(tmp_path):
     source, destination = tmp_path / "source-link", tmp_path / "release-link"
     real_source = tmp_path / "real-source"

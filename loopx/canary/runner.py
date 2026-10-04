@@ -5,11 +5,13 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
+from ..extensions.process_runtime import terminate_process_tree
 from .planner import REPO_ROOT, build_catalog_canary_plan, flatten_catalog_canary_checks
 from .smoke_profiles import list_smoke_suite_profiles, resolve_smoke_suite_profiles
 
@@ -266,16 +268,51 @@ def _run_check(
 
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            normalized["argv"],
-            cwd=REPO_ROOT,
-            env={**os.environ, "LOOPX_USAGE_PING": "0"},
-            text=True, encoding="utf-8", errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="loopx-smoke-") as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            env = {**os.environ, "LOOPX_USAGE_PING": "0", "HOME": str(home),
+                   "CODEX_HOME": str(home / ".codex")}
+            for name in ("LOOPX_RUNTIME_ROOT", "LOOPX_REGISTRY"):
+                env.pop(name, None)
+            for name in ("TMPDIR", "TEMP", "TMP"):
+                env[name] = str(root)
+            for name, directory in (
+                ("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"),
+                ("XDG_STATE_HOME", ".local/state"), ("XDG_CACHE_HOME", ".cache"),
+                ("OPENCODE_CONFIG_DIR", ".config/opencode"),
+            ):
+                env[name] = str(home / directory)
+            try:
+                with subprocess.Popen(
+                    normalized["argv"], cwd=REPO_ROOT, env=env,
+                    text=True, encoding="utf-8", errors="replace",
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    start_new_session=os.name == "posix",
+                ) as process:
+                    try:
+                        stdout, stderr = process.communicate(timeout=timeout_seconds)
+                    except BaseException:
+                        # Deadline/cancellation must stop the owned children
+                        # before deleting their fixture, even after leader exit.
+                        # Reuse OS transport; keep the caller's existing budget.
+                        terminate_process_tree(process, grace_seconds=0)
+                        raise
+                    completed = subprocess.CompletedProcess(
+                        normalized["argv"], process.returncode, stdout, stderr,
+                    )
+            finally:
+                # Each fixture owns its Effect process as well as its data.
+                # Use the existing shutdown owner in the same temporary scope.
+                if any(root.glob("loopx-effect-runtime-*/runtime-*.json")):
+                    subprocess.run(
+                        [sys.executable, "-c", "from loopx.control_plane.effect_runtime "
+                         "import restart_effect_runtime; r=restart_effect_runtime(); "
+                         "raise SystemExit(r['status'] == 'shutdown_pending')"],
+                        cwd=REPO_ROOT, env=env, check=True, timeout=15,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
     except subprocess.TimeoutExpired as exc:
         result.update(
             {

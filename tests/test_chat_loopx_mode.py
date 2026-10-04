@@ -508,3 +508,33 @@ def test_owner_team_readback_is_configured_scoped_and_does_not_start_a_turn(mode
     assert calls == []
     with pytest.raises(ValueError, match="invalid team readback"):
         service.read_team(sid, {"operation": "operations", "agent_id": "other"})
+
+
+def test_each_owner_inspect_request_keeps_fresh_transport(mode, monkeypatch):
+    from loopx.collaboration_mcp import Delegations
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    service, sid, _, settings, calls = mode
+    apply(mode, "configure", settings=settings)
+    before = service.store.load_session(sid)
+    observed = []
+
+    def no_supervisor(*args, **kwargs):
+        raise AssertionError("single-use Goal Chat started preview reuse")
+
+    # The fixture lacks a qualified Turn: retain the real constructor and
+    # request/configuration admission, but probe its selected IO at inspect.
+    def inspect(runner, binding_id):
+        assert binding_id == "review"
+        assert runner._preview_transport is None
+        observed.append(runner)
+        return {"read_only": True}
+
+    monkeypatch.setattr(DelegationPreviewTransport, "__init__", no_supervisor)
+    monkeypatch.setattr(Delegations, "inspect", inspect)
+    for _ in range(2):
+        assert service.read_team(sid, {"operation": "inspect", "binding_id": "review"}) == {
+            "ok": True, "read_only": True,
+        }
+    assert len(observed) == 2 and observed[0] is not observed[1]
+    assert service.store.load_session(sid) == before and calls == []

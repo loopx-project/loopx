@@ -184,6 +184,13 @@ The shell:
 5. opens the existing personal workspace in one native window;
 6. terminates only the service process groups it started when the window exits.
 
+On macOS, the shell retries a failed workspace navigation until WebKit commits
+the workspace document. A committed slow document can finish without repeated
+reloads; explicit runtime repair starts a fresh handoff. Other platforms retain
+their existing single navigation attempt because their page-start events do
+not provide the same commit acknowledgement. Native startup changes require an
+App update; updating the CLI alone does not replace the shell.
+
 An unknown process on either LoopX port is a hard startup error. Existing
 services are reused only after a successful response exposes both the exact
 top-level JSON fingerprint and the same installed release identity as the

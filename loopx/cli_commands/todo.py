@@ -39,6 +39,10 @@ from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
     render_task_planning_packet,
 )
+from ..control_plane.goals.first_party_host_admission import (
+    capture_first_party_host_goal_ref,
+)
+from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..todos import (
     add_goal_todo,
     archive_completed_todos,
@@ -87,13 +91,16 @@ PrintPayload = Callable[
 
 
 def _read_todo_turn_settlement(
-    args: argparse.Namespace, *, runtime_root: Path,
+    args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
+    goal_ref: dict[str, str] | None,
 ) -> QuotaSettlementReadback:
     """Transport the original lifecycle tuple to the TS identity owner."""
     readback = read_heartbeat_settlement(
         runtime_root,
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
         turn_instance_id=args.turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if readback is None:
         raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -124,6 +131,7 @@ def _completion_settlement_error(
 def _completion_settlement_plan(
     identity: SettlementIdentity, *, args: argparse.Namespace,
     registry_path: Path, runtime_root: Path,
+    goal_ref: dict[str, str] | None,
 ) -> dict[str, object]:
     """Render the native plan with the original route and supplied lease facts."""
     actor_args = ""
@@ -145,6 +153,7 @@ def _completion_settlement_plan(
         goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
         turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
         scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
+        goal_ref=goal_ref,
     ).as_dict()
 
 
@@ -274,6 +283,7 @@ def handle_todo_command(
         renderer = _render_todo_receipt
     elif args.todo_command == "result-read":
         renderer = itemgetter("text")
+    goal_ref: dict[str, str] | None = None
     try:
         if args.todo_command is None:
             raise ValueError(
@@ -283,6 +293,18 @@ def handle_todo_command(
             )
         validate_shared_todo_options(args)
         validate_capability_gap_options(args)
+        if getattr(args, "turn_instance_id", None):
+            goal_instance_id = str(
+                getattr(args, "goal_instance_id", None) or ""
+            ).strip()
+            goal_ref = (
+                exact_goal_ref(args.goal_id, goal_instance_id)
+                if goal_instance_id
+                else capture_first_party_host_goal_ref(
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                )
+            )
         if args.todo_command == "plan":
             validate_todo_plan_options(args)
             payload = build_task_planning_packet(
@@ -512,7 +534,10 @@ def handle_todo_command(
             if getattr(args, "turn_instance_id", None):
                 runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
                 settlement_readback = _read_todo_turn_settlement(
-                    args, runtime_root=runtime_root,
+                    args,
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_ref=goal_ref,
                 )
                 settlement_result = settlement_readback.identity
                 assert settlement_result.value is not None
@@ -558,7 +583,11 @@ def handle_todo_command(
                             settlement_result
                         ),
                         "settlement_plan": _completion_settlement_plan(
-                            identity, args=args, registry_path=registry_path, runtime_root=runtime_root,
+                            identity,
+                            args=args,
+                            registry_path=registry_path,
+                            runtime_root=runtime_root,
+                            goal_ref=goal_ref,
                         ),
                         "error": completion_error,
                     }
@@ -631,7 +660,12 @@ def handle_todo_command(
             validate_todo_supersede_options(args)
             supersede_readback = (
                 _read_todo_turn_settlement(
-                    args, runtime_root=resolve_runtime_root(load_registry(registry_path), runtime_root_arg),
+                    args,
+                    registry_path=registry_path,
+                    runtime_root=resolve_runtime_root(
+                        load_registry(registry_path), runtime_root_arg
+                    ),
+                    goal_ref=goal_ref,
                 ) if args.turn_instance_id else None
             )
             payload = supersede_goal_todo(
@@ -676,6 +710,8 @@ def handle_todo_command(
             )
         else:
             raise ValueError("unsupported todo command")
+        if goal_ref is not None:
+            payload["goal_ref"] = dict(goal_ref)
     except Exception as exc:
         from ..usage_ping import capture_failure
         capture_failure(exc)
@@ -704,6 +740,8 @@ def handle_todo_command(
             agent_id=args.agent_id,
             todo_id=args.todo_id,
             turn_instance_id=getattr(args, "turn_instance_id", None),
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -729,6 +767,7 @@ def handle_todo_command(
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()
+        receipt_id = payload.get("completion_receipt_id")
         if committed_at:
             # Capability evidence comes only from a Turn journal the TS
             # journal owner validated against this completion's full
@@ -751,7 +790,8 @@ def handle_todo_command(
                     goal_id=args.goal_id,
                     event_kind="todo_complete",
                     identity=identity,
-                    state_version=committed_at,
+                    state_version=receipt_id or committed_at,
+                    receipt_id=receipt_id,
                     committed_at=committed_at,
                     hooks=post_writeback_hooks,
                     projection_builder=post_writeback_projection_builder,

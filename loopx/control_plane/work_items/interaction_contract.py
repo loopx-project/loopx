@@ -550,6 +550,26 @@ def _scoped_cli_args(
     return f" --agent-id {agent_id}{capability_args}"
 
 
+def _goal_ref_cli_arg(payload: Mapping[str, Any]) -> str:
+    value = payload.get("goal_ref")
+    if value is None:
+        return ""
+    if not isinstance(value, Mapping):
+        raise ValueError("interaction GoalRef must be an object")
+    from ..goals.source_session_registry_state import exact_goal_ref
+
+    goal_ref = exact_goal_ref(
+        str(value.get("goal_id") or ""),
+        str(value.get("goal_instance_id") or ""),
+    )
+    if goal_ref["goal_id"] != str(payload.get("goal_id") or "").strip():
+        raise ValueError("interaction GoalRef does not match goal_id")
+    return (
+        " --goal-instance-id "
+        + shlex.quote(goal_ref["goal_instance_id"])
+    )
+
+
 def _turn_scoped_cli_settlement_context(
     payload: dict[str, Any],
     *,
@@ -612,6 +632,11 @@ def _turn_scoped_cli_settlement_context(
             str(selected_todo.get("delivery_boundary"))
             if selected_todo.get("delivery_boundary")
             == "in_flight_continuation"
+            else None
+        ),
+        goal_ref=(
+            payload.get("goal_ref")
+            if isinstance(payload.get("goal_ref"), Mapping)
             else None
         ),
     )
@@ -678,7 +703,7 @@ def _selection_recovery_command(
         agent_id=identity.get("agent_id"), runtime_root=runtime_root,
         turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
         scheduler_args=render_scheduler_execution_args(scheduler_execution_context=scheduler_execution_context),
-    )
+    ) + _goal_ref_cli_arg(payload)
 
 
 def _render_replan_successor_closeout_guard(
@@ -751,10 +776,11 @@ def interaction_next_cli_actions(
         runtime_root=runtime_root,
     )
     if selection_command_template:
-        return [selection_command_template]
+        return [selection_command_template + _goal_ref_cli_arg(payload)]
+    goal_ref_arg = _goal_ref_cli_arg(payload)
     typed_quota_guard = (
         f"{command_prefix} --format json quota should-run --goal-id {goal_id}"
-        f"{scoped_cli_args}{scheduler_args}"
+        f"{scoped_cli_args}{scheduler_args}{goal_ref_arg}"
         if scheduler_args
         else "rerun the typed quota_guard from the current host packet"
     )
@@ -764,7 +790,7 @@ def interaction_next_cli_actions(
         return [turn_reentry_action]
     typed_monitor_poll = (
         f"{command_prefix} quota monitor-poll --goal-id {goal_id}{scoped_cli_args}"
-        f"{scheduler_args} --execute"
+        f"{scheduler_args}{goal_ref_arg} --execute"
         if scheduler_args
         else "use the current host packet's typed monitor command"
     )
@@ -1431,6 +1457,7 @@ def _build_interaction_cli_channel(
                     f"{shlex.quote(safe_turn_instance_id)} --todo-id "
                     f"{shlex.quote(selected_monitor_id)}{target_args} --use-current-task-lease --result-hash "
                     f'"${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}"'
+                    f"{_goal_ref_cli_arg(payload)}"
                 )
                 auxiliary_projection.update(
                     {
@@ -1460,10 +1487,14 @@ def _build_interaction_cli_channel(
         if isinstance(payload.get("selected_todo"), Mapping)
         else {}
     )
-    if spend_after_selection and selected_todo.get("task_repository"):
+    if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
-            "refresh": "delivery_workspace; otherwise --delivery-workspace-path",
+            "refresh": (
+                "delivery_workspace; otherwise --delivery-workspace-path"
+                if selected_todo.get("task_repository")
+                else "registered local Goal workspace; Git peer delivery requires an independent worktree"
+            ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",
         }

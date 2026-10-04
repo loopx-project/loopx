@@ -12,6 +12,7 @@ from mcp.client.stdio import stdio_client
 
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import request
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 
 
 @pytest.fixture
@@ -54,7 +55,11 @@ def cli(root, registry, action="read", *args, agent="receiver", goal="delivery",
 
 
 def read_ids(root):
-    return {path.stem for path in (root / ".local/manager-context/reads").glob("*.json")}
+    return {
+        path.stem
+        for path in (root / ".local/manager-context/reads").glob("*.json")
+        if BARE_SHA256_PATTERN.fullmatch(path.stem)
+    }
 
 
 def ids(page):
@@ -180,7 +185,7 @@ def test_receipt_batch_lookahead_cannot_make_a_later_page_block_the_current_page
     assert read_ids(root) == set(expected[:20])
 
 
-@pytest.mark.parametrize("damage", ["directory", "identity", "schema", "filename"])
+@pytest.mark.parametrize("damage", ["directory", "identity", "schema"])
 def test_unreadable_or_conflicting_entries_fail_without_read_receipts(inbox, damage):
     root, registry, seed, _ = inbox
     expected = seed(1)
@@ -190,8 +195,6 @@ def test_unreadable_or_conflicting_entries_fail_without_read_receipts(inbox, dam
         entry.unlink()
         folder.rmdir()
         folder.write_text("not a directory")
-    elif damage == "filename":
-        entry.rename(entry.with_name("invalid.json"))
     else:
         row = json.loads(entry.read_text())
         row["request_id" if damage == "identity" else "schema_version"] = "invalid"

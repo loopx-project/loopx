@@ -254,6 +254,22 @@ export const stewardJourneyScenario = {
         animations: "disabled",
       });
 
+      // Hold a read started before confirmation. A later status refresh must
+      // not replace the acknowledged result with the cached preview, and the
+      // delayed preview must not reopen confirmation when its response lands.
+      let releaseReadback;
+      const heldReadback = new Promise(resolveRead => { releaseReadback = resolveRead; });
+      const pendingRead = page.waitForRequest(request => request.method() === "GET"
+        && new URL(request.url()).pathname === "/api/actions", { timeout: 10_000 });
+      const actionListRoute = /\/api\/actions(?:\?.*)?$/;
+      const holdReadback = async route => {
+        await heldReadback;
+        await route.fulfill({ contentType: "application/json", status: 200,
+          json: { ok: true, schema_version: "loopx_chat_action_list_v1", proposals: [teamPlanProposal()] } });
+      };
+      await page.route(actionListRoute, holdReadback);
+      await pendingRead;
+
       // Beat 3: confirm, and record what the workspace actually reports after
       // the canonical owner ran.
       const confirm = drawer.getByRole("button", { name: "确认分配", exact: true });
@@ -269,16 +285,28 @@ export const stewardJourneyScenario = {
       check(api.durableWriteCount === 1, "the confirmed apply performed exactly one durable write");
       const applied = drawer.getByRole("heading", { name: "已分配 1 项，1 项待安排", exact: true });
       await applied.waitFor({ state: "visible", timeout: 15_000 });
+      const outcomeText = await applied.innerText();
       const resultText = await drawer.locator(".personal-team-plan-result").innerText();
       const assignmentVisible = resultText.includes("agent-backend") && resultText.includes(READY_TODO);
       const gapVisible = resultText.includes("agent-reviewer") && resultText.includes(GAP_TODO)
         && resultText.includes("待安排 · 尚未加入此目标");
       check(assignmentVisible && gapVisible, "the result names assigned work and pending work with its reason");
       check(await confirm.count() === 0, "the completed result removes its confirmation control");
+      await page.getByRole("button", { name: "刷新状态", exact: true }).click();
+      await page.getByText("刚刚更新", { exact: true }).waitFor({ state: "visible" });
+      check(await applied.count() === 1 && await confirm.count() === 0,
+        "a Goal status refresh retains the acknowledged assignment result");
+      releaseReadback();
+      await page.unroute(actionListRoute, holdReadback);
+      await page.waitForTimeout(200);
+      check(await applied.count() === 1 && await confirm.count() === 0,
+        "a read started before apply cannot reopen assignment confirmation");
+      check(api.actionApplies.length === 1 && api.durableWriteCount === 1,
+        "readback and status refresh never reapply the confirmed assignment");
       record("3-confirm", {
         applies: api.actionApplies.length,
         durable_writes: api.durableWriteCount,
-        outcome_text: await applied.innerText(),
+        outcome_text: outcomeText,
         outcome_fidelity: "assigned task and pending task with reason; execution remains unverified",
       });
       gaps.push({

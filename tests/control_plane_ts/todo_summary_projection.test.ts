@@ -3,6 +3,7 @@ import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {TODO_SUMMARY_PROJECTION_COLUMNS, projectTodoSummary} from "../../loopx/control_plane/todos/summary_projection.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
+import {evaluateTodoSuccession, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "../../loopx/control_plane/todos/succession.ts";
 
 const row = (fields: JsonObject = {}): JsonObject => ({status: "open", done: false,
   task_class: "advancement_task", has_resume: false, resume_ready: null, resume_evaluated: false,
@@ -18,6 +19,57 @@ const request = (rows: JsonObject[], fields: JsonObject = {}): JsonObject => ({
   observed_at: 100,
   selection: null, role: "agent", source_section: "Agent Todo", item_limit: 12, full_selection: true, ...fields});
 const done = (fields: JsonObject = {}) => row({status: "done", done: true, no_followup: true, ...fields});
+
+function fused(rows: JsonObject[], facts: JsonObject[], evaluations = evaluateTodoSuccession(facts)): JsonObject {
+  return request(rows, {schema_version: "todo_summary_projection_request_v2", succession: {
+    schema_version: "todo_succession_request_v1", row_columns: [...SUCCESSION_FACT_COLUMNS],
+    context_field_sets: facts.map(fact => fact.context_fields),
+    rows: facts.map((fact, index) => SUCCESSION_FACT_COLUMNS.map(name => name === "context_fields" ? index : fact[name])),
+    evaluation_columns: [...SUCCESSION_EVALUATION_COLUMNS],
+    evaluations: evaluations.map(evaluation => SUCCESSION_EVALUATION_COLUMNS.map(name => evaluation[name])),
+  }});
+}
+
+test("fused summary preserves legacy decisions and full-source inferred edges through filtering", () => {
+  const facts = [{todo_id: "todo_source", status: "done", active: true, advancement: true,
+    no_followup: false, successors: [], superseded_by: null, unblocks: null, resumes: null,
+    handoff: true, context_fields: ["claimed_by"]},
+  {todo_id: "todo_archived", status: "done", active: false, advancement: true,
+    no_followup: true, successors: [], superseded_by: null, unblocks: "todo_source", resumes: null,
+    handoff: false, context_fields: []}];
+  const evaluations = evaluateTodoSuccession(facts);
+  const rows = [done({todo_id: "todo_source", no_followup: false, handoff_state: "cleared_with_successor"})];
+  const carrier = fused(rows, facts.slice(0, 1), evaluations.slice(0, 1));
+  for (const limit of [null, 0, 1, 12]) {
+    assert.deepEqual(projectTodoSummary({...carrier, item_limit: limit}), projectTodoSummary(request(rows, {item_limit: limit})));
+  }
+  const empty = projectTodoSummary(fused([], []));
+  assert.deepEqual(empty, projectTodoSummary(request([])));
+});
+
+test("fused summary refuses missing, stale, reordered and contradictory evidence before closure", () => {
+  const facts = ["todo_first", "todo_second"].map(todo_id => ({todo_id, status: "done", active: true,
+    advancement: true, no_followup: true, successors: [], superseded_by: null, unblocks: null,
+    resumes: null, handoff: false, context_fields: ["claimed_by"]}));
+  const rows = facts.map(fact => done({todo_id: fact.todo_id}));
+  const carrier = fused(rows, facts);
+  assert.ok(projectTodoSummary(carrier).fields.terminal_closure_proof);
+  assert.throws(() => projectTodoSummary({...carrier, succession: undefined}), /summary succession/);
+  for (const mutate of [
+    (value: JsonObject) => { (value.succession as JsonObject).evaluations = []; },
+    (value: JsonObject) => { ((value.succession as JsonObject).evaluations as unknown[][])[0][1] = "stale"; },
+    (value: JsonObject) => { (value.rows as unknown[][]).reverse(); },
+    (value: JsonObject) => { (value.rows as unknown[][])[0][TODO_SUMMARY_PROJECTION_COLUMNS.indexOf("successor_gap")] = true; },
+    (value: JsonObject) => { (value.rows as unknown[][])[0][TODO_SUMMARY_PROJECTION_COLUMNS.indexOf("handoff_state")] = "blocking"; },
+    (value: JsonObject) => { (value.rows as unknown[][])[0][TODO_SUMMARY_PROJECTION_COLUMNS.indexOf("no_followup")] = false; },
+  ]) {
+    const changed = structuredClone(carrier); mutate(changed);
+    assert.throws(() => projectTodoSummary(changed));
+  }
+  const changed = structuredClone(carrier);
+  delete (changed.succession as JsonObject).evaluations;
+  assert.throws(() => projectTodoSummary(changed), /full-source succession/);
+});
 
 test("one whole-source projection computes counts, visibility and closure before limits", () => {
   for (const limit of [null, 0, 1, 12]) {

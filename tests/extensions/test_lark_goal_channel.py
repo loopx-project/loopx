@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 
+from tests.extensions.conftest import notification_transport_synthesis  # noqa: F401
+
 from loopx.cli_commands import goal_channel as goal_channel_cli
 from loopx.cli_commands import goal_channel_operation as goal_channel_operation_cli
 from loopx.extensions.lark import goal_channel_contracts
@@ -909,8 +911,13 @@ def test_refresh_gate_receipt_failure_keeps_send_identity_for_retry(
     runner = _fake_runner(calls)
     save = goal_channel_runtime.save_goal_binding
 
+    writes = 0
     def fail(**kwargs):
-        raise PermissionError("private receipt path")
+        nonlocal writes
+        writes += 1
+        if writes > 1:
+            raise PermissionError("private receipt path")
+        save(**kwargs)
 
     monkeypatch.setattr(goal_channel_runtime, "save_goal_binding", fail)
     result = run(runner)
@@ -918,7 +925,7 @@ def test_refresh_gate_receipt_failure_keeps_send_identity_for_retry(
     assert result["failure"]["reason_code"] == "permission_denied"
     assert result["failure"]["external_write_status"] == "performed"
     assert result["external_write_performed"] is True
-    assert binding_path.read_bytes() == before
+    assert binding_path.read_bytes() != before  # prepared body survives final receipt failure
     monkeypatch.setattr(goal_channel_runtime, "save_goal_binding", save)
     assert run(runner)["status"] == "sent_verified"
     sends = [args for args in calls if "+messages-send" in args]
@@ -1001,11 +1008,35 @@ def test_refresh_gate_noop_has_no_extra_provider_calls_or_failure(
         }
         monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run",
                             lambda *args, **kwargs: packet)
+    def stale_extension(*args, **kwargs):
+        raise AssertionError("a safe no-op must not require extension admission")
+
+    monkeypatch.setattr(goal_channel_lifecycle, "resolve_extension_activation", stale_extension)
     calls: list[list[str]] = []
     result = run(_fake_runner(calls), authorized=mode != "suppressed")
     assert result["ok"] is True
     assert "failure" not in result and "failure_summary" not in result
     assert result["status"] == ("external_sink_suppressed" if mode == "suppressed" else mode)
+    assert calls == []
+
+
+def test_refresh_gate_already_sent_does_not_require_extension_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    runner = _fake_runner(calls)
+    assert run(runner)["status"] == "sent_verified"
+    calls.clear()
+
+    def stale_extension(*args, **kwargs):
+        raise AssertionError("verified delivery replay must not re-admit transport")
+
+    monkeypatch.setattr(goal_channel_lifecycle, "resolve_extension_activation", stale_extension)
+    result = run(runner)
+    assert result["status"] == "already_sent"
+    assert result["delivery_postcondition"]["satisfied"] is True
+    assert "extension_activation" not in result
     assert calls == []
 
 
@@ -1663,9 +1694,8 @@ def test_notify_gate_honors_admission_and_does_not_present_labels_as_decisions(
         quota_packet=quota_packet,
         runner=_fake_runner(calls),
     )
-    message, _question = goal_channel_contracts.gate_message(
+    notice = goal_channel_contracts._gate_notice_projection(
         goal_id=GOAL_ID,
-        objective="Deliver one bounded change.",
         quota_packet={
             **quota_packet,
             "interaction_contract": {
@@ -1679,20 +1709,14 @@ def test_notify_gate_honors_admission_and_does_not_present_labels_as_decisions(
                 }
             },
         },
-        kanban_url="https://example.invalid/kanban",
     )
 
     assert rejected["status"] == "rejected"
     assert rejected["blocker"] == "state_transition_rejected"
     assert calls == []
-    assert message.startswith("LoopX · Action required\n\nGoal:")
-    assert "Request details are unavailable" in message
-    assert "Approve the bounded change" not in message
-    assert "Revoke the test key" not in message
-    assert "Reply with" not in message
-    assert "Current recommendation" not in message
-    assert "Next safe action" not in message
-    assert "\n- " not in message
+    assert notice["source"] == "unavailable"
+    assert notice["items"] == []
+
 
 
 def test_notify_gate_reports_missing_shared_target_for_direct_caller(
@@ -2665,14 +2689,14 @@ def test_gate_notice_delivers_request_body_instead_of_compact_label(tmp_path: Pa
             "evidence": "https://example.org/release/2.0",
         }]},
     }
-    message, _ = goal_channel_contracts.gate_message(
-        goal_id=GOAL_ID, objective="Public release", quota_packet=quota, kanban_url="",
+    notice = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID, quota_packet=quota,
     )
+    message = json.dumps(notice, ensure_ascii=False)
     assert body in message
     assert "todo_release_review" in message
     assert "Only the stable-channel publication needs a decision." in message
     assert "https://example.org/release/2.0" in message
-    assert "bounded preview" in message
     calls: list[list[str]] = []
     runner = _fake_runner(calls)
     first = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=runner)
@@ -2686,15 +2710,112 @@ def test_gate_notice_delivers_request_body_instead_of_compact_label(tmp_path: Pa
 
 
 def test_gate_notice_redacts_and_bounds_additional_context() -> None:
-    message, _ = goal_channel_contracts.gate_message(
-        goal_id=GOAL_ID, objective="Public release", kanban_url="",
+    notice = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID,
         quota_packet={"user_todo_summary": {"gate_open_items": [{
             "todo_id": "todo_release_review", "text": "Review " + "public facts " * 200,
             "note": "See /tmp/private-review.txt and api_key=synthetic_fixture_secret_123456789",
             "evidence": "https://example.org/release/2.0",
         }]}},
     )
+    message = json.dumps(notice, ensure_ascii=False)
     assert "/tmp/private-review.txt" not in message
     assert "synthetic_fixture_secret_123456789" not in message
     assert len(message) < 2000
-    assert "Review the current request in LoopX" in message
+    assert notice["source"] == "unavailable"
+    assert notice["incomplete"][0]["reason_code"] == "content_redacted"
+
+
+def test_notify_cli_compact_quota_joins_same_read_complete_request(tmp_path: Path, monkeypatch) -> None:
+    from copy import deepcopy
+    from loopx.control_plane.todos.quota_summary import compact_quota_todo_summary_for_payload
+
+    body = "Review public release evidence and independent checks. " * 7
+    body += "Learning only. Expires at 2026-10-01T07:00:00Z; do not execute after expiry."
+    canonical = {"todo_id": "todo_release_review", "role": "user", "task_class": "user_action",
+                 "done": False, "status": "open", "updated_at": "2026-10-01T06:00:00Z",
+                 "text": body, "note": "Version 2.0 release review; not execution authority.",
+                 "evidence": "https://example.org/release/2.0"}
+    status = {"attention_queue": {"items": [{"goal_id": GOAL_ID,
+               "user_todos": {"items": [canonical]}}]}}
+    before = deepcopy(status)
+    reads = []
+    monkeypatch.setattr(goal_channel_cli, "registry_project_root", lambda _: tmp_path)
+    monkeypatch.setattr(goal_channel_cli, "collect_status", lambda **kwargs: reads.append(kwargs) or status)
+    def quota_from_status(observed, **kwargs):
+        assert observed is status
+        return {"goal_id": GOAL_ID, "state": "operator_gate", "notify_user_on_gate": True,
+                "interaction_contract": {"user_channel": {"action_required": True, "notify": "NOTIFY"}},
+                "user_todo_summary": compact_quota_todo_summary_for_payload({"gate_open_items": [canonical]})}
+    monkeypatch.setattr(goal_channel_cli, "build_quota_should_run", quota_from_status)
+    quota = goal_channel_cli._quota_packet(registry_path=tmp_path / "registry.json", runtime_root_arg=None,
+                                           goal_id=GOAL_ID, agent_id="fixture-agent")
+    assert len(reads) == 1  # no second provider read or snapshot race
+    short = quota["user_todo_summary"]["gate_open_items"][0]
+    assert len(short["text"]) <= 180 and "note" not in short
+    notice = goal_channel_contracts._gate_notice_projection(goal_id=GOAL_ID, quota_packet=quota)
+    message = json.dumps(notice, ensure_ascii=False)
+    assert body in message and canonical["note"] in message and canonical["evidence"] in message
+    assert "Expires at 2026-10-01T07:00:00Z" in message
+    calls = []
+    binding_path = _gate_test_binding(tmp_path)
+    result = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=_fake_runner(calls))
+    assert result["status"] == "sent_verified" and result["readback_verified"] is True
+    sent = next(args for args in calls if "+messages-send" in args)
+    expected = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID,
+        quota_packet=quota,
+    )
+    assert json.loads(sent[sent.index("--text") + 1])["decision_notice"] == expected
+    assert status == before
+    # A trailing content/evidence change beyond scheduler bounds is material.
+    old_generation = goal_channel_contracts.quota_human_gate_state_generation(quota)
+    canonical["note"] += " Additional public counterevidence."
+    assert goal_channel_contracts.quota_human_gate_state_generation(quota) != old_generation
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "other_goal", "revision", "lifecycle", "overflow"])
+def test_notify_complete_source_mismatch_or_overflow_is_not_decision_ready(mismatch: str) -> None:
+    canonical = {"todo_id": "todo_release_review", "role": "user", "task_class": "user_action",
+                 "done": False, "status": "open", "updated_at": "2026-10-01T06:00:00Z",
+                 "text": "Review public release evidence. " * 10 + "Expiry: 2026-10-01T07:00:00Z."}
+    selected = {**canonical, "text": canonical["text"][:177] + "..."}
+    snapshot = {"goal_id": GOAL_ID, "items": [canonical]}
+    if mismatch == "missing":
+        snapshot["items"] = []
+    if mismatch == "other_goal":
+        snapshot["goal_id"] = "other-goal"
+    if mismatch == "revision":
+        canonical["updated_at"] = "2026-10-01T06:01:00Z"
+    if mismatch == "lifecycle":
+        canonical["status"] = "deferred"
+    if mismatch == "overflow":
+        canonical["note"] = "x" * 451
+    notice = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID,
+        quota_packet={"user_todo_summary": {"gate_open_items": [selected]}, "request_snapshot": snapshot},
+    )
+    assert notice["items"] == []
+    assert notice["incomplete"][0]["request_id"] == "todo_release_review"
+
+
+def test_refresh_auto_notify_uses_same_complete_snapshot(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.todos.quota_summary import compact_quota_todo_summary_for_payload
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    body = "Review public release evidence. " * 12 + "Learning only; expires at 2026-10-01T07:00:00Z."
+    todo = {"todo_id": "todo_release_review", "role": "user", "task_class": "user_action",
+            "done": False, "status": "open", "updated_at": "2026-10-01T06:00:00Z", "text": body,
+            "note": "Independent review, no execution authority."}
+    status = {"attention_queue": {"items": [{"goal_id": GOAL_ID, "user_todos": {"items": [todo]}}]}}
+    reads = []
+    monkeypatch.setattr(goal_channel_lifecycle, "collect_status", lambda **kwargs: reads.append(kwargs) or status)
+    monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run", lambda *args, **kwargs: {
+        "goal_id": GOAL_ID, "state": "operator_gate", "notify_user_on_gate": True,
+        "user_todo_summary": compact_quota_todo_summary_for_payload({"gate_open_items": [todo]}),
+    })
+    calls = []
+    result = run(_fake_runner(calls))
+    assert result["status"] == "sent_verified" and result["readback_verified"] is True
+    assert len(reads) == 1
+    sent = next(args for args in calls if "+messages-send" in args)
+    assert body in sent[sent.index("--text") + 1] and todo["note"] in sent[sent.index("--text") + 1]

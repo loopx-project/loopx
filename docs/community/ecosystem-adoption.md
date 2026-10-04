@@ -35,9 +35,18 @@ owner submitting a directory entry.
   establish production availability, failover, or multi-owner operation.
   The separate metadata-runtime promotion gate
   [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) remains open.
+  Its seed-routing helper [PR #4724](https://github.com/loopx-project/loopx/pull/4724)
+  is merged, while the companion ladder
+  [PR #4726](https://github.com/loopx-project/loopx/pull/4726) remains open;
+  the helper merge alone does not close that promotion gate.
   **Status: qualification tooling merged, with separate acceptance still open**.
   This is concrete integration work beyond the README relationship below,
-  not proof that NoKV runs LoopX in production. Checked September 30, 2026.
+  not proof that NoKV runs LoopX in production. NoKV's
+  [current README evidence boundary](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md#evidence-and-qualification)
+  separately marks full-surface native CLI and installed Python wheel acceptance
+  against real services as not qualified. The historical single-node stack
+  result does not establish those current, broader acceptances.
+  Checked October 4, 2026.
 - **GoTry** (Danceiny) — uses LoopX goals, Codex task bindings and heartbeats
   for multiple development lanes. [Issue #18](https://github.com/Danceiny/gotry/issues/18)
   records setup; [PR #187](https://github.com/Danceiny/gotry/pull/187), merged,
@@ -62,15 +71,29 @@ owner submitting a directory entry.
   **Status: source and packaging integration observed**; deployment and
   sustained runtime use were not verified.
 - **Hufu** (Blicae8917) — [PR #70](https://github.com/Blicae8917/hufu/pull/70),
-  merged, adds an opt-in LoopX v0.5.2 RunOnce Consumer. The deployment provider
-  supplies the real transport and Host invocation; [issue #76](https://github.com/Blicae8917/hufu/issues/76)
-  remains open for status projection. **Status: bounded integration merged,
-  companion work remains**.
+  merged August 23, 2026, adds an opt-in LoopX v0.5.2 RunOnce Consumer.
+  The checked main snapshot [exports the consumer and its ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts);
+  its [compatibility record](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/docs/COMPATIBILITY.md)
+  retains the exact v0.5.2 baseline and no bundled LoopX dependency.
+  The deployment provider supplies real transport and Host invocation.
+  [Issue #76](https://github.com/Blicae8917/hufu/issues/76) reports an owner-local
+  pilot with committed/replayed RunOnce receipts, while general status projection
+  remains incomplete; the issue is still open. **Status: bounded integration
+  merged, local pilot reported, companion projection open**. That report was not
+  independently reproduced and does not establish current-version compatibility
+  or sustained deployment. Checked October 4, 2026.
 - **benjamin-plugins** (Yidada) — [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1),
-  merged, adds a Codex plugin calling the official LoopX kernel. The author
-  reports a source-checkout CLI contract smoke; PyPI installation was not
-  verified and background scheduling remains host-owned.
-  **Status: plugin merged**.
+  merged September 5, 2026, adds a Codex plugin calling the official LoopX kernel.
+  The checked main [marketplace entry](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/.agents/plugins/marketplace.json)
+  still registers the plugin. Its [source record](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/SOURCE.md)
+  pins CLI qualification to a LoopX 0.5.4 checkout; the PR reports one independent
+  model status scenario, with other scenarios structurally checked only.
+  The [preflight implementation](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/skills/loopx/scripts/preflight.py)
+  locates an executable and reads registry shape without executing LoopX;
+  it explicitly leaves runtime and driver verification false.
+  **Status: plugin merged, source-checkout validation reported**. PyPI installation,
+  actual background execution and current-version compatibility were not verified;
+  scheduling remains host-owned. Checked October 4, 2026.
 - **Adaptive-Agent-Orchestration-Protocol** (YuemingHub) —
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41),
   merged, registers LoopX as an optional execution-continuity provider.
@@ -107,14 +130,30 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 3. Proposals and Deferred Adoption
 
+- **MilkSU** — [issue #189](https://github.com/MilkSU-Official/milksu/issues/189)
+  asks whether to adopt LoopX, borrow its durable Goal/state/retry ideas, or
+  retain the existing ACP approach. **Status: open design evaluation**, not an
+  accepted integration or implementation. Checked October 3, 2026.
+- **ai-skills** — [issue #468](https://github.com/MichaelHeaton/ai-skills/issues/468)
+  proposes LoopX-inspired quota-gated cooldown and self-wake checks without a
+  LoopX runtime dependency. The
+  [September 23 follow-up](https://github.com/MichaelHeaton/ai-skills/issues/468#issuecomment-5796952500)
+  leaves hook/upstream design work open because `/loop` is a built-in command.
+  **Status: historical open proposal**, not a shipped skill or runtime adoption.
+  Checked October 3, 2026.
 - **OpenViking / VikingBot** — open
   [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) proposes
   optional, default-off LoopX-backed background long tasks. LoopX owns
   Goal/Todo state and execution gates; the Bot supplies the worker, model
   and tools. The author reports real CLI tests with a model substitute;
   real-model end-to-end acceptance and Docker build validation remain open.
+  The proposal's [pinned packaging](https://github.com/volcengine/OpenViking/blob/406827d73594fda9def251912be64bf06b013773/pyproject.toml)
+  places `loopx==1.0.5` in the optional `longtask` extra;
+  [current main packaging](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/pyproject.toml)
+  does not declare that extra. These are proposal and main snapshots,
+  not an instruction to install an unreleased extra.
   **Status: runtime integration proposed, not merged or released**.
-  Checked September 30, 2026.
+  Checked October 4, 2026.
 - **Opensiro VSM harness index** — merged
   [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) records
   a feasibility stop for a frozen LoopX comparison; a subsequent
@@ -169,6 +208,17 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 4. Learning, Coverage and Collaboration
 
+- **General Loop** — its
+  [pinned README comparison](https://github.com/CosmosShadow/general-loop/blob/0bd8fb3b5b5c2e8e02b35e627ad715cade23bba0/README.md)
+  contrasts LoopX's control-plane protocol with Markdown coordination on
+  existing agent hosts. **Status: comparative reference**; the mention does not
+  establish a LoopX dependency or adopted mechanism. Checked October 3, 2026.
+- **GitHub-Michelin** — merged
+  [PR #128](https://github.com/ZhenningLang/GitHub-Michelin/pull/128) adds a bilingual
+  [LoopX editorial entry](https://github.com/ZhenningLang/GitHub-Michelin/blob/a75520b79cff3d9818ab6b60100677b93beaef81/categories/agent-tooling/work-state/loopx.md).
+  **Status: editorial coverage**, not runtime adoption. Its September 27
+  assessment and snapshots are the editor's dated observations, not a live
+  qualification of current LoopX behavior. Checked October 3, 2026.
 - **ai-agent-book / Understanding AI Agents** (bojieli) —
   [PR #614](https://github.com/bojieli/ai-agent-book/pull/614), merged, introduces
   LoopX as a concrete Loop Engineering framework. [Chapter 10](https://github.com/bojieli/ai-agent-book/blob/main/book/chapter10.md)
@@ -177,10 +227,10 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - **NAVER fe-news** — the [September 2026 newsletter](https://github.com/naver/fe-news/blob/master/issues/2026-09.md)
   explains LoopX and its installation path in Korean. **Status: editorial coverage**,
   not a NAVER deployment claim.
-- **OpenViking / NoKV** — [OpenViking's README](https://github.com/volcengine/OpenViking/blob/main/README.md)
-  lists LoopX; [NoKV's README](https://github.com/NoKV-Lab/NoKV/blob/main/README.md)
+- **OpenViking / NoKV** — [OpenViking's README](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/README.md)
+  lists LoopX; [NoKV's README](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md)
   names an active open-source collaboration. **Status: public project relationships**;
-  these listings alone do not establish a runtime dependency.
+  these listings alone do not establish a runtime dependency. Checked October 4, 2026.
 - **loopx-book / loopx-book-labs** (cocolord) — a bilingual, protocol-first
   [developer book](https://github.com/cocolord/loopx-book) and
   [runnable labs](https://github.com/cocolord/loopx-book-labs) cover onboarding,
@@ -188,6 +238,16 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 5. Derivatives
 
+- **michaelx1993/loopx → foolzzz/loopx** — one related fork family, not two
+  independent adopters. The
+  [downstream changelog](https://github.com/foolzzz/loopx/blob/6c16e4a06797f2b0a81a53827e7fd8082913b36d/CHANGELOG.md)
+  documents divergence from upstream and role-based orchestration. Merged
+  [michaelx1993 PR #27](https://github.com/michaelx1993/loopx/pull/27) introduces
+  deterministic bookkeeping and a bounded orchestrator digest; merged
+  [foolzzz PR #18](https://github.com/foolzzz/loopx/pull/18) prepares that fork's
+  2.0.0 release. **Status: downstream code merged**; these are fork changes,
+  not an upstream LoopX release or independently verified performance gain.
+  Checked October 3, 2026.
 - **loopx-HPC** (Sande33p) — [PR #1](https://github.com/Sande33p/loopx-HPC/pull/1)
   is merged in an independent fork, adding optional scientific campaigns,
   PBS/Slurm and MLflow integration. **Status: downstream code merged**;
@@ -224,3 +284,12 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - Scoped update: **2026-09-30**, covering CGC 2046, NoKV qualification tooling,
   the VikingBot proposal and the retired Opensiro study above. Other entries
   retain their earlier review boundary; this is not a full-table revalidation.
+- Scoped update: **2026-10-03**, covering MilkSU, ai-skills, General Loop,
+  GitHub-Michelin and the michaelx1993/foolzzz fork family. Current issue/PR
+  states, later comments and pinned source files were checked; this update
+  adds no confirmed runtime adopter and does not revalidate the rest of the table.
+- Scoped update: **2026-10-04**, rechecking OpenViking, NoKV, Hufu and
+  benjamin-plugins against current public PR/issue states and pinned source files.
+  This distinguishes proposal packaging, historical tooling, author-reported
+  pilots, plugin registration and current acceptance limits. No live integration
+  was independently reproduced and other entries were not revalidated.

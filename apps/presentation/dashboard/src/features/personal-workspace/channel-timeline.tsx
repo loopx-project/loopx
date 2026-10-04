@@ -15,6 +15,7 @@ import { useWorkspaceI18n } from "./i18n";
 import { ReturnDeliveryStatus } from "./return-delivery-status";
 import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
+import { conversationOrder } from "./conversation-order";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string) {
@@ -28,6 +29,7 @@ function answerLink(sessionId: string, messageId: string) {
 
 
 export function ChannelTimeline({
+  emptyState,
   items,
   onSelect,
   selectedGoal,
@@ -39,6 +41,7 @@ export function ChannelTimeline({
   onSteerTurn,
   onCancelPreparation,
 }: {
+  emptyState?: { title: string; description: string };
   items: WorkspaceTimelineItem[];
   onCancelPreparation?: () => void;
   onSelect: (selection: WorkspaceDrawerSelection) => void;
@@ -55,13 +58,13 @@ export function ChannelTimeline({
     return (
       <div className="personal-timeline-empty">
         <span><Sparkles size={20} /></span>
-        <strong>{selectedGoal ? t("timeline.emptyGoal") : t("timeline.emptyWorkspace")}</strong>
-        <p>{selectedGoal ? t("timeline.emptyGoalDescription") : t("timeline.emptyWorkspaceDescription")}</p>
+        <strong>{emptyState?.title ?? (selectedGoal ? t("timeline.emptyGoal") : t("timeline.emptyWorkspace"))}</strong>
+        <p>{emptyState?.description ?? (selectedGoal ? t("timeline.emptyGoalDescription") : t("timeline.emptyWorkspaceDescription"))}</p>
       </div>
     );
   }
 
-  const latestAnnounceable = [...items].reverse().find((item) =>
+  const latestAnnounceable = conversationOrder(items).reverse().find((item) =>
     (item.kind === "message" && item.message.role !== "user")
     || (item.kind === "proposal" && ["applied", "stale", "error", "gated"].includes(item.proposal.status))
     || (item.kind === "run" && item.run.status === "completed"));
@@ -74,7 +77,7 @@ export function ChannelTimeline({
         : "";
 
   const gatedItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
-    item.kind === "proposal" && item.proposal.status === "gated");
+    item.kind === "proposal" && item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute");
   // Only routine execution is folded. Waiting, interruption, and failures stay
   // visible; no prose-based inference that a waiting run is safe to ignore.
   const routineRuns = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
@@ -95,7 +98,7 @@ export function ChannelTimeline({
     ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`]
     : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`]).filter(Boolean).join(" · ");
   const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
-    item.kind === "proposal" && item.proposal.status !== "gated");
+    item.kind === "proposal" && (item.proposal.status !== "gated" || item.proposal.actionKind === "operation.execute"));
   // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
   // "Newest" is read from the stored proposal, not from the position in this
   // list: a restore arrives newest first and a draft created in this session is
@@ -121,10 +124,12 @@ export function ChannelTimeline({
     }
     if (item.kind === "proposal") {
       const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
+      const pendingOperation = item.proposal.reviewPlan?.operationFrame?.kind === "pending";
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
+          <span><small>{pendingOperation ? t(`proposal.kind.${item.proposal.actionKind}`)
+            : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
             : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review") : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
         </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan
@@ -145,7 +150,7 @@ export function ChannelTimeline({
             ? <a className="personal-answer-link" href={answerLink(item.message.sourceSessionId, item.message.sourceMessageId)}
                 target="_blank" rel="noopener noreferrer">{locale === "zh-CN" ? "单独阅读完整答复" : "Read full answer separately"}</a>
             : null}
-          {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn}/> : null}
+          {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
             ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCard request={item.message.collaboration} />
@@ -163,7 +168,6 @@ export function ChannelTimeline({
           <summary><Activity size={16} aria-hidden="true"/><strong>{t("timeline.background")}</strong><span>{activitySummary}</span></summary>
           <div>{scheduleItems.map(renderItem)}{routineRuns.map(renderItem)}</div>
         </details> : null}
-        {primaryItems.map(renderItem)}
         {gatedItems.length ? (
           <details className="personal-gated-summary">
             <summary><span><Sparkles size={16} /></span><strong>{t("timeline.waitingConfirmation")}</strong><small>{t("timeline.gateHistory", { count: gatedItems.length })}</small></summary>
@@ -176,7 +180,7 @@ export function ChannelTimeline({
             <div>{foldedProposalItems.map(renderItem)}</div>
           </details>
         ) : null}
-        {visibleProposalItems.map(renderItem)}
+        {conversationOrder([...primaryItems, ...visibleProposalItems]).map(renderItem)}
       </div>
     </>
   );

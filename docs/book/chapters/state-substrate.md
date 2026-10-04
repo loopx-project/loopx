@@ -1,375 +1,179 @@
 # 持久状态与只读投影
 
-> Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
-> examples below describe a retired experiment. Current Todos use legacy Markdown
-> or the selected File/SQLite authority. See the
-> [retirement contract](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md).
+接手一项任务时，最先遇到的问题通常是：哪一份记录代表当前状态？Todo、dashboard、聊天和历史回执可能各自描述不同时间点。能读到旧信息，并不等于能够安全继续。
 
+## 同一条 Todo，为什么会看到两个状态
 
-长程任务能跨 session 恢复，不是因为系统保存了更多聊天记录，而是因为关键事实有稳定归属，
-并且能够被重新投影成当前决策。本章建立 LoopX 的状态底座：哪些表面保存事实，哪些表面只负责
-阅读，以及为什么“看起来像当前状态”的页面或 Markdown 不能自动成为写入入口。
+考虑一个教学情境：Agent A 已完成修复，当前 Todo source 记录了完成及证据。Agent B 接手时读到较早缓存的 dashboard，卡片仍显示 open，于是准备重做。
 
-## 本章目标
+提高刷新频率可以缩短这个窗口，却不能决定发生分歧时信谁。LoopX 的选择是为每类事实保留明确 owner，再生成面向不同读者的投影。恢复从当前 source 与外部读回开始，显示面负责帮助定位。
 
-读完后，你应该能：
+这会增加状态维护、读取和投影更新成本，但让 session、Host 和界面可以更换，同时保留可核对的工作记录。
 
-- 区分 registry、event ledger、active-state workbench、run history 与 status projection；
-- 判断一个字段应该属于 canonical state、外部事实还是只读 projection；
-- 解释 append-only event、replay、idempotency 与 freshness 的关系；
-- 说明为什么 dashboard、prompt 和 task graph 都不能成为第二套状态机；
-- 在协议变化时找到权威来源，而不是依赖某个 Python 函数名。
+## 为什么当前状态之外还要保留历史回执 {#design-choice}
 
-## Goal identity 不属于聊天线程
+T1 已提交 R1，随后其他工作把 source 推到新 revision。A 重试原操作时，有两个问题：当前状态是什么，原操作是否已经接受。只有最新状态，可能无法回答第二个问题；只有旧回执，又不足以判断下一次写入。
 
-LoopX 的持久身份是 **Goal**，不是某个 Host thread：
+| 可选做法 | 适用之处 | 长程工作中的代价 |
+| --- | --- | --- |
+| 从聊天重建进展 | 解释动机与人工接手的小任务 | 需要重新解释身份、版本和外部 freshness |
+| 只保存最新快照 | 快速读取当前工作 | 响应丢失后，未必能识别原操作已提交 |
+| 当前 source + identity-bound receipt | 分开读取当前 head 与历史操作结果 | 需要维护身份、回执保留和恢复合同 |
 
-```text
-Goal
-├── objective and boundary
-├── todos, gates and evidence lineage
-├── registered peer identities
-└── runtime and projection routes
+LoopX 在相应 authority 路径上采用最后一种分工。历史 R1 可以被恢复，当前 head 仍可包含后来提交的 R2；重放 R1 不应把状态退回过去。这是 source 与 receipt 各有职责的理由，而非选择某一种文件格式就自动获得的性质。
 
-Session / thread
-└── one temporary executor context
-```
+对应实现是 `CoordinationCommandReceipt` 与 [operation replay 合同](/loopx/docs/reference/authority-operation-replay/)。它们仍受 provider 与命令各自的恢复边界约束。
 
-一个 Goal 可以先后由 Codex App、Codex CLI 或其他 Host 推进；一个 session 也可能读取多个 Goal。
-读取 Goal 不会自动授予写权限，结束 session 也不会使 Goal 消失。
+## 先确定 Goal 与当前 authority
+
+持久边界是 Goal。它包含目标、Todo、Gate、Agent 身份和运行路由；某个 Host thread 只是执行上下文。结束 session 不会自动删除 Goal，读到 Goal 也不会授予写权限。
 
 ### 精确复用 Goal，不靠文本猜测
 
-Goal 复用依赖 stable `goal_id` 和 registry 连接，不依赖 objective 的模糊相似度：
+复用依赖 stable `goal_id` 与 registry 路由。多个 Goal 存在时，`start-goal --guided` 提供只读选择，再按精确 id 重跑；相似目标文本不构成静默合并的依据。
 
-```text
-one registered goal
-  -> reuse that exact goal boundary
+复用 Goal 和接管 Agent 是不同操作。新会话可以读取原 Goal，但 fresh `agent_id`、已有 lane 的明确复用以及执行 lease 仍有各自的检查。旧聊天或 receipt 不授予新执行者写入权。
 
-multiple registered goals
-  -> read-only goal_selection_gate
-  -> choose one exact goal_id
-  -> rerun before any mutation
-```
+### Todo 存储取决于选定的事实源
 
-如果项目注册了多个 Goal，`start-goal --guided` 应列出可选 id、状态和精确重跑命令。在选择完成前，
-Todo 写入、Agent 注册和 Host activation 都不应发生。目标文本相似、来自同一 repository，甚至
-共享一部分 acceptance，都不是静默合并 Goal 的依据。
+当前实现区分 legacy Markdown 与选定的 File/SQLite authority。先确认该 Goal 实际使用哪条路径，不能仅凭文件存在或 provider 安装状态判断。
 
-还要把 Goal reuse 与 Agent takeover 分开。新 Agent 可以读取同一 Goal 的公共 frontier 和历史，
-但在无已注册 lane 时默认注册 fresh `agent_id`；复用已有 Agent identity 需要用户明确选择那个精确 id。这样历史
-lineage 能连续，执行责任却不会被新 session 冒名继承。
+| 路径 | Todo 从哪里读取 | Markdown 的角色 | 操作注意 |
+| --- | --- | --- | --- |
+| 尚未迁移的 legacy 路径 | active-state 的 Todo 段落及元数据 | 仍可能是源状态 | 手改可能改变读取结果，也可能绕过验收与回执 |
+| 已选择 canonical provider 的路径 | 对应 authority 的 Todo snapshot | 兼容工作台或投影 | 以 provider revision 和生命周期读回为准 |
+| 旧 Todo `events.jsonl` 实验 | 已退役，不是当前恢复入口 | 不能据旧示例恢复为 authority | 非空旧源需按退役合同处理，不能忽略或清空来过检查 |
 
-因此，恢复模型不是：
-
-```text
-restore = replay the old conversation
-```
-
-而是：
-
-```text
-next decision =
-  replay(durable project facts)
-  + inspect(fresh workspace and external facts)
-```
-
-旧对话可以帮助理解，但不能比当前 Git、当前 Gate、当前 CI 和 LoopX canonical state 更权威。
+旧 Todo event API、replay、backfill 和 completion 示例已退役，见[退役合同](/loopx/docs/reference/protocols/event-sourced-state-contract-v0/)。这不等于 run history、quota events 或 `rollout_event_log` 也被退役；它们仍有各自的记录职责。
 
 ## 五类状态表面
 
-### 1. Registry：身份、连接与长期策略
+### 1. Registry：身份、连接与策略
 
-Registry 回答“这个 Goal 是谁、连接到哪里、允许哪些运行路径”：
+Registry 保存 Goal id、repository、active-state/runtime 路由、registered Agent 与运行策略。它回答“连接到哪里、有哪些边界”，不能证明某个 Host 已启动或某次交付已完成。
 
-- Goal id、repository 与 active-state 路由；
-- local/global runtime root；
-- registered Agent identities；
-- coordination、write scope 与 guard；
-- default-off feature 的配置。
+Goal 选择、Agent 身份与 authority 配置应按各自的公开入口读回。迁移 provider 要走对应切换协议，不能改一个展示字段就宣称迁移完成。
 
-Registry 不证明某个 Host 已经成功启动，也不保存每一轮 Agent 输出。它是连接与策略事实，不是
-执行回执。
+### 2. Todo 与 Goal state：当前工作事实
 
-### 2. Event ledger：发生过什么
+Todo status、dependency、Gate、claim、acceptance 与 continuation 决定下一步工作。当前值来自选定 source；状态修改通过相应生命周期 writer 完成，并保留绑定身份、revision 与所需 evidence。
 
-[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
-把 Todo、Gate、run、evidence、projection 和 quota 变化表达为 append-only events。
-
-事件至少需要满足四个不变量：
-
-| 不变量 | 作用 |
-| --- | --- |
-| Append-only | 新事实追加，不能重写历史来伪装旧动作没有发生 |
-| Ordered | replay 能重建相同的生命周期顺序 |
-| Idempotent | 同一 `event_id` 与相同 payload 重放不会重复生效 |
-| Privacy-partitioned | public-safe 摘要与 local/private payload 不混在同一公开流中 |
-
-例如“Todo 已完成”不是把 Markdown 复选框改成 `[x]` 就结束。合法转换应留下 Todo id、producer、
-completion evidence、时间和 event lineage，使 status、review packet 与下一轮 quota 能复用同一
-事实。
+在已迁移事务中，provider 的状态、receipt 和 revision 共同约束写入。在 legacy 路径中，需要遵守该 writer 已实现的锁和校验边界，不能推定它已获得其他 provider 的全部保证。
 
 ### 3. Active-state workbench：人可读工作台
 
-`ACTIVE_GOAL_STATE.md` 让人和 Agent 能快速阅读 Objective、Next Action、User Todo、Agent Todo 与
-Progress。它是重要的工作台，但不能笼统地理解为“所有真相都在 Markdown”。
+`ACTIVE_GOAL_STATE.md` 让人和 Agent 阅读 Objective、Next Action、User Todo、Agent Todo 与 Progress。它在不同 authority 路径下可能承担不同职责，因此不能统一叫作“纯投影”，也不能叫作“所有事实”。
 
-在迁移或兼容阶段，Markdown 可能仍参与 Todo 读取；规范写入仍应通过 LoopX lifecycle commands
-形成事件或受控 writeback。直接编辑一个被投影出来的段落，不等于完成状态转换。
+[结构化投影协议](/loopx/docs/reference/protocols/active-state-structured-projection-v0/)描述从工作台读取 typed view 的边界：投影可重算，不能自行授权；generated compatibility id 不等于 migration-ready canonical id；duplicate id 和缺失段落应暴露诊断。
 
-[`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
-定义了如何从这个工作台生成 typed、read-only 的 Todo、Gate 与 Next Action 视图。协议明确：
+### 4. Run history 与 rollout events：历史证据
 
-- projection 可以重算；
-- projection 不授予写权限；
-- generated compatibility id 不等于 migration-ready canonical id；
-- duplicate id、缺失 section 等问题应成为 diagnostics，而不是被静默忽略。
+Run history 记录一次工作的观察、交付、blocker、validation、outcome 与后续条件。Rollout events 为相关转换提供紧凑时间线和 join key。它们帮助解释历史，并给 replan、handoff 和 review 提供线索。
 
-### 4. Run history：一轮发生了什么
+历史记录有各自的追加、隐私和幂等合同，不能把它们合称为一个可重放所有 Todo 的通用 event store。Raw transcript、详细日志和私有材料留在相应私有存储，公开投影只携带允许披露的摘要与引用。
 
-Run history 保存一轮 bounded work 的紧凑索引，例如：
+### 5. Status 等 projection：面向消费者的读模型
 
-- 哪个 Agent、Todo 与 Goal 参与了本轮；
-- 观察、交付或 blocker 的分类；
-- validation 与 evidence refs；
-- delivery scale 与 outcome；
-- successor、replan 或 no-follow-up；
-- 是否满足 spend 条件。
+`loopx status`、quota packet、dashboard、review packet 和 task graph 汇总 source facts，并按人、Agent 或调度器的任务裁剪信息。
 
-Run snapshot 不是完整 project memory。它回答“这一轮看到了什么、做了什么、证明了什么”，而
-Goal lifecycle 仍由 Todo、Gate、events 与 acceptance 组合决定。
+它们可以摘要、排序和压缩，但不能发明 source 中没有的工作项、把显示顺序改作优先级，或通过改卡片绕过 write API。投影反映它所读取的输入，使用时需要核对 freshness 与 scope。
 
-富日志、raw transcript 和 verifier tail 可以留在 local/private runtime artifact；公开 projection
-只保留足以复核和恢复的 bounded references。
+## 三种记录：Turn Journal、Goal State、Run History
 
-### 5. Status 与其他 projection：当前如何阅读
-
-`loopx status`、`quota should-run`、dashboard、review packet 和 task graph 都是面向不同消费者的
-读模型。
-
-它们可以：
-
-- 聚合多个 source facts；
-- 压缩大 payload；
-- 按 user、agent、CLI 或 operator 视角重新组织；
-- 暴露 stale、gap、repair 与 attention signals。
-
-它们不能：
-
-- 发明一个 source 中不存在的 Todo；
-- 用展示顺序替代 lifecycle priority；
-- 通过修改卡片或图节点绕过 write API；
-- 把 stale external observation 当成当前事实。
-
-[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
-尤其强调：图中的 `blocks`、`validates`、`continues` 和 `hands_off_to` 是派生关系，不是新的调度
-命令。
-
-## 三种 Ledger：Turn Journal、Goal State、Run History
-
-把“所有记录”都当成同一类状态，会导致“阶段已记录”冒充“业务 transition”。LoopX 区分三种 ledger：
-
-| Ledger | 拥有什么 | 生命周期 | 典型用途 |
+| 记录 | 回答的问题 | 恢复时的用途 | 不能替代什么 |
 | --- | --- | --- | --- |
-| Turn journal | 单次事务的恢复信息 | 单次事务 | 恢复一个中断的 bounded segment |
-| Goal/event state | 持久 lifecycle transition | 跨 session、跨 Host | 判断当前 frontier、Gate、acceptance |
-| Run history/status | 历史的证据索引与投影 | 只读，不可重写 | 复审、replan、handoff 时的上下文 |
+| Turn journal | 原 Turn 已记录哪些阶段、结果、意图与回执？ | 区分可复用结果、待执行步骤和未决 effect | 整个 Goal 的验收与后续工作判断 |
+| Goal state | 当前 Todo、Gate、Vision 与 acceptance 是什么？ | 重建工作 frontier 和授权条件 | 外部服务的实时读回 |
+| Run history | 某轮发生了什么，有什么 evidence？ | 解释进展、复审与交接 | 当前状态或新的写入许可 |
 
-**Turn journal** 回答“本轮发生了什么，如果中断如何恢复”。它记录的是单次事务内的临时状态，不是
-持久业务事实。把 journal 当 goal state 的典型错误：agent 在 journal 中看到“已进入阶段三”，就认为
-goal 已经 transition 到阶段三。但 journal 只记录 agent 有过的意图，只有 goal/event state 才记录
-实际完成的 transition。
+Turn journal 是持久恢复记录，既可能包含 prepared 意图，也可能包含已提交 effect 的 checkpoint。不能把它全部称为临时意图，更不能看到一个阶段名就推断 Goal 已完成。
 
-**Goal/event state** 回答”当前 frontier 是什么，谁可以做什么”。它通过 append-only event 记录
-lifecycle transition（Todo 完成、Gate 解决、Vision 更新），并支持跨 session 重建。它是
-durable lifecycle fact 的权威来源，quota 将其与 registry/boundary、Todo/Gate、
-capability/workspace、run outcomes/history、scheduler context 以及 fresh external fact 一起编译。
+Goal state 保留当前生命周期事实。一次 run 说测试通过，需要检查它绑定的 commit、Todo 和 acceptance；当前状态也不能凭旧 run 断言远端 CI 仍然通过。
 
-**Run history/status** 回答“历史上发生了什么，有什么证据”。它是只读的，不能反向写入 goal state。
-run 记录说“这轮测试通过”，不等于 goal state 中对应的 acceptance 已闭合——只有通过 lifecycle
-command 写入的 transition 才算。
+使用这些记录时，先确定问题属于哪一层：恢复原 Turn、判断下一项工作，还是解释历史。再读相关 source，并核对它们之间的身份和版本绑定。
 
-区分这三者的实践意义：每次写回前，确认要写入的是 goal/event state（transition）而不是 turn
-journal（临时记录）；每次读取 decision 前，确认读的是 goal/event state 而不是 run history 的旧
-投影。完整三类 ledger 的源码路径和实验见
-[Control-Plane Course 第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
+## Projection truth contract 表达什么
 
-## Canonical、Workbench、Projection 与外部事实
+[长程状态协议](/loopx/docs/reference/protocols/long-horizon-agent-state-protocol-v0/)把读写边界写成公开合同：
 
-四个词必须分开：
-
-| 层 | 典型内容 | 谁能改变 | 能否直接支持状态转换 |
-| --- | --- | --- | --- |
-| Canonical state | event、typed Todo、Gate resolution、quota spend | LoopX lifecycle writer | 可以 |
-| Workbench | active-state Markdown、人工说明 | 受控 writeback 或兼容编辑 | 需要转成规范事实 |
-| Projection | status、quota packet、dashboard、task graph | projection builder | 不可以，只供决策读取 |
-| External fact | Git commit、PR、CI、cloud resource | 对应外部系统 | 需要 fresh readback/evidence |
-
-“某个页面显示 PR 已合并”可能只是旧 projection；“某次 run 说测试通过”也可能绑定旧 commit。
-只有重新读取外部事实并检查 revision、freshness 与 scope，才能把观察用于当前转换。
-
-## 存储介质不是 authority contract
-
-LoopX 当前是 **本地优先** 的控制面：项目 registry、active-state workbench、event/run history 和
-runtime state 位于项目或用户本地。这个事实不意味着“Markdown 文件本身就是 authority”，也不
-意味着把目录换成数据库就自动获得正确的并发与恢复语义。
-
-[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
-明确允许 JSONL、SQLite 或其他 local-first append-only 实现，只要它们保持：
-
-- stable event id 与 ordered replay；
-- idempotent append；
-- projection head 与 event-store head 对齐；
-- public-safe、local-private 与 private-pointer 分区；
-- Markdown 继续作为 workbench/projection，而不是任意写入口。
-
-[`local_state_write_correctness_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
-当前标记为 public-safe protocol draft。它把更强的写入正确性目标分成
-`prepare -> preview -> apply -> record -> project`：
-
-- 同一 `idempotency_key` 不应重复产生逻辑 effect；
-- `expected_revision` 不匹配时应 fail closed 或从新 revision 重算非重叠 patch；
-- foreign/expired lease 不应被静默清除；
-- lock 默认以 Goal 为目标边界，只有单 Todo 且不影响共享顺序时才可更窄；
-- 外部写、凭据、production 和 private read 仍需独立 Gate。
-
-当前 Todo lifecycle 命令已经在 active-state file lock 下重读并写回，preview 也会暴露 write
-intent。协议文档同时明确：hard idempotency、统一 optimistic CAS 和 lease conflict enforcement
-仍按 writer 分阶段 promotion，不能假设所有 writer 已完整执行上述 Draft。
-
-因此，文件、SQLite 或未来 provider 回答的是“字节存在哪里”；event、revision、CAS、lease 与
-authority 回答的是“哪次状态转换合法”。
-
-### 当前已发布与仍在设计中的边界
-
-`v0.5.4` 的 shared-authority 工作已经不只是纸面方案：仓库包含 provider-neutral TypeScript
-`AuthorityStore` contract，以及 file、NoKV 和 PostgreSQL 的 staged candidate 与 conformance evidence。
-但这仍不等于已启用 shared control plane。发布版没有把这些 candidate 接到默认运行时，也没有
-提供可直接启用的远端 authority service；安装 Provider 更不会自动改变某个 Goal 的事实源。
-
-`v0.5.4` 之后的 `main` 可能继续出现 default-off shadow、parity、fencing 或 provider-first cutover
-切片。它们证明迁移机制，不应倒推成 `v0.5.4` 已交付云端协作。稳定版行为以对应 tag 和 release
-notes 为准，实验状态以
-[Shared Control-Plane Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/)
-的当前 stage 为准。
-
-当前可以依赖：
-
-- 本地项目状态与 global registry projection；
-- Todo lifecycle writer 的 active-state file lock、preview/readback 和当前已实现的幂等行为；
-- registered peer、soft claim、可选 task lease 与独立 worktree guard；
-- 不同 Host 通过同一 registry/Goal 读取并受控写回。
-- 用于开发和 qualification 的 staged file/NoKV/PostgreSQL candidate；它们不自动获得 runtime
-  authority。
-
-当前不应承诺：
-
-- 多台设备自动共享一个在线 authority；
-- 离线设备可以新 claim、complete、续 lease 或执行 protected write；
-- 把项目目录放进同步盘就得到一致的分布式状态；
-- NoKV、数据库或 IM 自动替代 LoopX lifecycle owner。
-
-如果要实现跨设备控制面，应保留一个 canonical LoopX authority，要求 revision-bound、幂等的受控
-命令与 receipt，并把消息传递、上下文记忆和状态 authority 分开。直到 shared mode 经过独立
-promotion、运行时接线和发布验证，Dev Book 只教授这些协议边界，不提供“云端模式已可用”的操作
-步骤。
-
-## 历史产物的三层完整性
-
-LoopX 可以让研究、验证和决策产物不被静默改写，但这不等于旧结论永远适用于当前状态。判断一条
-历史 evidence 能否进入当前决策，要分三层：
-
-| 层次 | 需要回答 | 典型检查 |
-| --- | --- | --- |
-| Lineage integrity | 这条产物来自谁、何时生成，是否被追加、纠正或 supersede？ | `event_id`、`run_id`、producer、recorded revision、append-only refs |
-| Current applicability | 它支持的输入、范围和外部事实与当前问题仍一致吗？ | commit、target key、source revision、time window、Gate scope、fresh readback |
-| Supersession | 后来的 evidence 或决定是否替代、收窄或撤销了它？ | `supersedes`/`superseded_by`、compensating event、newer decision、replan delta |
-
-因此，append-only lineage 解决的是**防止历史被无声重写**，不是自动证明**旧结论仍然新鲜**。
-研究笔记、测试结果或 PR readback 要进入当前 frontier，至少应带稳定 join key，并在 material input
-变化后重新验证 applicability。无法确认时，把它标为 historical observation 或 stale evidence，
-不要删除历史，也不要继续把它当作 current authority。
-
-[`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
-提供 bounded、read-only 的 Agent chronology，适合 replan 和 handoff；它不替代 current status、
-quota decision 或外部系统 readback。
-
-## Replay 不是复制旧结论
-
-Replay 的目标是从有序事实重建当前状态，而不是永久保留旧判断。
-
-假设事件流记录：
-
-```text
-todo_added(T1)
-todo_claimed(T1, agent-a)
-gate_added(G1, scope=public_claim:action:homepage)
-run_recorded(R1, tests_passed_at=commit-a)
+```json
+{
+  "schema_version": "long_horizon_agent_state_protocol_v0",
+  "projection_is_writable": false,
+  "source_of_truth": [
+    "registry", "active_state", "todo_item_v0", "run_history",
+    "rollout_event_log", "operator_gate", "human_reward"
+  ],
+  "write_apis": [
+    "loopx todo", "loopx refresh-state", "loopx operator-gate",
+    "loopx reward", "loopx quota spend-slot"
+  ]
+}
 ```
 
-随后 Git 前进到 `commit-b`，用户又改变首页方向。Replay 仍能说明 R1 和 G1 曾经存在，但不会自动
-证明：
+这里列的是事实类别与受控写入入口，不是声明所有状态都存进同一种介质。每个字段仍需回到其 owner 和当前 authority 路径解释。
 
-- R1 对 `commit-b` 仍有效；
-- G1 已覆盖新的首页方案；
-- agent-a 仍在当前 workspace 执行；
-- 当前 frontier 可以继续发布。
+Task graph、Agent management 等投影也声明 `projection_is_writable: false`、`write_api: false`。这些字段描述消费者合同；真正的权限仍由 lifecycle writer 检查，不能仅靠 JSON 中一条声明证明所有入口安全。
 
-恢复者必须把 replay 后的 project facts 与新鲜环境重新组合。
+## 存储介质与写入合同
 
-## Projection gap 是控制面故障
+文件、SQLite 和其他 provider 决定状态如何存储；revision、幂等标识、lease 与 receipt 决定一次转换何时有效。把文件改成数据库不会自动解决身份、并发与副作用恢复。
 
-当 source 与读模型不一致时，不能任选一个看起来方便的表面继续：
+[本地写正确性协议](/loopx/docs/reference/protocols/local-state-write-correctness-v0/)用 `prepare -> preview -> apply -> record -> project` 描述目标边界：检查预期 revision，保护相应 lease，提交可读回结果，再更新展示。
 
-- event 中有 open Todo，status 却没有；
-- Gate 已解决，quota 仍显示 operator wait；
-- active state 有 Next Action，但对应 Todo 不存在；
-- dashboard 显示 runnable，workspace guard 却指向另一个 worktree。
+协议仍按 writer 分阶段落实。使用时应核对该命令、authority 模式和 provider 的实际验证，而不是把 draft 中的 hard idempotency、CAS 和 lease enforcement 一次性套到全部 legacy 路径。
 
-这些情况属于 **projection gap**。正确动作是：
+### 历史基线与当前交付边界
 
-1. 找到 authoritative source；
-2. 判断是 source 写入失败、projection stale、migration drift 还是 external observation 过期；
-3. 通过原 lifecycle/writeback 路径修复；
-4. 重算 projection 并验证 source revision；
-5. 在修复前不运行依赖该状态的交付。
+`v0.5.4` 的 shared-authority 工作引入 provider-neutral TypeScript `AuthorityStore` contract 与候选 provider 验证。后来的本地切换、fencing、projection 和默认入口采用有各自的里程碑；历史版本的能力不应倒推成当前所有路径的上限，也不能把候选资格当成远端服务已交付。
 
-手工把多个展示面改成一致，只会隐藏问题。
+File/SQLite 的当前本地 authority 路径，应按选定 Goal 的 readback 判断。NoKV/PostgreSQL 等阶段性候选不自动获得 runtime authority；安装 Provider 本身也不改变现有 Goal 的事实源。
 
-## 如何决定一个新字段放在哪里
+跨设备在线 authority、离线写入和服务级恢复另有资格要求。不要用同步盘、多台机器共享目录或 IM 消息替代 authority 协议。最新阶段见[Shared Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/)及其 ledger。
 
-新增字段前按顺序问：
+## 历史证据怎样用于当前决策
 
-1. 它描述长期配置、身份或路由吗？放 registry。
-2. 它描述一次 lifecycle transition 吗？放 event。
-3. 它描述一轮观察或交付吗？放 run snapshot/evidence。
-4. 它只服务某个读者视角吗？从现有事实生成 projection。
-5. 它属于 GitHub、CI 或其他系统吗？保留外部 authority，只存 bounded readback。
-6. 它是 Issue-Fix、Explore 等领域专属结果吗？放 Domain State，不要塞进通用 Todo/Quota。
+| 层次 | 需要回答 | 核对内容 |
+| --- | --- | --- |
+| Lineage integrity | 谁记录了这份材料，是否被后续材料替代？ | producer、run/event id、recorded revision、supersession |
+| Current applicability | 原输入和范围还适用于当前问题吗？ | commit、target、source revision、时间窗口、Gate scope |
+| Fresh external observation | 外部世界现在是什么状态？ | 远端 ref、CI revision、服务状态的独立读回 |
 
-如果一个字段同时想承担配置、事件、展示和权限四种责任，通常说明协议边界还没有拆清。
+例如修复在 `commit-a` 上通过测试，随后代码到了 `commit-b`。旧记录仍证明当时发生的事，却不能直接验收新代码。Goal 方向或授权范围变化也需要同样重审。
 
-## 协议阅读入口
+新投影可能包含旧观察。`generated_at` 表示投影生成时间，不会自动更新其底层 evidence；应连同 source revision 与外部事实的新鲜度一起看。
 
-本章拥有概念顺序，不复制完整 schema。需要修改 LoopX 状态行为时，优先阅读：
+## 遇到 projection gap 时怎么办
 
-- [`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)：
-  event、replay、ordering、privacy；
-- [`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
-  Markdown workbench 的 typed read model；
-- [`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
-  Todo、Gate、evidence 与 handoff 的只读关系图；
-- [`long_horizon_agent_state_protocol_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)：
-  长程工作中的 source/projection、并发 Agent 与 lifecycle；
-- [`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)：
-  replan/handoff 前的 Agent-scoped chronological read model；
-- [Status Data Contract](https://github.com/loopx-project/loopx/blob/main/docs/status-data-contract.md)：
-  operator 与 Agent 读取的聚合表面。
+先排除不同视图的正常裁剪：有限列表、Agent scope 或角色筛选可能隐藏条目。范围和版本一致时仍有分歧，再按下列顺序处理：
 
-如果你准备修改 registry、event、Domain State、replay 或 projection builder，继续阅读
-[Control-Plane Course 第 4 讲](/loopx/docs/development/control-plane-course/04-state-substrate/)。
-它从 Issue-Fix、Auto ML 与 Auto Research 的事实归属进入源码路径和实验；本章继续作为外部
-开发者的概念入口。
+1. 确认当前 authority 和 authoritative source；
+2. 定位 source 写入失败、缓存滞后、迁移不一致或外部 evidence 过期；
+3. 通过原 owner 的修复/写入路径处理；
+4. 重算相关投影，验证 source revision 和结果；
+5. 再推进依赖这些事实的工作。
 
-下一章在这套状态底座上建立工作图：谁可以做什么、什么条件阻塞它，以及一项工作如何合法地
-继续、交接或结束。
+不要手工把多个显示面改成一样。那可能隐藏真正的源问题，也无法补上缺失回执。
+
+## 代价与使用边界
+
+**恢复需要读取和核对。** 只读旧 dashboard 或聊天通常不够；需要当前 source、原 Turn 记录或外部读回。缓存与摘要能节省成本，但必须保留足够的身份和 freshness 信息。
+
+**投影更新可能落后于 source。** 这种分离允许不同界面使用同一事实源，也要求消费者不要把缓存当作提交授权。并非每次读取都一定滞后，关键是能够识别版本差异。
+
+**手改 Markdown 可能有实际效果。** legacy decoder 会在没有覆盖元数据时把 `[x]` 读成 done。这样绕过 lifecycle writer，可能缺少验收与回执；在已选择 provider 的路径上，同样的编辑又可能只是改了工作台。
+
+因此，操作 Todo 应使用当前 Goal 的生命周期入口，复核结果与 evidence。不要因为规范上不应手改，就假定字节改动不会影响源状态。
+
+## 证据与进一步阅读
+
+| 本章论断 | 实现或协议入口 | 覆盖边界 |
+| --- | --- | --- |
+| 选择 source 后再投影 | `loopx/todos.py`、`todo_block_codec.py` | legacy 与 provider 读取不同 |
+| 旧 Todo events 已退役 | `legacy_event_source.py`、退役合同 | 不代表 rollout/history 被整体退役 |
+| Journal 保留不确定性与已提交事实 | [LoopX Turn 协议](/loopx/docs/reference/protocols/loopx-turn-v0/) | 仍需 provider readback 与恢复判定 |
+| 读模型不授予写权限 | [Task graph 协议](/loopx/docs/reference/protocols/task-graph-projection-v0/) | 声明不能替代 writer 权限检查 |
+
+新增字段时，先找它的 owner：配置归 registry，Todo transition 归相应 lifecycle，run 观察归 history/evidence，展示派生为 projection。Git、CI 等事实继续由外部系统拥有；领域专属结果放 Domain State。
+
+需要实现细节时，进入 [Control-Plane Course 状态底座](/loopx/docs/development/control-plane-course/04-state-substrate/)和[Agent-scoped evidence ledger](/loopx/docs/reference/protocols/agent-scoped-evidence-ledger-v0/)。下一章讨论：确定事实源之后，哪些执行者可以改变它。

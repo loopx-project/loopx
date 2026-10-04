@@ -85,6 +85,7 @@ def register_todo_command(
             "turn-scoped quota guard and reuse it on retries."
         ),
     )
+    todo_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
     todo_parser.add_argument(
         "--completion-identity-key",
         help=(
@@ -105,7 +106,7 @@ def register_todo_command(
     todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For todo add/update, set the lifecycle status.")
     todo_parser.add_argument("--note", help="Public-safe note to attach to a lifecycle transition.")
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
-    todo_parser.add_argument("--result-file", help="For todo complete, bind a bounded local .json, .md or .txt result to the independently accepted completion.")
+    todo_parser.add_argument("--result-file", help="For todo complete with bound Goal acceptance criteria, bind a bounded local .json, .md or .txt result. A Todo validator alone is insufficient; use --evidence for a local artifact pointer.")
     todo_parser.add_argument(
         "--validation-command",
         help=(
@@ -272,7 +273,9 @@ def register_todo_command(
         choices=["approve", "reject", "cancel"],
         help=(
             "For todo complete on a user_gate, record the explicit owner decision. "
-            "Only approve consumes authority and resumes linked work."
+            "For a user_action, only cancel is accepted; it closes the reminder "
+            "without approving or resuming linked work. Only gate approval "
+            "consumes decision authority."
         ),
     )
     todo_parser.add_argument(

@@ -9,9 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from loopx.capabilities.manager_context import (
+    POLICY_SCHEMA,
+    _root,
+    _write,
     deliver,
     pending,
     normalize_request,
+    register_ingress,
     turn_start_hook,
 )
 from loopx.control_plane.collaboration.peers import (
@@ -119,10 +123,145 @@ def cli(root, registry, agent, action, *args, ok=True):
         capture_output=True,
         text=True,
         timeout=30,
+        cwd=registry.parent,
     )
     result = json.loads(proc.stdout)
     assert proc.returncode == (0 if ok else 1), (proc.stdout, proc.stderr)
     return result
+
+
+@pytest.fixture
+def external_scenario(scenario):
+    root, registry, brief, store, _, _, _ = scenario
+    session = store.create_session(
+        goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="external-fixture", channel_id="manager.external.fixture",
+    )
+    turn, _ = store.create_turn(
+        session["session_id"], client_turn_id="external-request",
+        message="Have the stock-plan owner handle this and ask for an independent check.",
+        origin="lark",
+    )
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {
+        "schema_version": POLICY_SCHEMA,
+        "sources": {session["channel_id"]: {
+            "local_delivery_scope": "selected", "sender_ids": ["fixture-owner"],
+            "targets": [{"goal_id": "delivery", "agent_id": agent}
+                        for agent in ("builder", "reviewer")],
+        }},
+    })
+    register_ingress(
+        root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+        channel=session["channel_id"], sender_id="fixture-owner",
+        message=turn["message"], source_id="lark:fixture-request",
+    )
+    receipt = deliver(root, registry, session=session, turn=turn,
+                      request={"goal_id": "delivery", "agent_id": "builder", "brief": brief})
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+                      response={"message": "Delivered", "context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    return root, registry, brief, store, session, turn, receipt["request_id"]
+
+
+@pytest.mark.parametrize("scope", ["selected_agent", "selected_goal", "all_registered"])
+def test_granted_external_peer_request_returns_through_original_conversation(external_scenario, scope):
+    root, registry, brief, store, session, turn, parent = external_scenario
+    if scope != "selected_agent":
+        policy_path = _root(root) / "policy.json"
+        policy = json.loads(policy_path.read_text())
+        policy["sources"][session["channel_id"]]["targets"] = [{"goal_id": "delivery"}]
+        if scope == "all_registered":
+            del policy["sources"][session["channel_id"]]["local_delivery_scope"]
+            del policy["sources"][session["channel_id"]]["targets"]
+        _write(policy_path, policy)
+    path = root / "external-review.json"
+    path.write_text(json.dumps(brief))
+    args = ("--peer-agent-id", "reviewer", "--operation-id", "external-review",
+            "--brief-file", str(path), "--parent-request-id", parent)
+    first = cli(root, registry, "builder", "request", *args)
+    assert not first["todo_created"] and not first["execution_interrupted"]
+    assert cli(root, registry, "builder", "request", *args)["replayed"]
+    rid = first["request_id"]
+    received = next(item for item in cli(root, registry, "reviewer", "read")["items"]
+                    if item["request_id"] == rid)
+    assert received["inherited_context"]["message"] == turn["message"]
+    cli(root, registry, "reviewer", "acknowledge", "--request-id", rid,
+        "--decision", "adopt", "--reason", "Will check the corrected stock plan.")
+    cli(root, registry, "reviewer", "report", "--request-id", rid,
+        "--reply-text", "Checked the stock constraint and zero-demand item; both pass.")
+    returned = cli(root, registry, "builder", "read")["peer_returns"]["items"][0]
+    assert returned["parent_request_id"] == parent
+    cli(root, registry, "builder", "acknowledge-return", "--request-id", rid)
+    cli(root, registry, "builder", "acknowledge", "--request-id", parent,
+        "--decision", "adopt", "--reason", "Incorporated the independent check.")
+    cli(root, registry, "builder", "report", "--request-id", parent,
+        "--reply-text", "Stock plan delivered with the independent check.")
+    sent = []
+
+    def sender(route, source_session, source_turn, text):
+        sent.append((route["channel_id"], source_session["session_id"], source_turn["turn_id"], text))
+        return {"ok": True, "reply_verified": True}
+
+    for _ in range(2):
+        drain(root, registry, ChatSessionStore(root), sender)
+    assert len(sent) == 1
+    assert sent[0][:3] == (session["channel_id"], session["session_id"], turn["turn_id"])
+    assert sent[0][3].endswith("Stock plan delivered with the independent check.")
+    assert not query(root, registry, goal_ids=["delivery"], owner_scope=False,
+                     channel_id="manager.external.unrelated")["rows"]
+
+
+@pytest.mark.parametrize("change", [
+    "receiver_revoked", "source_agent_revoked", "sender_revoked", "source_changed",
+    "route_missing", "route_changed", "session_closed",
+])
+def test_external_forwarding_rechecks_provenance_before_any_peer_write(external_scenario, change):
+    root, registry, brief, store, session, turn, parent = external_scenario
+    folder = _root(root)
+    if change.endswith("revoked"):
+        policy = json.loads((folder / "policy.json").read_text())
+        source = policy["sources"][session["channel_id"]]
+        if change == "sender_revoked":
+            source["sender_ids"] = []
+        else:
+            agent = "reviewer" if change == "receiver_revoked" else "builder"
+            source["targets"] = [item for item in source["targets"] if item["agent_id"] != agent]
+        _write(folder / "policy.json", policy)
+    elif change == "source_changed":
+        path = next((folder / "ingress").glob("*.json"))
+        _write(path, {**json.loads(path.read_text()), "source_id": "lark:another-request"})
+    elif change.startswith("route_"):
+        path = folder / "roundtrips" / (parent + ".json")
+        if change == "route_missing":
+            path.unlink()
+        else:
+            _write(path, {**json.loads(path.read_text()), "goal_ref": {"goal_id": "other"}})
+    else:
+        assert store.close_managed_session(session["session_id"])
+    before = {path: path.read_bytes() for path in folder.rglob("*.json")}
+    with pytest.raises(ValueError, match="(not authorized|authorization unavailable|conversation unavailable|identity mismatch)"):
+        request(root, registry, "delivery", "builder", "reviewer", "forbidden", brief, parent)
+    assert {path: path.read_bytes() for path in folder.rglob("*.json")} == before
+
+
+def test_external_parent_lineage_cannot_launder_a_second_hop(external_scenario):
+    root, registry, brief, *_rest, parent = external_scenario
+    first = request(root, registry, "delivery", "builder", "reviewer", "first", brief, parent)
+    with pytest.raises(ValueError, match="analyst is not authorized"):
+        request(root, registry, "delivery", "reviewer", "analyst", "second", brief, first["request_id"])
+    policy_path = _root(root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    source = policy["sources"]["manager.external.fixture"]
+    source["targets"].append({"goal_id": "delivery", "agent_id": "analyst"})
+    _write(policy_path, policy)
+    second = request(root, registry, "delivery", "reviewer", "analyst", "second", brief, first["request_id"])
+    inherited = pending(root, "delivery", "analyst")["items"][0]["inherited_context"]
+    assert inherited["request_id"] == parent
+    source["targets"] = [item for item in source["targets"] if item["agent_id"] != "builder"]
+    _write(policy_path, policy)
+    with pytest.raises(ValueError, match="builder is not authorized"):
+        request(root, registry, "delivery", "analyst", "reviewer", "third", brief, second["request_id"])
 
 
 def test_two_peer_review_rounds_return_to_original_conversation_after_restart(scenario):
@@ -315,7 +454,12 @@ def test_changed_missing_and_escaping_artifacts_are_explicit(scenario, tmp_path)
     assert input_readiness(registry, "delivery", brief)[0]["status"] == "changed"
     (root / "inputs/demand.csv").unlink()
     assert input_readiness(registry, "delivery", brief)[0]["status"] == "unavailable"
-    (root / "inputs/demand.csv").symlink_to(root.parent / "outside.csv")
+    try:
+        (root / "inputs/demand.csv").symlink_to(root.parent / "outside.csv")
+    except OSError as exc:
+        if sys.platform == "win32" and exc.winerror == 1314:
+            pytest.skip("Windows symlink fixture requires privileges")
+        raise
     assert (
         input_readiness(registry, "delivery", brief)[0]["status"] == "outside_workspace"
     )
@@ -462,6 +606,7 @@ def test_consumption_rejects_corrupt_reply_and_receipt(scenario):
         consume_return(root, "delivery", "builder", rid)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX FIFO fixture")
 def test_special_file_read_is_bounded_and_stopped_goal_remains_readable(scenario):
     import os
     from loopx.control_plane.collaboration.peers import read_inbox
@@ -549,3 +694,113 @@ def test_nested_coordinators_return_to_each_immediate_requester(scenario):
     )
     consume_return(root, "delivery", "builder", outer)
     assert not returns(root, "delivery", "builder")["items"]
+
+
+def test_peer_updates_have_independent_read_and_consumption_receipts(scenario):
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.control_plane.collaboration.peers import return_result
+
+    root, registry, brief, _, _, _, parent = scenario
+    peer = request(root, registry, "delivery", "builder", "reviewer", "update-review", brief, parent)
+    rid = peer["request_id"]
+    acknowledge(root, "delivery", "reviewer", rid, "adopt", "Review accepted")
+    return_result(root, "delivery", "reviewer", rid, "Waiting for evidence.")
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        updates = list(executor.map(lambda _: return_result(root, "delivery", "reviewer", rid, "Evidence checked; review complete.", update_id="evidence-ready"), range(4)))
+    update = updates[0]
+    assert {item["result_key"] for item in updates} == {update["result_key"]}
+    with pytest.raises(ValueError, match="read the peer"):
+        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    offered = returns(root, "delivery", "builder", mark_read=True)["items"]
+    assert [item["text"] for item in offered] == ["Waiting for evidence.", "Evidence checked; review complete."]
+    consume_return(root, "delivery", "builder", rid)
+    assert [item["result_key"] for item in returns(root, "delivery", "builder")["items"]] == [update["result_key"]]
+    consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    assert returns(root, "delivery", "builder")["items"] == []
+    assert return_result(root, "delivery", "reviewer", rid, "Evidence checked; review complete.", update_id="evidence-ready")["result_key"] == update["result_key"]
+    assert returns(root, "delivery", "builder")["items"] == []
+
+
+def test_peer_update_rejects_another_results_read_and_consumption_receipts(scenario):
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.control_plane.collaboration.peers import return_result
+
+    root, registry, brief, _, _, _, parent = scenario
+    rid = request(root, registry, "delivery", "builder", "reviewer", "update-review", brief, parent)["request_id"]
+    acknowledge(root, "delivery", "reviewer", rid, "adopt", "Accepted")
+    return_result(root, "delivery", "reviewer", rid, "Draft ready.")
+    returns(root, "delivery", "builder", mark_read=True)
+    consume_return(root, "delivery", "builder", rid)
+    update = return_result(root, "delivery", "reviewer", rid, "Review complete.", update_id="reviewed")
+    folder = root / ".local/manager-context/replies" / rid
+    delivery = folder / (update["result_key"] + ".delivery.json")
+    delivery.write_bytes((folder / "conclusion.delivery.json").read_bytes())
+    with pytest.raises(ValueError, match="read the peer"):
+        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    consumed = folder / (update["result_key"] + ".consumed.json")
+    consumed.write_bytes((folder / "conclusion.consumed.json").read_bytes())
+    with pytest.raises(ValueError, match="receipt scope"):
+        returns(root, "delivery", "builder")
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 extended path regression")
+def test_peer_exchange_survives_long_private_store_paths(scenario):
+    root, registry, brief, *_ = scenario
+    from loopx.control_plane.collaboration.inbox import _root
+
+    long_root = root / ("nested-runtime-" * 7)
+    packet = root / "long-path-brief.json"
+    packet.write_text(json.dumps(brief))
+    args = ("--peer-agent-id", "reviewer", "--operation-id", "long-path-review",
+            "--brief-file", str(packet))
+    sent = cli(long_root, registry, "builder", "request", *args)
+    rid = sent["request_id"]
+    assert cli(long_root, registry, "reviewer", "read")["items"][0]["request_id"] == rid
+    cli(long_root, registry, "reviewer", "acknowledge", "--request-id", rid,
+        "--decision", "adopt", "--reason", "Reviewing the pinned artifact")
+    cli(long_root, registry, "reviewer", "report", "--request-id", rid,
+        "--phase", "conclusion", "--reply-text", "Independent review complete")
+    assert cli(long_root, registry, "builder", "read")["peer_returns"]["items"][0]["request_id"] == rid
+    cli(long_root, registry, "builder", "acknowledge-return", "--request-id", rid)
+    replay = cli(long_root, registry, "builder", "request", *args)
+    assert replay["replayed"] and replay["request_id"] == rid
+    requests = [path for path in (_root(long_root) / "entries").glob("*/*.json") if path.stem == rid]
+    assert len(requests) == 1 and len(str(requests[0])) > 260
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 binary input regression")
+def test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest(scenario):
+    root, registry, brief, *_ = scenario
+    content = b"before\r\n\x1aafter\r\n\x00\xff"
+    artifact = root / "inputs" / "packet.bin"
+    artifact.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    brief = {**brief, "inputs": [{"ref": "inputs/packet.bin",
+        "description": "Binary fixture", "sha256": digest}]}
+    packet = root / "binary-brief.json"
+    packet.write_text(json.dumps(brief), encoding="utf-8")
+    sent = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+        "--operation-id", "binary-review", "--brief-file", str(packet))
+    item = cli(root, registry, "reviewer", "read")["items"][0]
+    assert item["request_id"] == sent["request_id"]
+    [readiness] = item["input_readiness"]
+    assert readiness["status"] == "available"
+    assert readiness["observed_sha256"] == readiness["expected_sha256"] == digest
+    assert readiness["content_supplied"] is False
+
+
+def test_default_local_forwarding_keeps_revocations_after_original_delivery(external_scenario):
+    root, registry, brief, _store, session, _turn, parent = external_scenario
+    policy_path = _root(root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    source = policy["sources"][session["channel_id"]]
+    source.pop("local_delivery_scope")
+    source.pop("targets")
+    _write(policy_path, policy)
+    first = request(root, registry, "delivery", "builder", "analyst", "default-hop", brief, parent)
+    assert first["request_id"]
+    # The source's current exceptions also protect later hops, not only Chat.
+    policy["sources"][session["channel_id"]]["blocked_targets"] = [{"goal_id": "delivery", "agent_id": "reviewer"}]
+    _write(policy_path, policy)
+    with pytest.raises(ValueError, match="reviewer is not authorized"):
+        request(root, registry, "delivery", "analyst", "reviewer", "blocked-hop", brief, first["request_id"])

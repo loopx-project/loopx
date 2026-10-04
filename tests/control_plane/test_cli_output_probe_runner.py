@@ -26,7 +26,18 @@ def crowded_turn_probe(monkeypatch: pytest.MonkeyPatch):
             return {}
         return {"loopx_turn_plan": commands(**kwargs)["loopx_turn_plan"]}
 
+    def assert_crowded_turn_json_matrix(measurements):
+        # This alias test deliberately samples one JSON surface, whereas the
+        # production probe qualifies every surface/format and both scenarios.
+        assert set(measurements) == {"crowded"}
+        assert set(measurements["crowded"]) == {"loopx_turn_plan"}
+        formats = measurements["crowded"]["loopx_turn_plan"]
+        assert set(formats) == {"json"}
+        assert formats["json"]["json_parseable"] is True
+        assert formats["json"]["pretty_print_overhead_chars"] > 0
+
     monkeypatch.setattr(probe, "_surface_commands", turn_json_only)
+    monkeypatch.setattr(probe, "_assert_scenario_matrix", assert_crowded_turn_json_matrix)
     return runpy.run_path(str(RUNNER))["_default_rows"]
 
 

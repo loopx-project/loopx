@@ -82,7 +82,7 @@ def test_remote_source_is_discovered_and_read_without_local_host_metadata(remote
     argv, opts = calls[0]
     assert (
         argv[-2] == "research-host"
-        and '"$HOME/.codex/loopx/registry.global.json"' in argv[-1]
+        and "--registry @host-global" in argv[-1]
     )
     assert "--manager-view todos" in argv[-1] and "--goal-id remote-goal" in argv[-1]
     assert "BatchMode=yes" in argv and opts["timeout"] == 45
@@ -158,8 +158,9 @@ def test_old_or_offline_remote_is_unknown_not_empty_healthy(remote):
     }
 
 
+@pytest.mark.parametrize("todo_id", [None, "t1"])
 def test_export_uses_canonical_todos_and_never_returns_owner_private_continuation(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, todo_id
 ):
     import loopx.chat_manager_details as details
 
@@ -189,12 +190,37 @@ def test_export_uses_canonical_todos_and_never_returns_owner_private_continuatio
         limit=8,
         offset=0,
         days=1,
+        context_todo_id=todo_id,
     )
     packet = export_page(registry, str(tmp_path), args)
     assert packet["schema_version"] == "manager_evidence_page_v1"
     assert packet["rows"][0]["goal_id"] == "remote-goal"
     assert packet["rows"][0]["title"] == "Validate delivery"
     assert "Private deliberation" not in json.dumps(packet)
+
+
+@pytest.mark.parametrize("view", [None, "portfolio", "agents", "deliveries"])
+def test_cli_rejects_exact_todo_on_other_views_before_read(tmp_path, view):
+    args = ["goal-portfolio", "--todo-id", "t1", "--goal-id", "missing"]
+    if view is not None:
+        args += ["--manager-view", view]
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json",
+         "--registry", str(tmp_path / "missing-registry.json"), *args],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["ok"] is False
+
+
+def test_remote_exact_todo_preserves_the_selector_as_one_quoted_argument(remote):
+    tool, calls, *_ = remote
+    todo_id = "todo_sample; echo unintended"
+    result = tool.read(TOOL_NAME, {"view": "todos", "source_id": "ssh:research-host",
+                                  "goal_id": "remote-goal", "todo_id": todo_id})
+    assert result["ok"]
+    wire = shlex.split(calls[0][0][-1])
+    assert wire[wire.index("--todo-id") + 1] == todo_id
 
 
 def test_delivery_lookback_can_explain_stale_goals_without_redating_outcomes(tmp_path):
@@ -234,7 +260,7 @@ def test_ssh_wire_arguments_execute_real_remote_cli_projection(remote, tmp_path)
 
     def execute_cli(argv, **kwargs):
         arguments = shlex.split(argv[-1].split("--format json ", 1)[1])
-        return subprocess.run(
+        completed = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -249,12 +275,14 @@ def test_ssh_wire_arguments_execute_real_remote_cli_projection(remote, tmp_path)
             ],
             **kwargs,
         )
+        assert completed.returncode == 0, completed.stderr
+        return completed
 
     tool.remote_runner = execute_cli
     result = tool.read(
         TOOL_NAME, {"view": "portfolio", "source_id": "ssh:research-host", "limit": 3}
     )
-    assert result["ok"]
+    assert result["ok"], result
     assert result["rows"][0]["goal_id"] == "remote-goal"
     assert result["rows"][0]["source_host"] == "research-host"
     assert result["rows"][0]["quality"] != "verified"

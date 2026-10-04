@@ -12,10 +12,82 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.effect_runtime import EffectRuntimeConflict
 from loopx.control_plane.goals import checkpoint_context_io as context_io
+from loopx.control_plane.projects.registry_codec import (
+    load_project_registry,
+    source_session_registry_transaction,
+)
 from tests.control_plane.test_checkpoint_read_context import _missing
 from tests.control_plane.test_quota_settlement_cli import GOAL_ID, AGENT_ID, TODO_ID, TURN_ID, _run_cli, _spend_run_count
 from tests.control_plane.checkpoint_process import REPO, start_probe, wait_for, refresh
+
+
+INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+def _stamp_runtime_owner(runtime: Path, goal_ref: dict[str, str]) -> None:
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    rows = [json.loads(line) for line in index.read_text().splitlines()]
+    for row in rows:
+        row["goal_ref"] = dict(goal_ref)
+        json_path = row.get("json_path")
+        if isinstance(json_path, str) and Path(json_path).is_file():
+            record = json.loads(Path(json_path).read_text())
+            record["goal_ref"] = dict(goal_ref)
+            Path(json_path).write_text(json.dumps(record) + "\n")
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    event_log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [json.loads(line) for line in event_log.read_text().splitlines()]
+    for event in events:
+        event["goal_ref"] = dict(goal_ref)
+    event_log.write_text("".join(json.dumps(event) + "\n" for event in events))
+
+
+def _replace_with_source_registry(
+    registry: Path,
+    runtime: Path,
+    instance_id: str,
+) -> None:
+    legacy = json.loads(registry.read_text())
+    goal = dict(legacy["goals"][0])
+    goal.update(
+        status="active",
+        goal_instance_id=instance_id,
+        execution_authority=False,
+    )
+    payload = {
+        **legacy,
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "common_runtime_root": str(runtime),
+        "projects": [],
+        "goals": [goal],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+        "retired_goal_instances": [],
+    }
+    registry.unlink()
+    with source_session_registry_transaction(
+        registry,
+        operation="checkpoint_goal_instance_test",
+        create=lambda: payload,
+    ) as transaction:
+        transaction.commit(payload)
+
+
+def _replace_source_goal(registry: Path, instance_id: str) -> None:
+    with source_session_registry_transaction(
+        registry,
+        operation="checkpoint_goal_instance_recreate",
+    ) as transaction:
+        payload = transaction.payload_copy()
+        payload["goals"][0]["goal_instance_id"] = instance_id
+        transaction.commit(payload)
 
 
 def fixture(tmp_path, monkeypatch, provider):
@@ -84,6 +156,75 @@ def test_public_update_before_final_read_rejects_then_reread_succeeds(tmp_path, 
     assert replay["idempotent_replay"] and index.read_bytes() == after
     assert result["settlement_identity"] == original["settlement_identity"]
     assert _spend_run_count(runtime) == 0
+
+
+def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
+    tmp_path,
+    monkeypatch,
+):
+    from loopx import state_refresh
+
+    current = _missing(tmp_path / "current")
+    stale = _missing(tmp_path / "stale")
+    goal_ref = {"goal_id": GOAL_ID, "goal_instance_id": INSTANCE_A}
+    for _, runtime, registry, _, _, _ in (current, stale):
+        _stamp_runtime_owner(runtime, goal_ref)
+        _replace_with_source_registry(registry, runtime, INSTANCE_A)
+
+    monkeypatch.setattr(context_io, "load_registry", load_project_registry)
+    monkeypatch.setattr(state_refresh, "load_registry", load_project_registry)
+
+    _, current_runtime, current_registry, _, _, current_original = current
+    current_context = context_io.read_checkpoint_context(
+        registry_path=current_registry,
+        runtime_root_override=str(current_runtime),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+        goal_ref=goal_ref,
+    )
+    committed = refresh(
+        current_registry,
+        current_runtime,
+        current_context["read_context_id"],
+        goal_ref=goal_ref,
+    )
+    assert committed["appended"] is True
+    assert committed["goal_ref"] == goal_ref
+    assert committed["settlement_identity"] == current_original["settlement_identity"]
+    committed_row = json.loads(
+        (current_runtime / "goals" / GOAL_ID / "runs" / "index.jsonl")
+        .read_text()
+        .splitlines()[-1]
+    )
+    assert committed_row["goal_ref"] == goal_ref
+
+    _, stale_runtime, stale_registry, _, _, _ = stale
+    stale_context = context_io.read_checkpoint_context(
+        registry_path=stale_registry,
+        runtime_root_override=str(stale_runtime),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+        goal_ref=goal_ref,
+    )
+    stale_index = stale_runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    before = stale_index.read_bytes()
+    _replace_source_goal(stale_registry, INSTANCE_B)
+    with pytest.raises(
+        EffectRuntimeConflict,
+        match="stale_goal_instance",
+    ) as rejected:
+        refresh(
+            stale_registry,
+            stale_runtime,
+            stale_context["read_context_id"],
+            goal_ref=goal_ref,
+        )
+    assert rejected.value.diagnostic_code == "stale_goal_instance"
+    assert stale_index.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

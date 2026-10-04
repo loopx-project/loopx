@@ -122,7 +122,7 @@ resume behavior for the newly selected id remains owned by the dsh composition.
 
 `--iteration-context fresh` selects a session scoped to the current Turn key;
 retrying that same transaction keeps its identity. The default
-`resume-if-available` retains the Goal/Agent/Todo lineage behavior described
+`resume` retains the Goal/Agent/Todo lineage behavior described
 above. A durable Agent identity is not a reason to reuse another Todo's task
 packet or chat context. Independent questions should select fresh context;
 continuations must keep the exact task lineage and refresh explicit inputs.
@@ -139,7 +139,7 @@ additional permissions. Domain task packages and
 artifact validators must still verify their own task identity and revision.
 
 `fresh` 按本次 Turn 选择新上下文，同一事务重试保持身份；默认
-`resume-if-available` 按 Goal/Agent/Todo 延续。Agent 可以长期存在，但独立
+`resume` 按 Goal/Agent/Todo 延续。Agent 可以长期存在，但独立
 问题应使用新上下文，不能把另一个 Todo 的旧任务包当成交接。宿主将上述四个
 本次调用身份变量传给运行时工具，覆盖陈旧值；无 Todo 时为空。这是覆盖映射，
 不是环境隔离边界：当前 pin 的 SDK 先继承父进程环境，再应用映射，因此父进程
@@ -298,12 +298,13 @@ The repository includes four validation paths. The first three do not require th
 DeepSeek Harness SDK or a real dsh runtime:
 
 ```bash
-python3 examples/dsh-turn-host-adapter-smoke.py
+uv run --extra test python -m pytest tests/test_dsh_goal_mode.py
 python3 examples/loopx-turn-dsh-e2e-smoke.py
 python3 examples/loopx-turn-dsh-builtin-host-e2e-smoke.py
 ```
 
-The first guards adapter translation and result shaping. The second drives the
+The first guards adapter translation, result shaping, and acceptance by the real
+host-result validator. The second drives the
 full `loopx turn run-once -> adapter -> fake dsh -> validator -> writeback ->
 quota spend -> idempotent replay` chain. The third proves the built-in host's
 success path plus three bounded provider-capacity attempts, retry-budget

@@ -265,12 +265,28 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
               <strong>{t("capabilities.larkInboxNotificationSetting")}</strong>
               <p>{t("capabilities.larkInboxNotificationDescription")}</p>
             </div>
-            <GoalAutoNotifyToggle
-              callbacks={callbacks}
-              goalId={goalId}
-              notification={notification}
-              onChanged={onNotificationChanged}
-            />
+            <div className="personal-capability-linked-controls">
+              <GoalAutoNotifyToggle
+                callbacks={callbacks}
+                goalId={goalId}
+                notification={notification}
+                onChanged={onNotificationChanged}
+              />
+              <GoalAutoNotifyToggle
+                callbacks={callbacks}
+                goalId={goalId}
+                kind="blocked_notice"
+                notification={notification}
+                onChanged={onNotificationChanged}
+              />
+              {notification?.blockedNoticeDelivery ? <p className="personal-notification-hint">
+                {t("notifications.blockedDelivery", {
+                  delivered: notification.blockedNoticeDelivery.deliveredCount,
+                  unverified: notification.blockedNoticeDelivery.unverifiedCount,
+                  resolved: notification.blockedNoticeDelivery.resolvedCount,
+                })}
+              </p> : null}
+            </div>
           </section>
         ) : null}
 

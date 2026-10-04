@@ -27,6 +27,7 @@ def _start_server() -> tuple[ChatHTTPServer, threading.Thread]:
     server.selected_goal_id = None
     server.registry_path = Path("/tmp/loopx-test-registry.json")
     server.runtime_root_override = None
+    server.runtime_root = Path("/tmp/loopx-test-runtime")
     # The capabilities readback quotes the steward channel's Session, so a
     # fixture server carries the store the real startup always installs.
     server.chat_store = ChatSessionStore(Path(tempfile.mkdtemp()) / "runtime")

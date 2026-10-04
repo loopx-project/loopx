@@ -8,6 +8,7 @@ from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
+from .accounting_admission import quota_accounting_admission
 from .effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
     SETTLEMENT_PLAN_SCHEMA_VERSION,
@@ -64,7 +65,7 @@ def _checkpoint_instructions(checkpoint: Mapping[str, Any]) -> str:
         "`--progress-evidence-id`, `--progress-coverage-complete`. Do not add options absent "
         "from the original command or change its delivery target.",
         "- Remove: Remove previously executed state-mutation options, even when their "
-        "values are unchanged: `--next-action`, `--autonomous-replan-recorded`, "
+        "values are unchanged: `--next-action`, `--next-action-basis`, `--autonomous-replan-recorded`, "
         "`--repair-delta-kind`, `--usage-json`, `--usage-codex-session`. "
         "Remove dependent options that become invalid without them.",
         "- Add: Echo `--checkpoint-read-context` from the read, and add only one valid vision decision: a valid `--agent-vision-json` packet "
@@ -172,6 +173,7 @@ def attach_settlement_progress(
     *,
     registry_path: Path | None = None,
     runtime_root: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> None:
     """Render the TS-owned receipt progress without deriving a second settlement rule."""
     progress = readback.progress
@@ -197,6 +199,7 @@ def attach_settlement_progress(
         scoped_cli_args="",
         lifecycle_actor_args="",
         quota_spend_source=progress["quota_spend_source"],
+        goal_ref=goal_ref,
     )
     payload["settlement_owed"] = {
         **identity.as_dict(), "schema_version": "turn_settlement_owed_v0",
@@ -311,32 +314,69 @@ def read_heartbeat_settlement(
     allow_unbound_binding: bool = False,
     resolve_original_binding: bool = False,
     refresh_retry: dict[str, Any] | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
+    borrow_source_admission: bool = False,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
-    try:
-        payload = effect_runtime_result(
-            "quota.settlement.read",
-            {
-                "schema_version": QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
-                "runtime_root": str(runtime_root.expanduser()),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "todo_id": todo_id,
-                "turn_instance_id": turn_instance_id,
-                "replan_obligation_id": replan_obligation_id,
-                "infer_turn_instance_id": infer_turn_instance_id,
-                "allow_unbound_binding": allow_unbound_binding,
-                **({"resolve_original_binding": True} if resolve_original_binding else {}),
-                **(
-                    {"refresh_retry": refresh_retry}
-                    if refresh_retry is not None
-                    else {}
-                ),
-            },
-        )
-    except EffectRuntimeRejected as exc:
-        raise ValueError(str(exc)) from None
+    def read(admission: Mapping[str, Any] | None) -> Any:
+        try:
+            return effect_runtime_result(
+                "quota.settlement.read",
+                {
+                    "schema_version": QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+                    "runtime_root": str(runtime_root.expanduser()),
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "todo_id": todo_id,
+                    "turn_instance_id": turn_instance_id,
+                    "replan_obligation_id": replan_obligation_id,
+                    "infer_turn_instance_id": infer_turn_instance_id,
+                    "allow_unbound_binding": allow_unbound_binding,
+                    **(
+                        {"resolve_original_binding": True}
+                        if resolve_original_binding
+                        else {}
+                    ),
+                    **(
+                        {"refresh_retry": refresh_retry}
+                        if refresh_retry is not None
+                        else {}
+                    ),
+                    **(
+                        {"goal_ref": dict(goal_ref)}
+                        if goal_ref is not None
+                        else {}
+                    ),
+                    **(
+                        {"source_admission": dict(admission)}
+                        if admission is not None
+                        else {}
+                    ),
+                    **(
+                        {"borrow_source_admission": True}
+                        if borrow_source_admission
+                        else {}
+                    ),
+                },
+            )
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from None
+
+    if source_admission is not None:
+        payload = read(source_admission)
+    else:
+        with quota_accounting_admission(
+            runtime_root=runtime_root,
+            registry_path=registry_path,
+            goal_id=goal_id,
+            goal_ref=goal_ref,
+            operation="quota-settlement-read",
+            lock_legacy_index=False,
+        ) as admission:
+            payload = read(admission)
     if not isinstance(payload, Mapping) or (
         payload.get("schema_version")
         != QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA

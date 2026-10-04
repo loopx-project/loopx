@@ -78,11 +78,11 @@ inventory-only row for the same provider id.
 
 ## Product surfaces
 
-- CLI: `external-evidence discover|plan|receipt|admit|retire`.
-- Managed Turn: the same five effect-runtime methods.
-- Frontend/Lark: not changed in this Core slice. A companion slice should render
-  the same typed plan/admission projection and readback; it must not invent a
-  second registry or lifecycle.
+- CLI: `external-evidence discover|plan|execute|receipt|admit|readback|retire`.
+- Managed Turn: the same five typed effect-runtime methods; explicit provider
+  execution and ledger projection use the capability's CLI owner.
+- Frontend/Lark: existing conversation answer/report and Markdown transports
+  render the shared validated readback. No independent registry or lifecycle.
 
 ## Acceptance
 
@@ -101,6 +101,29 @@ inventory-only row for the same provider id.
   fields whose complete admission identity no longer matches;
 - retirement waits for downstream coverage of every admitted source;
 - CLI and effect-runtime TypeScript tests pass from the source checkout.
+
+## Delivery checkpoint (2026-10-02)
+
+The public GitHub method now completes a bounded real journey: anonymous pinned
+file reads, exact-plan receipt validation, a separate parent decision, projection
+into the existing deepresearch source ledger, actual lineage readback and retirement.
+Optional source refs and literal search terms are bound into the request/plan digest;
+legacy requests retain their existing identity. The provider is bundled in extensions
+under `method:public-github`; capability and ledger owners remain unchanged.
+
+Passed: real public-provider/source CLI journey; negative cases for private or stale
+readiness, malformed/unpinned sources, plan/admission mutation, partial/empty/failed
+reads, independent admission and coverage, wrong-question projection, budget failure
+and idempotent replay; packaged desktop/mobile conversation readback and reload;
+existing Lark Markdown presentation. Source bodies are not persisted. The shared
+Markdown readback uses existing answer/report and Lark transports; no frontend
+configuration or parallel evidence authority is needed.
+
+Commands are in the [versioned capability guide](../../../loopx/capabilities/external_research/README.md#public-github-method--公开-github-方法).
+Live Lark delivery, authenticated connector execution and broader semantic research
+quality remain untested; this checkpoint does not promote those providers or close
+S6/S8. Failed or partial results preserve original-source fallback, and neither a
+successful read nor a parent admission certifies evidence completeness.
 
 ## Non-goals
 

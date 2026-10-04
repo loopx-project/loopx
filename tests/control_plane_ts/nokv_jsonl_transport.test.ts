@@ -52,7 +52,6 @@ async function openSdkHelper(
         : FAKE_SDK_ROOT,
       ...(fakeSdkShape === undefined ? {} : { LOOPX_FAKE_NOKV_SDK_SHAPE: fakeSdkShape }),
     },
-    request_timeout_ms: 2_000,
   });
 }
 
@@ -60,7 +59,6 @@ async function openFaultHelper(mode: string, maxResponseBytes?: number) {
   return await NoKVJsonLinesTransport.open({
     argv: [PYTHON, FAULT_HELPER, mode],
     config: {},
-    request_timeout_ms: 2_000,
     max_response_bytes: maxResponseBytes,
   });
 }
@@ -296,4 +294,26 @@ test("JSON-lines transport surfaces an unknown routing kind as a typed protocol 
     (error: unknown) =>
       error instanceof NoKVTransportProtocolError && /routing kind/.test(error.message),
   );
+});
+
+test("a stalled helper request expires at the transport deadline and fences later requests", { timeout: 10_000 }, async t => {
+  const transport = await openFaultHelper("unresponsive");
+  t.after(async () => { t.mock.timers.reset(); await transport.close(); });
+  // Start the real process before controlling time: process startup is not the
+  // request deadline under test. No wall-clock scheduling budget is asserted.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let settled = false;
+  const pending = transport.readBlob("authority-workbench", "metadata/head.json");
+  const rejected = assert.rejects(pending, error => {
+    settled = true;
+    assert.ok(error instanceof NoKVTransportUnavailableError);
+    assert.match(error.message, /read_blob timed out/);
+    return true;
+  });
+  t.mock.timers.tick(29_999);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  await rejected;
+  await assert.rejects(transport.storeIdentity("authority-workbench"), /read_blob timed out/);
 });

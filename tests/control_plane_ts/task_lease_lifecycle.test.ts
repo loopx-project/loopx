@@ -113,6 +113,43 @@ test("pure lifecycle decision keeps provider executions behind the same gates", 
   assert.equal(softClaim.code, "handoff_mode_forbids_lease");
 });
 
+for (const operation of ["renew", "transfer", "release"] as const) {
+  test(`native ${operation} rejects contradictory lease facts before mode and CAS`, () => {
+    for (const contradiction of [{present: false}, {status: "released"}]) {
+      const result = lifecycleDecision(operation, {
+        handoff_mode: "soft_claim",
+        lease: {present: true, active: true, status: "active", owner: "agent-a",
+          idempotency_key: "lease-a", version: 3, lease_epoch: 7,
+          write_scopes: [], acquire_ttl_seconds: 300, ...contradiction},
+        command: {operation, owner: "agent-a", idempotency_key: "lease-a",
+          expected_version: null, ttl_seconds: null, new_owner: null,
+          new_idempotency_key: null},
+      });
+      assert.equal(result.outcome, "rejected");
+      assert.equal(result.code, "invalid_lease_snapshot");
+      assert.equal(result.next_lease, null);
+    }
+  });
+}
+
+test("soft-claim rejects renew and transfer before missing version; release keeps its fence", () => {
+  for (const operation of ["renew", "transfer", "release"] as const) {
+    const result = lifecycleDecision(operation, {
+      handoff_mode: "soft_claim",
+      command: {operation, owner: "agent-a", idempotency_key: "lease-a",
+        expected_version: null, ttl_seconds: null, new_owner: null,
+        new_idempotency_key: null},
+    });
+    assert.equal(result.outcome, "rejected");
+    assert.equal(result.code, operation === "release" ? "version_required" : "handoff_mode_forbids_lease");
+  }
+  const cleanup = lifecycleDecision("release", {handoff_mode: "soft_claim"});
+  assert.equal(cleanup.outcome, "apply");
+  assert.equal(cleanup.next_lease?.status, "released");
+  assert.equal(cleanup.next_lease?.version, 3);
+  assert.equal(cleanup.next_lease?.lease_epoch, 7);
+});
+
 async function workspace(t: TestContext): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "loopx-task-lease-lifecycle-"));
   t.after(() => rm(root, { recursive: true, force: true }));

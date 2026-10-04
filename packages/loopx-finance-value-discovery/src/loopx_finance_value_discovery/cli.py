@@ -37,6 +37,8 @@ from .operation_request import (
     FINANCE_TRANSACTION_APPROVAL_INPUT_SCHEMA_VERSION,
     build_finance_transaction_approval_packet,
 )
+from .position_guard import REQUEST_SCHEMA as POSITION_GUARD_INPUT_SCHEMA
+from .position_guard import evaluate_finance_position_guard
 
 
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
@@ -159,6 +161,10 @@ def _direct_parser() -> argparse.ArgumentParser:
         required=True,
         help=f"Path to a {FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION} object.",
     )
+    guard_parser = sub.add_parser(
+        "evaluate-position", help="Assess private position protection and exit readback; no writes.",
+    )
+    guard_parser.add_argument("--input-json", required=True)
     return parser
 
 
@@ -170,7 +176,9 @@ def run(argv: Sequence[str] | None = None) -> int:
             if not isinstance(payload, Mapping):
                 raise ValueError("provider input must be a JSON object")
             schema_version = payload.get("schema_version")
-            if schema_version == FINANCE_CASE_INPUT_SCHEMA_VERSION:
+            if schema_version == POSITION_GUARD_INPUT_SCHEMA:
+                packet = evaluate_finance_position_guard(payload)
+            elif schema_version == FINANCE_CASE_INPUT_SCHEMA_VERSION:
                 packet = build_finance_case_evaluation(payload)
             elif schema_version == FINANCE_BETA_ATTRIBUTION_INPUT_SCHEMA_VERSION:
                 packet = build_finance_beta_attribution(payload)
@@ -199,7 +207,9 @@ def run(argv: Sequence[str] | None = None) -> int:
             return 1
         return 0
     try:
-        if args.command == "reduce":
+        if args.command == "evaluate-position":
+            packet = evaluate_finance_position_guard(_load_json(args.input_json))
+        elif args.command == "reduce":
             packet = build_finance_value_discovery_packet(_load_json(args.input_json))
         elif args.command == "evaluate":
             packet = build_finance_case_evaluation(_load_json(args.input_json))
@@ -247,10 +257,12 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "use --doctor, reduce, evaluate, replay, attribute-beta, "
                 "replay-beta, evaluate-pack, replay-pack, list-packs, "
                 "render-lark-card, build-operation-request, or "
-                "evaluate-contract-liquidity"
+                "evaluate-contract-liquidity, or evaluate-position"
             )
     except Exception as exc:
-        print(json.dumps(_error_packet(exc), indent=2, sort_keys=True))
+        # Position inputs are private; malformed values never enter diagnostics.
+        error = ValueError("private position input failed admission") if args.command == "evaluate-position" else exc
+        print(json.dumps(_error_packet(error), indent=2, sort_keys=True))
         return 1
     if args.command == "build-operation-request" and args.request_only:
         print(json.dumps(packet["operation_request"], indent=2, sort_keys=True))

@@ -18,6 +18,7 @@ from .time import now_utc_iso
 
 GOAL_SEMANTIC_HISTORY_SCHEMA_VERSION = "goal_semantic_history_v0"
 SEMANTIC_CONTEXT_RUN_FIELDS = (
+    "latest_lane_step_run",
     "latest_agent_vision_run",
     "latest_vision_checkpoint_run",
     "latest_outcome_vision_checkpoint_run",
@@ -27,6 +28,7 @@ SEMANTIC_CONTEXT_RUN_FIELDS = (
     "latest_evidence_delivery_run",
 )
 SEMANTIC_CONTEXT_RUN_PAYLOAD_FIELDS = {
+    "latest_lane_step_run": ("generated_at", "goal_id", "agent_id", "recommended_action_resolution"),
     "latest_agent_vision_run": (
         "generated_at",
         "agent_id",
@@ -161,6 +163,9 @@ def goal_semantic_history_from_runs(
                     active_blocked_retry_runs.append(run)
         context = contexts.setdefault(agent_id, {"agent_id": agent_id})
 
+        resolution = run.get("recommended_action_resolution")
+        if "latest_lane_step_run" not in context and isinstance(resolution, dict) and resolution.get("step_revision"):
+            context["latest_lane_step_run"] = run
         checkpoint = run.get("vision_checkpoint")
         if "latest_vision_checkpoint_run" not in context and isinstance(
             checkpoint, dict

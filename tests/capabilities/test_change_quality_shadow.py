@@ -238,7 +238,7 @@ def test_normalizer_rejects_local_paths_and_mismatched_identity() -> None:
         ],
     )
 
-    with pytest.raises(ValueError, match="repo-relative"):
+    with pytest.raises(ValueError, match="private-looking value"):
         normalize_change_quality_shadow_result(
             raw,
             case=case,

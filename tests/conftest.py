@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -12,8 +13,63 @@ os.environ["LOOPX_USAGE_PING"] = "0"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import pytest  # noqa: E402
+
+from loopx import paths  # noqa: E402
 from loopx.canary.runner import SMOKE_SUITE_CHOICES  # noqa: E402
 from loopx.semantics.production import NPM_DEV_DEPENDENCIES_MISSING  # noqa: E402
+
+
+# Default runtime routes resolve from HOME at import time. A test that writes
+# either one leaves state behind, and once both hold state every later implicit
+# default route fails as a conflict, so each test gets its own disposable pair.
+_DEFAULT_ROUTE_REFERENCES = (
+    ("loopx.paths", "DEFAULT_RUNTIME_ROOT", (".loopx",)),
+    ("loopx.paths", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
+    ("loopx.contract", "DEFAULT_RUNTIME_ROOT", (".loopx",)),
+    ("loopx.contract", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
+    ("loopx.cli_commands.registry_admin_lifecycle", "DEFAULT_RUNTIME_ROOT", (".loopx",)),
+    ("loopx.cli_commands.registry_admin_lifecycle", "LEGACY_LOCAL_RUNTIME_ROOT", (".codex", "loopx")),
+    ("loopx.control_plane.runtime.local_state_migration", "DEFAULT_RUNTIME_ROOT", (".loopx",)),
+    ("loopx.control_plane.runtime.local_state_migration", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
+)
+_REAL_DEFAULT_ROUTES = (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_default_runtime_routes(tmp_path_factory, monkeypatch):
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    for module_name, attribute, parts in _DEFAULT_ROUTE_REFERENCES:
+        monkeypatch.setattr(importlib.import_module(module_name), attribute, home.joinpath(*parts))
+    yield
+
+
+def pytest_sessionstart(session) -> None:
+    # Only routes absent at start are guarded; existing developer state may be
+    # changed by other local processes during the run.
+    session.config._loopx_absent_routes = [
+        root for root in _REAL_DEFAULT_ROUTES if not os.path.lexists(root)
+    ]
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    created = [
+        root for root in getattr(session.config, "_loopx_absent_routes", [])
+        if os.path.lexists(root)
+    ]
+    if not created:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_sep("=", "loopx default runtime route leak", red=True)
+        reporter.write_line(
+            f"Tests created real default runtime routes {', '.join(map(str, created))}; "
+            "isolate the writer."
+        )
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def pytest_addoption(parser) -> None:

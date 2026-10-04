@@ -189,7 +189,7 @@ loopx --format json todo list --goal-id &lt;goal-id&gt; --role agent --agent-id 
 loopx --format json task-lease inspect --goal-id &lt;goal-id&gt; --todo-id &lt;todo-id&gt;
 
 # 当前 Agent 可见的有界证据时间线
-loopx --format json evidence-log --goal-id &lt;goal-id&gt; --agent-id &lt;agent-id&gt; --thin --limit 20</code></pre>
+loopx --format json history --goal-id &lt;goal-id&gt; --agent-id &lt;agent-id&gt; --limit 20</code></pre>
       <p>写操作通过当前 Todo、Gate、claim／lease 与运行契约提供的生命周期入口完成，不靠改展示列或拼一段状态文本。需要什么参数、是否要执行实例身份，以及当前能否继续，读取当前命令帮助和返回的动作契约。</p>
       <p>CLI 与本地前端提供不同粒度的操作与读面；Lark 也有相应消息、目标通道和 Base 看板适配，但不能因此宣称所有界面字段和动作已完全等价。<a href="https://github.com/huangruiteng/loopx/blob/a96c9aa91c9d92454efcd7937483bac76e35fd4a/docs/integrations/lark-kanban-control-plane-adapter.md">Lark Kanban adapter</a> 目前仍标明 prototype contract：同步和触发需要配置，外部看板不自行创造另一套任务身份。</p>
     </section>

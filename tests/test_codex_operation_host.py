@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.turn_driver.codex_cli import (
-    _lineage,
     load_codex_cli_session,
     run_codex_cli_host,
 )
+from loopx.control_plane.turn_driver.codex_sessions import _lineage
 from loopx.control_plane.turn_driver.codex_operation_host import (
     run_codex_operation_host,
 )
@@ -29,7 +29,8 @@ from test_loopx_turn_driver import _write_live_fixture
 FAKE_SERVER = """#!/usr/bin/env python3
 import json, sys
 thread = "owned-app-server-thread"
-turn = "native-app-server-turn"
+import os
+turn = os.environ.get("FAKE_OPERATION_TURN_ID", "native-app-server-turn")
 key = None
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -58,6 +59,16 @@ for line in sys.stdin:
         if os.environ.get("FAKE_OPERATION_HANG") == "1":
             while True: time.sleep(.1)
         text = row["params"]["input"][0]["text"]
+        if os.environ.get("FAKE_OPERATION_PROMPT_FILE"):
+            pathlib.Path(os.environ["FAKE_OPERATION_PROMPT_FILE"]).write_text(text)
+        # The actual native prompt must separate proposal preparation from
+        # domain execution; otherwise approval can never get a proposal.
+        assert "context/pending/inspect do not require consumption" in text
+        assert "prepare may run before human confirmation or consume" in text
+        assert "prepare writes a canonical proposal" in text
+        assert "execution_allowed=false is expected for prepare" in text
+        assert "Only domain/external effects require the first successful consume" in text
+        assert "Execute only after the first receipt" not in text
         import re
         key = re.search(r'"turn_key":"([^"]+)"', text).group(1)
         emit({"id": row["id"], "result": {"turn": {"id": turn}}})
@@ -77,6 +88,389 @@ for line in sys.stdin:
 """
 
 
+def _claimed_native_fixture(tmp_path: Path):
+    from examples import operation_action_fixtures as fixtures
+    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+
+    service, store = fixtures.service(tmp_path, goal_id="fixture-goal")
+    executable = tmp_path / "fake-codex-operation"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    request = _request()
+    request["turn_envelope"]["agent_id"] = "finance-fixture-agent"
+    request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo-managed"
+    options = dict(runtime_root=store.root.parent.parent, registry_path=service.registry_path,
+                   project=service.registry_path.parent.parent, codex_bin=str(executable),
+                   model="test-model", reasoning_effort="xhigh", timeout_seconds=5)
+    run_codex_operation_host(request, **options)
+    binding = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+    handler = operation_tool_handler(
+        runtime_root=options["runtime_root"], registry_path=service.registry_path,
+        lineage=_lineage(request), session_id=binding["session_id"],
+        profile_digest=binding["operation_profile_digest"], model="test-model", reasoning_effort="xhigh",
+    )
+    operation_request = fixtures.request(goal_id="fixture-goal",
+        payload={"schema_version": "qualification_v0", "marker": "synthetic"})
+    terms = operation_request["normalized_parameters"]
+    terms.pop("executor")
+    terms.update(domain="qualification", operation_kind="qualification.observe", operation_schema="qualification_v0")
+    terms["projection"].update(simulated=False, title="Synthetic qualification", focus="No external effect")
+    prepared = handler("loopx_operation", {"action": "prepare", "request": operation_request},
+                       {"thread_id": binding["session_id"], "host_turn_id": "preparing-native-turn"})
+    assert prepared["ok"], prepared
+    proposal = prepared["proposal"]
+    delivered = store.record_operation_delivery(proposal["proposal_id"], delivery=fixtures.delivery(proposal))
+    claimed = store.decide_operation(proposal["proposal_id"], decision="confirm", confirmation=fixtures.confirmation(delivered))
+    request["session"]["action"] = "resume"
+    request["turn_key"] = "sha256:" + "b" * 64
+    return store, claimed, request, options
+
+
+def test_confirmed_operation_is_automatically_carried_into_accepted_native_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    prompt = tmp_path / "native-prompt.txt"
+    monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(prompt))
+    result = run_codex_operation_host(request, **options)
+    assert result["result_kind"] == "wait"
+    stored = store.load(claimed["proposal_id"])
+    receipt = stored["operation"]["host_start"]
+    assert claimed["proposal_id"] in prompt.read_text()
+    assert claimed["operation"]["claim"]["claim_id"] in prompt.read_text()
+    assert receipt["confirmation_event_id"] == claimed["operation"]["confirmation"]["event_id"]
+    assert receipt["claim_id"] == claimed["operation"]["claim"]["claim_id"]
+    assert receipt["host_turn_id"] == "native-app-server-turn"
+    assert receipt["turn_key"] == request["turn_key"]
+    assert receipt["confirmed_at"] <= receipt["accepted_at"]
+    assert receipt["execution_allowed"] is False
+    assert stored["operation"].get("agent_handoff") is None
+    assert stored["operation"]["outcome"] is None
+    monkeypatch.setenv("FAKE_OPERATION_TURN_ID", "later-native-turn")
+    request["turn_key"] = "sha256:" + "c" * 64
+    run_codex_operation_host(request, **options)
+    assert store.load(claimed["proposal_id"])["operation"]["host_start"] == receipt
+
+
+def test_confirmed_callback_launch_fence_resumes_only_the_original_native_session(tmp_path: Path) -> None:
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    run_codex_operation_host(request, confirmed_operation_id=claimed["proposal_id"], **options)
+    assert store.load(claimed["proposal_id"])["operation"]["host_start"]["turn_key"] == request["turn_key"]
+    assert store.load(claimed["proposal_id"])["operation"].get("agent_handoff") is None
+    # A callback/recovery cannot start another native Turn after acceptance.
+    with pytest.raises(Exception, match="unstarted"):
+        run_codex_operation_host(request, confirmed_operation_id=claimed["proposal_id"], **options)
+
+
+@pytest.mark.parametrize("drift", ["session", "todo", "profile", "fresh", "stopped", "missing"])
+def test_callback_launch_fence_rejects_drift_before_native_process_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
+) -> None:
+    from loopx.control_plane.turn_driver import codex_operation_host as owner
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    if drift == "session":
+        original = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+        _store_codex_cli_session(options["runtime_root"], lineage=_lineage(request), session_id="replacement",
+            operation_profile_digest=original["operation_profile_digest"], operation_model="test-model",
+            operation_reasoning_effort="xhigh")
+    elif drift == "todo":
+        request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "other"
+    elif drift == "profile":
+        options["reasoning_effort"] = "high"
+    elif drift == "fresh":
+        request["session"]["context_policy"] = {"mode": "fresh"}
+    elif drift == "stopped":
+        data = json.loads(options["registry_path"].read_text())
+        data["goals"][0]["status"] = "stopped"
+        options["registry_path"].write_text(json.dumps(data))
+    def no_start(*args, **kwargs):
+        pytest.fail("the fenced callback must not start/rebind a native process")
+    monkeypatch.setattr(owner.CodexChatAgentSession, "start", no_start)
+    before = store.path.read_bytes()
+    with pytest.raises((ValueError, RuntimeError)):
+        run_codex_operation_host(request, confirmed_operation_id="missing" if drift == "missing" else claimed["proposal_id"], **options)
+    assert store.path.read_bytes() == before
+
+
+def test_dynamic_pending_filters_other_managed_tasks_before_pagination(
+    tmp_path: Path,
+) -> None:
+    from examples import operation_action_fixtures as fixtures
+
+    service, store = fixtures.service(tmp_path, goal_id="fixture-goal")
+    current = fixtures.managed_handler(service, store, goal_id="fixture-goal")
+    other = fixtures.managed_handler(
+        service, store, goal_id="fixture-goal", todo_id="todo-other",
+        session_id="other-managed-thread",
+    )
+
+    def prepare_and_confirm(handler, index: int, thread_id: str):
+        request = fixtures.request(
+            goal_id="fixture-goal",
+            payload={"schema_version": "qualification_v0", "marker": "synthetic"},
+        )
+        request["idempotency_key"] = f"pending-fixture-{index}"
+        terms = request["normalized_parameters"]
+        terms.pop("executor")
+        terms.update(domain="qualification", operation_kind="qualification.observe", operation_schema="qualification_v0")
+        terms["projection"].update(simulated=False, title="Synthetic qualification", focus="No external effect")
+        prepared = handler(
+            "loopx_operation", {"action": "prepare", "request": request},
+            {"thread_id": thread_id, "host_turn_id": "fixture-native-turn"},
+        )
+        assert prepared["ok"], prepared
+        proposal = prepared["proposal"]
+        delivered = store.record_operation_delivery(
+            proposal["proposal_id"], delivery=fixtures.delivery(proposal),
+        )
+        return store.decide_operation(
+            proposal["proposal_id"], decision="confirm",
+            confirmation=fixtures.confirmation(delivered),
+        )["proposal_id"]
+
+    # All these are current, approved canonical operations for the SAME Agent.
+    # They must neither leak into this task nor exhaust its first page.
+    other_ids = {
+        prepare_and_confirm(other, index, "other-managed-thread")
+        for index in range(25)
+    }
+    own_id = prepare_and_confirm(current, 25, "owned-managed-thread")
+    pending = current(
+        "loopx_operation", {"action": "pending"},
+        {"thread_id": "owned-managed-thread", "host_turn_id": "fixture-native-turn"},
+    )
+    assert pending["ok"], pending
+    assert pending["pending_count"] == 1
+    assert {item["operation_id"] for item in pending["items"]} == {own_id}
+    assert pending["next_cursor"] is None
+    assert not other_ids.intersection(item["operation_id"] for item in pending["items"])
+
+    # A task-local page token is not reusable by another execution subject.
+    for index in range(26, 50):
+        prepare_and_confirm(current, index, "owned-managed-thread")
+    page = current(
+        "loopx_operation", {"action": "pending"},
+        {"thread_id": "owned-managed-thread", "host_turn_id": "fixture-native-turn"},
+    )
+    assert page["next_cursor"]
+    rejected = other(
+        "loopx_operation", {"action": "pending", "cursor": page["next_cursor"]},
+        {"thread_id": "other-managed-thread", "host_turn_id": "fixture-native-turn"},
+    )
+    assert rejected["ok"] is False
+    assert rejected["execution_allowed"] is False
+
+
+def test_process_launch_without_native_acceptance_cannot_record_operation_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    monkeypatch.setenv("FAKE_OPERATION_HANG", "1")
+    with pytest.raises(BuiltInHostError):
+        run_codex_operation_host(request, **{**options, "timeout_seconds": 0.5})
+    assert store.load(claimed["proposal_id"])["operation"].get("host_start") is None
+
+
+def test_start_receipt_failure_aborts_before_operation_tool_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.chat_action_store import ChatActionStore
+    from loopx.control_plane.turn_driver import codex_operation_host
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    before = store.path.read_bytes()
+    calls = []
+    original = codex_operation_host.operation_tool_handler
+
+    def observe(**options):
+        handler = original(**options)
+
+        def record(*args):
+            calls.append(args)
+            return handler(*args)
+
+        return record
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic receipt write failure")
+
+    monkeypatch.setattr(codex_operation_host, "operation_tool_handler", observe)
+    monkeypatch.setattr(ChatActionStore, "record_agent_operation_host_start", fail)
+    with pytest.raises(BuiltInHostError) as error:
+        run_codex_operation_host(request, **options)
+    assert str(error.value) == "codex_operation_host_start_unrecorded"
+    assert calls == []
+    assert store.path.read_bytes() == before
+    assert store.load(claimed["proposal_id"])["operation"].get("agent_handoff") is None
+SOURCE_PREPARE_SERVER = """#!/usr/bin/env python3
+import json, os, sys
+thread, turn = "owned-source-test-thread", "native-source-test-turn"
+calls = json.loads(os.environ["FAKE_SOURCE_TOOL_CALLS"])
+results = []
+def emit(value):
+    print(json.dumps(value), flush=True)
+def call_next():
+    if len(results) < len(calls):
+        emit({"id": 100 + len(results), "method": "item/tool/call", "params": {
+            "threadId": thread, "turnId": turn, "tool": "loopx_operation",
+            "arguments": calls[len(results)]}})
+    else:
+        emit({"method": "item/agentMessage/delta", "params": {
+            "threadId": thread, "turnId": turn, "delta": json.dumps({"results": results})}})
+        emit({"method": "turn/completed", "params": {
+            "threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+for line in sys.stdin:
+    row = json.loads(line)
+    if row.get("method") == "initialize":
+        emit({"id": row["id"], "result": {}})
+    elif row.get("method") == "thread/start":
+        emit({"id": row["id"], "result": {"thread": {"id": thread},
+            "model": "test-model", "reasoningEffort": "xhigh"}})
+    elif row.get("method") == "turn/start":
+        emit({"id": row["id"], "result": {"turn": {"id": turn}}})
+        call_next()
+    elif isinstance(row.get("id"), int) and row["id"] >= 100:
+        result = json.loads(row["result"]["contentItems"][0]["text"])
+        results.append(result)
+        if result.get("proposal") and len(results) == 1:
+            calls.append({"action": "consume", "proposal_id": result["proposal"]["proposal_id"],
+                "consumption_id": "unapproved-native-attempt"})
+        call_next()
+"""
+
+
+@pytest.mark.parametrize(
+    "thread_id", ["source@current", "accepted+thread", "source:alternate"]
+)
+@pytest.mark.parametrize(
+    "multiple,selected", [(False, False), (True, False), (True, True)]
+)
+def test_registered_source_tokens_survive_owned_native_prepare_and_store_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    thread_id: str,
+    multiple: bool,
+    selected: bool,
+) -> None:
+    from examples.operation_action_fixtures import (
+        GOAL_ID,
+        managed_handler,
+        request,
+        service,
+    )
+    from loopx.chat_agent import CodexChatAgentSession
+    from loopx.control_plane.turn_driver.codex_operation_host import (
+        OPERATION_TOOL,
+        operation_tool_handler,
+    )
+    from loopx.thread_agent_binding import (
+        bind_thread_agent_in_registry,
+        resolve_registry_thread_agent_binding,
+    )
+
+    api, store = service(tmp_path)
+    route = {"host_surface": "custom-host", "thread_id": thread_id}
+    for source in [
+        route,
+        *(
+            [{"host_surface": "custom-host", "thread_id": "safe-second"}]
+            if multiple
+            else []
+        ),
+    ]:
+        bound = bind_thread_agent_in_registry(
+            registry_path=api.registry_path,
+            goal_id=GOAL_ID,
+            agent_id="finance-fixture-agent",
+            execute=True,
+            **source,
+        )
+        assert bound["ok"] and bound["written"]
+        assert (
+            resolve_registry_thread_agent_binding(
+                registry_path=api.registry_path, **source
+            )["status"]
+            == "bound"
+        )
+    value = request()
+    value["normalized_parameters"].pop("executor")
+    value["normalized_parameters"]["projection"]["simulated"] = False
+    arguments = {"action": "prepare", "request": value}
+    monkeypatch.setenv("FAKE_SOURCE_TOOL_CALLS", json.dumps([arguments, arguments]))
+    executable = tmp_path / "fake-source-prepare-server"
+    executable.write_text(SOURCE_PREPARE_SERVER)
+    executable.chmod(0o700)
+    session = CodexChatAgentSession.start(
+        codex_bin=str(executable),
+        work_dir=tmp_path,
+        goal_id=GOAL_ID,
+        objective="Synthetic source preparation",
+        execution_mode=True,
+        sandbox="read-only",
+        model="test-model",
+        reasoning_effort="xhigh",
+        dynamic_tools=[OPERATION_TOOL],
+        hard_timeout_sec=10,
+        response_timeout_sec=5,
+    )
+    try:
+        session.bound_tool_handler = managed_handler(
+            api, store, session_id=session.thread_id
+        )
+        if selected:
+            session.bound_tool_handler = operation_tool_handler(
+                runtime_root=store.root.parent.parent,
+                registry_path=api.registry_path,
+                lineage={
+                    "goal_id": GOAL_ID,
+                    "agent_id": "finance-fixture-agent",
+                    "todo_id": "todo-managed",
+                },
+                session_id=session.thread_id,
+                profile_digest="c" * 64,
+                model="test-model",
+                reasoning_effort="xhigh",
+                source_route=route,
+            )
+        results = session.send(
+            "Prepare the supplied synthetic proposal; no domain effects.",
+            output_schema={
+                "type": "object",
+                "properties": {"results": {"type": "array"}},
+                "required": ["results"],
+            },
+        )["results"]
+    finally:
+        session.bound_tool_handler = None
+        session.close()
+    if multiple and not selected:
+        assert all(
+            result.get("error") == "operation_source_route_ambiguous"
+            for result in results
+        )
+        assert store.list() == []
+    else:
+        first, replay, refused = results
+        assert first["ok"] and first["execution_allowed"] is False
+        persisted = store.load(first["proposal"]["proposal_id"])
+        assert persisted["normalized_parameters"]["source_route"] == {
+            "goal_id": GOAL_ID,
+            "agent_id": "finance-fixture-agent",
+            **route,
+        }
+        executor = persisted["normalized_parameters"]["executor"]
+        assert (
+            executor["session_id"] == "owned-source-test-thread"
+            and executor["profile_digest"] == "c" * 64
+        )
+        assert (
+            replay["proposal"]["proposal_id"] == persisted["proposal_id"]
+            and len(store.list()) == 1
+        )
+        assert refused["ok"] is False
+
+
 def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(
     tmp_path: Path,
 ) -> None:
@@ -90,6 +484,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
         "codex_bin": str(executable),
         "model": "test-model",
         "reasoning_effort": "xhigh",
+        "source_route": {"host_surface": "codex-app", "thread_id": "source-one"},
         "timeout_seconds": 5,
     }
     first = run_codex_operation_host(_request(), **options)
@@ -103,7 +498,8 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
     )
     assert binding["operation_transport"] == "app-server-operation-tools-v0"
     second = run_codex_operation_host(
-        _request(session_action="resume", turn_key="sha256:" + "b" * 64), **options
+        _request(session_action="resume", turn_key="sha256:" + "b" * 64),
+        **{**options, "source_route": {"host_surface": "codex-app", "thread_id": "source-two"}},
     )
     assert second["turn_key"] == "sha256:" + "b" * 64
     assert (
@@ -117,7 +513,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
     with pytest.raises(ValueError, match="original managed transport"):
         run_codex_cli_host(
             _request(session_action="resume"),
-            **{key: value for key, value in options.items() if key != "registry_path"},
+            **{key: value for key, value in options.items() if key not in {"registry_path", "source_route"}},
         )
 
 
@@ -134,12 +530,24 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     def forbidden_plain_cli(*args, **kwargs):
         pytest.fail("Operation opt-in must not downgrade to plain Codex exec")
 
-    monkeypatch.setattr("loopx.cli_commands.turn.run_codex_cli_host", forbidden_plain_cli)
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.run_codex_cli_host",
+        forbidden_plain_cli,
+    )
+    selected_route = {"host_surface": "codex-app", "thread_id": "source-thread"}
+    observed_routes = []
+
+    def operation_host(*args, **kwargs):
+        observed_routes.append(kwargs["source_route"])
+        return run_codex_operation_host(*args, **kwargs)
+
+    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_operation_host.run_codex_operation_host", operation_host)
     arguments = [
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
         "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
         "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(executable),
+        "--codex-operation-source-route-json", json.dumps(selected_route),
         "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
         "--codex-sandbox", "read-only", "--timeout-seconds", "5",
         "--validation-command-json", json.dumps([sys.executable, "-c", "import json,sys; json.load(sys.stdin)"]),
@@ -161,6 +569,22 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     assert binding["operation_transport"] == "app-server-operation-tools-v0"
     assert binding["session_id"] == "owned-app-server-thread"
     assert payload["effects"]["quota_spent"] is False
+    assert observed_routes == [selected_route]
+
+
+def test_source_route_cli_requires_owned_operation_transport(tmp_path, capsys):
+    from loopx.cli import main as cli_main
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    rc = cli_main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--no-global-sync", "--codex-operation-source-route-json",
+        json.dumps({"host_surface": "codex-app", "thread_id": "source-thread"}),
+    ])
+    assert rc != 0
+    assert "requires --codex-operation-tools" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

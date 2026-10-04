@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_from_registry, require_registered_agent_id
-from .history import load_registry
-from .paths import resolve_runtime_root
-from .rollout_event_log import load_rollout_events, rollout_event_log_path
-from .state_refresh import now_local, resolve_goal_state
+# Keep historic facade imports available to existing callers and test seams.
+from .history import load_registry as load_registry
+from .paths import resolve_runtime_root as resolve_runtime_root
+from .rollout_event_log import load_rollout_events as load_rollout_events, rollout_event_log_path as rollout_event_log_path
+from .state_refresh import now_local, resolve_goal_state as resolve_goal_state
 from .status import MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
 from .control_plane.todos.contract import (
     TODO_STATUS_DEFERRED,
@@ -77,17 +78,17 @@ from .control_plane.todos.line_update import (
 )
 from .control_plane.todos.next_action_runtime import apply_added_todo_next_action, settle_completed_todo_next_action
 from .control_plane.todos.list_projection import (
-    compact_agent_lane_todo_summary,
-    compact_thin_todo_list_payload,
-    todo_item_relations,
-    todo_list_projection_contract,
+    compact_agent_lane_todo_summary as compact_agent_lane_todo_summary,
+    compact_thin_todo_list_payload as compact_thin_todo_list_payload,
+    todo_item_relations as todo_item_relations,
+    todo_list_projection_contract as todo_list_projection_contract,
 )
 from .control_plane.todos.goal_todo_projection import (
-    exact_archived_todo_summaries,
-    goal_todo_summaries,
-    todo_summaries_from_fields,
+    exact_archived_todo_summaries as exact_archived_todo_summaries,
+    goal_todo_summaries as goal_todo_summaries,
+    todo_summaries_from_fields as todo_summaries_from_fields,
 )
-from .control_plane.todos.active_state_todo_parser import parse_todo_source
+from .control_plane.todos.active_state_todo_parser import parse_todo_source as parse_todo_source
 from .control_plane.todos import monitor_metadata as todo_monitor_metadata
 from .control_plane.todos.mutation_authority import authorize_todo_lifecycle_mutation, todo_update_authority_action
 from .control_plane.todos.succession_warning import build_open_parent_successor_advisory
@@ -96,8 +97,9 @@ from .control_plane.todos.successor_derivation import (
     derive_successor_proposals,
     successor_add_kwargs,
 )
-from .control_plane.todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
+from .control_plane.todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL as MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from .control_plane.todos.text import normalize_new_todo, plan_todo_priority
+from .control_plane.todos.list_readback import list_goal_todos as list_goal_todos
 from .control_plane.todos.todo_semantics import todo_priority_label
 from .control_plane.todos.unblock_resume import (
     apply_completed_user_todo_lifecycle,
@@ -113,11 +115,11 @@ from .control_plane.todos.authoring_scope import (
 )
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction
 from .control_plane.coordination.local_authority import (
-    canonical_todo_items,
-    canonical_todo_summary_fields,
+    canonical_todo_items as canonical_todo_items,
+    canonical_todo_summary_fields as canonical_todo_summary_fields,
     claim_canonical_todo_if_promoted,
     local_authority_is_promoted,
-    read_canonical_todos_if_promoted,
+    read_canonical_todos_if_promoted as read_canonical_todos_if_promoted,
 )
 from .control_plane.todos.provider_update import update_canonical_todo_if_promoted
 from .control_plane.todos.update_intent import (
@@ -166,201 +168,6 @@ def require_registered_todo_excluded_agents(
         for agent_id in require_todo_excluded_agents(excluded_agents, field=field)
     )
 
-
-def list_goal_todos(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    role: str | None = None,
-    status: str | None = None,
-    todo_id: str | None = None,
-    agent_id: str | None = None,
-    project: Path | None = None,
-    state_file: Path | None = None,
-    runtime_root_arg: str | None = None,
-    limit: int | None = None,
-    thin: bool = False,
-) -> dict[str, Any]:
-    normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
-    if todo_id and not normalized_todo_id:
-        raise ValueError("todo_id must use the public token shape todo_<letters-digits-underscore-hyphen>")
-    normalized_agent_id = normalize_todo_claimed_by(agent_id) if agent_id else None
-    if agent_id and not normalized_agent_id:
-        raise ValueError("agent_id must be a public-safe agent token such as codex-main-control")
-    if limit is not None and limit < 1:
-        raise ValueError("todo list --limit must be at least 1")
-    registry = load_registry(registry_path)
-    goal, resolved_project, resolved_state_file = resolve_goal_state(
-        registry=registry,
-        goal_id=goal_id,
-        project_override=project,
-        state_file_override=state_file,
-    )
-    if goal is None:
-        raise ValueError(f"goal {goal_id!r} is not present in the registry")
-
-    runtime_root = resolve_runtime_root(
-        registry,
-        runtime_root_arg,
-        registry_path=registry_path,
-    )
-    rollout_events = load_rollout_events(
-        rollout_event_log_path(runtime_root, goal_id),
-        limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
-    )
-
-    roles = [role] if role else ["user", "agent"]
-    canonical_read = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-    )
-    if canonical_read is not None:
-        projected = todo_summaries_from_fields(
-            fields=canonical_todo_summary_fields(
-                canonical_read["todos"],
-                rollout_events=rollout_events,
-                goal_acceptance_contract=canonical_read.get("goal_acceptance_contract"),
-                goal_acceptance_work_guards=canonical_read.get("goal_acceptance_work_guards"),
-            ),
-            source="file_authority",
-            rollout_events=rollout_events,
-            roles=roles,
-            status=status,
-            todo_id=normalized_todo_id,
-            agent_id=normalized_agent_id,
-            limit=limit,
-        )
-    else:
-        if not resolved_state_file.exists():
-            raise ValueError(f"active state file does not exist: {resolved_state_file}")
-        state_text = resolved_state_file.read_text(encoding="utf-8")
-        projected = goal_todo_summaries(
-            goal,
-            state_text=state_text,
-            state_path=resolved_state_file,
-            rollout_events=rollout_events,
-            roles=roles,
-            status=status,
-            todo_id=normalized_todo_id,
-            agent_id=normalized_agent_id,
-            limit=limit,
-        )
-    if normalized_todo_id and not projected.todos:
-        if canonical_read is not None:
-            archived_items = [
-                item
-                for item in canonical_todo_items(canonical_read["todos"])
-                if item.get("archive_state") == "archive"
-            ]
-        else:
-            _active_items, archived_items, _source_sections = parse_todo_source(
-                state_text,
-                goal=goal,
-                state_path=resolved_state_file,
-            )
-        archived_projection = exact_archived_todo_summaries(
-            archived_items=archived_items,
-            source=projected.source,
-            rollout_events=rollout_events,
-            roles=roles,
-            status=status,
-            todo_id=normalized_todo_id,
-            agent_id=normalized_agent_id,
-            limit=limit,
-        )
-        if archived_projection is not None:
-            projected = archived_projection
-    source = projected.source
-    summaries = projected.summaries
-    todos = projected.todos
-    unfiltered_count = projected.unfiltered_count
-    uncapped_todo_count = projected.uncapped_todo_count
-
-    matched_todo_count = len(todos)
-    agent_lane_hot_path = bool(
-        normalized_agent_id and limit is None
-        and role is None
-        and status is None
-        and normalized_todo_id is None
-    )
-    if agent_lane_hot_path:
-        summaries = {
-            key: compact_agent_lane_todo_summary(
-                summary,
-                role=key.removesuffix("_todos"),
-            )
-            for key, summary in summaries.items()
-        }
-        todos = [
-            item
-            for key in ("user_todos", "agent_todos")
-            for item in summaries.get(key, {}).get("items") or []
-            if isinstance(item, dict)
-        ]
-
-    matched_todo = todos[0] if len(todos) == 1 else None
-    payload: dict[str, Any] = {
-        "ok": True,
-        "dry_run": True,
-        "read_only": True,
-        "command": "list",
-        "goal_id": goal_id,
-        "role": role or "all",
-        "status_filter": normalize_todo_status(status) if status else None,
-        "source": source,
-        "todo_count": matched_todo_count,
-        "todos": todos,
-        "state_file": str(resolved_state_file),
-        "project": str(resolved_project) if resolved_project else None,
-    }
-    if canonical_read is not None:
-        payload["authority_read"] = {
-            "source_authority": canonical_read["source_authority"],
-            "provider_revision": canonical_read.get("provider_revision"),
-            "cursor": canonical_read.get("cursor"),
-            "todo_read_model": canonical_read.get("todo_read_model"),
-            "decision_read_from_provider": True,
-            "legacy_fallback_used": False,
-        }
-    if normalized_agent_id:
-        payload["agent_id_filter"] = normalized_agent_id
-        payload["unfiltered_todo_count"] = unfiltered_count
-        payload["filter_semantics"] = (
-            "agent todos include unclaimed items plus claimed_by=<agent>; "
-            "User gates use global_gate, then blocks_agent, then legacy claimed_by scope; "
-            "User actions use bound_agent, then legacy claimed_by scope; unscoped items remain visible"
-        )
-    if agent_lane_hot_path:
-        payload["returned_todo_count"] = len(todos)
-        payload["todo_list_projection"] = todo_list_projection_contract(
-            matched_todo_count=matched_todo_count,
-            returned_todo_count=len(todos),
-        )
-    if limit is not None:
-        payload["explicit_limit"] = limit
-        payload["unfiltered_todo_count"] = unfiltered_count
-        payload["returned_todo_count"] = len(todos)
-        payload["todo_list_projection"] = todo_list_projection_contract(
-            matched_todo_count=uncapped_todo_count,
-            returned_todo_count=len(todos),
-            view="explicit_limit_cold_path",
-            item_limit_per_role=limit,
-            full_detail_cold_paths=(
-                "todo list without --limit",
-                "active state",
-            ),
-        )
-    if normalized_todo_id:
-        payload["todo_id_filter"] = normalized_todo_id
-        payload["matched"] = bool(todos)
-        payload["todo"] = matched_todo
-        payload["relations"] = todo_item_relations(matched_todo) if matched_todo else {}
-        if len(todos) > 1:
-            payload["ambiguous"] = True
-        if not todos:
-            payload["not_found"] = True
-    payload.update(summaries)
-    return compact_thin_todo_list_payload(payload) if thin else payload
 
 def add_todo_to_lines(
     lines: list[str],

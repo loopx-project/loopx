@@ -71,6 +71,33 @@ refreshed golden.
 行为，不授予其正确性；发现矛盾时应修复规则并增加反例或 mutation 覆盖，不得刷新
 golden 来让测试通过。
 
+### State Composition Qualification / 状态组合验证
+
+For a change spanning domain machines, select a bounded journey under the
+[composition verification RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.md).
+Reuse the quality catalog and existing validation matrix. Record independent
+invariants, explored actor/resource counts and trace bounds, fault orderings,
+real-entrypoint/readback evidence and conditional progress assumptions. A
+bounded sequence check is not an unbounded liveness proof. Existing deterministic
+checks, real-backend gates and required validation remain in force.
+
+跨领域状态机变更沿[组合验证 RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.zh-CN.md)
+选择有界旅程，复用 quality catalog 与已有验证矩阵。记录独立不变量、探索的 actor／
+resource 数与轨迹上限、故障顺序、真实入口／回读证据及有条件推进前提。有界序列
+检查不等于无界活性证明；既有确定性检查、真实后端门禁与必需验证继续适用。
+
+For a selected typed-core replacement, check illegal combinations at compile
+time and malformed/historical input at runtime. Compare pinned base/head through
+the same public path. Prove sensitivity with a historical failure or deliberate
+semantic mutation; a golden generated from the candidate is not an oracle.
+Retain only durable counterexamples, and do not build a general harness when an
+existing conformance family can express the causal sequence.
+
+选中的 typed core 替换同时验证编译期非法组合与运行时损坏／历史输入。相同公开
+路径比较 pinned base/head，用历史失败或语义 mutation 证明敏感性；候选实现生成
+的 golden 不是 oracle。只保留持久反例；已有 conformance 测试族能表达因果序列时，
+不另建通用 harness。
+
 ## Pull-Request Baseline / PR 基线
 
 ### Synthetic Runs Must Not Report Adoption / 合成运行不计入使用遥测
@@ -468,6 +495,21 @@ override when a separate compatible environment is intentional.
 Python `>=3.11`；不会静默退回不兼容的系统 `python3`。回归测试会拦截测试入口
 重新引入裸 `python3` 子进程或默认值。
 
+The control-plane test and coverage commands run at most four test files at a
+time. Many files start additional Node/Python processes or exercise real SQLite;
+CPU-count-based fan-out can starve those children and turn resource contention
+into apparent transport failures. The SQLite capacity rehearsal remains in the
+full suite with its existing workload and deadlines; this concurrency bound
+does not relax capacity admission criteria. Test transport timeouts with
+controlled clocks or observable request cancellation, separately from loaded
+whole-suite throughput measurements.
+Healthy external-worker fixtures use the production quota timeout; only timeout
+cases inject a short deadline. Detached telemetry integration waits for a local
+start/end record with a bounded watchdog. That observation includes process
+startup and is separate from the HTTP cancellation contract. Rebuild Chat after
+changing shared TS inputs before running packaged-dashboard tests; a stale
+source witness must still reject the bundle.
+
 Canary executes Python checks with the interpreter that launched LoopX
 (`sys.executable`). Its displayed `python3` command is not a second interpreter
 selection. Keep subprocesses on `sys.executable`; use `uv run` at the developer
@@ -580,6 +622,30 @@ The complete public sweep remains explicit and bounded:
 loopx canary smoke-suite --suite full-public --jobs 4 --timeout-seconds 120
 ```
 
+The smoke runner gives every check a disposable HOME, host configuration and
+temporary directory, removes inherited registry/runtime routes, disables usage
+telemetry, and stops only that fixture's managed Effect process before cleanup.
+Timeout and caller cancellation also reap the spawned check's isolated process
+group before deleting the fixture, including children retaining output pipes
+after leader exit. This uses the existing OS transport without extending the
+check deadline or stopping unrelated host processes.
+Serial and parallel checks have the same isolation. It preserves the caller's
+PATH: grouped checks append discovery fallbacks rather than overriding an
+explicitly selected toolchain. Prepare Python 3.11+, Node 24, jq and zsh before
+a complete release sweep, and record their versions with the exact-source
+receipts. A missing tool is an environment gap, not a product regression or a
+passing skip. Installed-host expected sets remain explicit so a missing bundled
+skill still fails; update their owning fixtures when the shipped contract changes.
+
+每项 smoke 都使用独立的一次性 HOME、宿主配置和临时目录，清除继承的 registry/runtime
+路由，关闭 usage telemetry，并在清理前只停止该 fixture 的 Effect 进程；串行、并行隔离
+一致。超时或调用方取消时，清理目录前还会回收该检查自建的隔离进程组，包括父进程
+退出后仍持有输出管道的子进程；复用已有 OS transport，不延长检查期限，不停止无关
+宿主进程。分组检查保留调用方 PATH 的优先级，只在末尾补充发现路径。完整发布验证前准备
+Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺工具属于环境缺口，
+不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
+正式契约变化时同步更新其归属 fixture。
+
 `full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
 not a required PR check. This separation protects repository quality without
 making every small patch wait for the broadest suite.
@@ -650,6 +716,15 @@ backend capacity, retention and cutover qualification belong to the
 [shared-authority RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md).
 Use the existing task/PR evidence and update its owning checkpoint when warranted;
 this adds no approval, receipt or requirement to complete unrelated milestones.
+
+For a demonstrated slow command, the opt-in
+[performance diagnosis workflow](../../loopx/capabilities/performance_diagnosis/README.md)
+selects language-appropriate capture recipes and reads local Speedscope/V8 CPU
+stacks. Measure the original workload without instrumentation, profile the
+actual owning process, then test the proposed cause and repeat the original
+semantic/latency checks. Tool plans, overlapping thread weights and inclusive
+hotspots are not elapsed-time, root-cause or admission proof. Raw profiles remain
+local-private; the workflow adds no profiler service or receipt gate.
 
 - **Locate the cost before selecting an abstraction.** Separate caller repeats,
   output/context expansion, process/bridge/serialization cost, shared semantic
@@ -969,10 +1044,14 @@ python3 scripts/qualify-doubao-capability-monitor-repair-tool-live.py \
 ```
 
 The regular live suite is
-`actual_default_model_behavior_portfolio_v0`: twenty-one one-arm scenarios and two
+`actual_default_model_behavior_portfolio_v0`: twenty-two one-arm scenarios and two
 attempts each. Its selected-Todo case starts from a production thin heartbeat,
 executes real quota, and requires the model to perform the selected Todo's
-read-only target action. Its required-vision replan case independently builds a
+read-only target action. Its accepted-replan-successor case requires the model
+to select the new primary while an older higher-priority alternative remains
+visible. This is packet interpretation evidence; the real CLI successor tests
+separately prove durable replan writeback and fresh-Turn adoption. Its
+required-vision replan case independently builds a
 hermetic required-profile/missing-vision state with a future monitor and
 peer-owned work. The actor must author an evidence-linked vision, execute the
 projected bound refresh and spend, and pass durable checkpoint, one-spend and
@@ -1053,7 +1132,7 @@ Exact scheduler, vision, writeback, and warning fields stay in deterministic
 action-signature coverage; pair mode keeps TurnEnvelope semantic extraction for
 explicit packet differentials or outcome claims.
 
-常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：21 个 one-arm
+常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：22 个 one-arm
 场景，每个重复 2 次。9 个 core-contract 场景覆盖正常接入、agent 身份与
 goal 选择、selected todo、peer 身份路由、same-agent 续接、最终 human gate、
 健康继续和 projection repair；1 个 effect-settlement 场景覆盖 terminal closeout；

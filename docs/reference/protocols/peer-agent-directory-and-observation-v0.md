@@ -160,8 +160,13 @@ Rules:
 
 For a named existing peer, `resolve-peer-route --goal-id ... --agent-id ...`
 reads the binding owner and the local host observer before any request is
-recorded. `ambiguous` preserves all accepted candidate identities and asks for
-an exact task link; it never selects the last or newest binding. An explicit
+recorded. Without a task link, the shared typed selector may resolve exactly one
+readable local task when every alternative has an explicit host `archived`
+observation. It observes all matching candidates within the existing 32-thread
+budget, independently of the three-row publication cap. Missing, unsupported,
+failed or withheld observations remain unknown alternatives; multiple remaining
+candidates or an over-budget inventory stay `ambiguous`. It never selects the
+last, newest or only visible binding. An explicit
 `--thread-link` must resolve to that same Goal and Agent across the project
 registry. `unavailable` includes archived, unknown, unsupported and missing
 host observations. `not_authorized` means the named peer is outside the Goal or
@@ -170,6 +175,16 @@ an exact project binding plus a readable local host record. The host must still
 verify its own profile and submission permission. Every preview says
 `host_delivery: not_attempted`, and no route preview grants a claim, lease,
 session resume or message-send permission.
+
+This changes the previous default refusal for *all* multiple bindings: archived
+history no longer requires the owner to supply a link. It applies to the local
+CLI and `manager-inbox request --require-host-route`, including trusted steward
+and peer callers. Readable records are still neither fresh runtime liveness nor
+model/capacity qualification. Restricted Chat and remote hosts do not acquire a
+new observer or execution path. Registration, the scoped candidate set and the
+selected identity are rechecked after host reads; a changed set remains
+unresolved, while a mere reorder does not change the route. Request replay
+keeps its original exact route.
 
 ## Presence Vocabulary
 
@@ -236,6 +251,51 @@ host task is an identity conflict. A sender must inspect the
 host after a lost submission response before repeating the host message. The
 receiver's `manager-inbox read`, decision and `report` receipts remain distinct
 from host submission and from each other.
+
+### Real-host qualification
+
+`examples/peer-handoff-live-qualification.py` is an explicit opt-in qualification of the
+existing Codex app-server adapter and the same request/return CLI. It creates
+two synthetic host threads in the selected authenticated home, a disposable
+Goal/registry/runtime, and a bounded artifact pinned to the checkout head and
+SHA-256. It does not resume a user thread or create replacement child workers.
+
+From the source checkout:
+
+```bash
+uv run --extra test python examples/peer-handoff-live-qualification.py --execute-real-host
+```
+
+The qualification filename keeps this paid host run outside the automatically
+discovered `*-smoke.py` fleet. Ordinary offline coverage remains in
+`tests/test_peer_collaboration.py` and `tests/control_plane/test_peer_host_route.py`;
+neither default CI nor the public smoke fleet
+authorizes model calls or host thread creation.
+
+On Windows select `--codex-bin codex.cmd` if the installed launcher needs it.
+The command consumes model quota and leaves the host's own test-thread records
+in that home; no authentication or session records are copied between homes.
+The caller authorizes these test submissions separately from route resolution.
+An unreachable historical binding keeps automatic selection ambiguous; an
+explicit exact link pins the existing reviewer. The real receiver reads and
+adopts the request, independently checks the artifact, and returns its exact
+head/digest. A fresh requester process restores its own thread, reads the
+result and acknowledges consumption. Retry recovers one request. Output contains
+compact assertions, without thread links, local paths or raw conversations.
+
+The qualification exposed two Windows blockers in this journey: private request
+hashes and lock/claim suffixes exceed `MAX_PATH`, and POSIX-only input flags
+prevent artifact readback. Private store/lock I/O now addresses the same physical
+files using Win32 extended paths; identities, lock exclusion and storage layout
+remain unchanged. Regular input files use the platform's binary/nonblocking
+flags. Focused regression checks cover mutual exclusion, release, artifact
+readback and one request across repeated delivery/consumption.
+
+This qualifies this local owned-host request/adopt/return slice. It does not
+qualify remote hosts, grant message permission to an arbitrary App task, transfer
+a lease, or close the overall R2/R3 collaboration acceptance. Route previews
+continue to report `host_delivery: not_attempted`; the smoke's explicit host
+submission and receiver receipts are separate evidence.
 
 ## Target Identity Pinning
 

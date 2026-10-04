@@ -3,16 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import re
 from typing import Any
 
 from ...registry import atomic_write_json
 from ..projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 from ..todos.active_state_editing import fsync_state_directory
-
-
-GOAL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
-GOAL_INSTANCE_ID = re.compile(r"^ginst_[0-9a-f]{32}$")
+from .goal_ref_validation import (
+    GOAL_INSTANCE_ID,
+    exact_goal_ref,
+    require_goal_id as require_goal_id,
+)
 
 
 def canonical_digest(value: object) -> str:
@@ -41,21 +41,6 @@ def guard_path(registry_path: Path, goal_id: str) -> Path:
 def write_journal(path: Path, payload: dict[str, Any]) -> None:
     atomic_write_json(path, payload, preserve_mode=True)
     fsync_state_directory(path)
-
-
-def require_goal_id(goal_id: str) -> None:
-    if not GOAL_ID.fullmatch(goal_id):
-        raise ValueError("source-session goal_id must be 1-200 safe characters")
-
-
-def exact_goal_ref(goal_id: str, goal_instance_id: str) -> dict[str, str]:
-    require_goal_id(goal_id)
-    if not GOAL_INSTANCE_ID.fullmatch(goal_instance_id):
-        raise ValueError("goal_instance_id must be a Goal instance identifier")
-    return {
-        "goal_id": goal_id,
-        "goal_instance_id": goal_instance_id,
-    }
 
 
 def required_list(

@@ -19,7 +19,7 @@ const observation = {
 function poll(id: number, patch: JsonObject = {}): JsonObject {
   return run(id, { classification: "quota_monitor_poll", monitor: {
     target_id: "watch", mode: "due_monitor_observed_without_material_transition",
-    frontier: null, todo_id: "todo_watch", target_key: null, ...patch,
+    material_change: false, frontier: null, todo_id: "todo_watch", target_key: null, ...patch,
   } });
 }
 function request(runs: JsonObject[], patch: JsonObject = {}): JsonObject {
@@ -44,6 +44,16 @@ test("periodic work counts distinct logical turns and keeps the existing public 
     agent_id: "worker-a",
   });
   assert.equal(trigger(many(19)), null);
+});
+
+test("periodic review counts material work, not quiet monitor receipts", () => {
+  const quiet = many(20, n => poll(n, { mode: n > 18
+    ? "due_monitor_observed_without_material_transition" : "monitor_quiet_until_material_transition" }));
+  assert.equal(trigger(quiet, { operation: "periodic" }), null);
+  assert.equal(trigger([...quiet, ...many(19)], { operation: "periodic" }), null);
+  const materialPoll = poll(21, { mode: "due_monitor_material_transition", material_change: true });
+  assert.equal(trigger([materialPoll, ...quiet, ...many(19)], { operation: "periodic" })?.kind,
+    "periodic_review_due");
 });
 
 test("ACK is a lane-scoped cutoff, including an ACK sharing the newest turn id", () => {
@@ -171,6 +181,7 @@ test("malformed typed facts fail visibly rather than falling back to Python poli
   for (const patch of [
     { accepted_ack: "true" }, { observed_at: NaN }, { progress: { ...observation, result_class: "success" } },
     { progress: { ...observation, fingerprint: "" } }, { monitor: [] },
+    { monitor: { ...poll(1).monitor as JsonObject, material_change: "true" } },
   ]) assert.throws(() => projectReplanHistory(request([run(1, patch)])));
 });
 

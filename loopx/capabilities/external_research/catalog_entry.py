@@ -21,12 +21,12 @@ EXTERNAL_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
     ),
     "user_value": (
         "Discover method and connector inventory, select only a currently ready provider, "
-        "bind a caller-presented provider receipt to its exact plan, and admit or reject compact "
+        "execute explicitly selected public GitHub sources, bind a provider receipt to its exact plan, and admit or reject compact "
         "provenance without copying raw provider content."
     ),
     "next_real_step": (
-        "run `loopx external-evidence discover --connector-registry`, then provide a current "
-        "provider inventory to plan and admit the returned provider receipt"
+        "run `loopx external-evidence plan --public-github --help`, then inspect the returned "
+        "receipt before explicit admission and downstream ledger readback"
     ),
     "entry_command": "loopx external-evidence discover --help",
     "commands": [
@@ -39,6 +39,16 @@ EXTERNAL_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
             "command": "loopx external-evidence plan ... --provider-inventory-json providers.json",
             "purpose": "Bind object, user activity, decision, and evidence kinds to one ready provider.",
             "write_boundary": "read-only",
+        },
+        {
+            "command": "loopx external-evidence execute --plan-json plan.json --execute",
+            "purpose": "Read explicit pinned public GitHub sources; parent admission remains separate.",
+            "write_boundary": "anonymous public HTTPS reads; no raw persistence",
+        },
+        {
+            "command": "loopx external-evidence readback --plan-json plan.json --receipt-json execution.json ...",
+            "purpose": "Show the same source lineage, parent decision and actual downstream coverage.",
+            "write_boundary": "read-only by default; --execute projects admitted sources to the existing research ledger",
         },
         {
             "command": "loopx external-evidence receipt --plan-json plan.json --receipt-json receipt.json",

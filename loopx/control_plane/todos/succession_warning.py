@@ -175,7 +175,8 @@ def succession_facts(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def project_succession(items: list[dict[str, Any]], *, reuse: bool = False) -> list[dict[str, Any]]:
+def succession_request(items: list[dict[str, Any]], *, reuse: bool = False) -> dict[str, Any]:
+    """Encode the existing owner request; do not validate or decide in Python."""
     rows = [succession_facts(item) for item in items]
     # Archived histories repeat field-presence shapes thousands of times. Intern
     # those shapes, preserving the complete graph inside the existing RPC budget.
@@ -196,7 +197,22 @@ def project_succession(items: list[dict[str, Any]], *, reuse: bool = False) -> l
         request["evaluations"] = [
             [item.succession_evaluation.get(name) for name in SUCCESSION_EVALUATION_COLUMNS]
             if isinstance(item, _EvaluatedTodo) else None for item in items]
-    result = effect_runtime_result("todo.succession.project", request)
+    return request
+
+
+def succession_evaluations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Carry ephemeral evidence to a fused owner; it must still validate it."""
+    if any(not isinstance(item, _EvaluatedTodo) for item in items):
+        raise ValueError("Todo display requires a matching full-source succession evaluation")
+    return [item.succession_evaluation for item in items]
+
+
+def project_succession(items: list[dict[str, Any]], *, reuse: bool = False) -> list[dict[str, Any]]:
+    if items == []:
+        # No graph/evidence is supplied and no row can be returned. Empty
+        # summary closure still goes through its ordinary typed projection.
+        return []
+    result = effect_runtime_result("todo.succession.project", succession_request(items, reuse=reuse))
     if (not isinstance(result, dict) or result.get("schema_version") != _SUCCESSION_WIRE["result_schema"]
             or result.get("evaluation_columns") != list(SUCCESSION_EVALUATION_COLUMNS)):
         raise ValueError("invalid typed Todo succession result")

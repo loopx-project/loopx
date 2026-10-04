@@ -15,6 +15,7 @@ from ...state_projection import (
 from .. import compact_control_plane_policy
 from ..agents.agent_lane_recommendation import (
     build_agent_lane_next_action,
+    build_explicit_advancement_next_action,
     selected_action_with_agent_lane,
     selected_recommended_action_from_work_lane,
 )
@@ -555,7 +556,21 @@ def _resolve_agent_lane_delivery_route(
 
     continuity_todo = prepared.delivery_continuity_todo
     delivery_anchor = prepared.delivery_continuity_anchor
-    if not isinstance(delivery_anchor, dict) and fallback is None:
+    replan_candidate = build_explicit_advancement_next_action(
+        agent_identity=prepared.agent_identity,
+        agent_todo_items=prepared.agent_todo_planning_source_items,
+        available_capabilities=prepared.effective_available_capabilities,
+        todo_id=(
+            ((prepared.latest_replan_ack or {}).get("semantic_delta") or {})
+            .get("successor_todo_id")
+        ),
+        selection_binding="",
+    )
+    if (
+        not isinstance(delivery_anchor, dict)
+        and fallback is None
+        and replan_candidate is None
+    ):
         return None
     delivery_route = evaluate_delivery_route(
         agent_id=delivery_agent_id,
@@ -594,6 +609,19 @@ def _resolve_agent_lane_delivery_route(
             )
         ),
         preemptions=delivery_preemptions,
+        replan_todo=replan_candidate,
+        latest_replan_ack=prepared.latest_replan_ack,
+        replan_actionable=bool(
+            isinstance(replan_candidate, dict)
+            and projection_todo_item_is_actionable_open(replan_candidate)
+        ),
+        replan_capability_ready=bool(
+            isinstance(replan_candidate, dict)
+            and not missing_required_capabilities(
+                replan_candidate,
+                available_capabilities=prepared.effective_available_capabilities,
+            )
+        ),
     )
 
     selection = delivery_route["selection"]
@@ -625,6 +653,11 @@ def _resolve_agent_lane_delivery_route(
                 "TypeScript selected delivery continuity without a "
                 "projectable Todo candidate"
             )
+    elif selection == "replan":
+        if replan_candidate is None:
+            raise RuntimeError("TypeScript selected replan without an eligible successor")
+        selected_action = replan_candidate
+        selected_action.pop("selection_binding", None)
     elif selection == "fallback":
         selected_action = fallback
     else:
@@ -688,6 +721,7 @@ def _planning_projections(
     route: _QuotaDecisionRoute,
     *,
     include_detail: bool,
+    turn_instance_id: str | None,
 ) -> dict[str, Any]:
     selection_available = route.normal_delivery_allowed or bool(
         route.workspace_repair_allowed
@@ -718,6 +752,18 @@ def _planning_projections(
         capability_gate=prepared.capability_gate,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
+        replan_selection_context=(
+            {
+                "has_turn_identity": bool(turn_instance_id),
+                "should_run": route.should_run,
+                "receipt_bound": bool(
+                    prepared.receipt_bound_todo_id or route.receipt_bound_replan_decision
+                ),
+                "selection_requested": prepared.requested_action_todo_id is not None,
+                "monitor_only": prepared.agent_monitor_only,
+            }
+            if route.replan_decision_allowed else None
+        ),
     )
 
 
@@ -750,6 +796,25 @@ def _resolve_external_evidence_observation(
         ):
             external_evidence_observation = None
     return external_evidence_observation, external_evidence_observation_recent
+
+
+def _with_lane_recommendation(
+    prepared: _QuotaDecisionPreparation, agent_lane_next_action: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Decorate selected work; preserve replay's frozen execution packet."""
+    source = prepared.item.get("recommendation_context")
+    if isinstance(source, dict) and isinstance(agent_lane_next_action, dict) and not prepared.guarded_agent_lane_next_action:
+        from ..goals.goal_frontier.semantic_history import latest_lane_recommendation_from_status
+        from ..work_items.recommendation_source_io import lane_recommendation_context
+        actor = agent_lane_next_action.get("agent_id")
+        task = next((task for task in prepared.agent_todo_planning_source_items
+            if task.get("todo_id") == agent_lane_next_action.get("todo_id")), None)
+        context = lane_recommendation_context(source, agent_id=actor,
+            selected_todo=agent_lane_next_action, task=task,
+            prior_resolution=latest_lane_recommendation_from_status(
+                prepared.status_payload, goal_id=prepared.safe_goal_id, agent_id=actor))
+        agent_lane_next_action = context["selected_todo"]
+    return agent_lane_next_action
 
 
 def _resolve_quota_should_run_route(
@@ -997,6 +1062,7 @@ def _resolve_quota_should_run_route(
         should_run=should_run,
         normal_delivery_allowed=normal_delivery_allowed,
     )
+    agent_lane_next_action = _with_lane_recommendation(prepared, agent_lane_next_action)
     agent_scope_frontier = None
     agent_lane_frontier_hint = None
     if receipt_bound_deferred:
@@ -1199,12 +1265,17 @@ def _build_active_quota_payload(
     route: _QuotaDecisionRoute,
     *,
     include_agent_todo_detail: bool = False,
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
     execution_obligation = _execution_obligation(
         should_run=route.should_run,
         effective_action=route.effective_action,
-        heartbeat_recommendation=route.heartbeat_recommendation,
+        heartbeat_recommendation=(
+            {**route.heartbeat_recommendation, "replan_obligation": prepared.replan_obligation}
+            if route.replan_decision_allowed
+            else route.heartbeat_recommendation
+        ),
         work_lane_contract=route.payload_work_lane_contract,
         external_evidence_observation=route.external_evidence_observation,
         user_gate_owns_frontier=_user_action_owns_empty_agent_lane(
@@ -1317,6 +1388,7 @@ def _build_active_quota_payload(
             prepared,
             route,
             include_detail=include_agent_todo_detail,
+            turn_instance_id=turn_instance_id,
         )
     )
     _attach_truthy_fields(
@@ -1472,13 +1544,17 @@ def _build_quota_should_run_payload(
     turn_instance_id: str | None = None,
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         payload = _build_settled_quota_payload(prepared, route)
     else:
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
+            turn_instance_id=turn_instance_id,
         )
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
     apply_settled_monitor_precedence(payload)
     cadence_root = _interaction_runtime_root(runtime_root, prepared.status_payload)
     if cadence_root:
@@ -1532,6 +1608,15 @@ def _build_quota_should_run_payload(
         interaction_contract=payload.get("interaction_contract"),
         scheduler_hint=payload.get("scheduler_hint"),
     )
+    if prepared.agent_scoped_user_todo_override:
+        # Admission is decided earlier; expose an action only from the final
+        # selected Todo and interaction authority, including cooldown changes.
+        kind = str(prepared.agent_scoped_user_todo_override["kind"])
+        payload[kind] = effect_runtime_result("quota.scoped_override.project", {
+            "override": payload[kind],
+            "selected_todo": payload.get("selected_todo"),
+            "interaction_contract": payload["interaction_contract"],
+        })
     return payload
 
 

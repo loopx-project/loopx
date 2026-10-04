@@ -418,6 +418,11 @@ The existing Inbox projects canonical locators directly, with recovery first,
 `loopx_operation pending` accepts its bound cursor; the CLI projection uses
 `manager-inbox read --operation-cursor CURSOR`. New/changed work restarts
 without a cursor. Reading or exhausting a page does not resolve obligations.
+The owned native tool applies the same exact execution-subject filter as Turn
+startup before pagination. Current approvals for another Todo/session/profile
+of the same Agent cannot appear on that task's page or starve its continuations;
+its cursor cannot be reused by another execution subject. The existing TS inbox
+owner makes these decisions; this is not a separate host-owned inbox.
 
 The shared TypeScript operation frame shows executor, pinned model/effort,
 Goal/Agent/Todo scope, optional source context, and distinct states: confirmed
@@ -445,11 +450,121 @@ remain fail-closed before private reads or writes, even with matching
 `CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor
 success. No proof-import shortcut is exposed.
 
-Immediate confirmation-triggered host wakeup is not implemented:
-`host_delivery: "not_attempted"` remains truthful. Continue through the
-existing admitted Turn/delegation route; later durable wakeup must reuse its
-original scheduling/session owner, not start a parallel resumed executor.
+An admitted operation-enabled Turn now automatically includes canonical
+confirmed-operation locators for its exact Goal/Agent/Todo/session/profile,
+filtered before inbox pagination. After the native `turn/start` response is
+accepted, the existing action store records immutable first-start evidence:
+confirmation event/time, claim, LoopX Turn key, native Turn and acceptance time.
+`host_delivery: "native_start_accepted"` means that observation only; it grants
+no consumption or effect authority and does not claim the Turn is still live.
+Receipt failure aborts before operation-tool dispatch; later Turns preserve the
+first observation. CLI/Inbox, Dashboard and Lark distinguish accepted native
+continuation from consumed authorization and an actual outcome.
+
+An authenticated confirmation callback may now request one continuation through
+the existing delegation owner, **only with a separate, default-off operator
+launch grant**. The grant selects one existing requester/binding, not a model,
+workspace or executor supplied by the card. The operation owner checks exact
+Goal/Agent/Todo/session/profile, confirmation lifetime and unconsumed state.
+The ordinary Turn still owns quota, lease, validation and native startup; its
+native adapter rechecks the complete effective profile before resuming the
+original session. A new/replacement session is refused. Confirmation does not
+grant launch configuration or domain execution authority.
+
+The canonical operation id determines one durable delegation identity. Callback
+replays read its locator without another spawn or artifact validation. A lost
+launch acknowledgement remains an original-journal recovery case; callbacks
+do not auto-resume an uncertain worker. Removing the operator grant is read at
+the next callback boundary. Already started work is not retroactively cancelled.
+`delegation_requested` does not prove native start, validated completion or
+source delivery; `host_delivery` remains `"not_attempted"` until native acceptance.
+See [operator activation](../../reference/local-delegation.md#confirmed-operation-callback-continuation).
+
+File/SQLite qualification uses authenticated synthetic confirmation fixtures,
+the real detached delegation worker and CLI/Turn path, and a synthetic native
+transport. It proves original-session startup without consumption or a domain
+effect; deliberate waiting is not accepted Todo completion. Genuine Lark/model
+and financial probes have not been run for this increment. Frontend grant
+editing and authenticated result return to the original source audience remain
+separate, **partial-delivery** obligations; current grant activation is through
+the operator-owned collector configuration, not a new UI authority.
 Before claiming the investment minimum loop, still prove installation,
 genuine human approval, bound native consumption, domain preflight and
 original-system evidence, accepted result and original-card/audience readback.
 The core PR requires owner review and is not self-installed before merge.
+
+### Preparation and canonical return-audience readback
+
+Proposal preparation is not domain execution. An admitted task with supplied
+immutable terms may call `prepare` before confirmation or consumption;
+`execution_allowed: false` is expected. `context/pending/inspect` also require
+no consumption. Reconcile existing preparations first; neither preparation,
+waiting nor final-answer prose proves task completion. Domain effects still
+require the first successful consumption on the original native tool connection.
+
+For a managed executor, one distinct registered Goal/Agent return audience is
+selected automatically. Multiple historical audiences require an explicit host
+option, `--codex-operation-source-route-json
+'{"host_surface":"codex-app","thread_id":"REGISTERED_THREAD"}'`.
+The selector is registered-audience routing, not authentication, a session
+replacement or an execution permit; the model cannot retarget it. Managed duplicate
+bindings collapse. No registered audience retains the historical null route;
+non-managed adapters retain their previous no-source-route projection and do not
+invoke this managed resolver. Store
+preparation freezes the selected audience in the original confirmation digest.
+
+Source-audience selection and the preparation prompt form a bounded backend
+slice, not a completed product delivery. The companion personal-workspace
+change below remains a separate first-screen-reviewed delivery in the same plan.
+It reads the canonical action list while visible, with
+scope-keyed cancellation, a bounded request timeout and no background interval
+reads. The existing Manager brief links known-Goal pending operations to their
+original drawer; overflow remains reachable through the existing conversation.
+The drawer follows the same proposal ID through delivery, confirmation,
+consumption, outcome and cancellation. A prepared request without a transport
+receipt does not claim that a group card exists. Cancellation is administrative,
+not an execution result. Failed readback marks cached state as potentially stale
+and provides retry; browsing never confirms or executes an operation.
+
+Companion UI qualification uses isolated canonical backend snapshots through a loopback
+HTTP fixture and the packaged EN/ZH desktop/mobile workspace. These synthetic
+receipts do not establish genuine approval, live delivery or confirmation-to-host
+wakeup latency. Actual click-to-original-session dispatch remains a separate
+required acceptance condition using the existing scheduling/session owner.
+The backend slice's focused native/normalization tests do not certify that the
+companion UI ships in its commit or that source delivery is connected.
+
+### Automatic continuation and original-audience return: remaining work
+
+An authenticated confirmation callback currently records the claim and projects
+the managed handoff; it does not launch the original host. Native `report`
+commits an outcome and returns on the tool connection, while delivery recovery
+updates the original Lark card. Neither is delivery to a selected source
+conversation. An `outcome_observed` operation is absent from the pending-work
+Inbox, so exhausting that Inbox cannot certify original-audience return.
+
+The same implementation Todo and capability owner retain both gaps. The next
+bounded deliveries must prove the following in order; these are planned work,
+not qualified features of the preparation/readback slice:
+
+| Delivery | Reused owner and required boundary | Exit evidence |
+| --- | --- | --- |
+| Confirmation-triggered continuation | The original Turn/session owner and an explicit operator-owned launch binding; the callback passes only an operation locator, never private terms or a new execution grant | Automatic bounded start of the same native session/profile after normal Goal, Todo, quota, lease and expiry checks; duplicate callbacks produce at most one active continuation |
+| Restart recovery | The existing Turn journal and kernel single-flight lock; a terminal waiting Turn is not blindly resumed as a new invocation | Crash before/after launch and lost-response tests recover the original attempt; consumed/unknown work reconciles evidence without another submission; stop, session replacement and profile drift deny new launch |
+| Source-audience return | The canonical operation/outcome and existing return-delivery semantics, with a qualified adapter for the selected audience | A durable attempt followed by actual readback of the same operation ID, outcome stage and digest at the original audience; unknown delivery is not blindly re-sent; Lark-card and source-conversation receipts remain distinct |
+| Original-consumer qualification | The installed, pinned runtime and a real non-financial confirmation on the original test Todo | Actual confirmation, host-start, consumption, outcome and source-delivery timestamps; one consumption; healthy confirmation-to-host-start at most 60 seconds for the initial qualification |
+
+The 60-second threshold is an initial acceptance target, not a proven latency or
+a scheduler guarantee. Host-start evidence must come from the native provider's
+accepted Turn and matching connection metadata, not just process creation or a
+locally stamped `started_at`. The adjacent [delegation lead-wake work](https://github.com/loopx-project/loopx/pull/5304)
+targets an originating internal Goal Chat conversation; its planner/recovery
+boundary is a reuse candidate, not proof of managed-operation confirmation wake
+or external source-audience delivery. Frontend refresh intervals, a later heartbeat, manual
+resume and engineering relay messages do not satisfy automatic continuation or
+source return. A registered route alone is not a qualified delivery adapter;
+an unrelated BotMux binding or attached Desktop identity is not a substitute.
+Any new automatic launch configuration must reuse the existing configuration
+owner and expose its effective state in the affected product entry points.
+Keep the original consumer Todo open until these receipts are observed; do not
+convert a cancelled test card or synthetic receipt into genuine approval.

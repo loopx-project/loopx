@@ -13,6 +13,7 @@ import {
   settlementFailed,
   settlementIdentity,
   settlementIdentityFromPlan,
+  settlementIdentityPayload,
   settlementNextAction,
   settlementPure,
   settlementResultPayload,
@@ -23,6 +24,8 @@ import {
   receiptBoundTerminalPhase,
 } from "../../loopx/control_plane/quota/settlement_phase.ts";
 import type {
+  BoundSettlementIdentity,
+  SettlementIdentity,
   SettlementResult,
 } from "../../loopx/control_plane/effect_program.ts";
 
@@ -46,6 +49,36 @@ const invalidSettlementResult: SettlementResult<{ value: number }> = {
   },
 };
 void invalidSettlementResult;
+
+const todoIdentity = {
+  ...identityInput, binding_kind: "todo", binding_id: "todo",
+  replan_obligation_id: null, effect_id: "goal:agent:todo:turn",
+} as const satisfies SettlementIdentity;
+// @ts-expect-error a Todo binding cannot simultaneously carry a replan target
+const dualIdentity: SettlementIdentity = { ...todoIdentity, replan_obligation_id: "replan" };
+// @ts-expect-error the discriminant cannot disagree with the active target
+const wrongKindIdentity: SettlementIdentity = { ...todoIdentity, binding_kind: "autonomous_replan" };
+const unboundIdentity = {
+  ...todoIdentity, binding_kind: "unbound", binding_id: "", todo_id: null,
+} as const satisfies SettlementIdentity;
+// @ts-expect-error an unbound plan cannot enter Turn settlement
+const executableIdentity: BoundSettlementIdentity = unboundIdentity;
+void [dualIdentity, wrongKindIdentity, executableIdentity];
+
+function identityTypes(identity: BoundSettlementIdentity): void {
+  if (identity.binding_kind === "todo") {
+    const todo: string = identity.todo_id;
+    const replan: null = identity.replan_obligation_id;
+    void [todo, replan];
+  } else {
+    const todo: null = identity.todo_id;
+    const replan: string = identity.replan_obligation_id;
+    void [todo, replan];
+  }
+  // @ts-expect-error a validated identity cannot be rebound through mutation
+  identity.todo_id = "other";
+}
+void identityTypes;
 
 test("Turn-result verdicts and host actions never become quota actions", () => {
   for (const resultKind of ["validated_progress", "repair_required", "wait", "host_failure"]) {
@@ -389,4 +422,51 @@ test("plan identity and public result payload remain stable at the boundary", ()
     receipts: [],
     failure: null,
   });
+});
+
+test("settlement plan decoding preserves legacy and versioned binding identities", () => {
+  for (const input of [identityInput, { ...identityInput, todo_id: null, replan_obligation_id: "replan" }]) {
+    const expected = settlementIdentity(input);
+    const wire = settlementIdentityPayload(input);
+    for (const identity of [expected, wire, { ...wire, schema_version: undefined }]) {
+      const plan = { settlement_plan: { identity } };
+      const before = structuredClone(plan);
+      assert.deepEqual(settlementIdentityFromPlan(plan).value, expected);
+      assert.deepEqual(plan, before);
+    }
+  }
+});
+
+test("settlement plan decoding rejects coerced and contradictory identities", () => {
+  const todo = settlementIdentityPayload(identityInput);
+  const replan = settlementIdentityPayload({ ...identityInput, todo_id: null, replan_obligation_id: "replan" });
+  const malformed = [
+    ...["goal_id", "agent_id", "turn_instance_id", "todo_id"].flatMap((field) =>
+      [42, true, ["todo"], { id: "todo" }].map((value) => {
+        const identity = { ...todo, [field]: value };
+        // Even a matching serialized effect id cannot make a non-string id legal.
+        identity.effect_id = `${identity.goal_id}:${identity.agent_id}:${identity.todo_id}:${identity.turn_instance_id}`;
+        return identity;
+      }),
+    ),
+    { ...todo, schema_version: "future_identity" },
+    { ...todo, schema_version: null },
+    { ...todo, binding_kind: "autonomous_replan", binding_id: "todo" },
+    { ...todo, binding_kind: "todo", binding_id: "other" },
+    { ...todo, replan_obligation_id: "replan" },
+    { ...todo, replan_obligation_id: false },
+    { ...todo, todo_id: null, effect_id: "goal:agent::turn" },
+    { ...replan, binding_kind: "todo" },
+    { ...replan, binding_id: "other" },
+    { ...replan, binding_kind: undefined },
+    { ...replan, binding_id: undefined },
+    { ...replan, schema_version: "quota_settlement_identity_v0" },
+    { ...replan, replan_obligation_id: 42, binding_id: "42", effect_id: "goal:agent:autonomous_replan:42:turn" },
+  ];
+  for (const identity of malformed) {
+    const result = settlementIdentityFromPlan({ settlement_plan: { identity } });
+    assert.equal(result.failure?.kind, "invalid_identity", JSON.stringify(identity));
+    assert.equal(result.value, null);
+    assert.deepEqual(result.receipts, []);
+  }
 });

@@ -6,7 +6,6 @@ from __future__ import annotations
 import runpy
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
@@ -27,17 +26,9 @@ def _run_budget_checks() -> None:
     tests = runpy.run_path(str(TEST_PATH))
     tests["test_manifest_covers_the_declared_agent_facing_surface_set"]()
     tests["test_brief_budget_retains_full_commands_on_real_long_paths"]()
-    with tempfile.TemporaryDirectory(prefix="loopx-cli-output-budget-") as temp_dir:
-        root = Path(temp_dir)
-        tests["test_real_cli_output_stays_inside_the_characterized_baseline"](
-            root / "scenarios"
-        )
-        tests["test_collection_growth_and_bootstrap_duplication_are_explicit"](
-            root / "growth"
-        )
-        tests["test_explicit_compact_and_detail_modes_are_characterized"](
-            root / "mode-variants"
-        )
+    # The differential probe runs all default and mode-variant assertions on
+    # its candidate observations, including growth/duplication. Repeating the
+    # candidate matrix here adds real CLI work without another contract.
 
 
 def main() -> int:

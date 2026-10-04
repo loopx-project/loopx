@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -231,7 +232,7 @@ class ChatSessionStore(ChatIngressStore):
     def create_session(
         self,
         *,
-        goal_id: str,
+        goal_id: str | None,
         goal_instance_id: str | None = None,
         agent_id: str,
         adapter_kind: str,
@@ -244,6 +245,7 @@ class ChatSessionStore(ChatIngressStore):
         host_surface: str | None = None,
         attached_capabilities: dict[str, bool] | None = None,
         codex_home: str | None = None,
+        project_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         token = _opaque_id(session_id or uuid.uuid4().hex, field="session_id")
@@ -269,7 +271,17 @@ class ChatSessionStore(ChatIngressStore):
             if str(key)
             in {"live_steering", "session_queue", "claim_wait", "reply_readback"}
         }
-        normalized_goal_id = _opaque_id(goal_id, field="goal_id")
+        if project_context is not None:
+            from .control_plane.effect_runtime import effect_runtime_result
+            selected = effect_runtime_result("collaboration.project.context", {
+                "project_ref": project_context.get("project_ref"), "available": [project_context],
+            })
+            if goal_id is not None or goal_instance_id is not None or channel_id != selected["channel_id"] or normalized_mode != CHAT_SESSION_MODE_MANAGED:
+                raise ValueError("ordinary project Sessions require their exact channel and no Goal")
+            project_context = selected["context"]
+        normalized_goal_id = _opaque_id(goal_id, field="goal_id") if goal_id is not None else None
+        if normalized_goal_id is None and project_context is None:
+            raise ValueError("goal_id is required outside ordinary project Sessions")
         normalized_agent_id = _opaque_id(agent_id, field="agent_id")
         normalized_executor_endpoint_id = _opaque_id(
             executor_endpoint_id or agent_id,
@@ -289,6 +301,7 @@ class ChatSessionStore(ChatIngressStore):
             "schema_version": CHAT_SESSION_SCHEMA_VERSION,
             "session_id": token,
             "goal_id": normalized_goal_id,
+            **({"project_context": project_context} if project_context is not None else {}),
             **(
                 {
                     "goal_instance_id": _opaque_id(
@@ -1742,6 +1755,12 @@ class ChatSessionStore(ChatIngressStore):
 
     def public_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         session_mode = str(payload.get("session_mode") or CHAT_SESSION_MODE_MANAGED)
+        # A receiver can append a result without changing the execution state.
+        # Observe the transcript independently of updated_at, without reading it
+        # or exposing filesystem identity. This is a read hint, never authority.
+        revision = self._event_revision(
+            self._session_dir(payload["session_id"]) / "messages.jsonl"
+        )
         return {
             key: payload.get(key)
             for key in (
@@ -1749,6 +1768,10 @@ class ChatSessionStore(ChatIngressStore):
                 "active_turn_id", "last_error_code", "created_at", "updated_at", "last_activity_at",
             )
         } | {
+            "transcript_revision": (
+                hashlib.sha256(str(revision).encode("ascii")).hexdigest()
+                if revision is not None else None
+            ),
             "session_mode": session_mode,
             "executor_endpoint_id": str(
                 payload.get("executor_endpoint_id") or payload.get("agent_id") or ""
@@ -1760,6 +1783,7 @@ class ChatSessionStore(ChatIngressStore):
                 else {}
             ),
             "channel_id": _session_channel(payload),
+            "project_ref": (payload.get("project_context") or {}).get("project_ref"),
             "manager_runtime": (
                 {
                     "schema_version": "manager_runtime_session_readback_v0",

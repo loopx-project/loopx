@@ -7,11 +7,6 @@ from pathlib import Path
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
-from ..control_plane.turn_driver import (
-    LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION,
-    codex_cli_session_binding,
-    inspect_loopx_turn_journal,
-)
 from .turn_rendering import render_loopx_turn_journal_inspection_markdown
 
 PrintPayload = Callable[
@@ -31,11 +26,24 @@ def handle_turn_journal_inspection(
 ) -> int | None:
     if args.turn_command != "inspect-journal":
         return None
+    from ..control_plane.turn_driver import (
+        LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION,
+        codex_cli_session_binding,
+        inspect_loopx_turn_journal,
+        load_loopx_turn_plan_from_journal,
+    )
+
     try:
         runtime_root = resolve_status_projection_cache_runtime_root(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        scope = "todo"
+        if args.retry_failed_turn:
+            plan = load_loopx_turn_plan_from_journal(
+                runtime_root, goal_id=args.goal_id, turn_key=args.turn_key,
+            )
+            scope = str(((plan.get("session") or {}).get("context_policy") or {}).get("binding_scope") or "todo")
         payload = inspect_loopx_turn_journal(
             runtime_root,
             goal_id=args.goal_id,
@@ -46,6 +54,7 @@ def handle_turn_journal_inspection(
                 lambda turn_envelope: codex_cli_session_binding(
                     runtime_root,
                     turn_envelope,
+                    session_scope=scope,
                 )
             ),
         )

@@ -92,7 +92,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {
                 "command": "loopx review-packet --goal-id <goal-id>",
-                "purpose": "Render a handoff or review packet with any required evidence-log reads.",
+                "purpose": "Render a handoff or review packet with host-projected replan context.",
             },
             {
                 "command": "loopx goal-channel --help",
@@ -111,10 +111,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Preview, stop, or resume a Goal without deleting its history, todos, or evidence.",
             },
             {
-                "command": "loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin",
-                "purpose": "Read the current agent's thin public-safe ledger before replan or handoff.",
-            },
-            {
                 "command": "loopx agent-capabilities --help",
                 "purpose": "Inspect or correct a registered Agent's observed runtime capabilities.",
             },
@@ -125,6 +121,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             {
                 "command": "loopx machine-config --help",
                 "purpose": "Inspect typed machine policy, preview changes, and apply an exact plan revision.",
+            },
+            {
+                "command": "loopx migrate-local-state --help",
+                "purpose": "Preview an explicit local-state path migration or receipt-bound rollback; stop writers before execution.",
             },
             {"command": "loopx todo --help", "purpose": "Show todo lifecycle commands."},
             {
@@ -327,6 +327,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
             {
+                "command": "loopx performance-diagnosis --help",
+                "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
+            },
+            {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",
             },
@@ -476,8 +480,6 @@ def render_concise_help(program: str = "loopx") -> str:
             "Daily operator commands:",
             "  loopx status                   Show current goals, gates, and next action.",
             "  loopx diagnose --goal-id ID    Build a compact evidence packet.",
-            "  loopx evidence-log --goal-id ID --agent-id AGENT --thin",
-            "                                  Read this agent's thin ledger before replan.",
             "  loopx todo --help              Add, claim, complete, update, or archive todos.",
             "  loopx task-lease --help        Manage a hard per-todo lease.",
             "  loopx coordination-shadow --help",

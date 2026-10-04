@@ -581,7 +581,7 @@ def main() -> int:
             item["number"] for item in approval_packet["review_sequence"]
         ) == [4111, 4112], approval_packet["review_sequence"]
         for number, expected_blockers in (
-            (4111, ("merge_state_requires_update", "status_checks_failed")),
+            (4111, ("merge_state_unverified", "status_checks_failed")),
             (4112, ()),
         ):
             readiness = json.loads(

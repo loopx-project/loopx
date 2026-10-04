@@ -4,15 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx-finance-value-discovery"
-version = "0.8.0"
+version = "0.8.1"
 description = "Public-safe finance value-discovery extension for LoopX."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = ["loopx>=0.4.0"]
+dependencies = ["loopx>=0.4.0", "jsonschema>=4.23,<5"]
 
 [project.scripts]
 loopx-finance-value-discovery = "loopx_finance_value_discovery.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+loopx_finance_value_discovery = ["schemas/*.json"]

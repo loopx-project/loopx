@@ -20,7 +20,7 @@ from .control_plane.goals.activation import (
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
-from .control_plane.quota.slot_accounting import (
+from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
 )
@@ -330,6 +330,7 @@ def collect_history(
     include_runtime_goals: bool = True,
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
+    scoped_agent_id: str | None = None,
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
@@ -395,6 +396,12 @@ def collect_history(
         ]
         for run in runs:
             run["goal_id"] = str(run.get("goal_id") or current_goal_id)
+        # Explicit history drill-down scopes the complete source before its
+        # requested cap. Status/quota retain their separate Goal-wide source
+        # and bounded lane decision window; quota accounting is always Goal-wide.
+        goal_runs = runs
+        if scoped_agent_id:
+            runs = [run for run in goal_runs if run.get("agent_id") == scoped_agent_id]
         run_count += len(runs)
         recent_runs = list(
             islice(
@@ -409,7 +416,7 @@ def collect_history(
         )
 
         adapter = meta.get("adapter") if isinstance(meta.get("adapter"), dict) else {}
-        quota = goal_quota_with_spend_ledger(meta, runs) if registry_member else None
+        quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
         goal_record = {
             "id": current_goal_id,
             "activation_state": activation_state.value,
@@ -442,7 +449,7 @@ def collect_history(
             "latest_runs": latest_runs_with_agent_context(
                 runs,
                 limit=limit,
-                agent_lane_id=agent_lane_id,
+                agent_lane_id=None if scoped_agent_id else agent_lane_id,
             ),
             "semantic_history": goal_semantic_history_from_runs(runs),
         }

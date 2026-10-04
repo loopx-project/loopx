@@ -5,7 +5,9 @@ import asyncio
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -17,9 +19,167 @@ from loopx.control_plane.turn_driver.executor import (
 )
 from loopx.control_plane.turn_driver.journal_store import turn_journal_path
 from test_delegation_cli import cli
-from test_local_delegation import service as delegation_service
+from test_local_delegation import demo, service as delegation_service
 
 service = delegation_service
+
+
+@pytest.mark.parametrize("turn_command", ["run-once", "decision"])
+def test_turn_decision_preserves_goal_instance_and_host_workspace_facts(
+    tmp_path, monkeypatch, turn_command
+):
+    """Neither source identity nor destination may be lost during composition."""
+    from loopx.cli_commands import turn_decision
+
+    observed = []
+    goal_ref = {
+        "goal_id": "fixture-goal",
+        "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
+    args = SimpleNamespace(
+        goal_id="fixture-goal", agent_id="fixture-agent",
+        project=tmp_path, turn_command=turn_command, available_capabilities=[],
+    )
+
+    def capture(_status, **kwargs):
+        observed.append(kwargs)
+        return {"read_only": True}
+
+    monkeypatch.setattr(turn_decision, "build_live_quota_should_run_decision", capture)
+    decide = turn_decision._build_turn_decision(
+        args, registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime", status_payload={},
+        scheduler_execution_context={}, operator_inbox_urgency_projector=lambda **_: {},
+        goal_ref=goal_ref,
+    )
+    assert decide(requested_action_todo_id="todo_fixture0001") == {"read_only": True}
+    assert len(observed) == 1
+    assert observed[0]["goal_ref"] is goal_ref
+    assert observed[0]["workspace_path"] == (
+        tmp_path.resolve() if turn_command == "run-once" else None
+    )
+    assert observed[0]["requested_action_todo_id"] == "todo_fixture0001"
+
+
+def _structured_turn_preview(runner, binding, *arguments, timeout=60):
+    """Exercise the original owner from a service cwd, without global overrides."""
+    from loopx.cli_commands.turn import handle_turn_command
+    from loopx.cli_commands.turn_registration import register_turn_commands
+    from loopx.cli_runtime import add_subcommand_format, build_cli_parser
+
+    parser, subparsers = build_cli_parser()
+    register_turn_commands(subparsers, add_subcommand_format)
+    args = parser.parse_args(arguments)
+    assert args.turn_command == "run-once" and not args.execute
+    outputs = []
+    status = handle_turn_command(
+        args, registry_path=runner.registry, runtime_root_arg=str(runner.root),
+        output_format=lambda *_args: "json",
+        print_payload=lambda payload, *_args: outputs.append(payload),
+    )
+    assert status in (0, 1) and len(outputs) == 1
+    assert not any(outputs[0]["effects"].values())
+    # Use the same value types as the original CLI's JSON wire.
+    return json.loads(json.dumps(outputs[0]))
+
+
+def test_canonical_preview_uses_bound_project_without_service_cwd_mutation(
+    service, monkeypatch
+):
+    """Full preflight parity, including fresh validator drift, on real providers."""
+    root, runner = service
+    original_cli = runner._cli
+    original_cwd = Path.cwd()
+    source = runner.registry.read_bytes(), runner.config.read_bytes()
+    validator = (
+        Path(json.loads(source[0])["goals"][0]["repo"])
+        / "validation" / "acceptance.py"
+    )
+    original_validator = validator.read_bytes()
+    canonical_before = demo.canonical_tasks(root)
+
+    for drift in (False, True, False):
+        validator.write_bytes(original_validator + (b"\n# fixture drift\n" if drift else b""))
+        with monkeypatch.context() as patch:
+            patch.setattr(runner, "_cli", original_cli)
+            expected = runner.inspect("analysis")
+            patch.setattr(
+                runner, "_cli",
+                lambda *args, **kwargs: _structured_turn_preview(runner, *args, **kwargs),
+            )
+            observed = runner.inspect("analysis")
+        assert observed == expected
+        assert observed["state"] == ("acceptance_unavailable" if drift else "runtime_unverified")
+        assert Path.cwd() == original_cwd
+        assert (runner.registry.read_bytes(), runner.config.read_bytes()) == source
+        assert demo.canonical_tasks(root) == canonical_before
+        assert not (root / "host-started").exists()
+        assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
+        assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
+def test_structured_previews_isolate_concurrent_registry_and_workspace_facts(
+    service, tmp_path, request, monkeypatch
+):
+    """Same public Goal name, different authorities: no cwd or decision leakage."""
+    first_root, first = service
+    provider_request = SimpleNamespace(
+        param=request.node.callspec.params["service"],
+        addfinalizer=request.addfinalizer,
+    )
+    second_root, second = delegation_service.__wrapped__(
+        tmp_path / "second", provider_request, monkeypatch
+    )
+    original_cwd = Path.cwd()
+    expected = [runner.inspect("analysis") for runner in (first, second)]
+    sources = [
+        (runner.registry.read_bytes(), runner.config.read_bytes())
+        for runner in (first, second)
+    ]
+    for runner in (first, second):
+        monkeypatch.setattr(
+            runner, "_cli",
+            lambda *args, _runner=runner, **kwargs: _structured_turn_preview(
+                _runner, *args, **kwargs
+            ),
+        )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(runner.inspect, "analysis") for runner in (first, second)]
+        observed = [future.result(timeout=40) for future in futures]
+    assert observed == expected
+    assert Path.cwd() == original_cwd
+    for root, runner, source in zip((first_root, second_root), (first, second), sources):
+        assert (runner.registry.read_bytes(), runner.config.read_bytes()) == source
+        assert not (root / "host-started").exists()
+        assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
+
+
+def test_real_turn_preview_checks_destination_not_callers_allowed_workspace(service):
+    """An allowed caller cwd cannot authorize a foreign execution project."""
+    root, runner = service
+    binding = runner.binding("analysis", require_active=True)
+    arguments = [
+        "turn", "run-once", "--goal-id", runner.goal_id,
+        "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
+        "--turn-instance-id", "destination-check",
+        *runner._execution_arguments(binding, "destination-check"),
+    ]
+    # Do not change the original selection, grant, scan root or caller cwd.
+    # Only the destination fact is changed to the canonical (non-isolated) repo.
+    project = arguments.index("--project") + 1
+    arguments[project] = json.loads(runner.registry.read_text())["goals"][0]["repo"]
+    completed = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--registry", str(runner.registry),
+         "--runtime-root", str(runner.root), "--format", "json", *arguments],
+        cwd=binding["workspace"], capture_output=True, text=True, timeout=40,
+    )
+    result = json.loads(completed.stdout)
+    assert completed.returncode == 1, result
+    assert result.get("status") != "preview"
+    assert result["error"] == "LoopX Turn route is not host executable", result
+    assert not any(result["effects"].values())
+    assert not (root / "host-started").exists()
+    assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
 
 
 @pytest.mark.parametrize("workspace_state", ["missing", "not_directory"])
@@ -628,12 +788,13 @@ def test_hard_lease_delegation_claims_before_host_launch(service, monkeypatch):
     row = json.loads(runner.path("leased-dispatch").read_text())
 
     assert [call[:2] for call in calls] == [("todo", "claim"), ("turn", "run-once")]
-    assert row["task_lease"] == {
-        "required": True,
-        "handoff_mode": "hard_lease",
-        "idempotency_key": row["turn_instance_id"],
-        "version": 7,
-    }
+    assert row["task_lease"]["required"] is True
+    assert row["task_lease"]["lease"]["idempotency_key"] == row["turn_instance_id"]
+    assert row["task_lease"]["lease"]["version"] == 7
+    # The canonical contract permits an older lease without an acquisition
+    # TTL. Let the shared TS lease owner resolve its default rather than
+    # inventing a Python default or rejecting this still-current execution.
+    assert runner._delegated_lease_context(row, runner.binding("analysis"))["ttl_seconds"] is None
     assert result["status"] == "rejected"
     assert result["error"] == "stop after lease evidence"
 
@@ -859,12 +1020,18 @@ def test_preflight_does_not_call_an_invalidated_acceptance_ready(service):
 
 
 @pytest.mark.parametrize("validation_basis", ["goal_acceptance", "independent", "missing_workspace", "independent_missing", "validation_files_unavailable"])
-def test_http_team_readback_uses_original_scope_without_a_new_turn(service, validation_basis):
+def test_http_team_readback_uses_original_scope_without_a_new_turn(service, validation_basis, monkeypatch):
     import http.client
     import threading
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    def no_supervisor(*args, **kwargs):
+        raise AssertionError("per-request HTTP inspection started preview reuse")
+
+    monkeypatch.setattr(DelegationPreviewTransport, "__init__", no_supervisor)
 
     root, runner = service
     if validation_basis in {"independent", "independent_missing"}:

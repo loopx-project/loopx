@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { conversationReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "./conversation-returns.ts";
+import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "./conversation-returns.ts";
 
 const collaboration = { returns: [] };
 const original = [
@@ -27,7 +27,8 @@ const waiting = reconcileConversationReturns(arrived, "old", [settledBrief, conc
 assert.deepEqual(conversationReturnSessions("current", waiting), ["current", "old"]);
 const delivered = reconcileConversationReturns(waiting, "old", [settledBrief, { ...conclusion,
   return_delivery: { phase: "conclusion", status: "delivered" } }], createReply);
-assert.deepEqual(conversationReturnSessions("current", delivered), ["current"]);
+assert.deepEqual(conversationReturnSessions("current", delivered), ["current", "old"], "A delivered result does not close observation");
+assert.deepEqual(conversationPendingReturnSessions(delivered), ["current"], "Settled results stop full transcript polling");
 assert.equal(delivered.length, arrived.length);
 // Recovered Turns acquire stored identity without replacing the live text.
 const hydrated = reconcileConversationReturns(original, "current", [{ message_id: "answer", turn_id: "running",
@@ -36,9 +37,15 @@ assert.equal(hydrated[2].sourceMessageId, "answer");
 assert.equal(hydrated[2].text, "Streaming text");
 assert.equal(hydrated[2].pending, true);
 assert.equal(hydrated[0], original[0]);
-assert.deepEqual(conversationReturnSessions(undefined, delivered), ["current"]);
+assert.deepEqual(conversationReturnSessions(undefined, delivered), ["current", "old"]);
 assert.deepEqual(conversationReturnSessions(undefined, original), ["current", "old"]);
-assert.deepEqual(conversationReturnSessions(undefined, [delivered[0], delivered.at(-1)]), []);
+assert.deepEqual(conversationReturnSessions(undefined, [delivered[0], delivered.at(-1)]), ["old"]);
+const later = reconcileConversationReturns(delivered, "old", [settledBrief, conclusion, {
+  ...conclusion, message_id: "result-v2", text: "Correction adopted", return_delivery: { phase: "conclusion", status: "delivered" },
+}], createReply);
+assert.equal(later.length, delivered.length + 1);
+assert.equal(later.at(-1).text, "Correction adopted");
+assert.equal(later[2], delivered[2], "An old update must preserve the new conversation's live answer");
 const historyRows = [
   { session_id: "old", message_id: "answer", role: "agent", turn_id: "old-turn", text: "Older answer", created_at: "2026-08-01" },
   { session_id: "current", message_id: "answer", role: "agent", turn_id: "current-turn", text: "Stored answer", created_at: "2026-08-02", collaboration },
@@ -67,4 +74,16 @@ assert.equal(hydratedRoles.length, 2);
 assert.equal(hydratedRoles[0].sourceMessageId, "user-message");
 assert.equal(hydratedRoles[1].sourceMessageId, "agent-message");
 assert.equal(hydratedRoles[1].text, "Live answer");
-console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and watch retirement)");
+// The initial optimistic request is the first user message of its Turn.
+// Later instructions must retain independent stored identities and remain visible.
+const withInstructions = [storedRoles[0],
+  { session_id: "current", message_id: "instruction-1", turn_id: "same-turn", role: "user", text: "Chinese first" },
+  { session_id: "current", message_id: "instruction-2", turn_id: "same-turn", role: "user", text: "Do not publish" },
+  storedRoles[1]];
+const recoveredInstructions = reconcileConversationHistory(bothRoles, withInstructions, createHistory);
+assert.equal(recoveredInstructions.length, 4);
+assert.equal(recoveredInstructions.find(row => row.text === "My request").sourceMessageId, "user-message");
+assert.equal(recoveredInstructions.find(row => row.text === "Chinese first").sourceMessageId, "instruction-1");
+assert.equal(recoveredInstructions.find(row => row.text === "Do not publish").sourceMessageId, "instruction-2");
+assert.equal(reconcileConversationHistory(recoveredInstructions, withInstructions, createHistory), recoveredInstructions);
+console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and continued revision observation)");

@@ -84,6 +84,34 @@ def test_attached_cli_disconnect_retry_and_verified_return(service):
     assert "artifacts" not in inventory["items"][0]
 
 
+def test_cli_stop_settles_a_running_member_and_refuses_resume(service):
+    root, runner = service
+    (root / "hold").touch()
+    source = root / "brief.json"
+    source.write_text(json.dumps(brief()))
+    status, started = cli(runner, "start", "--binding-id", "analysis", "--operation-id", "cli-stop",
+                          "--brief-file", str(source), "--execute")
+    assert status == 0, started
+    deadline = time.monotonic() + 45
+    while not (root / "host-started").exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert (root / "host-started").exists()
+    status, refused = cli(runner, "stop", "--operation-id", "cli-stop")
+    assert status == 1 and "--execute" in refused["error"]
+    assert not runner._stop_path(runner.path("cli-stop")).exists()
+    status, stopped = cli(runner, "stop", "--operation-id", "cli-stop", "--execute")
+    assert status == 0 and stopped["phase"] == "settled" and stopped["status"] == "stopped", stopped
+    assert stopped["stop"]["ack"]["source"] == "SIGTERM"
+    status, again = cli(runner, "stop", "--operation-id", "cli-stop", "--execute")
+    assert status == 0 and again == stopped
+    status, resumed = cli(runner, "resume", "--operation-id", "cli-stop", "--execute")
+    assert status == 1 and "start a new operation id" in resumed["error"]
+    status, observed = cli(runner, "read", "--operation-id", "cli-stop")
+    assert status == 0 and observed["status"] == "stopped" and observed["stop"]["phase"] == "settled"
+    assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+
+
 def test_cli_invalid_inputs_do_not_launch_work(service):
     root, runner = service
     bad = root / "bad.json"
@@ -104,6 +132,30 @@ def test_cli_invalid_inputs_do_not_launch_work(service):
         assert status == 1 and not result["ok"]
     status, result = cli(runner, "list", "--limit", "5")
     assert status == 1 and not result["ok"]
+
+
+def test_one_shot_cli_inspection_keeps_original_subprocess(service, monkeypatch, capsys):
+    """The real CLI entry must not pay for a worker it cannot reuse."""
+    from loopx.cli import main
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    root, runner = service
+    assert runner._preview_transport is None
+    before = runner.registry.read_bytes(), runner.config.read_bytes(), demo.canonical_tasks(root)
+
+    def no_supervisor(*args, **kwargs):
+        raise AssertionError("single-use CLI started preview reuse")
+
+    monkeypatch.setattr(DelegationPreviewTransport, "__init__", no_supervisor)
+    expected = runner.inspect("analysis")
+    assert main(["--registry", str(runner.registry), "--runtime-root", str(runner.root),
+                 "--format", "json", "delegation", "inspect", "--goal-id", runner.goal_id,
+                 "--agent-id", runner.agent_id, "--execution-config", str(runner.config),
+                 "--binding-id", "analysis"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, **expected}
+    assert (runner.registry.read_bytes(), runner.config.read_bytes(), demo.canonical_tasks(root)) == before
+    assert not (root / "host-started").exists()
+    assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
 
 
 def test_shared_execution_host_does_not_require_optional_mcp():

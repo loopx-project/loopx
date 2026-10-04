@@ -3,15 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
-from ...extensions.hook_adapters import discover_extension_hook_adapters
-from ...extensions.runtime import default_extension_state_file
+from ...control_plane.digest_envelope import sha256_envelope
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
 from ...registry import atomic_write_json, find_registry_goal
@@ -35,6 +36,30 @@ _IDENTITY_RE = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 
 SourceBinder = Callable[..., Mapping[str, Any]]
 SourceSettler = Callable[..., Mapping[str, Any]]
+
+_LAZY_HOST_EXPORTS = {
+    "discover_extension_hook_adapters": "loopx.extensions.hook_adapters",
+    "default_extension_state_file": "loopx.extensions.runtime",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _LAZY_HOST_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_HOST_EXPORTS))
+
+
+def _host_export(name: str) -> Callable[..., Any]:
+    # Preserve the original module-level patch seam without importing unused
+    # extension discovery into every canonical Turn preview.
+    return getattr(sys.modules[__name__], name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +112,7 @@ def _digest(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _timestamp(value: object, label: str) -> str:
@@ -135,8 +160,8 @@ def discover_periodic_report_request_ports(
     agent_id: str,
     extension_state_file: Path | None = None,
 ) -> PeriodicReportRequestPorts:
-    discovery = discover_extension_hook_adapters(
-        state_file=(extension_state_file or default_extension_state_file(runtime_root)),
+    discovery = _host_export("discover_extension_hook_adapters")(
+        state_file=(extension_state_file or _host_export("default_extension_state_file")(runtime_root)),
         phase=REQUEST_ADAPTER_PHASE,
         capability_id="periodic-report",
         target_hook_id=REQUEST_HOOK_ID,

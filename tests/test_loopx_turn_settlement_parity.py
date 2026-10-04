@@ -30,6 +30,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from loopx.control_plane.effect_program import (
     SettlementFailureKind,
     SettlementStepKind,
@@ -184,6 +186,48 @@ def test_same_key_replay_stays_idempotent_under_original_effect_id() -> None:
     assert calls == {"writeback": 0, "spend": 0}
 
 
+@pytest.mark.parametrize("committed_steps", [0, 1, 2])
+@pytest.mark.parametrize("malformation", ["coerced_id", "binding_conflict", "unknown_schema"])
+def test_invalid_identity_never_dispatches_or_replays_receipts(
+    committed_steps: int, malformation: str
+) -> None:
+    transaction = _plan()["transaction"]
+    identity = transaction["settlement_plan"]["identity"]
+    if malformation == "coerced_id":
+        identity["goal_id"] = 42
+        identity["effect_id"] = identity["effect_id"].replace("fixture-goal:", "42:", 1)
+    elif malformation == "binding_conflict":
+        identity.update(binding_kind="autonomous_replan", binding_id="different-work")
+    else:
+        identity["schema_version"] = "unsupported_identity"
+    calls: list[str] = []
+
+    def effect(name: str):
+        def execute():
+            calls.append(name)
+            return dict(COMMITTED_PAYLOAD)
+
+        return execute
+
+    result = execute_turn_driver_settlement(
+        transaction,
+        transaction_phases=TRANSACTION_PHASES,
+        completed_phases=TRANSACTION_PHASES[: 3 + committed_steps],
+        writeback_payload=dict(COMMITTED_PAYLOAD) if committed_steps >= 1 else None,
+        quota_spend_payload=dict(COMMITTED_PAYLOAD) if committed_steps >= 2 else None,
+        writeback=effect("writeback"),
+        spend=effect("spend"),
+        checkpoint=lambda *_: calls.append("checkpoint"),
+        committed_effect_id=identity["effect_id"],
+    )
+
+    assert result.failure is not None
+    assert result.failure.kind is SettlementFailureKind.INVALID_IDENTITY
+    assert result.failure.step_kind is SettlementStepKind.VALIDATION
+    assert result.receipts == ()
+    assert calls == []
+
+
 def test_mismatch_check_is_opt_in_for_callers_without_journal_provenance() -> None:
     plan = _plan(todo_id="todo_fixture0002")
 
@@ -215,7 +259,7 @@ def test_journal_committed_effect_id_is_none_for_legacy_journal() -> None:
     assert _journal_committed_effect_id(journal) is None
 
 
-def test_new_turn_settlement_reduces_between_each_provider_effect() -> None:
+def test_new_turn_settlement_admits_each_return_before_checkpoint() -> None:
     plan = _plan(todo_id="todo_fixture0002")
     transaction = plan["transaction"]
     assert isinstance(transaction, dict)
@@ -239,11 +283,8 @@ def test_new_turn_settlement_reduces_between_each_provider_effect() -> None:
         )
 
     assert result.failure is None
-    assert calls == [
-        "turn.settlement.reduce",
-        "turn.settlement.reduce",
-        "turn.settlement.reduce",
-    ]
+    # Preflight + admission/checkpoint acknowledgement for each of two providers.
+    assert calls == ["turn.settlement.reduce"] * 5
 
 
 def test_replayed_turn_settlement_uses_one_runtime_request() -> None:

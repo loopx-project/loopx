@@ -441,6 +441,60 @@ def test_coordination_runtime_shadow_bootstrap_crosses_python_typescript_boundar
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
+@pytest.mark.parametrize("compile_cache", ["enabled", "disabled"])
+def test_identical_release_does_not_reuse_a_retired_lazy_loader(
+    tmp_path: Path, monkeypatch, compile_cache: str,
+) -> None:
+    """Copied releases have identical bytes, but different live module locations."""
+    source_root = effect_runtime._control_plane_root()
+    roots = [tmp_path / name / "control_plane" for name in ("release # a", "release % b")]
+    for relative in effect_runtime._runtime_source_files(source_root):
+        for root in roots:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / relative, target)
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    for name in ("NODE_COMPILE_CACHE", "NODE_DISABLE_COMPILE_CACHE", "NODE_V8_COVERAGE"):
+        monkeypatch.delenv(name, raising=False)
+    if compile_cache == "disabled":
+        monkeypatch.setenv("NODE_DISABLE_COMPILE_CACHE", "1")
+    original_info = None
+    monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: roots[0])
+    try:
+        original_fingerprint = effect_runtime._runtime_fingerprint()
+        original = effect_runtime.effect_runtime_result("runtime.ping", {})
+        original_info = effect_runtime._read_info(
+            effect_runtime._runtime_info_path(original_fingerprint),
+            fingerprint=original_fingerprint,
+        )
+        assert original_info is not None
+        # Simulate a cleaned installer candidate while its resident runtime lives.
+        # No business owner has been loaded by the transport-only ping.
+        shutil.rmtree(roots[0])
+        monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: roots[1])
+        replacement = effect_runtime.effect_runtime_result("runtime.ping", {})
+        upgraded = effect_runtime.effect_runtime_result("coordination.authority_archive.manage", {
+            "schema_version": "loopx_authority_archive_admin_request_v0",
+            "action": "upgrade", "runtime_roots": [str(tmp_path / "authority")], "execute": True,
+        })
+        assert upgraded["status"] == "upgraded"
+        assert upgraded["results"] == []
+        assert upgraded["authority_changed"] is False
+        assert not (tmp_path / "authority").exists()
+        assert replacement["pid"] != original["pid"]
+        assert effect_runtime._runtime_fingerprint() != original_fingerprint
+        assert effect_runtime.effect_runtime_result("runtime.ping", {}) == replacement
+    finally:
+        if original_info is not None:
+            effect_runtime._request_with_info(
+                original_info, request_id="stop-retired-release", method="runtime.shutdown",
+                params={}, timeout=5,
+            )
+        effect_runtime.restart_effect_runtime()
+
+
 def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     tmp_path: Path,
     monkeypatch,
@@ -895,6 +949,11 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "150")
+    # Keep the tested idle lifecycle independent of client source-scan cost.
+    fingerprint = effect_runtime._runtime_fingerprint()
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint,
+    )
 
     original = effect_runtime.effect_runtime_result("runtime.ping", {})
     original_pid = int(original["pid"])
@@ -911,6 +970,93 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
         {},
         retry_safe=False,
     )
+
+
+@pytest.mark.parametrize("shutdown", [False, True], ids=["idle", "shutdown"])
+@pytest.mark.parametrize("disconnect", [False, True], ids=["connected", "timed-out"])
+def test_runtime_drains_admitted_write_before_exit(
+    tmp_path: Path, monkeypatch, shutdown: bool, disconnect: bool,
+) -> None:
+    """Socket lifetime must not define the lifetime of an accepted effect."""
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
+    journal_path = tmp_path / "admitted-turn.json"
+    lock_path = Path(f"{journal_path}.ts-effect.lock")
+    lock_path.write_text(json.dumps({"pid": os.getpid(), "token": "fixture-holder"}))
+    effect_id = _effect_id("drain-before-exit")
+    journal = _journal(effect_id)
+    # This test covers draining an admitted effect, not cold source discovery.
+    # Resolve the unchanged fixture revision before starting the 250 ms idle
+    # window; otherwise client-side scans can retire the server before send.
+    # Source freshness/replacement is exercised separately in this suite.
+    fingerprint = effect_runtime._runtime_fingerprint()
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint,
+    )
+    original = effect_runtime.effect_runtime_result("runtime.ping", {})
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+
+    def write() -> dict[str, object]:
+        return effect_runtime.effect_runtime_result(
+            "turn_journal.write",
+            {"path": str(journal_path), "journal": journal, "expected_effect_id": effect_id},
+            timeout=0.1 if disconnect else 3,
+            retry_safe=False,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(write)
+            if disconnect:
+                with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous):
+                    pending.result(timeout=2)
+            else:
+                time.sleep(0.1)
+            rejected = _raw_runtime_response(info, (json.dumps({
+                "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+                "token": "wrong-token", "request_id": "rejected", "method": "runtime.ping", "params": {},
+            }) + "\n").encode())
+            assert rejected["ok"] is False
+            assert rejected["error"]["code"] == "authentication_failed"
+            # A second, completed request must not mark the outstanding write idle.
+            observed = effect_runtime._request_with_info(
+                info, request_id="still-serving", method="runtime.ping", params={}, timeout=2,
+            )
+            assert observed["result"]["pid"] == original["pid"]
+            if shutdown:
+                effect_runtime._request_with_info(
+                    info, request_id="drain-shutdown", method="runtime.shutdown", params={}, timeout=2,
+                )
+            time.sleep(0.6)  # More than two idle windows while the real lock is held.
+            try:
+                assert effect_runtime._pid_is_alive(original["pid"]), "accepted work was abandoned"
+                assert info_path.exists(), "locator retired before the accepted effect settled"
+                assert not journal_path.exists()
+                if shutdown:
+                    with pytest.raises(OSError):
+                        socket.create_connection((str(info["host"]), int(info["port"])), timeout=0.2)
+            finally:
+                lock_path.unlink(missing_ok=True)
+            if not disconnect:
+                result = pending.result(timeout=3)
+                assert result["appended"] is True and result["replayed"] is False
+            deadline = time.monotonic() + 3
+            while info_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.025)
+            assert not info_path.exists(), "settled runtime must still retire when idle or stopped"
+            assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
+    finally:
+        lock_path.unlink(missing_ok=True)
+        cleanup_deadline = time.monotonic() + 3
+        while time.monotonic() < cleanup_deadline:
+            effect_runtime._reap_exited_runtime_child(info)
+            if not effect_runtime._pid_is_alive(original["pid"]):
+                break
+            time.sleep(0.025)
+        if effect_runtime._pid_is_alive(original["pid"]):
+            os.kill(int(original["pid"]), signal.SIGTERM)
 
 
 def _envelope(code: str, received: str) -> bytes:

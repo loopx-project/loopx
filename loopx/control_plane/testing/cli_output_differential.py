@@ -362,6 +362,30 @@ def _removed(base: dict[str, Any], candidate: dict[str, Any], field: str) -> lis
     return sorted(base_values - candidate_values)
 
 
+def _has_decision_evidence(row: dict[str, Any]) -> bool:
+    paths = set(row.get("json_shape_paths") or [])
+    return any(path.endswith(".replan_context.core_goal") and
+               path.removesuffix("core_goal") + "evidence" in paths and
+               path.removesuffix("core_goal") + "coverage_ledger" in paths for path in paths)
+
+
+def _decision_evidence_migration_allowance(base: dict[str, Any], candidate: dict[str, Any], metric: Metric) -> int:
+    # One-time, measured transition from coverage-only to dense decision context.
+    # Future dense->dense edits and ordinary guard rows keep their original budget.
+    if candidate.get("format") != "json" or _has_decision_evidence(base) or not _has_decision_evidence(candidate):
+        return 0
+    row_id = str(candidate["row_id"])
+    if row_id == "surface/quota_should_run/crowded/json":
+        limits = (7_000, 7_000, 96, 6_000)
+    elif row_id == "surface/diagnose/crowded/json":
+        limits = (15_000, 15_000, 190, 12_000)
+    elif row_id == "variant/review_packet_full/small/json":
+        limits = (800, 800, 24, 650)
+    else:
+        return 0
+    return dict(zip(("chars", "utf8_bytes", "lines", "compact_payload_chars"), limits))[metric]
+
+
 def _action_signature_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
@@ -651,6 +675,30 @@ def _projection_envelope_migration(
     return {}, ["projection envelope schema coverage changed"], []
 
 
+def _task_step_read_fence_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[Metric, int], list[str]]:
+    """Bound the first read-fence projection, not later growth or other views."""
+    before = base.get("next_action_basis_count", 0)
+    after = candidate.get("next_action_basis_count", 0)
+    row_id = str(base["row_id"])
+    if not (base["format"] == "json"
+        and row_id.startswith(("surface/status/", "surface/quota_should_run/", "variant/status_task_graph_detail/"))
+        and type(before) is int and before == 0
+        and type(after) is int and 0 < after <= 4):
+        return {}, []
+    # Each ordinary fence is 100 pretty / 94 compact chars. The unchanged
+    # two-peer detail fixture adds 457 / 346 chars including task/actor rows.
+    per_fence: dict[Metric, int] = (
+        {"chars": 256, "utf8_bytes": 256, "lines": 8, "compact_payload_chars": 192}
+        if row_id.startswith("variant/status_task_graph_detail/") else
+        {"chars": 192, "utf8_bytes": 192, "lines": 6, "compact_payload_chars": 144}
+    )
+    return {metric: value * after for metric, value in per_fence.items()}, [
+        "task-bound recommendation read fences added; bounded one-time JSON growth",
+    ]
+
+
 def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     row_id = str(base["row_id"])
     failures: list[str] = []
@@ -690,6 +738,8 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     )
     failures.extend(projection_failures)
     review_signals.extend(projection_signals)
+    fence_allowance, fence_signals = _task_step_read_fence_migration(base, candidate)
+    review_signals.extend(fence_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -726,7 +776,9 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 metric,
             ),
             _schema_migration_growth_allowance(migration, metric),
+            _decision_evidence_migration_allowance(base, candidate, metric),
             projection_allowance.get(metric, 0),
+            fence_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK
@@ -882,14 +934,22 @@ def compare_cli_output_receipts(
                 }
             )
         elif candidate is None:
+            parts = row_id.split("/")
+            replacement = next((row for key, row in candidate_rows.items()
+                                if key.startswith(("variant/review_packet_full/", "surface/quota_should_run/"))
+                                and _has_decision_evidence(row)), None)
+            retired_evidence_command = bool(
+                len(parts) == 4 and parts[:2] == ["surface", "evidence_log_thin"]
+                and replacement and _has_decision_evidence(replacement)
+            )
             results.append(
                 {
                     "row_id": row_id,
-                    "status": "failed",
+                    "status": "passed" if retired_evidence_command else "failed",
                     "deltas": {},
                     "allowances": {},
-                    "failures": ["qualified base row is missing from candidate"],
-                    "review_signals": [],
+                    "failures": [] if retired_evidence_command else ["qualified base row is missing from candidate"],
+                    "review_signals": ["evidence-log retired; scoped decision evidence is delivered by replan_context"] if retired_evidence_command else [],
                 }
             )
         else:

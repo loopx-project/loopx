@@ -14,13 +14,11 @@ required, while an owner gate asks one concrete question.
 
 Each notice also carries a ``blocker_revision`` digest over the cause, evidence,
 recovery condition, responsible party and supersession marker. The digest is the
-dedup key a later ledger needs — unchanged means "already told", changed means
-"tell again" — but this module does not decide emission: that decision, the
-persisted delivery/readback state and the reconciliation of resolved and
-superseded blockers arrive with the successor that owns a real caller. Until
-then every notice reports ``delivery.state == "pending"``: no delivery surface
-has been authorized, so nothing has reached anybody, and a NOTIFY intent must
-not be reported as a delivery.
+dedup key used by an authorized delivery adapter — unchanged means "already
+told", changed means "tell again". This transport-neutral builder does not
+decide emission: it reports ``delivery.state == "pending"`` until a delivery
+adapter records a separate receipt. The Lark Goal Channel adapter owns
+send/readback state in its private binding; a NOTIFY intent is not delivery.
 """
 
 from __future__ import annotations
@@ -50,9 +48,8 @@ from ..todos.resume_condition import (
 BLOCKED_TRANSITION_NOTICE_SCHEMA_VERSION = "blocked_transition_notice_v0"
 BLOCKED_TRANSITION_NOTICE_KIND = "blocked_transition_notice"
 
-# The only delivery state this slice can honestly report: no surface has been
-# authorized yet. "delivered" and "readback_verified" arrive with the successor
-# that records an actual handover.
+# The transport-neutral notice remains pending until an authorized adapter
+# records delivery/readback in its own receipt store.
 NOTICE_DELIVERY_PENDING = "pending"
 
 RESPONSIBLE_AGENT = "agent"
@@ -157,6 +154,7 @@ def build_blocked_transition_notice(
     item: Mapping[str, Any],
     *,
     selected_executable: Mapping[str, Any] | None = None,
+    fallback_assessed: bool = True,
 ) -> dict[str, Any] | None:
     """Build the typed first-transition notice for one blocked Todo.
 
@@ -168,7 +166,7 @@ def build_blocked_transition_notice(
     ``blocker_revision`` digest so a later ledger can dedup "same blocker, same
     cause" from "same blocker, materially changed cause", but it does not itself
     decide whether to emit: emission, delivery recording and reconciliation need
-an authorized delivery surface and belong to the successor slice.
+    an authorized delivery surface and belong to the delivery adapter.
 
 The module also owns how a notice is rendered for the owner
 (:func:`blocked_priority_fallback_owner_reason`), so the projection that shows
@@ -222,6 +220,8 @@ the reason stays a thin caller instead of growing a second copy of the rules.
             else " No executable fallback is selected, so no agent work advances."
         )
     )
+    if not fallback_assessed:
+        impact = f"'{text}' waits for {recovery}. Execution and fallback availability have not been assessed."
     superseded_by = _compact(item.get("superseded_by"), limit=120)
 
     notice: dict[str, Any] = {
@@ -261,6 +261,11 @@ the reason stays a thin caller instead of growing a second copy of the rules.
             "readback_verified_at": None,
         },
     }
+    if not fallback_assessed and not owner_must_act:
+        notice["next_action"] = (
+            "No owner action is required by this blocker. The agent should assess "
+            "independent work while waiting for the recovery condition."
+        )
     notice["blocker_revision"] = _digest(
         {
             "blocker_identity": identity,
@@ -320,3 +325,47 @@ def blocked_priority_fallback_owner_reason(fallback: Mapping[str, Any]) -> str |
                 return reason
     prose = str(fallback.get("reason") or "").strip()
     return prose or None
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def collect_blocked_transition_notices(
+    status: Mapping[str, Any], goal_id: str, quota_packet: Mapping[str, Any],
+    *, fallback_assessed: bool = True,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Collect canonical blockers; shared by local attention and Lark delivery."""
+    fallback = _mapping(quota_packet.get("blocked_priority_fallback"))
+    selected = _mapping(fallback.get("selected_executable"))
+    notices = {
+        str(value["blocker_identity"]): dict(value)
+        for value in fallback.get("blocked_transition_notices", [])
+        if isinstance(value, Mapping)
+        and value.get("blocker_identity") and value.get("blocker_revision")
+        and not value.get("superseded_by")
+    }
+    observed: dict[str, dict[str, Any]] = {}
+    queue = _mapping(status.get("attention_queue"))
+    for goal in queue.get("items", []):
+        if not isinstance(goal, Mapping) or str(goal.get("goal_id") or "") != goal_id:
+            continue
+        for lane in ("agent_todos", "user_todos"):
+            group = _mapping(goal.get(lane))
+            for item in group.get("items", []):
+                if not isinstance(item, Mapping):
+                    continue
+                identity = blocked_transition_notice_identity(item)
+                if identity is None:
+                    continue
+                observed[identity] = dict(item)
+                notice = build_blocked_transition_notice(
+                    item, selected_executable=selected or None,
+                    fallback_assessed=fallback_assessed,
+                )
+                # Explicit canonical rows supersede an older quota projection.
+                if notice is not None and not notice.get("superseded_by"):
+                    notices[identity] = notice
+                else:
+                    notices.pop(identity, None)
+    return list(notices.values()), observed

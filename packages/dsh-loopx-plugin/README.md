@@ -176,7 +176,12 @@ For every DSH plugin release:
 [Reliability Diagnostics](../../loopx/capabilities/reliability_diagnostics/README.md)
 capability: an L1 shadow observer that consumes read-only harness events and
 appends compact, public-safe envelopes plus an observer stats record to
-`<loopx-runtime-root>/reliability_diagnostics/<goal-id>.ndjson`. It is a
+`<loopx-runtime-root>/reliability_diagnostics/by-goal/<sha256>.ndjson`, where
+`sha256` is the lowercase digest of the exact UTF-8 Goal id. Upgrade the CLI and
+plugin together. An existing legacy filename blocks flushes with
+`LegacyDiagnosticLedgerError` until the
+[offline upgrade](../../loopx/capabilities/reliability_diagnostics/docs/local-retention-v0.md#upgrading-a-legacy-ledger-offline)
+preserves its history; readback never silently migrates it. It is a
 separate Cordis row and bundle from the Driver, with no Driver or Agent
 injection and no shared send path. It never calls `agent.send`, touches the
 inbox, invokes the LoopX CLI, schedules, retries, stops, or resumes anything.
@@ -340,6 +345,59 @@ mixed batch rejects the automatic message and restores the human work.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
+
+## Installation and upgrade recovery
+
+Check `dsh --version` before choosing an artifact. The current source accepts
+DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
+qualified 0.1.7-rc.2 candidate. It excludes DSH 0.2 and other, unqualified
+prerelease tuples. A 0.1.x range alone does not admit every 0.1.x prerelease.
+The immutable beta.5 download above contains the earlier integration; building
+this checkout produces beta.6. A source build is not a published beta.6 release.
+
+If a marketplace reports `loopx-repository: entry file missing: index.js`, it
+selected the monorepo root instead of this plugin package. Installing
+`git+https://github.com/loopx-project/loopx.git` cannot select the nested, built
+plugin. Use a compatible prebuilt plugin tarball, or build this package and
+install it with your supported DSH executable:
+
+```bash
+cd packages/dsh-loopx-plugin
+DSH_BIN="$(command -v dsh)" ./install.sh
+dsh --profile web --dump-config
+```
+
+The installer rejects an incompatible host before changing its profile. A
+successful profile contains `loopx-goalbar`, `loopx-init-command`, `loopx-driver`,
+and the passive `loopx-shadow-observer` in that order. The installer also reads
+the installed package version back. Restart DSH after upgrading a running host; then
+check the native GoalBar and `/loopx-init` in that same Session. Profile
+registration alone does not prove that a Client loaded or that work continued.
+
+A GitHub URL download timeout occurs before plugin loading. Download the exact
+compatible release asset on a network that can reach GitHub, verify its SHA256
+against the GitHub release asset's digest, then transfer and install that file:
+
+```bash
+dsh plugin --profile web add ./dsh-loopx-plugin-VERSION.tgz --ignore-scripts
+dsh --profile web --dump-config
+```
+
+Replace `VERSION` with the verified asset's version. Local-file installation
+avoids downloading that asset again; DSH may still need its configured registry
+to resolve dependencies. It does not make an incompatible host supported or
+establish recovery of the original Windows network failure. Before upgrading,
+retain the previous compatible tarball for the rollback below. Marketplace
+catalog correction, release publication, browser qualification, and native
+Windows verification remain distinct delivery steps.
+
+For release qualification, run `pnpm smoke:install` with `DSH_BIN` pointing to
+each supported host executable. To qualify an upgrade rather than a fresh
+installation, run `pnpm smoke:install --previous-tarball /path/to/retained.tgz`.
+It invokes the actual source installer in an isolated profile, verifies the
+installed version, rejects an incompatible host before profile operations,
+and removes the plugin. It makes no model calls and does not qualify a browser
+or the user's existing profile.
 
 ## Uninstall
 

@@ -208,6 +208,7 @@ assert "loopx.cli" not in sys.modules
 		(["diagnose", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["review-packet", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["quota", "--help"], "loopx.cli_commands.quota_registration", "loopx.cli_commands.quota"),
+		(["task-lease", "--help"], "loopx.cli_commands.task_lease", "loopx.cli_commands.task_lease"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
 		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
 		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
@@ -240,6 +241,7 @@ assert "loopx.cli" not in sys.modules
 assert {registration_module!r} in sys.modules
 assert "loopx.cli_commands.benchmark_dispatch" not in sys.modules
 assert "loopx.capabilities.content_ops.cli" not in sys.modules
+assert "loopx.cli_commands.turn_run_once" not in sys.modules
 if {registration_module!r} != {handler_module!r}:
     assert {handler_module!r} not in sys.modules
 """
@@ -261,6 +263,78 @@ assert "loopx.capabilities.content_ops.cli" not in sys.modules
 """
 	completed = run_isolated_script(script)
 
+	assert completed.returncode == 0, completed.stderr
+
+
+def test_turn_handler_import_defers_optional_workflows() -> None:
+	script = """
+import sys
+
+import loopx.cli_commands.turn
+
+assert "loopx.capabilities.agent_turn_recall" not in sys.modules
+assert "loopx.capabilities.reward_memory" not in sys.modules
+assert "loopx.capabilities.issue_fix" not in sys.modules
+assert "loopx.todos" not in sys.modules
+assert "loopx.control_plane.todos.provider_update" not in sys.modules
+assert "loopx.control_plane.todos.provider_create" not in sys.modules
+assert "loopx.control_plane.turn_driver.executor" not in sys.modules
+assert "loopx.dsh_goal_mode.turn_host_adapter" not in sys.modules
+assert "loopx.cli_commands.turn_managed_step" not in sys.modules
+assert "loopx.control_plane.quota.slot_accounting" not in sys.modules
+assert "loopx.control_plane.quota.void_commit" not in sys.modules
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+def test_turn_facade_preserves_every_export_owner_identity() -> None:
+	script = """
+from importlib import import_module
+import sys
+import loopx.control_plane.turn_driver as facade
+
+assert "loopx.control_plane.turn_driver.executor" not in sys.modules
+for name in facade.__all__:
+    value = getattr(facade, name)
+    owner = import_module("." + facade._EXPORTS[name], facade.__name__)
+    assert value is getattr(owner, name), name
+    assert name in dir(facade)
+from loopx import todos, state_refresh
+from loopx.control_plane.todos.list_readback import list_goal_todos
+from loopx.control_plane.goals.state_resolution import resolve_goal_state
+assert todos.list_goal_todos is list_goal_todos
+assert state_refresh.resolve_goal_state is resolve_goal_state
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+def test_quota_facade_lazy_exports_preserve_owner_identity() -> None:
+	script = """
+from importlib import import_module
+import sys
+import loopx.quota as facade
+from loopx.control_plane.quota import ledger_readback
+
+assert "loopx.control_plane.quota.slot_accounting" not in sys.modules
+assert "loopx.control_plane.quota.void_commit" not in sys.modules
+assert facade.quota_slot_contribution is ledger_readback.quota_slot_contribution
+assert facade.net_quota_slot_spend is ledger_readback.net_quota_slot_spend
+for name in facade._LAZY_PUBLIC_COMPAT_REEXPORTS:
+    assert name in dir(facade)
+    value = getattr(facade, name)
+    owner = import_module(facade._PUBLIC_COMPAT_REEXPORTS[name])
+    assert value is getattr(owner, name), name
+    assert getattr(facade, name) is value, name
+try:
+    facade.nonexistent_quota_export
+except AttributeError:
+    pass
+else:
+    raise AssertionError("unknown quota exports must fail")
+"""
+	completed = run_isolated_script(script)
 	assert completed.returncode == 0, completed.stderr
 
 
@@ -292,6 +366,13 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["review-packet", "--help"],
 		["todo", "--help"],
 		["quota", "--help"],
+		["task-lease", "--help"],
+		["task-lease", "renew", "--help"],
+		["task-lease", "unknown-action"],
+		["task-lease", "renew"],
+		["task-lease", "inspect", "--goal-id", "goal", "--todo-id", "todo", "--unknown-option"],
+		["task-lease", "renew", "--goal-id", "goal", "--todo-id", "todo", "--expected-ver", "1"],
+		["task-lease", "renew", "--goal-id", "goal", "--todo-id", "todo", "--ttl-seconds", "not-a-number"],
 		["delegation", "--help"],
 		["turn", "--help"],
 		["turn", "run-once", "--help"],
@@ -307,6 +388,86 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	full = run_cli_batch("loopx.cli", argv_cases)
 
 	assert selected == full
+
+
+@pytest.mark.parametrize("action", ["acquire", "renew", "transfer", "release", "inspect"])
+def test_selected_task_lease_dispatch_preserves_owner_arguments(
+	tmp_path: Path, action: str,
+) -> None:
+	"""Thin routing must preserve the existing lease handler, not reimplement it."""
+	registry, runtime_root = write_command_fixture(tmp_path)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root),
+		"--format", "markdown", "task-lease", action, "--format", "json",
+		"--goal-id", "perf-goal", "--todo-id", "todo_cli_dispatch"]
+	expected = {"registry_path": str(registry), "runtime_root": str(runtime_root),
+		"goal_id": "perf-goal", "todo_id": "todo_cli_dispatch"}
+	if action != "inspect":
+		argv += ["--owner", "perf-agent", "--idempotency-key", "original-execution", "--expected-version", "11"]
+		expected.update(owner="perf-agent", idempotency_key="original-execution", expected_version=11)
+	if action in {"acquire", "renew", "transfer"}:
+		argv += ["--ttl-seconds", "20"]
+		expected["ttl_seconds"] = 20
+	if action == "acquire":
+		argv += ["--write-scope", "loopx/**", "--write-worktree", str(tmp_path / "worktree")]
+		expected.update(write_scopes=["loopx/**"], write_worktree=str(tmp_path / "worktree"))
+	if action == "transfer":
+		argv += ["--new-owner", "next-agent", "--new-idempotency-key", "next-execution", "--transfer-claim"]
+		expected.update(new_owner="next-agent", new_idempotency_key="next-execution", transfer_claim=True)
+	function = "execute_native_task_lease_acquire" if action == "acquire" else f"{action}_task_lease"
+	results = []
+	for module in ("loopx.entrypoint", "loopx.cli"):
+		script = f"""
+import contextlib
+import io
+import json
+import sys
+from pathlib import Path
+import loopx.cli_commands.task_lease as owner
+from {module} import main
+
+observed = []
+def invoke(**kwargs):
+    observed.append({{key: str(value) if isinstance(value, Path) else value for key, value in kwargs.items()}})
+    return {{"ok": True, "action": {action!r}, "schema_version": "task_lease_v0"}}
+owner.{function} = invoke
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    code = main({argv!r})
+assert code == 0
+assert observed == [{expected!r}]
+assert json.loads(output.getvalue()) == {{"ok": True, "action": {action!r}, "schema_version": "task_lease_v0"}}
+if {module!r} == "loopx.entrypoint":
+    assert "loopx.cli" not in sys.modules
+    assert "loopx.cli_commands.benchmark_dispatch" not in sys.modules
+    assert "loopx.capabilities.content_ops.cli" not in sys.modules
+print(output.getvalue(), end="")
+"""
+		completed = run_isolated_script(script)
+		assert completed.returncode == 0, completed.stderr
+		results.append(completed.stdout)
+	assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("arguments", [
+	["renew"],
+	["renew", "--owner", "perf-agent"],
+	["inspect", "--owner", "perf-agent"],
+	["release", "--owner", "perf-agent", "--idempotency-key", "original", "--ttl-seconds", "20"],
+	["renew", "--write-worktree", "worktree"],
+	["renew", "--transfer-claim"],
+])
+def test_selected_task_lease_rejections_match_full_cli(tmp_path: Path, arguments: list[str]) -> None:
+	registry, runtime_root = write_command_fixture(tmp_path)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root),
+		"--format", "json", "task-lease", *arguments,
+		"--goal-id", "perf-goal", "--todo-id", "todo_cli_dispatch"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	assert json.loads(selected.stdout)["ok"] is False
+	assert not runtime_root.exists()
 
 
 @pytest.mark.parametrize("command", ["authority-archive", "extension", "slash-commands"])
@@ -348,12 +509,15 @@ def test_selected_admin_preview_matches_full_cli_without_writes(
 @pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
 @pytest.mark.parametrize("healthy", [True, False])
 def test_doctor_dispatch_preserves_owner_flags_and_failure(
-    module: str, healthy: bool,
+    module: str, healthy: bool, tmp_path: Path,
 ) -> None:
+    registry = tmp_path / "registry.json"
+    runtime_root = tmp_path / "runtime"
     script = f"""
 import contextlib
 import io
 import json
+from pathlib import Path
 
 import loopx.cli_commands.doctor as owner
 from {module} import main
@@ -365,10 +529,13 @@ def collect(**kwargs):
 owner.collect_doctor = collect
 output = io.StringIO()
 with contextlib.redirect_stdout(output):
-    code = main(["--format", "markdown", "doctor", "--format", "json",
+    code = main(["--registry", {str(registry)!r}, "--runtime-root", {str(runtime_root)!r},
+                 "--format", "markdown", "doctor", "--format", "json",
                  "--deep", "--installation-only"])
 assert code == {0 if healthy else 1}
-assert observed == [{{"deep": True, "agent_type": None, "installation_only": True}}]
+assert observed == [{{"deep": True, "agent_type": None, "installation_only": True,
+                    "registry_path": Path({str(registry)!r}),
+                    "runtime_root_override": {str(runtime_root)!r}}}]
 assert json.loads(output.getvalue()) == {{"ok": {healthy!r}, "scope": "installation_only"}}
 """
     completed = run_isolated_script(script)

@@ -38,6 +38,9 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
   const refresh = useCallback(async () => {
     const { agentId, channelId, goalId, scope } = params.current;
     const loaded = await fetchChatHistory({ agentId, channelId, goalId });
+    // The caller may still need its completed read, but a conversation that
+    // was left while it waited no longer owns this hook's visible history.
+    if (params.current.scope !== scope) return loaded;
     cached.current = { scope, history: loaded };
     setState({ scope, history: loaded, reading: false, failed: false });
     return loaded;
@@ -56,11 +59,11 @@ export function useConversationHistory({ agentId, currentAgentId, channelId, goa
       setState({ scope, history: previous, reading: true, failed: false });
       try {
         const loaded = await fetchChatHistory({ agentId, channelId, goalId }, previous ?? undefined);
-        if (cancelled) return;
+        if (cancelled || params.current.scope !== scope) return;
         cached.current = { scope, history: loaded };
         setState({ scope, history: loaded, reading: false, failed: false });
       } catch {
-        if (cancelled) return;
+        if (cancelled || params.current.scope !== scope) return;
         setState({ scope, history: cachedHistory(scope), reading: false, failed: true });
       } finally {
         reading = false;

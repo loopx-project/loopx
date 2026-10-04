@@ -30,9 +30,9 @@
       "invariant": {"decision": "replay_legal", "replay_legal": true, "goal_matches": true, "owner_matches": true, "turn_key_matches": true, "phases_form_ordered_prefix": true, "tombstone_retained": true}
     },
     {
-      "case_id": "stopped-partial-prefix",
-      "invariant_id": "terminal-partial-prefix-is-replayable",
-      "rationale": "A stopped journal may retain a valid partial transaction prefix without reopening execution.",
+      "case_id": "stopped-before-validation",
+      "invariant_id": "stopped-requires-validation-prefix",
+      "rationale": "A stopped journal requires the validated prefix, as enforced by the writer; an earlier prefix is retained but cannot authorize replay.",
       "request": {
         "goal_id": "fixture-goal",
         "agent_id": "fixture-agent",
@@ -54,12 +54,12 @@
           "receipt": {"turn_key": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
         }
       },
-      "invariant": {"decision": "replay_legal", "replay_legal": true, "phases_form_ordered_prefix": true, "tombstone_retained": true}
+      "invariant": {"decision": "replay_blocked", "replay_legal": false, "phases_form_ordered_prefix": true, "tombstone_retained": true}
     },
     {
-      "case_id": "failed-empty-prefix",
-      "invariant_id": "failed-terminal-tombstone-is-retained",
-      "rationale": "A failed journal with an empty ordered prefix is terminal evidence, not an instruction to repeat work.",
+      "case_id": "failed-without-phase",
+      "invariant_id": "failed-requires-next-phase",
+      "rationale": "A failed journal must name its next uncompleted phase; an empty prefix without failed_phase is ambiguous retained history, not replay authority.",
       "request": {
         "goal_id": "fixture-goal",
         "agent_id": "fixture-agent",
@@ -79,7 +79,7 @@
           }
         }
       },
-      "invariant": {"decision": "replay_legal", "replay_legal": true, "phases_form_ordered_prefix": true, "tombstone_retained": true}
+      "invariant": {"decision": "replay_blocked", "replay_legal": false, "phases_form_ordered_prefix": true, "tombstone_retained": true}
     },
     {
       "case_id": "goal-identity-mismatch",

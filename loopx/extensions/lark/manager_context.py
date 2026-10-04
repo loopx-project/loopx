@@ -105,6 +105,7 @@ def _context_candidates(
                 "message_id": message_id,
                 "create_time": str(raw.get("create_time") or "")[:40],
                 "content": content,
+                **{key: str(raw[key]) for key in ("sender_type", "sender_id") if raw.get(key)},
             }
         )
     candidates.sort(key=lambda item: (item["create_time"], item["message_id"]))
@@ -356,7 +357,7 @@ def manager_context_projection(
     return projection, retention
 
 
-def manager_message(text: str, materials: object) -> str:
+def manager_message(text: str, materials: object, *, reply_context: str = "") -> str:
     current = str(text or "").strip()
     context = materials if isinstance(materials, list) else []
     lines = [
@@ -364,6 +365,8 @@ def manager_message(text: str, materials: object) -> str:
         "对已有授权的意图委托使用 context_handoff，直接交给目标 Agent 自主判断并推进，"
         "不要添加确认或直接替它改优先级。"
     ]
+    if reply_context:
+        lines.extend(["", reply_context])
     if context:
         lines.extend(
             [
@@ -376,7 +379,13 @@ def manager_message(text: str, materials: object) -> str:
             if isinstance(item, Mapping):
                 content = " ".join(str(item.get("content") or "").split())
                 if content:
-                    lines.append(f"- [context-only] {content}")
+                    material = {
+                        key: item[key] for key in
+                        ("message_id", "create_time", "sender_type", "sender_id")
+                        if item.get(key)
+                    }
+                    material["content"] = content
+                    lines.append("- [context-only] " + json.dumps(material, ensure_ascii=False))
     lines.extend(["", "已授权用户消息：" + current])
     return "\n".join(lines)
 

@@ -3,11 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .active_state_editing import section_bounds, todo_blocks
-from .contract import (
-    TODO_TASK_CLASS_USER_GATE,
-    normalize_todo_id,
-    require_todo_decision_outcome,
-)
+from .contract import normalize_todo_id
 
 
 def require_completion_decision_outcome(
@@ -16,27 +12,19 @@ def require_completion_decision_outcome(
     *,
     materialized: bool,
 ) -> str | None:
-    is_user_gate = (
-        str((completion_todo or {}).get("role") or "") == "user"
-        and str((completion_todo or {}).get("task_class") or "")
-        == TODO_TASK_CLASS_USER_GATE
-    )
-    if not is_user_gate:
-        if decision_outcome is not None:
-            raise ValueError(
-                "decision_outcome is only valid when completing a user_gate"
-            )
-        return None
-    if decision_outcome is None:
-        raise ValueError(
-            "user_gate completion requires decision_outcome=approve, reject, or cancel"
-        )
-    if not materialized:
-        raise ValueError(
-            "event-projected user_gate completion must first materialize the gate "
-            "in active state so its decision outcome is durable"
-        )
-    return require_todo_decision_outcome(decision_outcome)
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    # The shared plan validates its input even with no dependent rows. Python
+    # transports the locked source fact; it does not own a second outcome rule.
+    try:
+        effect_runtime_result("todo.user_completion.plan", {
+            "schema_version": "todo_user_completion_request_v0",
+            "source": dict(completion_todo or {}), "todos": [],
+            "decision_outcome": decision_outcome, "materialized": materialized,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    return decision_outcome
 
 
 def _find_todo(

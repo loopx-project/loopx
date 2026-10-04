@@ -237,16 +237,21 @@ If the fake violates the real contract, repair test infrastructure before diagno
 
 ## Choose local validation commands by risk
 
-The official fast baseline includes:
+The official contribution baseline (see the [testing and quality guide](/loopx/docs/development/testing-and-quality/))
+starts with `uv sync --extra test` and runs inside the checkout with the selected interpreter:
 
 ```bash
-python -m pip install -e ".[test]"
-python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
-python -m mypy
-python examples/control_plane/cli-output-budget-regression-smoke.py
-python -m pytest -q
+uv sync --extra test
+uv run --extra test python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
+uv run --extra test python -m mypy
+uv run --extra test python examples/control_plane/cli-output-budget-regression-smoke.py
+uv run --extra test python -m pytest -q
 git diff --check
 ```
+
+An explicit environment that already has this checkout installed may run the same `python -m ...`
+commands directly; a bare `python` may point at another installation, so confirm `sys.executable` and
+`loopx --version` first.
 
 During development, start closer to the change:
 
@@ -343,7 +348,7 @@ Git hygiene is part of the public/private contract.
 | Product code | Protocol policy, writer, projection | Commit when required by this PR |
 | Public docs | Protocol, contributor guide | Commit when it explains current behavior |
 | Durable validation | Contract test, public-safe smoke | Commit when it protects the rule |
-| Local/private state | `.loopx/`, `.codex/goals/`, live state | Never commit |
+| Local/private state | `.loopx/`, `.loopx/goals/`, live state | Never commit |
 | Generated/raw evidence | Logs, transcripts, verifier tails | Never commit |
 | Unrelated artifact | Another experiment or formatter churn | Keep outside the PR |
 
@@ -580,7 +585,7 @@ Before opening the PR, confirm:
 - [ ] Fakes, fixtures, and snapshots do not invent product semantics.
 - [ ] Validation failures are classified accurately.
 - [ ] Every changed path is classified and staged explicitly.
-- [ ] `.loopx/`, `.codex/goals/`, live state, credentials, private links, raw logs, and machine paths are absent.
+- [ ] `.loopx/`, `.loopx/goals/`, live state, credentials, private links, raw logs, and machine paths are absent.
 - [ ] Commits and PR text are organized around protocol results, not function lists.
 - [ ] Compatibility, recovery, unverified items, and owner Gates are explicit.
 - [ ] The PR links public work and does not duplicate maintainer-owned execution.

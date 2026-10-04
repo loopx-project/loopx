@@ -83,11 +83,25 @@ def capability_configuration_editor(
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
     definitions: dict[str, dict[str, Any]] = {
+        "goal_capability_organization": {
+            "supported_scopes": ["goal"], "writable_scopes": ["goal"],
+            "fields": [
+                _field("mode", "Improvement intent", "select", options=["off", "bounded"], required=True,
+                       description="Advisory discovery only; individual capability owners still decide enablement and admission."),
+                _field("discovery_budget_minutes", "Discovery budget (minutes)", "number", minimum=1, maximum=30, required=True),
+                _field("max_trials", "Maximum proposed trials", "number", minimum=0, maximum=2, required=True),
+            ],
+        },
         "goal_storage": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
-            "fields": [_field("new_goal_provider", "New Goal storage target (after promotion)", "select",
+            "fields": [_field("new_goal_provider", "New Goal storage provider", "select",
                               options=["file", "sqlite"], required=True,
-                              description="Fixed at creation. Existing Goals need a separate backed-up migration; this setting does not promote them.")],
+                              description="Fixed at creation. Existing Goals need a separate backed-up migration."),
+                       _field("canonical_creation", "Create canonical authority", "boolean", required=True,
+                              description="Explicit opt-in for future Goals. Disabled retains the post-promotion target behavior."),
+                       _field("new_goal_handoff_mode", "New Goal execution policy", "select",
+                              options=["soft_claim", "hard_lease"], required=True,
+                              description="Used only with canonical creation. Agents inherit the Goal policy; this grants no tool permissions.")],
         },
         "todo_replan_cadence": {
             "supported_scopes": ["machine", "goal"],

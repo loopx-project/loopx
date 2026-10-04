@@ -164,6 +164,7 @@ class _QuotaDecisionPreparation:
     replan_obligation: dict[str, Any] | None
     replan_scope: dict[str, Any]
     goal_frontier_projection: dict[str, Any]
+    latest_replan_ack: dict[str, Any] | None
     projection_gap: dict[str, Any] | None
     boundary_projection_repair: dict[str, Any] | None
     include_scheduler_detail: bool
@@ -182,6 +183,7 @@ def _preserve_receipt_bound_replan_obligation(
     replan_obligation: Mapping[str, Any] | None,
     receipt_bound_replan_obligation_id: str | None,
     *, guard_scoped: bool = False,
+    agent_id: str | None = None,
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
@@ -195,6 +197,7 @@ def _preserve_receipt_bound_replan_obligation(
             "operation": "receipt_bound_obligation",
             "current_obligation": dict(replan_obligation) if replan_obligation is not None else None,
             "selected_obligation_id": preserved_replan_id, "guard_scoped": guard_scoped,
+            "agent_id": agent_id,
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
         })
@@ -837,6 +840,7 @@ def _prepare_quota_should_run_item(
             goal_frontier_context.get("replan_obligation"),
             receipt_bound_replan_obligation_id,
             guard_scoped=receipt_bound_replan_guard_scoped,
+            agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
             transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
         )
@@ -930,6 +934,7 @@ def _prepare_quota_should_run_item(
         replan_obligation=replan_obligation,
         replan_scope=replan_scope,
         goal_frontier_projection=goal_frontier_projection,
+        latest_replan_ack=goal_frontier_context.get("latest_replan_ack"),
         projection_gap=projection_gap,
         boundary_projection_repair=boundary_projection_repair,
         include_scheduler_detail=include_scheduler_detail,

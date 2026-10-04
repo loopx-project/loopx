@@ -43,8 +43,10 @@ BUILTIN_IDS = [
     "public-safe-outbound",
     "connector-registry",
     "external-evidence-research",
+    "performance-diagnosis",
     "reliability-diagnostics",
     "progress-review-sentinel",
+    "goal-capability-organization",
 ]
 
 

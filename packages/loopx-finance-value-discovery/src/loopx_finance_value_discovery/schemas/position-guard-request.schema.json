@@ -1,0 +1,713 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "position_guard_request_v0"
+      ]
+    },
+    "extension_id": {
+      "enum": [
+        "loopx-finance-value-discovery"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "evaluate_finance_position_guard"
+      ]
+    },
+    "invocation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "context_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "position",
+              "orders",
+              "fills",
+              "monitor"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "kind",
+          "ref",
+          "digest"
+        ]
+      },
+      "maxItems": 4,
+      "minItems": 4
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "max_age_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "max_skew_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60
+        },
+        "trade": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "trade_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "target_key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "asset": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "account_scope_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "side": {
+              "enum": [
+                "long",
+                "short"
+              ]
+            },
+            "entry_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "entry_quantity": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+              "not": {
+                "pattern": "^0(\\.0+)?$"
+              }
+            },
+            "entry_price": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+              "not": {
+                "pattern": "^0(\\.0+)?$"
+              }
+            },
+            "opening_fill_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "max_hold_until": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "review_interval_seconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400
+            },
+            "stop_price": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+              "not": {
+                "pattern": "^0(\\.0+)?$"
+              }
+            },
+            "take_profit_price": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+              "not": {
+                "pattern": "^0(\\.0+)?$"
+              }
+            },
+            "cash_currency": {
+              "enum": [
+                "USD",
+                "USDC",
+                "USDT"
+              ]
+            },
+            "max_loss_cash": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+              "not": {
+                "pattern": "^0(\\.0+)?$"
+              }
+            },
+            "exit_cost_reserve_cash": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+            },
+            "financial_authority": {
+              "enum": [
+                "human_final_submit"
+              ]
+            },
+            "payoff_model": {
+              "const": "linear_quote_cash"
+            },
+            "quantity_unit": {
+              "const": "base_asset"
+            },
+            "unit_multiplier": {
+              "const": "1"
+            },
+            "price_currency": {
+              "enum": [
+                "USD",
+                "USDC",
+                "USDT"
+              ]
+            }
+          },
+          "required": [
+            "trade_id",
+            "target_key",
+            "asset",
+            "account_scope_digest",
+            "side",
+            "entry_at",
+            "entry_quantity",
+            "entry_price",
+            "opening_fill_ids",
+            "max_hold_until",
+            "review_interval_seconds",
+            "stop_price",
+            "take_profit_price",
+            "cash_currency",
+            "max_loss_cash",
+            "exit_cost_reserve_cash",
+            "financial_authority",
+            "payoff_model",
+            "quantity_unit",
+            "unit_multiplier",
+            "price_currency"
+          ]
+        },
+        "receipts": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "position"
+                    ]
+                  },
+                  "receipt_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "trade_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "asset": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "account_scope_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  },
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "quantity": {
+                        "type": "string",
+                        "maxLength": 50,
+                        "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+                      },
+                      "side": {
+                        "enum": [
+                          "long",
+                          "short"
+                        ]
+                      },
+                      "trigger_reference_price": {
+                        "type": "string",
+                        "maxLength": 50,
+                        "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+                        "not": {
+                          "pattern": "^0(\\.0+)?$"
+                        }
+                      },
+                      "trigger_basis": {
+                        "enum": [
+                          "mark",
+                          "last",
+                          "index"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "quantity",
+                      "side",
+                      "trigger_reference_price",
+                      "trigger_basis"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "receipt_id",
+                  "trade_id",
+                  "asset",
+                  "account_scope_digest",
+                  "observed_at",
+                  "complete",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "orders"
+                    ]
+                  },
+                  "receipt_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "trade_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "asset": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "account_scope_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  },
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "orders": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "order_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                            },
+                            "kind": {
+                              "enum": [
+                                "stop_loss",
+                                "take_profit",
+                                "other"
+                              ]
+                            },
+                            "side": {
+                              "enum": [
+                                "buy",
+                                "sell"
+                              ]
+                            },
+                            "remaining_quantity": {
+                              "type": "string",
+                              "maxLength": 50,
+                              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+                              "not": {
+                                "pattern": "^0(\\.0+)?$"
+                              }
+                            },
+                            "reduce_only": {
+                              "type": "boolean"
+                            },
+                            "trigger_price": {
+                              "type": "string",
+                              "maxLength": 50,
+                              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+                              "not": {
+                                "pattern": "^0(\\.0+)?$"
+                              }
+                            },
+                            "trigger_basis": {
+                              "enum": [
+                                "mark",
+                                "last",
+                                "index"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "order_id",
+                            "kind",
+                            "side",
+                            "remaining_quantity",
+                            "reduce_only",
+                            "trigger_price",
+                            "trigger_basis"
+                          ]
+                        },
+                        "maxItems": 64
+                      }
+                    },
+                    "required": [
+                      "orders"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "receipt_id",
+                  "trade_id",
+                  "asset",
+                  "account_scope_digest",
+                  "observed_at",
+                  "complete",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "fills"
+                    ]
+                  },
+                  "receipt_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "trade_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "asset": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "account_scope_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  },
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "fills": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "fill_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                            },
+                            "role": {
+                              "enum": [
+                                "entry",
+                                "exit"
+                              ]
+                            },
+                            "quantity": {
+                              "type": "string",
+                              "maxLength": 50,
+                              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+                              "not": {
+                                "pattern": "^0(\\.0+)?$"
+                              }
+                            },
+                            "price": {
+                              "type": "string",
+                              "maxLength": 50,
+                              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$",
+                              "not": {
+                                "pattern": "^0(\\.0+)?$"
+                              }
+                            },
+                            "fee_cash": {
+                              "type": "string",
+                              "maxLength": 51,
+                              "pattern": "^-?(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+                            },
+                            "filled_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          },
+                          "required": [
+                            "fill_id",
+                            "role",
+                            "quantity",
+                            "price",
+                            "fee_cash",
+                            "filled_at"
+                          ]
+                        },
+                        "maxItems": 1000
+                      },
+                      "history_complete": {
+                        "type": "boolean"
+                      },
+                      "costs_complete": {
+                        "type": "boolean"
+                      },
+                      "funding_paid_cash": {
+                        "type": "string",
+                        "maxLength": 51,
+                        "pattern": "^-?(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+                      }
+                    },
+                    "required": [
+                      "fills",
+                      "history_complete",
+                      "costs_complete",
+                      "funding_paid_cash"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "receipt_id",
+                  "trade_id",
+                  "asset",
+                  "account_scope_digest",
+                  "observed_at",
+                  "complete",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "monitor"
+                    ]
+                  },
+                  "receipt_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "trade_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "asset": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "account_scope_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "observed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  },
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "todo_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      "task_class": {
+                        "enum": [
+                          "continuous_monitor",
+                          "advancement_task"
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "open",
+                          "done",
+                          "blocked",
+                          "deferred"
+                        ]
+                      },
+                      "target_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      "claimed_by": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      "next_due_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "expires_at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "todo_id",
+                      "task_class",
+                      "status",
+                      "target_key",
+                      "claimed_by",
+                      "next_due_at",
+                      "expires_at"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "receipt_id",
+                  "trade_id",
+                  "asset",
+                  "account_scope_digest",
+                  "observed_at",
+                  "complete",
+                  "data"
+                ]
+              }
+            ]
+          },
+          "maxItems": 4,
+          "minItems": 4
+        }
+      },
+      "required": [
+        "decision_at",
+        "max_age_seconds",
+        "max_skew_seconds",
+        "trade",
+        "receipts"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "extension_id",
+    "operation",
+    "invocation_id",
+    "context_refs",
+    "input"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopx.dev/schemas/finance/position-guard-request-v0"
+}

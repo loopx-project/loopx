@@ -103,7 +103,9 @@ def test_browser_operation_fixture_needs_no_test_framework(tmp_path: Path) -> No
         check=True,
     )
     fixtures = json.loads(result.stdout)
-    assert list(fixtures) == ["confirmed", "waiting", "unknown", "reconciled"]
+    assert list(fixtures) == [
+        "prepared", "delivered", "confirmed", "waiting", "unknown", "reconciled"
+    ]
     for proposal in fixtures.values():
         assert proposal["normalized_parameters"]["goal_id"] == "product-release"
         assert proposal["normalized_parameters"]["executor"]["kind"] == "managed_turn"
@@ -182,6 +184,71 @@ def test_owned_managed_tool_uses_canonical_approval_once_without_desktop_binding
     assert recovered["ok"] is True and recovered["needs_reconciliation"] is False
 
 
+@pytest.mark.parametrize("selector", [None, {"host_surface": "codex-app", "thread_id": "source"}])
+def test_non_managed_prepare_rejects_source_selector_even_when_null(tmp_path: Path, selector) -> None:
+    service, store = _service(tmp_path)
+    request = _request()
+    request["normalized_parameters"]["source_route"] = selector
+    with pytest.raises(ValueError, match="source route selection requires a managed executor"):
+        service.preview(request)
+    assert store.list() == []
+
+
+def test_non_managed_prepare_does_not_mount_managed_source_resolution(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane import effect_runtime
+
+    original = effect_runtime.effect_runtime_result
+    calls = []
+
+    def record(method, *args, **kwargs):
+        calls.append(method)
+        return original(method, *args, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", record)
+    service, store = _service(tmp_path)
+    proposal = service.preview(_request())
+    assert "source_route" not in store.load(proposal["proposal_id"])["normalized_parameters"]
+    assert "operation.source_route.resolve" not in calls
+
+
+def test_managed_prepare_selects_registered_return_audience_without_rebinding_executor(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+
+    service, store = _service(tmp_path)
+    registry = json.loads(service.registry_path.read_text())
+    route = {"agent_id": "finance-fixture-agent", "host_surface": "codex-app", "thread_id": "source-current"}
+    registry["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        route, {**route, "thread_id": "source-historical"},
+    ]
+    service.registry_path.write_text(json.dumps(registry))
+    original = _managed_handler(service, store)
+    request = _request()
+    request["normalized_parameters"].pop("executor")
+    request["normalized_parameters"]["projection"]["simulated"] = False
+    native = {"thread_id": "owned-managed-thread", "host_turn_id": "native-turn-1"}
+    rejected = original("loopx_operation", {"action": "prepare", "request": request}, native)
+    assert rejected["error"] == "operation_source_route_ambiguous"
+    assert store.list() == []
+    selector = {key: route[key] for key in ("host_surface", "thread_id")}
+    selected = operation_tool_handler(
+        runtime_root=store.root.parent.parent, registry_path=service.registry_path,
+        lineage={"goal_id": GOAL_ID, "agent_id": "finance-fixture-agent", "todo_id": "todo-managed"},
+        session_id=native["thread_id"], profile_digest="c" * 64, model="test-model",
+        reasoning_effort="xhigh", source_route=selector,
+    )
+    model_override = {**request, "normalized_parameters": {**request["normalized_parameters"],
+        "source_route": {**selector, "thread_id": "source-historical"}}}
+    assert selected("loopx_operation", {"action": "prepare", "request": model_override}, native)["ok"] is False
+    prepared = selected("loopx_operation", {"action": "prepare", "request": request}, native)
+    assert prepared["ok"] and not prepared["execution_allowed"]
+    proposal = prepared["proposal"]
+    assert proposal["normalized_parameters"]["source_route"] == {"goal_id": GOAL_ID, **route}
+    assert proposal["normalized_parameters"]["executor"]["session_id"] == native["thread_id"]
+    assert not selected("loopx_operation", {"action": "consume", "proposal_id": proposal["proposal_id"],
+        "consumption_id": "not-approved"}, native)["ok"]
+    assert len(store.list()) == 1
+
+
 def test_managed_pending_reuses_registered_agent_and_goal_instance_scope(
     tmp_path: Path,
 ) -> None:
@@ -255,8 +322,8 @@ def test_managed_replacement_has_evidence_only_access_and_never_inherits_executi
     from contextlib import contextmanager
     from threading import Event, current_thread
     from loopx.control_plane.collaboration import operation_handoff
-    from loopx.control_plane.turn_driver import codex_cli
-    from loopx.control_plane.turn_driver.codex_cli import _discard_codex_cli_session
+    from loopx.control_plane.turn_driver import codex_sessions
+    from loopx.control_plane.turn_driver.codex_sessions import _discard_codex_cli_session
 
     service, store = _service(tmp_path)
     original = _managed_handler(service, store)
@@ -327,7 +394,7 @@ def test_managed_replacement_has_evidence_only_access_and_never_inherits_executi
         "reconciles_outcome_digest": reported["outcome_digest"],
     }
     attempted, acquired = Event(), Event()
-    original_lock = codex_cli.exclusive_file_lock
+    original_lock = codex_sessions.exclusive_file_lock
     original_binding = operation_handoff._binding
     original_write = ChatActionStore._write
     commits = []
@@ -357,7 +424,7 @@ def test_managed_replacement_has_evidence_only_access_and_never_inherits_executi
         original_write(self, payload)
         commits.append("report")
 
-    monkeypatch.setattr(codex_cli, "exclusive_file_lock", observed_lock)
+    monkeypatch.setattr(codex_sessions, "exclusive_file_lock", observed_lock)
     monkeypatch.setattr(ChatActionStore, "_write", record_report)
     with ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="managed-revoker"
@@ -439,7 +506,7 @@ def test_managed_tool_rejects_actor_injection_native_mismatch_and_revoked_profil
         decision="confirm",
         confirmation=_confirmation(delivered),
     )
-    from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     _store_codex_cli_session(
         store.root.parent.parent,

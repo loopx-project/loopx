@@ -34,6 +34,7 @@ from loopx.control_plane.turn_driver.executor import BuiltInHostError
 from loopx.control_plane.turn_driver.subagent_execution_topology import (
     OPAQUE_REF_PATTERN,
 )
+from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
 
 
 FAILURE_ENVELOPE_FIXTURES = (
@@ -113,8 +114,7 @@ def _request(
 def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
     executable = tmp_path / "fake-codex"
     log_path = tmp_path / "codex-argv.jsonl"
-    executable.write_text(
-        """#!/usr/bin/env python3
+    source = """#!/usr/bin/env python3
 import json
 import os
 import pathlib
@@ -168,11 +168,14 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
     raise SystemExit(9)
 if os.environ.get("FAKE_CODEX_CHILD_MARKER"):
     marker = os.environ["FAKE_CODEX_CHILD_MARKER"]
-    child = subprocess.Popen([sys.executable, "-c",
-        "import pathlib,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-        "p=pathlib.Path(" + repr(marker) + ");n=0\\n"
-        "while True:\\n p.write_text(str(n));n+=1;time.sleep(.01)"])
-    pathlib.Path(marker + ".pid").write_text(str(child.pid))
+    child = subprocess.Popen([
+        sys.executable,
+        "-c",
+        __COUNTER_PROCESS_SOURCE__,
+        marker,
+        marker + ".pid",
+        ".01",
+    ])
     while not pathlib.Path(marker).exists():
         time.sleep(.01)
 if os.environ.get("FAKE_CODEX_SLEEP"):
@@ -191,7 +194,12 @@ output_path.write_text(json.dumps({
     "vision_unchanged_reason": "The fixture objective remains unchanged.",
     "summary": "One public fixture advanced."
 }), encoding="utf-8")
-""",
+"""
+    executable.write_text(
+        source.replace(
+            "__COUNTER_PROCESS_SOURCE__",
+            repr(COUNTER_PROCESS_SOURCE),
+        ),
         encoding="utf-8",
     )
     executable.chmod(0o755)
@@ -502,6 +510,66 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
     persisted = session_paths[0].read_text(encoding="utf-8")
     assert "raw_trajectory" not in persisted
     assert "private_material" not in persisted
+
+
+@pytest.mark.parametrize("scope", ["todo", "agent"])
+def test_codex_session_scope_across_todos(tmp_path, monkeypatch, scope):
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    project = tmp_path / "project"
+    project.mkdir()
+    runtime_root = tmp_path / "runtime"
+    first = _request()
+    first["session"]["context_policy"] = {"mode": "resume", "binding_scope": scope}
+    run_codex_cli_host(first, runtime_root=runtime_root, project=project,
+                       codex_bin=str(executable), timeout_seconds=5)
+    second = _request(turn_key="sha256:" + "b" * 64,
+                      session_action="resume" if scope == "agent" else "start_new")
+    second["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo_successor"
+    second["session"]["context_policy"] = {"mode": "resume", "binding_scope": scope}
+    run_codex_cli_host(second, runtime_root=runtime_root, project=project,
+                       codex_bin=str(executable), timeout_seconds=5)
+    calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert ("resume" in calls[1]) is (scope == "agent")
+    if scope == "agent":
+        assert "session-fixture-0001" in calls[1]
+    assert len(list(runtime_root.glob("goals/*/turn-sessions/*.json"))) == (1 if scope == "agent" else 2)
+
+
+def test_agent_resume_rejects_changed_profile_before_launch(tmp_path, monkeypatch):
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    request = _request()
+    request["session"]["context_policy"] = {"mode": "resume", "binding_scope": "agent"}
+    options = dict(runtime_root=tmp_path / "runtime", project=tmp_path, codex_bin=str(executable))
+    run_codex_cli_host(request, model="fixture-model", **options)
+    request["session"]["action"] = "resume"
+    with pytest.raises(ValueError, match="profile changed"):
+        run_codex_cli_host(request, model="another-model", **options)
+    assert len(log.read_text().splitlines()) == 1
+
+
+def test_agent_binding_still_requires_exact_goal_lifetime(tmp_path, monkeypatch):
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    admission = _source_admission(tmp_path)
+    request = _request()
+    request["goal_ref"] = SOURCE_GOAL_REF
+    request["session"]["context_policy"] = {"mode": "resume", "binding_scope": "agent"}
+    run_codex_cli_host(request, runtime_root=tmp_path / "runtime", project=tmp_path,
+                       codex_bin=str(executable), goal_admission=admission)
+    with source_session_registry_transaction(admission.registry_path, operation="fixture_new_lifetime") as transaction:
+        registry = transaction.payload_copy()
+        registry["goals"][0]["goal_instance_id"] = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        transaction.commit(registry)
+    with pytest.raises(RuntimeError, match="first-party Host runtime rejected"):
+        codex_cli_session_binding(tmp_path / "runtime", request["turn_envelope"],
+                                  session_scope="agent", goal_admission=admission)
+    request["session"]["context_policy"]["mode"] = "fresh"
+    with pytest.raises(RuntimeError, match="first-party Host runtime rejected"):
+        run_codex_cli_host(request, runtime_root=tmp_path / "runtime", project=tmp_path,
+                           codex_bin=str(executable), goal_admission=admission)
+    assert len(log.read_text().splitlines()) == 1
 
 
 def test_codex_source_session_descriptor_persists_exact_goal_ref(

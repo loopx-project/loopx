@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from loopx.status import autonomous_replan_obligation_from_runs
+from loopx.status import (
+    autonomous_replan_obligation_from_runs,
+    autonomous_replan_periodic_review_from_runs,
+)
 from loopx.control_plane.work_items.progress_observation import typed_progress_repeat_trigger
 
 AGENT = "history-worker"
@@ -80,6 +83,28 @@ def test_twenty_distinct_turns_retain_periodic_identity() -> None:
     assert trigger["latest_generated_at"] == rows[0]["generated_at"]
     assert trigger["oldest_counted_generated_at"] == rows[-1]["generated_at"]
     assert obligation(rows) == first
+
+
+def test_periodic_review_ignores_quiet_polls_but_counts_material_transitions() -> None:
+    quiet = [
+        {**monitor(n, turn=f"quiet-{n}"),
+         "monitor_target": {"target_id": "watch", "agent_id": AGENT,
+                            "monitor_mode": ("due_monitor_observed_without_material_transition"
+                                             if n > 38 else "monitor_quiet_until_material_transition")},
+         "monitor_event": {"material_change": False}}
+        for n in range(40, 20, -1)
+    ]
+    work = [run(n, turn=f"work-{n}") for n in range(19, 0, -1)]
+
+    def periodic(rows: list[dict]) -> dict | None:
+        return autonomous_replan_periodic_review_from_runs(rows, agent_todos=None)
+    assert periodic(quiet) is None
+    assert periodic(quiet + work) is None
+    material = {**monitor(41, turn="material-41"),
+                "monitor_target": {"target_id": "watch", "agent_id": AGENT,
+                                   "monitor_mode": "due_monitor_material_transition"},
+                "monitor_event": {"material_change": True}}
+    assert periodic([material] + quiet + work)["triggers"][0]["kind"] == "periodic_review_due"
 
 
 def test_six_distinct_polls_retain_dead_monitor_contract() -> None:

@@ -59,6 +59,8 @@ export async function executeHandoffModeSet(store: AuthorityStore, raw: HandoffM
     const previous = await receipt.read(store);
     if (previous) return previous;
   }
+  if (input.requested_mode === "legacy") return failure("handoff_mode_retired",
+    "legacy is a historical source mode; select soft_claim or hard_lease", "decision_rejection");
   const loaded = await store.loadAuthority();
   if (loaded.status !== "loaded") return {schema_version: RESULT_SCHEMA, ...loaded, changed: false};
   let decision: JsonObject;

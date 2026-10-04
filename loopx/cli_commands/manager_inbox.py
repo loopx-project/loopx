@@ -50,7 +50,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--brief-file", help="For request: collaboration_brief_v0 JSON file.")
     parser.add_argument("--parent-request-id", help="For request: an inbox request received by the sender.")
     parser.add_argument("--goal-id")
-    parser.add_argument("--agent-id")
+    parser.add_argument("--agent-id", help="Agent identity; for delivery grants, omit to cover all current/future Agents in --goal-id.")
     parser.add_argument("--channel-id")
     parser.add_argument("--ssh-host")
     parser.add_argument("--read-goal-id", action="append", default=[])
@@ -60,6 +60,8 @@ def register_manager_inbox(subparsers, add_format):
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
     parser.add_argument("--reply-text")
+    parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
+    parser.add_argument("--result-key", help="For acknowledge-return: the exact peer result read; defaults to the initial conclusion.")
     parser.add_argument("--related-todo-id", action="append", default=[])
     parser.add_argument("--evidence-id", action="append", default=[])
     parser.add_argument("--offset", type=int, default=0)
@@ -72,6 +74,10 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        if getattr(args, "update_id", None) is not None and args.manager_inbox_action != "report":
+            raise ValueError("--update-id is only supported for report")
+        if getattr(args, "result_key", None) is not None and args.manager_inbox_action != "acknowledge-return":
+            raise ValueError("--result-key is only supported for acknowledge-return")
         cursor = getattr(args, "cursor", None)
         operation_cursor = getattr(args, "operation_cursor", None)
         if cursor is not None and args.manager_inbox_action != "read":
@@ -100,7 +106,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 registry_path,
                 channel=args.channel_id or "",
                 goal_id=args.goal_id or "",
-                agent_id=args.agent_id or "",
+                agent_id=args.agent_id,
                 grant=args.manager_inbox_action == "grant-delivery-target",
                 execute=args.execute,
             )
@@ -161,13 +167,16 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.agent_id,
                 args.request_id,
                 registry=registry_path,
+                result_key=getattr(args, "result_key", None) or "conclusion",
             )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor)
-            result["followthrough"] = (
-                "After reading and deciding, associate Core work with manager-inbox link. Then use manager-inbox report --phase conclusion --reply-text to return this request's concrete result, replan decision, or explicit blocker/defer reason to its original audience automatically. Use optional --phase decision only for meaningful interim news during longer work. Adoption/linking alone is not a completed exchange. Do not wait for the owner to ask again. Write audience-ready text, not private deliberation."
+            result["followthrough"] += (
+                " CLI: record assessment with manager-inbox acknowledge; optionally associate existing work "
+                "with manager-inbox link. Return audience-ready results with manager-inbox report "
+                "--phase conclusion --reply-text; use --phase decision for meaningful interim news."
             )
         elif args.manager_inbox_action == "report":
             from ..capabilities.manager_context.roundtrip import report
@@ -179,10 +188,11 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id or "",
                 args.phase,
                 args.reply_text or "",
+                update_id=getattr(args, "update_id", None),
                 registry=registry_path,
             )
         elif args.manager_inbox_action == "link":
-            from ..capabilities.manager_context.tracking import link
+            from ..control_plane.collaboration.links import link
 
             result = link(
                 runtime_root,

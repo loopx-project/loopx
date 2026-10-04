@@ -206,10 +206,12 @@ def read_remote(
         argv += ["--goal-id", gid]
     if args.get("view") == "agents":
         argv += ["--query", args.get("query", "")]
+    if args.get("todo_id"):
+        argv += ["--todo-id", args["todo_id"]]
     if args.get("include_stopped"):
         argv += ["--include-stopped"]
     command = (
-        'exec "$HOME/.local/bin/loopx" --registry "$HOME/.codex/loopx/registry.global.json" --runtime-root "$HOME/.codex/loopx" --format json '
+        'exec "$HOME/.local/bin/loopx" --registry @host-global --format json '
         + shlex.join(argv)
     )
     ssh = [

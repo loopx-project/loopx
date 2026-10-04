@@ -13,6 +13,9 @@ from loopx.capabilities.multi_subagent.native_child_receipts import (
     native_child_activity,
     record_native_child,
 )
+from loopx.control_plane.projects.registry_codec import (
+    source_session_registry_transaction,
+)
 from loopx.rollout_event_log import (
     append_rollout_event,
     build_rollout_event,
@@ -24,9 +27,15 @@ from loopx.rollout_event_log import (
 GOAL = "native-child-fixture"
 AGENT = "generic-coordinator"
 TURN = "turn-native-1"
+INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 
-def _admit(runtime_root: Path) -> None:
+def _admit(
+    runtime_root: Path,
+    *,
+    goal_ref: dict[str, str] | None = None,
+) -> None:
     append_rollout_event(
         rollout_event_log_path(runtime_root, GOAL),
         build_rollout_event(
@@ -34,6 +43,7 @@ def _admit(runtime_root: Path) -> None:
             run_id=TURN, todo_id="todo_native_1", status="normal_run",
             details={"todo_id": "todo_native_1",
                      "settlement_effect_id": f"{GOAL}:{AGENT}:todo_native_1:{TURN}"},
+            goal_ref=goal_ref,
         ),
     )
 
@@ -45,6 +55,84 @@ def _record(runtime_root: Path, operation_id: str, *, stage: str, outcome: str,
         turn_instance_id=TURN, operation_id=operation_id, configured_limit=6,
         stage=stage, outcome=outcome, execute=True, **kwargs,
     )
+
+
+def _write_source_registry(
+    registry_path: Path,
+    runtime_root: Path,
+    instance_id: str,
+) -> None:
+    payload = {
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "common_runtime_root": str(runtime_root),
+        "projects": [],
+        "goals": [
+            {
+                "id": GOAL,
+                "goal_instance_id": instance_id,
+                "status": "active",
+                "execution_authority": False,
+            }
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+        "retired_goal_instances": [],
+    }
+    with source_session_registry_transaction(
+        registry_path,
+        operation="native_child_goal_instance_test",
+        create=lambda: payload,
+    ) as transaction:
+        transaction.commit(payload)
+
+
+def test_native_child_receipts_are_partitioned_by_exact_goal_owner(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    goal_ref_a = {"goal_id": GOAL, "goal_instance_id": INSTANCE_A}
+    goal_ref_b = {"goal_id": GOAL, "goal_instance_id": INSTANCE_B}
+    _admit(runtime, goal_ref=goal_ref_a)
+    _admit(runtime, goal_ref=goal_ref_b)
+    _write_source_registry(registry, runtime, INSTANCE_B)
+
+    result = record_native_child(
+        runtime_root=runtime,
+        registry_path=registry,
+        goal_ref=goal_ref_b,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        turn_instance_id=TURN,
+        operation_id="op-b",
+        configured_limit=6,
+        stage="decision",
+        operation="spawn",
+        outcome="started",
+        entrypoint_id="generic_host",
+        execute=True,
+    )
+    assert result["native_child_activity"]["operation_count"] == 1
+    events = load_rollout_events(rollout_event_log_path(runtime, GOAL))
+    assert events[-1]["goal_ref"] == goal_ref_b
+    assert native_child_activity(
+        events,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        turn_instance_id=TURN,
+        configured_limit=6,
+        goal_ref=goal_ref_a,
+    )["operation_count"] == 0
+    assert native_child_activity(
+        events,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        turn_instance_id=TURN,
+        configured_limit=6,
+    )["operation_count"] == 0
 
 
 def test_generic_report_adoption_is_idempotent_and_survives_restart(tmp_path: Path):

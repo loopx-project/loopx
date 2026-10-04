@@ -1,3 +1,4 @@
+import {registerHandoffModeMigrationConformance} from "./handoff_mode_migration_conformance.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -33,6 +34,32 @@ function intercept(store: AuthorityStore, commit: AuthorityStore["commitAuthorit
 }
 
 export function registerHandoffModeConformance(provider: string, factory: AuthorityStoreConformanceFactory) {
+  registerHandoffModeMigrationConformance(provider, factory);
+  test(`${provider}: retired legacy intent rejects new writes but preserves an original receipt replay`, async t => {
+    const {store} = await factory(t);
+    await seed(store);
+    const original = {...request, operation_id: "historical-legacy", requested_mode: "legacy"};
+    const before = await head(store);
+    // A valid pre-retirement receipt is historical input, not produced by the
+    // implementation under test. Recovery must never reinterpret it as a grant.
+    const decision = {goal_id: original.goal_id, operation_id: original.operation_id,
+      previous_mode: "hard_lease", previous_mode_valid: true, handoff_mode: "legacy", changed: true};
+    assert.equal((await store.commitAuthority({operation_id: original.operation_id,
+      expected_provider_revision: before.provider_revision, next_projection: {...before.head, handoff_mode: "legacy"},
+      events: [{schema_version: "loopx_handoff_mode_changed_v0", ...decision}], receipts: [{
+        schema_version: "loopx_coordination_handoff_mode_receipt_v0", goal_id: original.goal_id,
+        operation_id: original.operation_id,
+        request_sha256: canonicalAuthoritySha256({goal_id: original.goal_id, requested_mode: "legacy"}), decision}]})).status, "applied");
+    const rejected = await executeHandoffModeSet(store, {...original, operation_id: "new-legacy"});
+    assert.equal(rejected.reason_code, "handoff_mode_retired");
+    assert.equal((await store.readReceipt("new-legacy")).status, "missing");
+    assert.equal((await executeHandoffModeSet(store, {...request, operation_id: "new-hard", requested_mode: "hard_lease"})).status, "applied");
+    const later = await head(store);
+    const replay = await executeHandoffModeSet(store, original);
+    assert.equal(replay.status, "replayed");
+    assert.equal(replay.changed, false);
+    assert.deepEqual(await head(store), later);
+  });
   test(`${provider}: mode transition preserves the large projection and seals replay, including no-op`, async t => {
     const {store, contender} = await factory(t);
     await seed(store);
@@ -50,7 +77,7 @@ export function registerHandoffModeConformance(provider: string, factory: Author
     const unchanged = await executeHandoffModeSet(store, noop);
     assert.equal(unchanged.changed, false);
     assert.equal((await store.readReceipt(noop.operation_id)).status, "found");
-    assert.equal((await executeHandoffModeSet(store, {...request, operation_id: "later-mode", requested_mode: "legacy"})).status, "applied");
+    assert.equal((await executeHandoffModeSet(store, {...request, operation_id: "later-mode", requested_mode: "hard_lease"})).status, "applied");
     const later = await head(store);
     for (const retry of [request, noop]) {
       const replay = await executeHandoffModeSet(contender, {...retry, observed_at: "2028-01-01T00:00:00Z"});

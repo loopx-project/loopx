@@ -82,6 +82,7 @@ def load_requested_quota_action_selection(
     *,
     runtime_root: Path,
     turn_instance_id: str | None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> RequestedQuotaActionSelection:
     requested_todo_id = _requested_quota_action_todo_id(args)
     if not turn_instance_id:
@@ -98,6 +99,7 @@ def load_requested_quota_action_selection(
         goal_id=args.goal_id,
         agent_id=args.agent_id,
         turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
     )
     if not existing:
         return RequestedQuotaActionSelection(
@@ -234,6 +236,7 @@ def reconcile_requested_quota_action_selection(
     registry_path: Path,
     context: QuotaCommandContext,
     selection: RequestedQuotaActionSelection,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> ActionSelectionPreflightResult:
     recovery = _requested_quota_action_selection_preflight(
         payload,
@@ -265,6 +268,7 @@ def reconcile_requested_quota_action_selection(
         scheduler_args=render_scheduler_execution_args(
             scheduler_execution_context=context.scheduler_context
         ),
+        goal_ref=goal_ref,
     )
     receipt, receipt_status, receipt_appended = _retain_deferred_action_selection(
         payload,
@@ -272,6 +276,7 @@ def reconcile_requested_quota_action_selection(
         runtime_root=context.runtime_root,
         turn_instance_id=context.heartbeat_turn_id,
         selection=selection,
+        goal_ref=goal_ref,
     )
     return ActionSelectionPreflightResult(
         rejected=True,
@@ -304,6 +309,7 @@ def _retain_deferred_action_selection(
     runtime_root: Path,
     turn_instance_id: str | None,
     selection: RequestedQuotaActionSelection,
+    goal_ref: Mapping[str, object] | None,
 ) -> tuple[dict[str, object] | None, str, bool]:
     """Append a deferred explicit choice without granting settlement authority."""
 
@@ -323,5 +329,6 @@ def _retain_deferred_action_selection(
         turn_instance_id=turn_instance_id,
         todo_id=selection.requested_todo_id,
         reason=str(qualification.get("reason") or "current_delivery_gate"),
+        goal_ref=goal_ref,
     )
     return retained, "selection_retained" if appended else "replayed", appended

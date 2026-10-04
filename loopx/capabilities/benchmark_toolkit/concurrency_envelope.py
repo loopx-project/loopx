@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .experiment_identity import (
+    ARM_ROLES,
+    experiment_token_text as _token,
+)
 from ...domain_state import default_domain_state_file_path
 from ...file_lock import exclusive_file_lock
 from ...registry import atomic_write_json
@@ -17,8 +20,6 @@ BENCHMARK_RESOURCE_HEADROOM_RECEIPT_SCHEMA_VERSION = (
 )
 BENCHMARK_CONCURRENCY_ENVELOPE_FILENAME = "concurrency-envelope.json"
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$")
-_ARM_ROLES = {"baseline", "control", "treatment", "explore"}
 _RESOURCE_HEADROOM_KINDS = {
     "file_descriptors",
     "memory",
@@ -67,13 +68,6 @@ def _timestamp(value: Any, *, field: str) -> str:
     if parsed.tzinfo is None:
         raise ValueError(f"{field} must include a timezone")
     return parsed.isoformat().replace("+00:00", "Z")
-
-
-def _token(value: Any, *, field: str) -> str:
-    text = str(value or "").strip()
-    if not _TOKEN_RE.fullmatch(text):
-        raise ValueError(f"{field} must be a compact public-safe token")
-    return text
 
 
 def _bounded_int(value: Any, *, field: str, minimum: int = 0) -> int:
@@ -275,7 +269,7 @@ def _normalize_active_run(value: Mapping[str, Any]) -> dict[str, str]:
         raise TypeError("active run must be an object")
     _reject_unknown_fields(value, allowed=_ACTIVE_RUN_FIELDS, field="active_run")
     arm_role = _token(value.get("arm_role"), field="arm_role")
-    if arm_role not in _ARM_ROLES:
+    if arm_role not in ARM_ROLES:
         raise ValueError("arm_role is unsupported")
     return {
         "run_id": _token(value.get("run_id"), field="run_id"),

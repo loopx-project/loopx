@@ -19,12 +19,13 @@ const LONG_ANSWER = [
   "| B | 无验收记录 | 成本与风险 |",
   "",
   "依据：[公开报告](https://example.org/report)。这是记录里的结论；生产状态仍需独立读回。",
+  "填写地址：https://example.org/forms/community。English: https://example.org/forms/en。",
   "",
   "<script>window.pwned=true</script>",
   "",
   "下一步：请项目 Agent 核验部署与可回退路径，再提交采用建议。",
 ].join("\n");
-const SHORT_ANSWER = "方案 A 的公开来源是[这份报告](https://example.org/report)。";
+const SHORT_ANSWER = "方案 A 的公开来源：https://example.org/report。";
 
 async function send(page, prompt) {
   await page.getByLabel("向 LoopX 发送消息").fill(prompt);
@@ -49,6 +50,12 @@ export const answerPresentationScenario = {
       if (await answer.locator("table").count() !== 1) throw new Error("Steward answer table was not rendered");
       if (await answer.locator('a[href="https://example.org/report"]').count() !== 1) {
         throw new Error("Steward evidence link was lost");
+      }
+      for (const href of ["https://example.org/forms/community", "https://example.org/forms/en"]) {
+        const link = answer.locator(`a[href="${href}"]`);
+        if (await link.count() !== 1 || await link.getAttribute("target") !== "_blank") {
+          throw new Error("A returned plain web destination is not directly usable from the conversation");
+        }
       }
       if (await answer.locator("script").count() || !((await answer.innerText()).includes("下一步：请项目 Agent"))) {
         throw new Error("Steward answer lost its ending or executed model HTML");
@@ -95,6 +102,7 @@ export const answerPresentationScenario = {
       await page.locator(".answer-report-content table").waitFor({ state: "visible", timeout: 15_000 });
       if (await page.locator(".answer-report-content table").count() !== 1
         || !(await page.locator(".answer-report-content").innerText()).includes("可回退路径")
+        || await page.locator('.answer-report-content a[href="https://example.org/forms/community"]').count() !== 1
         || await page.locator(".answer-report-content script").count() || await page.evaluate(() => window.pwned === true)) {
         throw new Error("The standalone answer lost content or executed model HTML");
       }
@@ -107,6 +115,7 @@ export const answerPresentationScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.locator(".answer-report-content table").waitFor({ state: "visible", timeout: 15_000 });
       if (await page.locator(".answer-report-content table").count() !== 1
+        || await page.locator('.answer-report-content a[href="https://example.org/forms/en"]').count() !== 1
         || api.turnRequests.length !== originalTurnCount) {
         throw new Error("Reloading the answer link replayed a Turn or lost its content");
       }
@@ -114,10 +123,15 @@ export const answerPresentationScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByRole("heading", { name: "Full answer" }).waitFor({ state: "visible" });
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
-      await page.getByRole("button", { name: "Back to conversation" }).click();
+      await page.getByRole("button", { name: "Back to Steward", exact: true }).click();
       await page.locator(".personal-channel-timeline .personal-message.is-assistant", {
         hasText: "建议先验证方案 A",
       }).waitFor({ state: "visible", timeout: 15_000 });
+      const returned = new URL(page.url());
+      if (returned.searchParams.get("goalId") !== "" || returned.searchParams.get("view") !== "conversation"
+        || returned.searchParams.has("reportMessageId") || returned.searchParams.has("reportSessionId")) {
+        throw new Error("Returning from a saved Steward answer lost its conversation scope");
+      }
       if (api.turnRequests.length !== originalTurnCount) {
         throw new Error("Returning to the Steward conversation replayed a Turn");
       }
@@ -140,6 +154,27 @@ export const answerPresentationScenario = {
       await short.waitFor({ state: "visible", timeout: 15_000 });
       if (await short.locator("a").count() !== 1 || await short.locator("h1,h2,h3,h4,table").count()) {
         throw new Error("Goal Chat lost a short direct sourced answer or forced a report layout");
+      }
+      if (await short.locator('a[href="https://example.org/report"]').count() !== 1) {
+        throw new Error("Goal Chat did not preserve the plain source URL destination");
+      }
+      await send(page, LONG_PROMPT);
+      const goalAnswer = page.locator(".personal-channel-timeline .personal-message.is-assistant", {
+        hasText: "建议先验证方案 A",
+      });
+      await goalAnswer.waitFor({ state: "visible" });
+      const goalReportHref = await goalAnswer.getByRole("link", { name: "单独阅读完整答复" }).getAttribute("href");
+      if (!goalReportHref) throw new Error("Goal answer has no stable reading link");
+      const goalId = new URL(page.url()).searchParams.get("goalId");
+      const goalTurnCount = api.turnRequests.length;
+      await page.goto(goalReportHref, { waitUntil: "networkidle" });
+      await page.locator(".answer-report-content", { hasText: "建议先验证方案 A" }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "返回对话", exact: true }).click();
+      await page.locator(".personal-channel-timeline .personal-message.is-assistant", {
+        hasText: "建议先验证方案 A",
+      }).waitFor({ state: "visible" });
+      if (new URL(page.url()).searchParams.get("goalId") !== goalId || api.turnRequests.length !== goalTurnCount) {
+        throw new Error("Returning from a saved Goal answer changed its Goal or replayed a Turn");
       }
       if (!api.turnRequests.some((turn) => turn.message === LONG_PROMPT)
         || !api.turnRequests.some((turn) => turn.message === SHORT_PROMPT)) {

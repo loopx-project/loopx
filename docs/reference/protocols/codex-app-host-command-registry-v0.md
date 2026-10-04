@@ -293,7 +293,7 @@ loopx --format json start-goal --guided --project . --goal-text "<goal text>" --
 loopx bootstrap-command-pack --project . --goal-text "<goal text>"
 loopx pr-review
 loopx global-summary
-loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <goal-id> --agent-id <agent-id>
+loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <goal-id> --agent-id <agent-id>
 ```
 
 If host command parsing is unavailable, the user or a skill fallback can still

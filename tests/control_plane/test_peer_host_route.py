@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 import contextlib
 import io
+import os
+import sqlite3
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.agents.host_thread_activity import (
@@ -38,8 +44,8 @@ def _registry(tmp_path: Path, bindings: list[dict[str, str]]) -> Path:
     return path
 
 
-def _binding(thread_id: str, agent_id: str = "reviewer") -> dict[str, str]:
-    return {"agent_id": agent_id, "host_surface": "codex-app", "thread_id": thread_id}
+def _binding(thread_id: str, agent_id: str = "reviewer", *, host_surface: str = "codex-app") -> dict[str, str]:
+    return {"agent_id": agent_id, "host_surface": host_surface, "thread_id": thread_id}
 
 
 def _observer(state: HostThreadState):
@@ -48,7 +54,177 @@ def _observer(state: HostThreadState):
     }
 
 
-def test_named_peer_with_several_bindings_needs_an_exact_selection(
+def test_registry_loss_during_host_observation_is_unknown_and_recovers(tmp_path):
+    registry = _registry(tmp_path, [_binding("current")])
+    before = registry.read_bytes()
+
+    def observe(ids):
+        registry.unlink()
+        return {item: HostThreadActivity(state=HostThreadState.IDLE) for item in ids}
+
+    unavailable = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                         observers={"codex-app": observe})
+    assert unavailable["ok"] is False and unavailable["unknown"] is True
+    assert unavailable["reason"] == "agent_inventory_unavailable"
+    assert unavailable["candidate_count"] is None and unavailable["candidates"] == []
+    assert unavailable["selected_route"] is None and "host_observation" not in unavailable
+    registry.write_bytes(before)
+    recovered = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                       observers=_observer(HostThreadState.IDLE))
+    assert recovered["status"] == "resolved"
+    assert recovered["selected_route"]["thread_id"] == "current"
+    absent = resolve_peer_host_route(registry, goal_id="goal", agent_id="absent",
+                                    observers=_observer(HostThreadState.IDLE))
+    assert absent["status"] == "not_authorized" and absent["reason"] == "peer_not_registered"
+    assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("current", [HostThreadState.IDLE, HostThreadState.TURN_OPEN])
+def test_archived_history_does_not_require_the_owner_to_find_a_task_link(tmp_path, current):
+    bindings = [_binding(f"old-{i}") for i in range(4)] + [_binding("current")]
+    registry = _registry(tmp_path, bindings)
+    observed = []
+
+    def observe(ids):
+        observed.append(set(ids))
+        return {item: HostThreadActivity(state=current if item == "current" else HostThreadState.ARCHIVED)
+                for item in ids}
+
+    route = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                    observers={"codex-app": observe})
+    assert route["status"] == "resolved"
+    assert route["selected_route"]["thread_id"] == "current"
+    assert route["candidate_count"] == 5 and len(route["candidates"]) == 3
+    assert route["host_observation"]["state"] == current.value
+    assert route["host_delivery"] == "not_attempted"
+    assert observed == [{b["thread_id"] for b in bindings}]
+
+
+@pytest.mark.parametrize("other", ["missing", "unsupported", "failed", "idle"])
+def test_unknown_or_another_readable_binding_never_becomes_archived(tmp_path, other):
+    registry = _registry(tmp_path, [_binding("current"), _binding("other", host_surface=other)])
+
+    def fail(ids):
+        raise OSError("private host failure")
+
+    observers = _observer(HostThreadState.IDLE)
+    if other != "unsupported":
+        observers[other] = fail if other == "failed" else (
+            lambda ids: {} if other == "missing" else {i: HostThreadActivity(state=HostThreadState.IDLE) for i in ids}
+        )
+    route = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer", observers=observers)
+    assert route["status"] == "ambiguous"
+    assert route["selected_route"] is None and route["host_delivery"] == "not_attempted"
+    assert "private host failure" not in json.dumps(route)
+
+
+def test_all_archived_is_unavailable_but_explicit_archived_link_stays_exact(tmp_path):
+    registry = _registry(tmp_path, [_binding("old"), _binding("current")])
+    archived = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                       observers=_observer(HostThreadState.ARCHIVED))
+    assert archived["status"] == "unavailable" and archived["reason"] == "host_thread_archived"
+    assert archived["selected_route"] is None
+    explicit = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+        thread_link="codex://threads/old", observers={"codex-app": lambda ids: {
+            i: HostThreadActivity(state=HostThreadState.ARCHIVED if i == "old" else HostThreadState.IDLE) for i in ids}})
+    assert explicit["status"] == "unavailable" and explicit["selected_route"] is None
+
+
+def test_observation_cannot_rebind_the_selected_peer(tmp_path):
+    registry = _registry(tmp_path, [_binding("old"), _binding("current")])
+
+    def observe(ids):
+        registry.write_text(json.dumps({"goals": [{"id": "goal", "coordination": {
+            "registered_agents": ["reviewer", "builder"],
+            "thread_agent_bindings": [_binding("current", "builder")],
+        }}]}))
+        return {i: HostThreadActivity(state=HostThreadState.ARCHIVED if i == "old" else HostThreadState.IDLE) for i in ids}
+
+    route = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer", observers={"codex-app": observe})
+    assert route["status"] == "ambiguous" and route["reason"] == "binding_identity_conflict"
+    assert route["selected_route"] is None
+
+
+@pytest.mark.parametrize("change", ["new_binding", "unregistered", "reordered"])
+def test_observation_rechecks_the_candidate_set_and_registration(tmp_path, change):
+    registry = _registry(tmp_path, [_binding("old"), _binding("current")])
+
+    def observe(ids):
+        content = json.loads(registry.read_text())
+        coordination = content["goals"][0]["coordination"]
+        if change == "new_binding":
+            coordination["thread_agent_bindings"].append(_binding("unobserved"))
+        elif change == "unregistered":
+            coordination["registered_agents"].remove("reviewer")
+        else:
+            coordination["thread_agent_bindings"].reverse()
+        registry.write_text(json.dumps(content))
+        return {i: HostThreadActivity(state=HostThreadState.ARCHIVED if i == "old" else HostThreadState.IDLE)
+                for i in ids}
+
+    route = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                    observers={"codex-app": observe})
+    expected = {"new_binding": "ambiguous", "unregistered": "not_authorized", "reordered": "resolved"}
+    assert route["status"] == expected[change]
+    assert route["selected_route"] == (
+        {"host_surface": "codex-app", "thread_id": "current"} if change == "reordered" else None
+    )
+    assert route["host_delivery"] == "not_attempted"
+
+
+def test_withheld_and_over_budget_candidates_cannot_hide_a_second_binding(tmp_path):
+    private_id = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234"
+    registry = _registry(tmp_path, [_binding("current"), _binding(private_id)])
+    result = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                     observers=_observer(HostThreadState.IDLE))
+    assert result["status"] == "ambiguous" and result["selected_route"] is None
+    assert result["withheld_candidate_count"] == 1 and private_id not in json.dumps(result)
+    registry = _registry(tmp_path, [_binding(f"task-{i}") for i in range(33)])
+
+    def forbidden(ids):
+        pytest.fail("over-budget inventory must remain ambiguous without an unbounded host read")
+
+    result = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer", observers={"codex-app": forbidden})
+    assert result["status"] == "ambiguous" and result["candidate_count"] == 33
+    assert result["selected_route"] is None
+
+
+def test_real_cli_uses_read_only_host_store_and_pins_one_request_after_archived_history(tmp_path):
+    registry = _registry(tmp_path, [_binding("old"), _binding("current")])
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    rollout = home / "current.jsonl"
+    rollout.write_text(json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
+                                  "payload": {"type": "task_complete"}}) + "\n")
+    db = home / "state_5.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE threads(id TEXT, rollout_path TEXT, archived INTEGER)")
+        conn.executemany("INSERT INTO threads VALUES(?,?,?)", [("old", "", 1), ("current", str(rollout), 0)])
+    before = (registry.read_bytes(), db.read_bytes(), rollout.read_bytes())
+    brief = tmp_path / "brief.json"
+    brief.write_text(json.dumps({"schema_version": "collaboration_brief_v0", "purpose": "Check the draft",
+        "context": "Independent review", "constraints": ["Do not publish"], "inputs": [],
+        "acceptance": ["Return findings"], "return_requirement": "Report to requester"}))
+    env = {**os.environ, "LOOPX_CODEX_HOMES": str(home)}
+
+    def cli(*args):
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--runtime-root", str(tmp_path / "runtime"), "--format", "json", *args],
+            env=env, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    preview = cli("resolve-peer-route", "--goal-id", "goal", "--agent-id", "reviewer")
+    assert preview["status"] == "resolved" and preview["selected_route"]["thread_id"] == "current"
+    args = ("manager-inbox", "request", "--goal-id", "goal", "--agent-id", "builder",
+            "--peer-agent-id", "reviewer", "--operation-id", "review-draft", "--brief-file", str(brief), "--require-host-route")
+    requested, replay = cli(*args), cli(*args)
+    assert requested["request_id"] == replay["request_id"] and replay["replayed"] is True
+    assert requested["host_delivery"]["thread_id"] == "current"
+    assert requested["host_delivery"]["status"] == "not_attempted"
+    assert before == (registry.read_bytes(), db.read_bytes(), rollout.read_bytes())
+
+
+def test_named_peer_with_two_readable_bindings_needs_an_exact_selection(
     tmp_path: Path,
 ) -> None:
     registry = _registry(tmp_path, [_binding("older"), _binding("current")])

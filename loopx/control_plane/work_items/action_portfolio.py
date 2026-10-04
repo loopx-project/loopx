@@ -53,10 +53,11 @@ def build_quota_planning_packet(
     capability_gate: Mapping[str, Any] | None,
     blocked_priority_fallback: Mapping[str, Any] | None,
     goal_frontier_projection: Mapping[str, Any] | None,
+    replan_selection_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project every requested planning lens through one TypeScript request."""
 
-    if not projection_enabled and not include_detail:
+    if not projection_enabled and not include_detail and replan_selection_context is None:
         return {}
     inventory_request = build_quota_planning_inventory_request(
         goal_id=goal_id,
@@ -80,6 +81,8 @@ def build_quota_planning_packet(
                 "acceptance_gaps": _frontier_acceptance_gaps(
                     goal_frontier_projection
                 ),
+                **({"replan_selection_context": dict(replan_selection_context)}
+                   if replan_selection_context is not None else {}),
             },
         )
     except EffectRuntimeRejected as exc:

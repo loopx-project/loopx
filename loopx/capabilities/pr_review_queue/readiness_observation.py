@@ -61,6 +61,7 @@ def readiness_material_state(
         "state": _text(item.get("state")).upper(),
         "is_draft": item.get("is_draft") is True,
         "merge_state": _text(item.get("merge_state")).upper(),
+        "mergeability": _text(item.get("mergeability")).upper(),
         "review_decision": _text(item.get("review_decision")).upper(),
         "review_conclusion": {
             "valid": conclusion.get("valid") is True,

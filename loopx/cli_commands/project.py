@@ -4,7 +4,7 @@ from ..control_plane.coordination.legacy_writer_fence import LegacyCoordinationW
 from ..control_plane.coordination.shadow_management import ShadowManagementError
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ..control_plane.projects.registry import (
@@ -102,7 +102,10 @@ def render_project_command_markdown(payload: dict[str, object]) -> str:
         f"- registry: `{payload.get('registry')}`",
     ]
     for field in (
+        "status",
         "changed",
+        "replayed",
+        "gate_state",
         "resolution",
         "source",
         "project_id",
@@ -110,6 +113,21 @@ def render_project_command_markdown(payload: dict[str, object]) -> str:
     ):
         if field in payload:
             lines.append(f"- {field}: `{payload.get(field)}`")
+    if payload.get("recovery_action"):
+        lines.append(f"- recovery_action: {payload.get('recovery_action')}")
+    pending_effects = payload.get("pending_effects")
+    if isinstance(pending_effects, list) and pending_effects:
+        lines.extend(["", "## Pending Turn effects", ""])
+        for pending in pending_effects:
+            if not isinstance(pending, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"turn_key=`{pending.get('turn_key')}`; "
+                f"step_kind=`{pending.get('step_kind')}`; "
+                f"reason=`{pending.get('reason')}`; "
+                f"recovery_action={pending.get('recovery_action')}"
+            )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
     return "\n".join(lines)

@@ -5,11 +5,13 @@ import json
 import shlex
 import sys
 from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from ..capabilities.issue_fix.provider_hooks import IssueFixReviewerProviderHooks
-from ..capabilities.reward_memory.feedback_hint import build_feedback_review_hint
-from ..capabilities.reward_memory.outbound import outbound_guidance_hook
+if TYPE_CHECKING:
+    from ..capabilities.issue_fix.provider_hooks import IssueFixReviewerProviderHooks
+
 from ..control_plane.capability_hooks import (
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     TurnStartHookRegistration,
@@ -24,47 +26,55 @@ from ..extensions.lark import (
     LARK_REPLY_PERMISSION,
     LARK_REVIEWER_NOTIFICATION_PERMISSION,
 )
-from ..extensions.lark.event_collector import (
-    inspect_lark_event_collector,
-    install_lark_event_collector,
-    plan_lark_event_collector,
-)
-from ..extensions.lark.event_collector_routes import (
-    reconcile_lark_event_collector_route,
-)
-from ..extensions.lark.event_collector_runtime import run_lark_event_collector
-from ..extensions.lark.event_inbox import (
-    acknowledge_lark_event_inbox,
-    inspect_lark_event_inbox,
-    lark_event_inbox_contains_text,
-)
-from ..extensions.lark.group_history import catch_up_lark_group_history
-from ..extensions.lark.inbox_reactions import (
-    complete_lark_event_inbox_reactions,
-    mark_lark_event_inbox_processing,
-)
-from ..extensions.lark.inbox_reply import (
-    reply_lark_event_inbox,
-    send_lark_inbox_message,
-)
-from ..extensions.lark.reviewer_notification import (
-    lark_reviewer_notification_sink,
-)
-from ..extensions.lark.routed_inbox import (
-    acknowledge_routed_lark_event_inbox,
-    ingest_routed_lark_event_inbox,
-    inspect_routed_lark_event_inbox,
-    project_routed_lark_event_inbox_urgency,
-    resolve_routed_lark_inbox_config,
-    resolve_routed_lark_inbox_route,
-    settle_routed_lark_event_inbox_material_review,
-)
-from ..extensions.lark.turn_start_sync import sync_lark_turn_start_inbox
-from ..extensions.runtime import (
-    default_extension_state_file,
-    resolve_extension_activation,
-)
 from ..file_lock import lock_timeout_error_fields
+
+
+# Quota/Turn compose urgency from this module without selecting provider sync,
+# outbound messages or collector execution. Even the urgency projector is
+# inert until an enabled Goal inbox selects it. Preserve imported names and
+# patch seams, resolving original owners only when their route is selected.
+_LAZY_HOST_EXPORTS = {
+    "inspect_lark_event_collector": "loopx.extensions.lark.event_collector",
+    "install_lark_event_collector": "loopx.extensions.lark.event_collector",
+    "plan_lark_event_collector": "loopx.extensions.lark.event_collector",
+    "reconcile_lark_event_collector_route": "loopx.extensions.lark.event_collector_routes",
+    "run_lark_event_collector": "loopx.extensions.lark.event_collector_runtime",
+    "catch_up_lark_group_history": "loopx.extensions.lark.group_history",
+    "complete_lark_event_inbox_reactions": "loopx.extensions.lark.inbox_reactions",
+    "mark_lark_event_inbox_processing": "loopx.extensions.lark.inbox_reactions",
+    "reply_lark_event_inbox": "loopx.extensions.lark.inbox_reply",
+    "send_lark_inbox_message": "loopx.extensions.lark.inbox_reply",
+    "sync_lark_turn_start_inbox": "loopx.extensions.lark.turn_start_sync",
+    "acknowledge_lark_event_inbox": "loopx.extensions.lark.event_inbox",
+    "inspect_lark_event_inbox": "loopx.extensions.lark.event_inbox",
+    "lark_event_inbox_contains_text": "loopx.extensions.lark.event_inbox",
+    "acknowledge_routed_lark_event_inbox": "loopx.extensions.lark.routed_inbox",
+    "ingest_routed_lark_event_inbox": "loopx.extensions.lark.routed_inbox",
+    "inspect_routed_lark_event_inbox": "loopx.extensions.lark.routed_inbox",
+    "project_routed_lark_event_inbox_urgency": "loopx.extensions.lark.routed_inbox",
+    "resolve_routed_lark_inbox_config": "loopx.extensions.lark.routed_inbox",
+    "resolve_routed_lark_inbox_route": "loopx.extensions.lark.routed_inbox",
+    "settle_routed_lark_event_inbox_material_review": "loopx.extensions.lark.routed_inbox",
+    "default_extension_state_file": "loopx.extensions.runtime",
+    "resolve_extension_activation": "loopx.extensions.runtime",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _LAZY_HOST_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_HOST_EXPORTS))
+
+
+def _host_export(name: str) -> Callable[..., Any]:
+    return getattr(sys.modules[__name__], name)
 
 
 def _goal_inbox_config(
@@ -340,9 +350,9 @@ def _resolve_lark_activation(
     *,
     runtime_root_arg: str | None,
 ) -> dict[str, object]:
-    return resolve_extension_activation(
+    return _host_export("resolve_extension_activation")(
         LARK_EXTENSION_ID,
-        state_file=default_extension_state_file(runtime_root_arg),
+        state_file=_host_export("default_extension_state_file")(runtime_root_arg),
         required_permissions=_required_extension_permissions(command),
     )
 
@@ -359,7 +369,7 @@ def build_lark_operator_inbox_urgency_projector(
                 str(runtime_root_arg) if runtime_root_arg is not None else None
             ),
         )
-        return project_routed_lark_event_inbox_urgency(
+        return _host_export("project_routed_lark_event_inbox_urgency")(
             project=project,
             config_path=config_path,
         )
@@ -383,7 +393,7 @@ def build_lark_turn_start_inbox_hook(
                 str(runtime_root_arg) if runtime_root_arg is not None else None
             ),
         )
-        result = sync_lark_turn_start_inbox(
+        result = _host_export("sync_lark_turn_start_inbox")(
             project=project,
             config_path=config_path,
         )
@@ -498,9 +508,15 @@ def dispatch_goal_lark_turn_start_hooks(
 def build_lark_issue_fix_reviewer_provider_hooks(
     *, runtime_root_arg: str | None
 ) -> IssueFixReviewerProviderHooks:
-    activation = resolve_extension_activation(
+    # The optional reviewer workflow is not part of Turn admission. Import its
+    # provider only when this Lark route is actually selected; every read-only
+    # Turn preview also constructs the inbox urgency projector from this module.
+    from ..capabilities.issue_fix.provider_hooks import IssueFixReviewerProviderHooks
+    from ..extensions.lark.reviewer_notification import lark_reviewer_notification_sink
+
+    activation = _host_export("resolve_extension_activation")(
         LARK_EXTENSION_ID,
-        state_file=default_extension_state_file(runtime_root_arg),
+        state_file=_host_export("default_extension_state_file")(runtime_root_arg),
         required_permissions=(
             LARK_INBOX_READ_PERMISSION,
             LARK_INBOX_WRITE_PERMISSION,
@@ -509,9 +525,9 @@ def build_lark_issue_fix_reviewer_provider_hooks(
         ),
     )
     return IssueFixReviewerProviderHooks(
-        inspect=inspect_lark_event_inbox,
-        acknowledge=acknowledge_lark_event_inbox,
-        contains_text=lark_event_inbox_contains_text,
+        inspect=_host_export("inspect_lark_event_inbox"),
+        acknowledge=_host_export("acknowledge_lark_event_inbox"),
+        contains_text=_host_export("lark_event_inbox_contains_text"),
         notification_adapter=lark_reviewer_notification_sink,
         activation=activation,
     )
@@ -614,7 +630,7 @@ def handle_lark_inbox_command(
             runtime_root_arg=runtime_root_arg,
         )
         if args.lark_inbox_command == "drain":
-            payload = inspect_routed_lark_event_inbox(
+            payload = _host_export("inspect_routed_lark_event_inbox")(
                 project=project,
                 config_path=config_path,
                 limit=args.limit,
@@ -625,6 +641,8 @@ def handle_lark_inbox_command(
                 and not getattr(args, "config", None)
                 and not getattr(args, "project", None)
             ):
+                from ..capabilities.reward_memory.feedback_hint import build_feedback_review_hint
+
                 hint = build_feedback_review_hint(
                     registry_path=registry_path,
                     goal_id=getattr(args, "goal_id", None),
@@ -633,7 +651,7 @@ def handle_lark_inbox_command(
                 if hint is not None:
                     payload["reward_memory_feedback_review"] = hint
         elif args.lark_inbox_command == "ack":
-            payload = acknowledge_routed_lark_event_inbox(
+            payload = _host_export("acknowledge_routed_lark_event_inbox")(
                 project=project,
                 config_path=config_path,
                 message_ids=args.message_id,
@@ -647,7 +665,7 @@ def handle_lark_inbox_command(
             )
             if effect_receipt is not None and not isinstance(effect_receipt, dict):
                 raise ValueError("effect receipt JSON must be an object")
-            payload = settle_routed_lark_event_inbox_material_review(
+            payload = _host_export("settle_routed_lark_event_inbox_material_review")(
                 project=project,
                 config_path=config_path,
                 message_id=args.message_id,
@@ -656,12 +674,14 @@ def handle_lark_inbox_command(
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "reply":
-            routed_config = resolve_routed_lark_inbox_config(
+            from ..capabilities.reward_memory.outbound import outbound_guidance_hook
+
+            routed_config = _host_export("resolve_routed_lark_inbox_config")(
                 project=project,
                 config_path=config_path,
                 message_id=args.message_id,
             )
-            payload = reply_lark_event_inbox(
+            payload = _host_export("reply_lark_event_inbox")(
                 project=project,
                 config_path=routed_config,
                 message_id=args.message_id,
@@ -677,12 +697,14 @@ def handle_lark_inbox_command(
                 ),
             )
         elif args.lark_inbox_command == "send":
-            routed_config = resolve_routed_lark_inbox_route(
+            from ..capabilities.reward_memory.outbound import outbound_guidance_hook
+
+            routed_config = _host_export("resolve_routed_lark_inbox_route")(
                 project=project,
                 config_path=config_path,
                 route_key=args.route_key,
             )
-            payload = send_lark_inbox_message(
+            payload = _host_export("send_lark_inbox_message")(
                 project=project,
                 config_path=routed_config,
                 text=args.text,
@@ -697,38 +719,38 @@ def handle_lark_inbox_command(
                 ),
             )
         elif args.lark_inbox_command == "processing":
-            routed_config = resolve_routed_lark_inbox_config(
+            routed_config = _host_export("resolve_routed_lark_inbox_config")(
                 project=project,
                 config_path=config_path,
                 message_id=args.message_id,
             )
-            payload = mark_lark_event_inbox_processing(
+            payload = _host_export("mark_lark_event_inbox_processing")(
                 project=project,
                 config_path=routed_config,
                 message_id=args.message_id,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "reaction-complete":
-            routed_config = resolve_routed_lark_inbox_config(
+            routed_config = _host_export("resolve_routed_lark_inbox_config")(
                 project=project,
                 config_path=config_path,
                 message_id=args.message_id,
             )
-            payload = complete_lark_event_inbox_reactions(
+            payload = _host_export("complete_lark_event_inbox_reactions")(
                 project=project,
                 config_path=routed_config,
                 message_id=args.message_id,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "ingest":
-            payload = ingest_routed_lark_event_inbox(
+            payload = _host_export("ingest_routed_lark_event_inbox")(
                 project=project,
                 config_path=config_path,
                 events=_read_stdin_events(),
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "history-catch-up":
-            payload = catch_up_lark_group_history(
+            payload = _host_export("catch_up_lark_group_history")(
                 project=project,
                 config_path=config_path,
                 route_key=args.route_key,
@@ -739,20 +761,20 @@ def handle_lark_inbox_command(
                 node_executable=args.node_executable,
             )
         elif args.lark_inbox_command == "collector-plan":
-            payload = plan_lark_event_collector(
+            payload = _host_export("plan_lark_event_collector")(
                 project=args.project,
                 config_path=args.config,
                 runtime_root=runtime_root_arg,
             )
         elif args.lark_inbox_command == "collector-install":
-            payload = install_lark_event_collector(
+            payload = _host_export("install_lark_event_collector")(
                 project=args.project,
                 config_path=args.config,
                 runtime_root=runtime_root_arg,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "collector-route-reconcile":
-            payload = reconcile_lark_event_collector_route(
+            payload = _host_export("reconcile_lark_event_collector_route")(
                 project=args.project,
                 config_path=args.config,
                 route_key=args.route_key,
@@ -761,7 +783,7 @@ def handle_lark_inbox_command(
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "collector-run":
-            payload = run_lark_event_collector(
+            payload = _host_export("run_lark_event_collector")(
                 project=args.project,
                 config_path=args.config,
                 lark_cli_executable=args.lark_cli_executable,
@@ -769,7 +791,7 @@ def handle_lark_inbox_command(
                 node_executable=args.node_executable,
             )
         else:
-            payload = inspect_lark_event_collector(
+            payload = _host_export("inspect_lark_event_collector")(
                 project=args.project,
                 config_path=args.config,
                 runtime_root=runtime_root_arg,

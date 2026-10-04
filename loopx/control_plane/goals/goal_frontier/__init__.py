@@ -87,7 +87,6 @@ from .semantic_history import (
     latest_autonomous_replan_ack_from_status_payload,
     latest_missing_vision_checkpoint_from_status_payload,
     latest_replan_ack_feedback_from_status_payload,
-    latest_runs_for_goal,
 )
 from .terminal import (
     GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION,  # noqa: F401
@@ -295,8 +294,11 @@ def autonomous_replan_scope_decision(
     else:
         selected_peer_agent = select_peer_for_work(
             registered_agent_ids or [],
+            # Display evidence and prose are mutable projections, not work
+            # identity. Normalize before both selection and permission checks.
             work_key=peer_work_key(
-                replan_obligation,
+                {"obligation_id": replan_obligation.get("obligation_id")
+                 or ensure_replan_novelty_policy(replan_obligation)["obligation_id"]},
                 fallback="autonomous_replan",
             ),
         )
@@ -1308,7 +1310,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
                 }
             ],
             guidance_actions=[
-                "read_evidence_log",
+                "use_replan_context",
                 "run_bounded_public_research_if_local_evidence_is_missing",
                 "group_or_prune_todo_chain",
                 "update_agent_vision",
@@ -1741,10 +1743,8 @@ def build_goal_frontier_projection_context_from_status(
             replan_obligation,
             goal_id=goal_id,
             agent_id=agent_id,
-            newest_first_runs=latest_runs_for_goal(
-                status_payload,
-                goal_id=goal_id,
-            ),
+            newest_first_runs=(), source_status=status_payload,
+            goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
         )
 
     goal_frontier_projection = build_goal_frontier_projection_from_summaries(
@@ -1792,7 +1792,7 @@ def compact_replan_obligation(replan_obligation: dict[str, Any]) -> dict[str, An
         # Keep hot quota/status packets on the two authoritative seams. The
         # detailed selection hint remains available on the full obligation.
         compact["replan_novelty_policy"] = {
-            "evidence_source": "agent_scoped_evidence_log",
+            "evidence_source": "compact_run_history",
             "delivery": "host_projected",
             "writeback": "typed_semantic_delta",
         }

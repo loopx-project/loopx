@@ -1385,7 +1385,7 @@ def test_failed_upgrade_keeps_the_active_revision(tmp_path: Path) -> None:
     assert status["revision_count"] == 1
 
 
-def test_failed_enable_remains_disabled_and_clears_old_proof(tmp_path: Path) -> None:
+def test_failed_enable_remains_disabled_and_rejects_current_artifact(tmp_path: Path) -> None:
     provider = _provider(tmp_path / "provider")
     manifest = _manifest(
         tmp_path / "extension.toml",
@@ -1412,11 +1412,11 @@ def test_failed_enable_remains_disabled_and_clears_old_proof(tmp_path: Path) -> 
         "test-semantic-extension"
     ]
     assert entry["enabled"] is False
-    assert "doctor_verified_revision" not in entry
+    assert extension_status(state_file=state_file)["extensions"][0]["doctor_verified"] is False
     assert "doctor_verified_entrypoint_identity" not in entry
 
 
-def test_failed_executed_doctor_clears_stale_readiness_proof(
+def test_failed_executed_doctor_rejects_current_artifact(
     tmp_path: Path,
 ) -> None:
     provider = _provider(tmp_path / "provider")
@@ -1439,7 +1439,7 @@ def test_failed_executed_doctor_clears_stale_readiness_proof(
     entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
         "test-semantic-extension"
     ]
-    assert "doctor_verified_revision" not in entry
+    assert extension_status(state_file=state_file)["extensions"][0]["doctor_verified"] is False
     assert "doctor_verified_entrypoint_identity" not in entry
     with pytest.raises(ValueError, match="doctor readiness is stale"):
         resolve_extension_binding(
@@ -1463,9 +1463,9 @@ def test_enabled_extension_doctor_batch_migrates_stale_identity(
     state_file = tmp_path / "extensions.json"
     install_extension(manifest, state_file=state_file, execute=True)
     state = json.loads(state_file.read_text(encoding="utf-8"))
-    state["extensions"]["test-semantic-extension"][
-        "doctor_verified_entrypoint_identity"
-    ] = "legacy-release-identity"
+    entry = state["extensions"]["test-semantic-extension"]
+    entry.pop("doctor_verified_entrypoint_identities")
+    entry["doctor_verified_entrypoint_identity"] = "legacy-release-identity"
     state_file.write_text(json.dumps(state), encoding="utf-8")
 
     preview = doctor_enabled_extensions(state_file=state_file)
@@ -1533,7 +1533,7 @@ def test_executed_doctor_rebinds_revision_only_legacy_proof(tmp_path: Path) -> N
     install_extension(manifest, state_file=state_file, execute=True)
     state = json.loads(state_file.read_text(encoding="utf-8"))
     entry = state["extensions"]["test-semantic-extension"]
-    entry.pop("doctor_verified_entrypoint_identity")
+    entry.pop("doctor_verified_entrypoint_identities")
     state_file.write_text(json.dumps(state), encoding="utf-8")
 
     with pytest.raises(ValueError, match="doctor readiness is stale"):

@@ -207,7 +207,7 @@ from .control_plane.agents.subagent_activity import (
 from .control_plane.agents.management_projection import (
     build_agent_management_projection as _build_agent_management_projection_read_model,
 )
-from .control_plane.runtime.agent_scoped_evidence_log import (
+from .control_plane.runtime.agent_evidence_history import (
     MAX_PROJECTED_READ_RECEIPTS,
     project_evidence_log_read_receipts,
 )
@@ -223,7 +223,6 @@ from .control_plane.todos.todo_summary import (
     MAX_STATUS_TODOS_PER_ROLE as _TODO_SUMMARY_MAX_STATUS_TODOS_PER_ROLE,
     MAX_TODO_VISIBILITY_LANE_ITEMS as _TODO_SUMMARY_MAX_TODO_VISIBILITY_LANE_ITEMS,
     active_state_todo_attention_item as _active_state_todo_attention_item_read_model,
-    active_next_action_todo_ids,
     attach_dependency_blockers,
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
@@ -711,17 +710,20 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    registry_path: Path | None = None,
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
+    include_agent_next_actions: bool = False,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return _active_state_todo_fields_read_model(
         goal,
         runtime_root=runtime_root,
+        registry_path=registry_path,
+        include_agent_next_actions=include_agent_next_actions,
         rollout_events=rollout_events,
         **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         resolve_goal_local_path=resolve_goal_local_path,
         active_state_next_action_entries=active_state_next_action_entries,
-        active_next_action_todo_ids=active_next_action_todo_ids,
         load_rollout_events=load_rollout_events,
         rollout_event_log_path=rollout_event_log_path,
         max_todo_index_rollout_events_per_goal=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
@@ -1090,6 +1092,8 @@ def build_attention_queue(
     include_stopped_goal_context: bool = False,
     events_for_goal: EventsForGoal | None = None,
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
+    current_registry: dict[str, Any] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1108,6 +1112,8 @@ def build_attention_queue(
         return active_state_todo_fields(
             goal,
             runtime_root=runtime_root,
+            include_agent_next_actions=include_task_graph,
+            registry_path=registry_path,
             rollout_events=supplied_events,
             **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         )
@@ -1189,9 +1195,25 @@ def build_attention_queue(
                 and int(orchestration.get("max_children") or 0) > 0
             ):
                 continue
+            goal_ref = None
+            if (current_registry or {}).get("profile_id") == "source_session_v1":
+                matches = [
+                    goal
+                    for goal in (current_registry or {}).get("goals") or []
+                    if isinstance(goal, dict)
+                    and goal.get("id") == goal_id
+                    and goal.get("status") == "active"
+                    and isinstance(goal.get("goal_instance_id"), str)
+                ]
+                if len(matches) == 1:
+                    goal_ref = {
+                        "goal_id": goal_id,
+                        "goal_instance_id": matches[0]["goal_instance_id"],
+                    }
             native_activity = latest_native_child_activity(
                 events, goal_id=goal_id,
                 configured_limit=int(orchestration["max_children"]),
+                goal_ref=goal_ref,
             )
             if native_activity:
                 # The shared status snapshot is bounded for Todo work. Once it
@@ -1203,6 +1225,8 @@ def build_attention_queue(
                     agent_id=native_activity["agent_id"],
                     turn_instance_id=native_activity["turn_instance_id"],
                     configured_limit=int(orchestration["max_children"]),
+                    goal_ref=goal_ref,
+                    registry_path=registry_path,
                 )
     return queue
 

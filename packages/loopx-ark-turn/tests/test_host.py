@@ -194,7 +194,7 @@ def test_invalid_request_never_starts_provider(tmp_path, mutation):
     if mutation == "signature":
         req["turn_envelope"]["action"]["primary_action"] = "Forged change"
     elif mutation == "context":
-        req["session"]["context_policy"]["mode"] = "resume-if-available"
+        req["session"]["context_policy"]["mode"] = "resume"
     else:
         req["turn_key"] = "not-a-turn-key"
     provider = Provider([])

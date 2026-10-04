@@ -288,6 +288,7 @@ def main() -> int:
         assert catalog["disclosure_policy"]["first_run_configuration_required"] is False
         features = {item["feature_id"]: item for item in catalog["features"]}
         assert set(features) == {
+            "goal_capability_organization",
             "todo_replan_cadence",
             "local_authority_shadow",
             "coordination_runtime_shadow",
@@ -303,6 +304,11 @@ def main() -> int:
             "pull_request_review",
             "periodic_report",
         }
+        improvement = features["goal_capability_organization"]
+        assert improvement["default"] == {
+            "mode": "off", "discovery_budget_minutes": 5, "max_trials": 1,
+        }, improvement
+        assert "current" not in improvement, improvement
         assert features["pull_request_review"]["availability"] == "supported"
         assert features["progress_review"]["availability"] == "supported_opt_in"
         assert features["progress_review"]["default"]["mode"] == "off"

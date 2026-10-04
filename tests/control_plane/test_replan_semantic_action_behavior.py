@@ -539,9 +539,9 @@ def test_manual_evidence_read_is_context_not_replan_completion(
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(
                 command=(
-                    "loopx --format json evidence-log "
+                    "loopx --format json history "
                     "--goal-id replan-semantic-action-fixture "
-                    "--agent-id codex-replan-semantic-action --thin"
+                    "--agent-id codex-replan-semantic-action"
                 )
             ),
         ]

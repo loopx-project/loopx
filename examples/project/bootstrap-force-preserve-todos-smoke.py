@@ -35,7 +35,6 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopx-bootstrap-preserve-") as tmp:
         project = Path(tmp) / "project"
         project.mkdir()
-        state_file = project / ".codex/goals/bootstrap-preserve-fixture/ACTIVE_GOAL_STATE.md"
 
         initial = run_cli(
             "bootstrap",
@@ -49,6 +48,8 @@ def main() -> int:
         )
         assert initial["ok"] is True, initial
         assert initial["state_action"] == "created", initial
+        state_file = Path(initial["state_file"])
+        assert state_file == (project / ".loopx/goals/bootstrap-preserve-fixture/ACTIVE_GOAL_STATE.md").resolve()
 
         todo_state = "# Active Goal State\n\n## Agent Todo\n\n- [ ] Preserve this during reconnect.\n"
         state_file.write_text(todo_state, encoding="utf-8")

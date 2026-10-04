@@ -219,9 +219,11 @@ def _canonical_events(
             "content": content,
             "chat_id": chat_id,
         }
-        sender_type, _sender_id = _sender_identity(message)
+        sender_type, sender_id = _sender_identity(message)
         if sender_type:
             event["sender_type"] = sender_type
+        if sender_id:
+            event["sender_id"] = sender_id
         for field in ("parent_id", "root_id"):
             if message.get(field) not in (None, ""):
                 event[field] = message[field]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -11,6 +10,7 @@ from typing import Any
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
 from ...registry import atomic_write_json, read_json
+from ...control_plane.digest_envelope import sha256_envelope
 
 
 PUBLICATION_CANDIDATE_SCHEMA = "periodic_report_publication_candidate_v0"
@@ -24,7 +24,7 @@ def _canonical_digest(value: object) -> str:
     encoded = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _identity(value: object, *, prefix: str) -> str:

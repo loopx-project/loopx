@@ -328,6 +328,10 @@ executor revision、consumption ID、核验投影、`simulation: false`、
 及独立 operation cursor。`loopx_operation pending` 接受绑定游标；CLI 投影用
 `manager-inbox read --operation-cursor CURSOR`。新增/改变工作应无游标重读，
 读完一页或遍历结束不代表义务已解决。
+自有原生工具与 Turn 启动使用相同的精确执行主体过滤，并在分页前生效。
+同一 Agent 另一 Todo/session/profile 的当前批准不能出现在本任务页面或挤占其
+续接信息；游标也不能跨执行主体复用。判定仍由既有 TS Inbox owner 负责，
+不新建宿主自有 Inbox。
 
 共享 TS 操作 frame 展示执行者、固定模型/思考深度、Goal/Agent/Todo 范围、可选来源
 上下文，并区分：已确认但外接认证不可用、已确认待绑定受管回合、已消费待证据、未知须
@@ -348,8 +352,87 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
 意外返回 actor 成功，也没有 proof-import 捷径。
 
-本切片不实现确认后的即时宿主唤醒，`host_delivery: "not_attempted"` 保持真实。
-沿既有已准入 Turn/delegation 续接；后续持久唤醒复用其调度/session owner，
-不启动平行 resumed 执行者。宣称投研最小闭环前，仍须证明安装、真实用户批准、
+启用 operation 的已准入 Turn 自动携带其精确 Goal/Agent/Todo/session/profile 的
+规范确认请求定位信息，并在 Inbox 分页前过滤范围。仅在原生 `turn/start` 返回接受后，
+既有 action store 才记录不可覆盖的首次启动证据：确认事件/时间、claim、LoopX Turn key、
+原生 Turn 和接受时间。`host_delivery: "native_start_accepted"` 只证明该观察，
+不授予消费或外部效果权限，也不声称回合仍在运行。回执失败时先停止、不分发 operation 工具；
+后续回合保留首次观察。CLI/Inbox、Dashboard 和 Lark 区分原生续接接受、授权消费和真实结果。
+
+认证确认 callback 现在可通过既有 delegation owner 请求一次续跑，前提是具有
+**独立且默认关闭的 operator 启动 grant**。grant 指定已有 requester/binding，
+不采用卡片提供的模型、工作树或执行者。操作 owner 核对精确
+Goal/Agent/Todo/session/profile、确认期限和未消费状态；普通 Turn 仍负责 quota、
+租约、验收及原生启动。原生适配器在恢复前重验完整生效配置，拒绝新建/替换会话。
+用户确认不授予启动配置或垂域执行权限。
+
+规范 operation id 固定唯一持久 delegation 身份。callback 重放只读原定位信息，
+不再次 spawn 或运行产物验收；丢失启动 ACK 仍由原 journal 恢复，不在回调自动续跑
+不确定的 worker。移除 operator grant 会在下一次 callback 边界读回生效，
+不追溯取消已经开始的工作。`delegation_requested` 不证明原生启动、完成验收或
+来源送达；原生接受前 `host_delivery: "not_attempted"` 保持真实。
+启用方式见[原配置入口](../../reference/local-delegation.md#confirmed-operation-callback-continuation)。
+
+File/SQLite 资格化使用合成认证确认夹具、真实 detached delegation worker 与
+CLI/Turn 路径，以及合成原生传输；证明原会话启动，但未消费批准或执行垂域操作。
+夹具故意等待，不冒充 Todo 完成。本增量未跑真实 Lark/模型或金融探针。
+前端 grant 编辑及经认证的原来源受众结果回传仍为独立的**部分交付**义务；
+目前只能通过 operator-owned collector 配置启用，不另建 UI 状态权威。
+宣称投研最小闭环前，仍须证明安装、真实用户批准、
 绑定原生消费、垂域提交前检查与原系统证据、结果验收及原卡/受众读回。
 Core PR 仍须 owner review，不在合并前自行安装。
+
+### 准备提案与规范返回受众读回
+
+准备提案不是领域执行。已准入任务提供不可变条款时，可以在确认和消费前调用
+`prepare`，其 `execution_allowed: false` 是正常结果；`context/pending/inspect`
+也不要求先消费。先核对已有提案，不重复创建；准备、等待和最终答复文字都不能
+证明任务完成。领域副作用仍要求原生工具连接上的首次成功消费回执。
+
+受管执行器只有一个不同的已登记 Goal/Agent 返回受众时自动选择；存在多个历史
+受众时，必须由宿主显式传入 `--codex-operation-source-route-json
+'{"host_surface":"codex-app","thread_id":"REGISTERED_THREAD"}'`。
+这只是已登记的回传受众，不是认证、session 替换或执行许可；模型不能改投。
+受管重复绑定会去重；无登记受众保持历史 null 路由，非受管 adapter 保留既有
+无 source-route 投影，不调用这条受管解析。准备落盘后，返回受众进入原确认摘要，不可修改。
+
+源受众选择与准备提示构成有界后台切片，不是完整产品交付。下面的个人工作台
+配套改动仍在同一计划内单独完成首屏评审后交付。工作台在可见时读取规范
+action list，按范围隔离查询并取消旧请求，限制
+单次请求时长，不在后台做间隔读取。复用管家简报将已知 Goal 的待确认操作连到
+原抽屉，溢出项通过既有对话可达。抽屉按同一提案 ID 跟随投递、确认、消费、
+结果和取消。没有投递回执的请求不能声称群卡已存在；取消只是行政终态，不是
+执行结果。读回失败明确提示缓存可能过期并允许重试；浏览不确认也不执行操作。
+
+配套 UI 验收通过隔离的规范后端快照、loopback HTTP 夹具和打包页面，覆盖中英文及
+桌面/移动端。这些合成回执不证明真实用户批准、真实投递或确认后的即时唤醒。
+真实点击到原受管 session 的派发延迟仍是独立的必需验收项，必须复用现有调度
+和 session owner。
+后台切片的聚焦原生/规范化测试不证明其提交包含配套 UI，也不证明源投递已经接通。
+
+### 自动续接与原受众返回：剩余交付
+
+当前经过认证的确认回调会登记 claim 并投影受管交接，但不会启动原宿主。
+原生 `report` 将结果写回规范存储并在工具连接上返回；投递恢复更新原 Lark 卡片。
+两者都不等于已向选定的源会话投递。`outcome_observed` 操作不在待办 Inbox 中，
+因此读完 Inbox 也不能证明已返回原受众。
+
+这两个缺口继续由同一个实现 Todo 和 capability owner 负责。后续有界交付按以下
+顺序验收；这是规划，不是准备/读回切片已经具备或验证的功能：
+
+| 交付 | 复用的权威与必需边界 | 退出证据 |
+| --- | --- | --- |
+| 确认事件触发续接 | 原 Turn/session owner 与显式的 operator-owned 启动绑定；回调只传操作定位信息，不复制私有条款或新增执行许可 | 经过正常 Goal、Todo、quota、租约及过期核对后自动启动同一个原生 session/profile；重复回调最多产生一个活动续接 |
+| 重启恢复 | 既有 Turn journal 与内核 single-flight 锁；不把已终止的等待 Turn 盲目当成新调用续跑 | 覆盖启动前后崩溃与响应丢失，恢复原尝试；已消费/未知操作只核对证据、不重新提交；停止、session 替换及 profile 漂移拒绝新启动 |
+| 原受众返回 | 规范操作/结果与既有 return-delivery 语义，选定受众须有合格 adapter | 先登记投递尝试，再真实读回原受众处相同 operation ID、结果阶段及 digest；未知投递不盲目重发；Lark 原卡与源会话回执分开 |
+| 原消费者验收 | 已安装且固定的 runtime，以及原测试 Todo 上真实的非金融确认 | 实际确认、宿主启动、消费、结果及源投递时间；一次消费；首轮健康路径从确认到宿主启动不超过 60 秒 |
+
+60 秒是首轮验收目标，不是已证明的延迟或调度保证。宿主启动必须由原生 provider
+接受的 Turn 与匹配的连接元数据证明，仅创建进程或本地写入 `started_at` 不够。
+相邻的 [delegation lead 唤醒改动](https://github.com/loopx-project/loopx/pull/5304)
+面向原发起的内部 Goal Chat 会话；其判定/恢复边界可供复用，不证明受管操作的
+确认唤醒或外部源受众已送达。前端刷新间隔、后续 heartbeat、
+手动 resume 及工程转述消息都不算自动续接或源返回。路由登记不等于投递 adapter
+已合格；无关的 BotMux 绑定或附着 Desktop 身份不能替代。新增自动启动配置必须
+复用既有配置 owner，并在受影响的产品入口展示生效状态。看到上述回执前保留原
+消费者 Todo 为开放状态，不把已取消测试卡或合成回执当成真实批准。

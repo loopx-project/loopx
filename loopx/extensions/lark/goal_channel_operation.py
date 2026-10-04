@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import hashlib
 import html
 import json
-import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -36,16 +35,13 @@ from .goal_channel_message_delivery import (
     GoalChannelMessageDeliverySession,
     resolve_bound_goal_channel,
 )
+from .identity_shapes import require_card_callback_identity
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 
 
 OPERATION_CARD_ACTION_SCHEMA_VERSION = "loopx_operation_card_action_v0"
 OPERATION_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_operation_callback_receipt_v0"
 OPERATION_EXECUTOR_CAPABILITY_ID = "human-confirmed-operation-executor"
-_EVENT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,240}$")
-_MESSAGE_ID = re.compile(r"^om_[A-Za-z0-9_-]+$")
-_CHAT_ID = re.compile(r"^oc_[A-Za-z0-9_-]+$")
-_OPEN_ID = re.compile(r"^ou_[A-Za-z0-9_-]+$")
 
 
 def _digest(value: object) -> str:
@@ -92,12 +88,14 @@ def _field_markdown(fields: list[Mapping[str, Any]]) -> str:
     )
 
 
-def _operation_review_frame(proposal: Mapping[str, Any]) -> dict[str, Any]:
+def _operation_review_frame(
+    proposal: Mapping[str, Any], *, now_ms: int | None = None
+) -> dict[str, Any]:
     """Read provider-neutral operation presentation semantics from TypeScript."""
 
     plan = effect_runtime_result(
         "presentation.action_review_plan.compile",
-        {"proposal": proposal},
+        {"proposal": proposal, **({"now_ms": now_ms} if now_ms is not None else {})},
     )
     if not isinstance(plan, Mapping):
         raise ValueError("operation review plan is unavailable")
@@ -136,8 +134,10 @@ def _result_delivery_current(proposal: Mapping[str, Any]) -> bool:
 
 def build_goal_channel_operation_card(
     proposal: Mapping[str, Any],
+    *,
+    now_ms: int | None = None,
 ) -> dict[str, Any]:
-    frame = _operation_review_frame(proposal)
+    frame = _operation_review_frame(proposal, now_ms=now_ms)
     if frame.get("kind") != "confirmation":
         raise ActionConflictError("operation is not awaiting confirmation")
     projection = frame.get("content")
@@ -356,11 +356,12 @@ def build_goal_channel_operation_result_card(
     pending = frame.get("kind") == "pending"
     unknown = result_kind == "unknown"
     not_executed = result_kind == "not_executed"
+    cancelled = result_kind == "cancelled"
     rejected = result_kind == "rejected"
     simulated = result_kind == "simulation_completed"
     template = (
         "orange"
-        if pending or unknown or not_executed
+        if pending or unknown or not_executed or cancelled
         else "red"
         if rejected
         else "green"
@@ -372,6 +373,8 @@ def build_goal_channel_operation_result_card(
         if unknown
         else "已结束，未执行"
         if not_executed
+        else "确认请求已取消，未执行"
+        if cancelled
         else "已拒绝"
         if rejected
         else "模拟完成"
@@ -382,6 +385,8 @@ def build_goal_channel_operation_result_card(
         result_label = "执行授权已消费，等待真实结果"
     elif pending and frame.get("executionState") == "managed_turn_pending":
         result_label = "已确认，等待绑定的受管回合；尚未执行"
+    elif pending and frame.get("executionState") == "managed_turn_started":
+        result_label = "原生续接已接受；授权仍待消费，尚无执行结果"
     summary = str(frame.get("summary") or result_label)
     return {
         "schema": "2.0",
@@ -404,7 +409,7 @@ def build_goal_channel_operation_result_card(
                     "tag": "text_tag",
                     "text": {"tag": "plain_text", "content": result_label},
                     "color": "orange"
-                    if pending or unknown or not_executed
+                    if pending or unknown or not_executed or cancelled
                     else "red"
                     if rejected
                     else "green",
@@ -496,7 +501,9 @@ def deliver_goal_channel_operation_card(
         agent_id=agent_id,
     )
     route = goal_channel_delivery_route(goal_id, lambda _goal_id: binding)
-    card = build_goal_channel_operation_card(proposal)
+    card = build_goal_channel_operation_card(
+        proposal, now_ms=int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
     card_digest = _digest(card)
     key = str(operation["confirmation_digest"])
     if not execute:
@@ -541,6 +548,11 @@ def deliver_goal_channel_operation_card(
             blocker="sender_identity_unverified",
             failure_stage="verify_sender_identity",
         )
+    # Identity verification can cross the deadline. Fresh delivery uses the
+    # shared TS expiry guard; historical callback reconstruction stays timeless.
+    build_goal_channel_operation_card(
+        proposal, now_ms=int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
     sent = dict(session.send(card, key, route))
     message_id = str(sent.get("message_id") or "")
     try:
@@ -964,6 +976,7 @@ def handle_goal_channel_operation_callback(
     profile: str,
     runner: CommandRunner = default_subprocess_runner,
     executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    managed_turn_wake: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     action = _callback_action(event)
     callback_token = str(event.get("token") or "").strip()
@@ -973,14 +986,7 @@ def handle_goal_channel_operation_callback(
         or any(ord(character) < 32 for character in callback_token)
     ):
         raise ValueError("operation callback update token is invalid")
-    for field, pattern in (
-        ("event_id", _EVENT_ID),
-        ("message_id", _MESSAGE_ID),
-        ("chat_id", _CHAT_ID),
-        ("operator_id", _OPEN_ID),
-    ):
-        if not pattern.fullmatch(str(event.get(field) or "")):
-            raise ValueError(f"operation callback {field} is invalid")
+    require_card_callback_identity(event, error_prefix="operation callback")
     if str(event.get("host") or "") != "im_message":
         raise ValueError("operation callback host is unsupported")
     store = ChatActionStore(action_store_root)
@@ -1055,6 +1061,7 @@ def handle_goal_channel_operation_callback(
         },
     )
     dispatch_lock = store.root / f"{action['operation_id']}.dispatch.lock"
+    wake_receipt = None
     with exclusive_file_lock(
         dispatch_lock,
         agent_id="loopx-lark-operation",
@@ -1071,6 +1078,11 @@ def handle_goal_channel_operation_callback(
             # existing Inbox. No simulator, host resume or financial effect is
             # run in the callback process, and no outcome is manufactured.
             store._agent_operation_plan(current, action="project")
+            from ...control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
+
+            wake_receipt = dispatch_confirmed_operation_wake(
+                current, runtime_root=runtime_root, configuration=managed_turn_wake
+            )
         elif current_operation.get("lifecycle_state") == "claimed":
             outcome = dict(
                 executor(current)
@@ -1141,6 +1153,7 @@ def handle_goal_channel_operation_callback(
             else None
         ),
         "callback_ack_is_execution_receipt": False,
+        "managed_turn_wake": wake_receipt,
         "card_update_verified": update_verified,
         "status": (
             "authorization_pending"

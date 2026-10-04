@@ -67,9 +67,73 @@ export const larkCliMissingScenario = {
     } finally {
       await context.close();
     }
+
+    // The provider URL arrives asynchronously. Browser popups retain the click
+    // gesture; native hosts return no popup proxy and must receive the actual
+    // provider URL, never a placeholder LoopX workspace. No OAuth grant is made.
+    for (const desktop of [false, true]) {
+      let polls = 0;
+      const verificationUrl = "https://example.org/verify?request=synthetic";
+      const setup = await openWorkspacePage(browser, url, {
+        collectCoverage,
+        beforeGoto: async (_api, setupPage) => {
+          await setupPage.addInitScript(({ desktop }) => {
+            if (desktop) window.__TAURI__ = { core: {} };
+            window.setupDestinations = [];
+            window.open = (destination) => {
+              window.setupDestinations.push(String(destination));
+              if (desktop) return null;
+              return {
+                closed: false,
+                close() {},
+                location: {
+                  set href(value) { window.setupDestinations.push(value); },
+                },
+              };
+            };
+          }, { desktop });
+          await setupPage.route(/\/api\/chat\/lark\/app-setups/u, (route) => {
+            const method = route.request().method();
+            if (method === "GET") polls += 1;
+            return route.fulfill({
+              contentType: "application/json",
+              json: {
+                ok: true,
+                app_ref: "synthetic-app",
+                error: null,
+                setup_id: "synthetic-setup",
+                status: method === "POST" ? "starting" : method === "DELETE" ? "cancelled" : "waiting_for_feishu",
+                verification_url: method === "GET" ? verificationUrl : null,
+              },
+            });
+          });
+        },
+      });
+      try {
+        await setup.page.getByRole("button", { name: "设置", exact: true }).click();
+        await setup.page.getByRole("button", { name: "Lark", exact: true }).click();
+        await setup.page.locator(".personal-lark-tabs").getByRole("button", { name: /^Lark Apps/u }).click();
+        await setup.page.getByRole("button", { name: "新建 Lark App", exact: true }).click();
+        const workspaceUrl = setup.page.url();
+        await setup.page.getByRole("button", { name: "在飞书中继续", exact: true }).click();
+        await setup.page.locator(`a[href="${verificationUrl}"]`).waitFor({ state: "visible" });
+        await setup.page.waitForResponse((response) => response.request().method() === "GET" && response.url().endsWith("/app-setups/synthetic-setup"));
+        if (polls < 2) throw new Error("Setup did not observe the repeated provider URL");
+        const destinations = await setup.page.evaluate(() => window.setupDestinations);
+        const expected = desktop ? [verificationUrl] : [workspaceUrl, verificationUrl];
+        if (JSON.stringify(destinations) !== JSON.stringify(expected)) {
+          throw new Error(`Wrong ${desktop ? "native" : "browser"} setup destinations: ${JSON.stringify(destinations)}`);
+        }
+        await setup.page.getByRole("button", { name: "取消", exact: true }).click();
+        await setup.page.locator("#new-lark-app-title").waitFor({ state: "hidden" });
+      } finally {
+        await setup.close();
+      }
+      context.coverageEntries.push(...setup.coverageEntries);
+    }
     return {
       coverageEntries: context.coverageEntries,
-      note: "A missing lark-cli keeps Goal repository context and disables Lark App setup with its reason.",
+      note: "Missing CLI recovery and asynchronous setup destinations in browser/native hosts, without OAuth activation.",
     };
   },
 };

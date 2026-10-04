@@ -122,8 +122,8 @@ def register_coordination_shadow_command(
                 choices=("preserve", "hard_lease"),
                 help=(
                     "Explicitly preserve the source handoff mode or migrate it to hard_lease "
-                    "inside the reviewed authority cutover. Omit to retain the v0 requirement "
-                    "that the source already uses hard_lease."
+                    "inside the reviewed authority cutover. The default preserves ownership "
+                    "policy; provider promotion does not enable hard leases."
                 ),
             )
         if name == "read-candidate":
@@ -383,20 +383,15 @@ def handle_coordination_shadow_command(
                 )
             else:
                 registered_agents = registered_agent_ids_for_goal(goal)
+                handoff_strategy = args.handoff_mode_migration or "preserve"
                 operation_digest = _projection_version(
                     {
                         "goal_id": args.goal_id,
                         "projection": projection,
                         "minimum_operations": minimum_operations,
                         "required_event_kinds": args.require_event_kind,
-                        **(
-                            {
-                                "handoff_mode_migration": args.handoff_mode_migration,
-                                "registered_agents": registered_agents,
-                            }
-                            if args.handoff_mode_migration is not None
-                            else {}
-                        ),
+                        "handoff_mode_migration": handoff_strategy,
+                        "registered_agents": registered_agents,
                     }
                 )
                 promotion = review_local_coordination_authority_promotion(
@@ -408,12 +403,8 @@ def handle_coordination_shadow_command(
                     source_snapshot=source_snapshot,
                     minimum_operations=minimum_operations,
                     required_event_kinds=args.require_event_kind,
-                    handoff_mode_migration=args.handoff_mode_migration,
-                    registered_agents=(
-                        registered_agents
-                        if args.handoff_mode_migration is not None
-                        else None
-                    ),
+                    handoff_mode_migration=handoff_strategy,
+                    registered_agents=registered_agents,
                     execute=bool(args.execute),
                 )
             payload["executed"] = promotion.get("executed") is True

@@ -57,7 +57,7 @@ function assertNoLeak(text, label) {
     /\/private\//,
     new RegExp("byte" + "dance", "i"),
     new RegExp("lark" + "office", "i"),
-    new RegExp("\\.codex/goals|\\.goal-" + "harness"),
+    new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness"),
     new RegExp("raw_" + "internal_note"),
     /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/,
     /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i,
@@ -145,8 +145,17 @@ for (const locale of ["", "zh/"]) {
     const html = await readFile(pagePath, "utf8");
     const language = locale ? "zh-CN" : "en";
     const interactive = article === "application-scenarios/";
-    if (!html.includes(`<html lang="${language}">`) || !html.includes("<h1>") || (!interactive && html.includes("<script"))) {
+    const catalog = article === "";
+    if (!html.includes(`<html lang="${language}">`) || !html.includes("<h1>") || (!interactive && !catalog && html.includes("<script"))) {
       throw new Error(`Blog must provide static content in ${language}: ${pagePath}`);
+    }
+    if (catalog) {
+      const scriptHref = locale ? "../../blog/blog-index.js" : "../blog/blog-index.js";
+      const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((match) => match[0]);
+      if (scripts.length !== 1 || scripts[0] !== `<script type="module" src="${scriptHref}"></script>`) {
+        throw new Error("Blog catalog may only enhance its static listings with the shared sorting module");
+      }
+      assertExists(resolve(dirname(pagePath), scriptHref));
     }
     if (interactive) {
       const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((match) => match[0]);

@@ -8,6 +8,7 @@ counted loss, visible clocks, and a total status enum.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -700,11 +701,9 @@ def test_projection_surfaces_event_loss_and_integrity() -> None:
 
 
 def test_ledger_ref_is_relative_and_goal_scoped(tmp_path: Path) -> None:
-    assert ledger_ref("goal:alpha") == "reliability_diagnostics/goal_alpha.ndjson"
-    assert (
-        ledger_path(tmp_path, "goal-a")
-        == tmp_path / "reliability_diagnostics" / "goal-a.ndjson"
-    )
+    ref = ledger_ref("goal:alpha")
+    assert re.fullmatch(r"reliability_diagnostics/by-goal/[0-9a-f]{64}\.ndjson", ref)
+    assert ledger_path(tmp_path, "goal:alpha") == tmp_path / ref
     with pytest.raises(ValueError):
         ledger_ref("../escape")
 

@@ -1,6 +1,11 @@
 # 主要状态机与状态流转
 
-先给结论：**LoopX 确实由多组状态机协作驱动；但最高一层不是
+前面各章把机制拆开讲：02b 提出长程运行的四条要求，状态底座讲持久事实与只读投影，
+工作图讲 Todo、claim 与权限，03 讲一轮内部的事务顺序。本章是它们汇合的地方。
+那些机制在文档里分开读时各自成立；真正需要回答的问题在这里：**它们怎样接回同一
+条循环？**
+
+先给结论：**LoopX 由多组状态机协作驱动；但最高一层不是
 “九台机器互相发消息”，而是一条 effectful Agent Loop。** Harness 解释 Agent 或 Host 提出的
 effect request，再由 Todo、Gate、Quota、Settlement、Scheduler 等领域状态机判断这一小段流程的
 合法动作。它们通过持久事实、typed contract、guarded transition 和 receipt 衔接，而不是直接
@@ -8,7 +13,33 @@ effect request，再由 Todo、Gate、Quota、Settlement、Scheduler 等领域�
 
 LoopX 不靠一个巨型状态机推进 Goal。它把持久工作、单轮决策、证据结算、调度和界面投影
 交给有明确 owner 的协作状态机。本章先建立名词和抽象层级，再解释为什么这样设计，随后看
-协作总图，最后才逐组展开状态机。这样你可以先理解主线，再按需深入某一组规则。
+协作总图，再逐组展开状态机，最后交代这套设计付出的代价。这样你可以先理解主线，再按需深入某一组规则。
+
+## 从一个坏的结局开始
+
+本章的场景需要跑完几轮才会出现，所以先看时间线：
+
+```text
+周一 14:00  Goal 已是 active。Todo 图完整：实现、测试、文档各有归属。
+周一 17:30  一轮工作完成。Agent 修改了 Vision：接受一条新的验收路径。
+周二 09:00  进程被杀（部署、OOM 或用户按停止）。
+周二 09:10  新实例接管。它读到 active 的 Goal、完整的 Todo 图、已 ACK 的调度记录。
+周二 09:10  所有字段都合法。Todo status 在四个持久 status 之内；Vision checkpoint
+            格式正确；scheduler 的 last_checked_at 是最新的。
+周二 09:10  但它无法判断一件事：Goal 的 acceptance 在周一 17:30 已被改过。
+            File/SQLite authority 路径上，checkpoint 的 read context 会覆盖 Goal 与
+            acceptance 基线的 digest，改过之后会判 stale 并要求重读；而在 acceptance
+            不由该路径携带的模式下，没有任何 owner 把 checkpoint 绑定到 acceptance 版本。
+周三 10:00  没有人能说清重规划是否已经完成。
+周三 10:00  控制面继续按旧路线推进。没有一条规则说这不允许。
+```
+
+这个结局里没有哪一台状态机坏了。Todo lifecycle 判对了 status，quota 按 current source facts
+重新编译了 contract，settlement 的 receipt 齐全，scheduler ACK 也真的写了回执。每一台机器
+单独看都给出正确答案，合起来却说不清"工作到了哪一步"。
+
+这就是前面几章拆开讲时看不见的接缝：**每台机器各自拥有的是一部分事实，循环由这些事实之间
+的接力构成。** 某台机器把结论写成持久事实，下一台读它，不会直接调用彼此的内部状态。
 
 ## 先读哪一层：一条 Loop、三层抽象、九组状态机
 
@@ -133,7 +164,7 @@ transition owner 才决定事实是否真的改变。
 回答的问题，不是 LoopX 1.0 已经提供的统一 schema：
 
 ```yaml
-GoalControlSnapshot:                 # desired read model，不是当前唯一可写 schema
+GoalControlSnapshot:                 # 概念视图；字段是待回答的问题，不是已实现字段名
   identity:
     goal_id: ...
     activation_state: active | stopped
@@ -162,7 +193,7 @@ GoalControlSnapshot:                 # desired read model，不是当前唯一�
 LoopX 1.0 **没有一个可以整体覆盖的 `GoalState` 大对象**。更重要的是，`objective`、non-goals、
 acceptance、permissions 和 terminal conditions 目前还没有统一的 typed canonical storage；上面的
 `intent` 是目标模型，不应被描述成已经落地的 authoritative envelope。当前 shared Goal alignment 是
-只读聚合：它从 event log、Markdown active state 或 canonical Todo snapshot 取得 source basis，并用
+只读聚合：Todo basis 来自当前选定的 Markdown active state 或 canonical Todo snapshot，历史记录按其 owner 补充证据；旧 Todo event API 已退役。聚合使用
 独立 `todo_basis` 标识 Todo/lease snapshot，再投影 drift 与 conflict：
 
 | 常见抽象字段 | LoopX 的实际表达 |
@@ -170,7 +201,7 @@ acceptance、permissions 和 terminal conditions 目前还没有统一的 typed 
 | `goal_id` | registry 与所有 goal-scoped event 的稳定 identity |
 | `phase` | Goal activation 只有 `active | stopped`；阶段路线属于 Agent Vision / Todo，而不是通用 Goal phase |
 | `objective` / `acceptance` / `permissions` / terminal conditions | 目前分散在项目材料、Vision、Todo 与运行约束中；没有统一 typed canonical intent revision |
-| `completed_requirements` / `pending_requirements` | 由可用的 Todo、Vision checkpoint、acceptance gap 和 frontier facts 聚合；不是独立可写列表 |
+| 已完成 / 待完成的要求 | 概念占位，不是当前字段名；alignment 输出中的对应项是 `frontier_basis`，其余由 Todo、Vision checkpoint、acceptance gap 与 frontier facts 聚合，且不是独立可写列表 |
 | `artifacts` / `evidence` / `blockers` | 保存在 Todo、run、event 和 receipt 中的引用与 typed facts |
 | `version` | 按 owner 使用 event `append_sequence`、source checksum 或 opaque provider revision；不存在全局 Goal version |
 
@@ -194,13 +225,13 @@ flowchart TD
 
 这里的“CAS”是并发控制原则，不是假装全仓只有一个整数 `version`：
 
-- event-sourced Todo 会比对 validation 时的 checksum、last event 与 append sequence，匹配后追加事件；
+- Todo completion 会在取得 mutation lock 后比对 admission 相关的字段快照（`status`、`completion_continuation`、`successor_todo_ids`、`validation_command_argv` 等），快照不一致即拒绝，确保针对某份声明的 validation 不能授权另一份已持久化的 Todo；
 - shared authority store 以 opaque `expected_provider_revision`（file provider 中对应 generation）做真正的 compare-and-swap；`authority_revision` 和 `lease_epoch` 不能代替它；
 - local-state correctness 模块会在 dry-run/shadow 中构造 `expected_revision`、per-Goal lock、lease 与 idempotency envelope；它明确不代表当前 apply path 已执行这些保证，实际 lock、write 与 event 仍由 caller 负责；
 - settlement 再以 `goal_id + agent_id + turn_instance_id` 绑定 writeback、spend 与 scheduler receipt。
 
 对应的源码锚点分别是
-[`event_writeback.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/event_writeback.py)、
+[`completion_transaction.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py)、
 [`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py)、
 [`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts)、
 [`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py)
@@ -230,8 +261,9 @@ transition，而不是让它成为一段失去来路的聊天结论。这里的�
 
 ## 九组状态机怎样组成一条 Loop
 
-现在再看状态图。维护者级地图把控制面拆成九组协作状态机；“九”是当前核心规则的教学地图，
-不是一个要求所有 extension 都注册九台 runtime service 的协议常量。本书按读者任务把它们组织为四层：
+现在把刚才那条时间线接回整条循环。维护者级地图把控制面拆成九组协作状态机；“九”是当前
+核心规则的教学地图，不是一个要求所有 extension 都注册九台 runtime service 的协议常量。
+本书按读者任务把它们组织为四层：
 
 | 层 | 主要机器 | 回答的问题 |
 | --- | --- | --- |
@@ -677,3 +709,74 @@ coverage-backed `no_followup` 都可以诚实收口；关键是结果可追溯�
 完整维护者级九机状态表见
 [State Machines](/loopx/docs/product/core-control-plane/state-machine/)。修改规则时，不要从本章的教学图
 反向复制实现；先确认当前 typed owner、协议 schema、characterization fixture 和 migration boundary。
+
+## 代价与边界：九组状态机买到了什么
+
+本章开头那条时间线说明：分开拥有事实换来的是每台机器可以独立演进、独立修复。代价是接力
+本身成了需要维护的东西，而且它不会被任何一台机器单独发现。
+
+**代价一：接力点必须显式。** 一条结论从"某台机器的判断"变成"下一台机器可读的事实"，中间
+要有 writeback 和 receipt。缺了这一步，两台机器各自都是对的，循环却断了。这也是本章开头
+那条时间线的形状。
+
+**代价二：读到的可能已经过期。** 每台机器按 current source facts 判定，而读取与提交之间
+存在窗口。约束这个窗口的机制是 revision basis、checksum 和 CAS，它们让过期写入被拒绝，
+代价是调用方必须处理 `needs_rebase` 并重新读取。
+
+**代价三：同一个问题要问多次。** 九组机器各自维护自己的 interpretation table，同一个现象
+（例如"这一轮该不该动"）会在 quota、scheduler 和 frontier 三处分别被判定一次。重复的是
+入口而非知识；好处是每条规则只有一个 owner，坏处是排障必须按 owner 逐个走。
+
+**代价四：跨组的性质无法由任何单组保证。** 闭环是四层嵌套合取，终局判定要求整条 frontier
+没有未解决项。这意味着"看起来快完成了"无法作为可判定的状态，必须逐项证明。
+
+**边界一：九组是教学地图，并非协议常量。** 没有一个 runtime 要求注册九台 service；extension
+不需要对齐这个数字。真正有约束力的是 typed owner、协议 schema 和 transition 规则。
+
+**边界二：这张地图不替代 migration boundary。** 图中的 owner 与当前实现语言是两个维度。
+某条语义已经由 TypeScript owner 承担时，从教学图反向在 Python 里重建一遍，就会制造第二个
+事实源。
+
+**边界三：幂等恢复只覆盖 journal 管理的步骤。** 带持久 journal、`effect_ref` 和 provider
+readback resolver 的 settlement step 才享有这项保证。普通的任意外部调用不会因为本章讲了
+reconcile 就自动去重；resolver 缺失或返回未知状态时，settlement 会 fail closed。
+
+**边界四：图不上前线。** 本章的图是解释用的，并非实现规格。修改规则要先确认当前 typed
+owner、协议 schema、characterization fixture 和 migration boundary。
+
+## 具名失败：接力断在哪里
+
+上面四条代价各自对应一类可以观察到的失败。它们都能从状态读出来，不需要读 transcript。
+
+**失败一：结论没有变成事实。** 某台机器算出本轮判定，但没有经过 writeback 就结束。下一轮
+重新读取 source facts，得到的是同一个旧结论。症状是同一个 action 被反复选中，而 Todo
+图上没有任何变化。
+
+**失败二：事实被过期写入覆盖。** 读取 basis 之后 source 已变化，而提交没有走 CAS。症状是
+两个 Agent 的进展互相抹掉，或者一个 lease 已经被换掉却继续写入。`needs_rebase` 就是为这条
+准备的拒绝路径。
+
+**失败三：投影被当成事实源。** dashboard 上改一个 row 让显示正确，source 没变。症状是
+UI 与 CLI 长期不一致，而每次刷新都回到旧值。恢复方式是修 source 或 builder，再 readback。
+
+**失败四：停止的理由并不等于闭环。** Goal `stopped`、quota paused 或 peer coordination blocked
+都可能停止轮询，它们各自是合法停止，但不证明 Goal 闭环。只有 `terminal_no_followup` 表达
+"因已验证 Goal closure 而停止"。把这几者混作一谈，会让一个被暂停的 Goal 看起来像已完成。
+
+## 不变式
+
+1. **循环由事实接力构成，不由调用关系构成。** 一台机器改变另一台的行为，方式是把结论写成
+   持久事实，不会直接改它的状态。
+2. **每台机器只对自己的 decision table 与合法 transition 负责。** 单台给出正确答案，不保证
+   整条循环成立。
+3. **派生结果不可写。** 显示层拿到的是 derivation；要改变它，改 source 再重算。
+4. **过期写入必须被拒绝。** 读取与提交之间的窗口由 revision basis 与 CAS 约束，调用方负责
+   处理拒绝结果。
+5. **终局是合取。** 完整且闭合的 Todo source、没有未解决 frontier、结构化 `no_followup`
+   intent，三者同时成立才算闭环。
+6. **教学地图不等于实现规格。** 改规则先确认 typed owner、协议 schema、characterization
+   fixture 和 migration boundary。
+
+这六条回答的是同一个问题：**当机制被拆到九组机器、又只能通过持久事实互相说话时，凭什么
+相信它们还在驱动同一条循环？** 本章的答案是：能，但前提是接力点显式、派生不可写、过期写入
+被拒，而终局必须逐项证明。

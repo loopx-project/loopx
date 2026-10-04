@@ -23,7 +23,7 @@ from loopx.control_plane.work_items import autonomous_replan_ack as replan_ack_r
 from loopx.control_plane.goals import global_registry_shadow as global_registry_shadow_read_model  # noqa: E402
 from loopx.control_plane.goals import path_resolution as path_resolution_read_model  # noqa: E402
 from loopx.control_plane.agents import management_projection as management_projection_read_model  # noqa: E402
-from loopx.control_plane.runtime import agent_scoped_evidence_log as evidence_log_read_model  # noqa: E402
+from loopx.control_plane.runtime import agent_evidence_history as evidence_log_read_model  # noqa: E402
 from loopx.control_plane.runtime import run_compaction as run_compaction_read_model  # noqa: E402
 from loopx.control_plane.runtime import status_projection_cache as status_cache_read_model  # noqa: E402
 from loopx.control_plane.runtime import time as runtime_time_read_model  # noqa: E402

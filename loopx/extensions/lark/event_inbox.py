@@ -29,15 +29,17 @@ from .goal_channel_transport import (
     OPEN_ID_PATTERN,
     lark_provider_mention_identities,
 )
+from .identity_shapes import (  # noqa: F401
+    LARK_CHAT_ID_PATTERN as CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_PATTERN as MESSAGE_ID_PATTERN,
+)
 
 EVENT_SCHEMA_VERSION = "lark_event_inbox_event_v0"
 CONFIG_SCHEMA_VERSION = "lark_event_inbox_config_v0"
 PROCESSED_SCHEMA_VERSION = "lark_event_inbox_processed_v0"
 MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION = "lark_material_review_ledger_v0"
-MESSAGE_ID_PATTERN = re.compile(r"om_[A-Za-z0-9_-]+")
 EVENT_ID_PATTERN = re.compile(r"[A-Za-z0-9:_-]{1,200}")
 SAFE_PROFILE_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,100}")
-CHAT_ID_PATTERN = re.compile(r"oc_[A-Za-z0-9_-]+")
 REACTION_EMOJI_PATTERN = re.compile(r"[A-Za-z0-9_]{1,64}")
 REPLY_PLACEMENT_POLICIES = {"source_thread", "source_context"}
 REPLY_EDITORIAL_STYLES = {"concise", "bullet_points_preferred"}
@@ -293,6 +295,13 @@ def _event_from_payload(
         if not SENDER_TYPE_PATTERN.fullmatch(sender_type):
             return None
         event["sender_type"] = sender_type
+    sender_id = payload.get("sender_id")
+    if sender_id not in (None, ""):
+        # Opaque provider provenance, not an owner or execution grant. Keep the
+        # exact bounded identity through persistence and later private reads.
+        if not isinstance(sender_id, str) or not EVENT_ID_PATTERN.fullmatch(sender_id):
+            return None
+        event["sender_id"] = sender_id
     if "route_key" in payload:
         route_key = str(payload.get("route_key") or "").strip()
         if not ROUTE_KEY_PATTERN.fullmatch(route_key):
@@ -304,6 +313,36 @@ def _event_from_payload(
         event["parent_id"] = parent_id
     if MESSAGE_ID_PATTERN.fullmatch(root_id):
         event["root_id"] = root_id
+    if isinstance(payload.get("thread_id"), str):
+        event["thread_id"] = payload["thread_id"][:200]
+    thread_context = payload.get("thread_context")
+    if isinstance(thread_context, Mapping):
+        # Provider adapter bounds the observation; shared TS validates lineage
+        # and selects the visible excerpt. Keep it immutable on ingress replay.
+        messages = thread_context.get("messages")
+        if isinstance(messages, list) and len(messages) <= 64:
+            rows = []
+            for raw in messages:
+                if not isinstance(raw, Mapping):
+                    continue
+                text = raw.get("content")
+                text = text if isinstance(text, str) else ""
+                sender = raw.get("sender")
+                sender = sender if isinstance(sender, Mapping) else {}
+                rows.append({
+                    **{key: raw.get(key, "")[:200] if isinstance(raw.get(key), str) else ""
+                       for key in ("message_id", "conversation_id", "thread_id")},
+                    "position": raw.get("position"), "content": text[:16000],
+                    "content_truncated": len(text) > 16000 or raw.get("content_truncated") is True,
+                    "sender": {key: sender.get(key, "")[:200] if isinstance(sender.get(key), str) else ""
+                               for key in ("id", "kind")},
+                    "created_at": raw.get("created_at", "")[:80] if isinstance(raw.get("created_at"), str) else "",
+                })
+            event["thread_context"] = {
+                **{key: thread_context.get(key, "")[:200] if isinstance(thread_context.get(key), str) else ""
+                   for key in ("root_message_id", "conversation_id", "thread_id")},
+                "messages": rows, "truncated": thread_context.get("truncated") is True,
+            }
     reply_context_verified = payload.get("reply_context_verified") is True
     event["reply_context_verified"] = reply_context_verified
     event["reply_to_bot"] = bool(
@@ -311,6 +350,19 @@ def _event_from_payload(
         and "parent_id" in event
         and payload.get("reply_to_bot") is True
     )
+    # Transport only bounded provider text and its source identifiers. The TS
+    # conversation owner checks the parent/conversation join before model use.
+    reply_context = payload.get("reply_context")
+    if isinstance(reply_context, Mapping):
+        reply_content = reply_context.get("content")
+        reply_content = reply_content if isinstance(reply_content, str) else ""
+        event["reply_context"] = {
+            "message_id": str(reply_context.get("message_id") or "")[:200],
+            "conversation_id": str(reply_context.get("conversation_id") or "")[:200],
+            "content": reply_content[:16000],
+            "content_truncated": len(reply_content) > 16000
+            or reply_context.get("content_truncated") is True,
+        }
     addressed_to_bot = bool(
         event["reply_to_bot"]
         or (

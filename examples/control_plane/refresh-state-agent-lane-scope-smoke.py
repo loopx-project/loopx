@@ -221,24 +221,24 @@ def main() -> None:
                 ),
             )
 
-            expect_value_error(
-                "agent-lane refresh-state cannot update the durable active-state Next Action",
-                lambda: state_refresh.refresh_state_run(
-                    registry_path=registry_path,
-                    runtime_root_override=str(runtime),
-                    goal_id=GOAL_ID,
-                    project=project,
-                    state_file=None,
-                    classification="frontstage_side_lane_next_action_write",
-                    recommended_action=SIDE_ACTION,
-                    next_action=SIDE_ACTION,
-                    delivery_batch_scale="single_surface",
-                    delivery_outcome="outcome_progress",
-                    agent_id="codex-side-bypass",
-                    dry_run=True,
-                    sync_global=False,
-                ),
+            step_preview = state_refresh.refresh_state_run(
+                registry_path=registry_path,
+                runtime_root_override=str(runtime),
+                goal_id=GOAL_ID,
+                project=project,
+                state_file=None,
+                classification="frontstage_side_lane_next_action_write",
+                recommended_action=SIDE_ACTION,
+                next_action=SIDE_ACTION,
+                delivery_batch_scale="single_surface",
+                delivery_outcome="outcome_progress",
+                agent_id="codex-side-bypass",
+                dry_run=True,
+                sync_global=False,
             )
+            assert step_preview["progress_scope"] == "agent_lane"
+            assert step_preview["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+
 
             peer_goal_scope = state_refresh.refresh_state_run(
                 registry_path=registry_path,
@@ -379,24 +379,24 @@ def main() -> None:
                 ),
             )
 
-            expect_value_error(
-                "agent-lane refresh-state cannot update the durable active-state Next Action",
-                lambda: state_refresh.refresh_state_run(
-                    registry_path=registry_path,
-                    runtime_root_override=str(runtime),
-                    goal_id=GOAL_ID,
-                    project=project,
-                    state_file=None,
-                    classification="adapter_lifecycle_primary_default_lane_next",
-                    recommended_action=PRIMARY_AGENT_LANE_ACTION,
-                    next_action=PRIMARY_AGENT_LANE_ACTION,
-                    delivery_batch_scale="single_surface",
-                    delivery_outcome="outcome_progress",
-                    agent_id="codex-main-control",
-                    dry_run=True,
-                    sync_global=False,
-                ),
+            step_preview = state_refresh.refresh_state_run(
+                registry_path=registry_path,
+                runtime_root_override=str(runtime),
+                goal_id=GOAL_ID,
+                project=project,
+                state_file=None,
+                classification="adapter_lifecycle_primary_default_lane_next",
+                recommended_action=PRIMARY_AGENT_LANE_ACTION,
+                next_action=PRIMARY_AGENT_LANE_ACTION,
+                delivery_batch_scale="single_surface",
+                delivery_outcome="outcome_progress",
+                agent_id="codex-main-control",
+                dry_run=True,
+                sync_global=False,
             )
+            assert step_preview["progress_scope"] == "agent_lane"
+            assert step_preview["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+
 
             state_refresh.now_local = lambda: "2026-06-20T00:04:00+00:00"
             primary_next_payload = state_refresh.refresh_state_run(
@@ -418,7 +418,7 @@ def main() -> None:
             assert primary_next_payload["progress_scope"] == "goal", primary_next_payload
             assert primary_next_payload["agent_id"] == "codex-main-control", primary_next_payload
             assert primary_next_payload.get("agent_lane") is None, primary_next_payload
-            assert primary_next_payload["active_state_next_action_update"]["updated"] is True
+            assert primary_next_payload["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
 
             primary_goal_status = collect_status(
                 registry_path=registry_path,
@@ -433,7 +433,7 @@ def main() -> None:
             )
             assert primary_goal_item["status"] == "adapter_lifecycle_primary_goal_next"
             assert primary_goal_item["recommended_action"] == PRIMARY_AGENT_LANE_ACTION
-            assert primary_goal_item["active_state_next_action"] == PRIMARY_AGENT_LANE_ACTION
+            assert primary_goal_item["active_state_next_action"] == PRIMARY_ACTION
             assert (
                 primary_goal_item["latest_run_recommended_action"]
                 == PRIMARY_AGENT_LANE_ACTION
@@ -442,7 +442,7 @@ def main() -> None:
                 primary_goal_item["latest_run_recommended_action_source"]
                 == "latest_status_run"
             ), primary_goal_item
-            assert "next_action_projection_warning" not in primary_goal_item, primary_goal_item
+
     finally:
         state_refresh.now_local = original_now_local
         state_refresh.capture_delivery_workspace = original_capture_delivery_workspace

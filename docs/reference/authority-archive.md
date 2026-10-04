@@ -43,6 +43,16 @@ A process killed before publication may leave a private `.partial` sibling;
 verify any completed output before deciding whether an interrupted export needs
 to be repeated.
 
+Publication syncs the archive file and uses the existing File authority owner's
+directory-sync policy: directory fsync is required on supported non-Windows
+paths, while Windows retains file sync without unsupported directory fsync.
+Other IO errors still reject; verification and no-overwrite publication remain
+required on every platform.
+
+中文：发布仍同步归档文件，并复用既有 File authority owner 的目录同步规则：
+非 Windows 路径执行目录 fsync，Windows 保留文件同步，不调用不支持的目录 fsync。
+其他 IO 错误仍拒绝；完整校验与不覆盖既有输出的规则在所有平台保持不变。
+
 ## Restore an isolated copy
 
 The destination is a **new directory**, not a runtime root or a provider selector.
@@ -78,6 +88,42 @@ verification receipt, not a permanent claim that nobody changed the copy later.
 The source physical provider revisions remain in the archive for provenance;
 restored transactions receive the destination provider's own revision tokens.
 Business operation identities and receipt payloads remain unchanged.
+
+### When the CLI stops waiting
+
+An executed restore whose Effect response is lost or exceeds the 300-second
+request budget returns nonzero with `status=outcome_unknown`,
+`reason_code=restore_outcome_unknown` and a `recovery_command` argument array.
+The worker may still finish. The CLI does not retry automatically, cancel the
+worker or claim that the isolated copy was not written. `authority_changed=false`
+means that this operation never switches the active provider.
+
+Read the matching completion receipt without re-running recovery:
+
+```bash
+loopx --format json authority-archive restore-receipt \
+  --goal-id example-goal --archive-sha256 <verified-digest> \
+  --provider sqlite --destination ./recovered-authority
+```
+
+`receipt_found` means that the existing binding and historical completion
+receipt match the reviewed goal, digest and provider. `receipt_missing` means
+that no completion receipt is recorded; it proves neither failure nor worker
+liveness. Malformed or mismatched metadata fails. The query performs bounded
+metadata reads only; it does not open a provider, acquire the restore lock,
+replay history or create a destination. It accepts existing completion receipts
+without changing their persisted format.
+
+Both observations explicitly report `current_integrity_verified=false` and
+`worker_liveness=unknown`. Before adopting a copy, use `authority-archive audit`
+with the original archive, digest, goal and destination to verify its **current**
+history. A copied receipt or later modification cannot substitute for that
+audit. If recovery needs to resume, repeat only the original `restore --execute`
+command with the same reviewed inputs and destination; retain partial output.
+The original lock, prefix audit and divergent-history rejection still apply.
+
+This readback fixes completion visibility, not the remaining File restore cost
+or the need for separately qualified provider activation.
 
 The full archive is validated before restore writes begin and again during
 replay. Modifying the input during recovery fails verification; any partial

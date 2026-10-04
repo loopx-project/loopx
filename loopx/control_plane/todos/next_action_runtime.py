@@ -221,3 +221,15 @@ def settle_completed_todo_next_action(
         },
     )
     return bool(result["changed"])
+
+
+def bound_next_action_todo_ids(state_text: str) -> set[str]:
+    """Decode the existing typed binding, without inferring IDs from prose."""
+    if "loopx:next-action" not in state_text:
+        return set()
+    lines = state_text.splitlines()
+    bounds = _next_action_projection_bounds(lines)
+    if bounds is None:
+        return set()
+    result = effect_runtime_result("todo.next_action.binding", {"lines": lines[bounds[0]:bounds[1]]})
+    return {result["todo_id"]} if result.get("todo_id") else set()

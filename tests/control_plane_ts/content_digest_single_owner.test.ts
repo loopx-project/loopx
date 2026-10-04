@@ -73,6 +73,10 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "whitespace class assembled from a shared character-class constant",
   },
+  "control_plane/presentation/decision_notice.ts": {
+    count: 1,
+    reason: "escaped request identifier with exact-reference boundaries, not a digest matcher",
+  },
   "control_plane/quota/monitor_poll_commit.ts": {
     count: 1,
     reason: "artifact file name grammar keyed by a runtime effect token",
@@ -87,11 +91,16 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
 const CANONICAL_CONSUMERS = [
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/external_evidence.ts",
+  "control_plane/collaboration/chat_mode.ts",
   "control_plane/collaboration/delegation.ts",
+  "control_plane/collaboration/goal_instance_lifecycle.ts",
+  "control_plane/collaboration/inbox_receipts.ts",
+  "control_plane/collaboration/result_publication.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",
   "control_plane/coordination/authority_archive_read.ts",
   "control_plane/coordination/authority_source.ts",
+  "control_plane/coordination/legacy_writer_fence.ts",
   "control_plane/coordination/local_authority_migration.ts",
   "control_plane/coordination/local_authority_shadow.ts",
   "control_plane/coordination/local_authority_shadow_outbox.ts",
@@ -114,6 +123,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/goals/source_session_lifetime.ts",
   "control_plane/governed_capability.ts",
   "control_plane/quota/refresh_external_delivery.ts",
+  "control_plane/runtime/execution_identity.ts",
   "control_plane/runtime/usage_statistics_cycles.ts",
   "control_plane/runtime/usage_statistics_goal_contract.ts",
   "control_plane/runtime/usage_statistics_goals.ts",
@@ -123,9 +133,11 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/operation_agent_handoff.ts",
   "control_plane/work_items/pending_capability_intent.ts",
   "control_plane/work_items/replan_history_snapshot.ts",
+  "control_plane/work_items/refresh_recommendation.ts",
   "control_plane/work_items/task_lease_acquire.ts",
   "control_plane/work_items/task_lease_lifecycle.ts",
   "control_plane/work_items/task_lease_lifecycle_request.ts",
+  "control_plane/work_items/task_lease_workspace.ts",
 ];
 
 function packageFiles(dir: string, base = ""): string[] {

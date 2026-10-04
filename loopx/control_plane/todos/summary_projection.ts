@@ -5,7 +5,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {projectTodoSummaryLanes, type TodoSummaryLane} from "./summary_lanes.ts";
-import {projectTodoClosure} from "./succession.ts";
+import {projectTodoClosure, projectTodoSuccession, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "./succession.ts";
 
 type Format = "raw" | "compact" | "active" | "recent" | "gap";
 interface DisplayLane {indices: number[]; format: Format}
@@ -48,6 +48,32 @@ function decodeRows(request: JsonObject): JsonObject[] {
   });
 }
 
+/** Co-deployed callers can fuse evidence validation with summary projection.
+ * This is the same succession owner, not a cache, graph truncation or bypass.
+ * Legacy v1 callers retain their existing path; v2 requires the carrier. */
+function validateSummarySuccession(request: JsonObject, rows: readonly JsonObject[]): void {
+  if (request.schema_version === "todo_summary_projection_request_v1") return;
+  const source = requireJsonObject(request.succession, "summary succession");
+  if (source.evaluations === undefined) {
+    throw new EffectRuntimeRequestError("summary requires full-source succession evaluations");
+  }
+  const result = projectTodoSuccession(source);
+  const evaluations = result.evaluations as unknown[][];
+  const facts = source.rows as unknown[][];
+  if (evaluations.length !== rows.length) {
+    throw new EffectRuntimeRequestError("summary succession cardinality mismatch");
+  }
+  for (const [index, row] of rows.entries()) {
+    const fact = Object.fromEntries(SUCCESSION_FACT_COLUMNS.map((name, column) => [name, facts[index][column]]));
+    const evaluation = Object.fromEntries(SUCCESSION_EVALUATION_COLUMNS.map((name, column) => [name, evaluations[index][column]]));
+    if (row.todo_id !== fact.todo_id || row.status !== fact.status || row.no_followup !== fact.no_followup ||
+        (row.task_class === "advancement_task") !== fact.advancement ||
+        row.successor_gap !== evaluation.successor_gap || row.handoff_state !== evaluation.handoff_state) {
+      throw new EffectRuntimeRequestError("summary facts disagree with validated succession evidence");
+    }
+  }
+}
+
 /** Allocate a bounded display across claimants, then restore source ordering. */
 function claimedVisibility(indices: readonly number[], rows: readonly JsonObject[], limit: number): number[] {
   if (indices.length <= limit) return [...indices];
@@ -72,7 +98,8 @@ function claimedVisibility(indices: readonly number[], rows: readonly JsonObject
 
 export function projectTodoSummary(value: unknown): SummaryProjection {
   const request = requireJsonObject(value, "Todo summary request");
-  if (request.schema_version !== "todo_summary_projection_request_v1") {
+  if (request.schema_version !== "todo_summary_projection_request_v1" &&
+      request.schema_version !== "todo_summary_projection_request_v2") {
     throw new EffectRuntimeRequestError("Todo summary request schema mismatch");
   }
   const role = request.role === null ? null : requireStringLiteral(request.role, ["user", "agent"], "role");
@@ -85,6 +112,7 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
   }
   const full = requireBoolean(request.full_selection, "full_selection");
   const rows = decodeRows(request);
+  validateSummarySuccession(request, rows);
   // The co-deployed adapter sends source facts, not prose or full Todo bodies.
   for (const row of rows) {
     if ((row.claim !== null && typeof row.claim !== "string") || row.claimed !== Boolean(row.claim)) {

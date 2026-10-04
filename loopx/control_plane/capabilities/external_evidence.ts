@@ -92,6 +92,19 @@ function normalizeRequest(value: unknown): JsonObject {
     (normalized.evidence_kinds as string[]).length > 0,
     "request.evidence_kinds must not be empty",
   );
+  // Optional source selection is part of the exact request identity. Preserve
+  // legacy request digests when no source-bound provider is requested.
+  if (request.source_refs !== undefined) {
+    const refs = boundedStrings(request.source_refs, "request.source_refs", 8, 2048);
+    requireThat(refs.length > 0 && new Set(refs).size === refs.length,
+      "request.source_refs must be nonempty and unique");
+    requireThat(refs.every((ref) => SOURCE_REF_RE.test(ref) && !ref.startsWith("file://")),
+      "request.source_refs must be non-file provenance URIs");
+    normalized.source_refs = refs;
+  }
+  if (request.search_terms !== undefined) {
+    normalized.search_terms = boundedStrings(request.search_terms, "request.search_terms", 8, 256);
+  }
   normalized.request_id = digest(normalized);
   return normalized;
 }

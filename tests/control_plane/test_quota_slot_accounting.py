@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 from loopx.control_plane.quota.slot_accounting import (
     build_quota_slot_preview_for_decision,
     build_quota_slot_spend_event,
+    record_quota_slot_spend_from_preview,
 )
 from loopx.quota import spend_quota_slot
 from loopx.rollout_event_log import rollout_event_log_path
@@ -33,6 +35,19 @@ SAFE_BYPASS_CASES = (
         id="outcome-floor-recovery",
     ),
 )
+
+
+def test_ledger_readback_legacy_exports_preserve_owner_identity() -> None:
+    from loopx.control_plane.quota import ledger_readback, slot_accounting
+
+    for name in (
+        "QUOTA_SLOT_SPENT_CLASSIFICATION",
+        "QUOTA_SLOT_VOIDED_CLASSIFICATION",
+        "load_quota_event_from_run",
+        "quota_slot_contribution",
+        "net_quota_slot_spend",
+    ):
+        assert getattr(slot_accounting, name) is getattr(ledger_readback, name), name
 
 
 def _write_run_index(runtime: Path, records: list[dict[str, Any]]) -> None:
@@ -270,6 +285,77 @@ def test_safe_bypass_consumes_accountable_writeback_once_across_neutral_refresh(
             _spent("2026-01-01T00:03:00+00:00"),
         ],
     )
+    assert _preview(runtime, before_overrides=before_overrides)["ok"] is False
+
+
+def test_alias_safe_bypass_ignores_exact_delivery(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    exact_delivery = {
+        **_run(
+            "2026-01-01T00:01:00+00:00",
+            classification="validated_fallback",
+            delivery_outcome="outcome_progress",
+        ),
+        "goal_ref": {
+            "goal_id": GOAL_ID,
+            "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+    }
+    _write_run_index(runtime, [exact_delivery])
+
+    preview = _preview(
+        runtime,
+        before_overrides={"state": "operator_gate", "safe_bypass_allowed": True},
+    )
+
+    assert preview["ok"] is False
+    assert "requires a latest unspent Turn settlement writeback" in preview["reason"]
+
+
+def test_alias_safe_bypass_ignores_exact_spend_and_commits_once(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    legacy_delivery = _run(
+        "2026-01-01T00:01:00+00:00",
+        classification="validated_fallback",
+        delivery_outcome="outcome_progress",
+    )
+    exact_spend = {
+        **_spent("2026-01-01T00:02:00+00:00"),
+        "goal_ref": {
+            "goal_id": GOAL_ID,
+            "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+    }
+    _write_run_index(runtime, [legacy_delivery, exact_spend])
+    before_overrides = {
+        "state": "operator_gate",
+        "safe_bypass_allowed": True,
+    }
+
+    preview = _preview(runtime, before_overrides=before_overrides)
+
+    assert preview["ok"] is True
+    assert preview["delivery_run_classification"] == "validated_fallback"
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    preview["expected_index_digest"] = (
+        f"sha256:{hashlib.sha256(index_path.read_bytes()).hexdigest()}"
+    )
+    committed = record_quota_slot_spend_from_preview(
+        preview,
+        {"runtime_root": str(runtime)},
+        goal_id=GOAL_ID,
+        execute=True,
+    )
+    assert committed["ok"] is True
+    assert committed["appended"] is True
+    rows = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["classification"] == "quota_slot_spent"
+    assert "goal_ref" not in rows[-1]
     assert _preview(runtime, before_overrides=before_overrides)["ok"] is False
 
 

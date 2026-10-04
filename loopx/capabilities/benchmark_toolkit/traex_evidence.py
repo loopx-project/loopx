@@ -4,25 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .experiment_identity import experiment_token_text as _token
 from ...registry import atomic_write_json
 
 TRAE_BENCHMARK_EVIDENCE_SCHEMA_VERSION = "benchmark_trae_evidence_capture_v0"
 BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION = "benchmark_model_route_receipt_v0"
 ATIF_SCHEMA_VERSION = "ATIF-v1.7"
 
-_PUBLIC_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$")
-
-
-def _token(value: Any, *, field: str) -> str:
-    text = str(value or "").strip()
-    if not _PUBLIC_TOKEN.fullmatch(text):
-        raise ValueError(f"{field} must be a compact public-safe token")
-    return text
 
 
 def _canonical_json(value: Any) -> str:

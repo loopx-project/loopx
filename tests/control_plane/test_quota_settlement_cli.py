@@ -30,6 +30,7 @@ from loopx.control_plane.scheduler.state import (
     load_scheduler_state,
 )
 from loopx.heartbeat_prompt import build_heartbeat_prompt
+from loopx.paths import shell_selected_global_registry
 from loopx.rollout_event_log import build_rollout_event
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -596,6 +597,28 @@ def _projected_cli_args(command: str, *, turn_instance_id: str) -> tuple[str, ..
     )
 
 
+def _bind_selected_replan_guard(
+    registry: Path, runtime: Path, project: Path, turn_instance_id: str,
+) -> dict[str, Any]:
+    """Choose the fixture Todo explicitly, then consume the generated recovery.
+
+    An initial hard-replan recommendation is planning context, not a binding.
+    Keep the existing semantic-delta regressions testing an admitted identity.
+    """
+    rc, deferred = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn_instance_id, "--scan-path", str(project),
+        "--todo-id", SELECTED_REPLAN_TODO_ID,
+    )
+    assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
+    [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    rc, bound = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    return bound
+
+
 def _initialize_git_checkout(project: Path) -> None:
     subprocess.run(
         ["git", "init", "--quiet"],
@@ -642,16 +665,36 @@ def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("legacy_runtime", [False, True])
 def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, legacy_runtime: bool,
 ) -> None:
     # Production quota CLI -> detached Python discovery -> TS cycle owner.
     # The isolated home also proves telemetry never reads the operator's sessions.
     from loopx import usage_ping
     import time
+
+    def await_cycle(*, finished: bool) -> dict[str, Any]:
+        # This observes an asynchronous local result, not an HTTP deadline.
+        # Process startup and competing tests must not become an 8s product rule.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if cycles_path.exists():
+                cycles = json.loads(cycles_path.read_text())["cycles"]
+                if cycles and ("end" in cycles[0] if finished else "start" in cycles[0]):
+                    assert len(cycles) == 1
+                    return cycles[0]
+            time.sleep(0.03)
+        raise AssertionError(f"public quota/spend CLI did not observe cycle finished={finished}")
+
     home = tmp_path / "isolated-home"
-    machine = home / ".codex" / "loopx"
+    machine = home / (".codex/loopx" if legacy_runtime else ".loopx")
     machine.mkdir(parents=True)
+    if legacy_runtime:
+        (machine / "registry.global.json").write_text(
+            json.dumps({"common_runtime_root": str(machine), "goals": []}),
+            encoding="utf-8",
+        )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
@@ -695,10 +738,7 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
 
     # Preview/failed spend before validated delivery must not finish measurement.
     cycles_path = Path(str(usage_path) + ".cycles")
-    deadline = time.monotonic() + 8
-    while not cycles_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.03)
-    assert "start" in json.loads(cycles_path.read_text())["cycles"][0]
+    await_cycle(finished=False)
     for execute in (False, True):
         _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
                  "--slots", "1", "--source", "heartbeat", *binding,
@@ -756,18 +796,9 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     assert spend["delivery_workspace_validated"] is True
     assert spend["delivery_workspace"]["workspace_identity"] == f"loopx:{GOAL_ID}"
     assert _spend_run_count(runtime) == 1
-    cycles_path = Path(str(usage_path) + ".cycles")
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        if cycles_path.exists():
-            cycles = json.loads(cycles_path.read_text())["cycles"]
-            if cycles and cycles[0].get("end"):
-                break
-        time.sleep(0.03)
-    else:
-        raise AssertionError("public quota/spend CLI did not complete a telemetry cycle")
-    assert len(cycles) == 1 and cycles[0]["exact"] is True
-    assert cycles[0]["start"] < cycles[0]["end"]
+    cycle = await_cycle(finished=True)
+    assert cycle["exact"] is True
+    assert cycle["start"] < cycle["end"]
     before_replay = cycles_path.read_bytes()
     replay_rc, replay = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
                                  "--slots", "1", "--source", "heartbeat", *binding,
@@ -2220,6 +2251,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
+    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
 
     complete_args = (
         "todo",
@@ -2363,9 +2395,12 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert _spend_run_count(runtime) == 1
 
-    settled_ack_hint = settled_replay["scheduler_hint"]["codex_app"]["ack_hint"]
-    assert settled_ack_hint["args"]["turn_instance_id"] == TURN_ID
-    assert settled_ack_hint["cli_args"][-3:] == [
+    # A historical settlement receipt cannot issue a new scheduler operation.
+    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
+    for surface in ("app_automation", "codex_app"):
+        assert "ack_hint" not in settled_replay["scheduler_hint"][surface]
+    assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
+    assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",
         TURN_ID,
         "--execute",
@@ -2373,7 +2408,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
-        *settled_ack_hint["cli_args"],
+        *original_ack_hint["cli_args"],
     )
     # The intervening fresh_guard superseded this Turn for host writeback,
     # even though its original delivery settlement still replays correctly.
@@ -2885,7 +2920,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
-        "$HOME/.codex/loopx/registry.global.json",
+        shell_selected_global_registry().strip('"'),
         str(registry_path),
     )
 
@@ -2948,7 +2983,7 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
-        "$HOME/.codex/loopx/registry.global.json",
+        shell_selected_global_registry().strip('"'),
         str(registry_path),
     )
 
@@ -3149,7 +3184,7 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     # The thin body tells the agent to mint LOOPX_TURN per iteration.
     guard_command = (
         prompt["quota_guard_command"]
-        .replace("$HOME/.codex/loopx/registry.global.json", str(registry_path))
+        .replace(shell_selected_global_registry().strip('"'), str(registry_path))
         .replace('"${LOOPX_TURN:?}"', turn_instance_id)
     )
     assert f"--runtime-profile {runtime_profile}" in guard_command
@@ -3273,6 +3308,8 @@ def test_legacy_todo_guard_keeps_current_replan_gate_strict(
     )
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
+
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
 
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     events = [
@@ -3882,8 +3919,10 @@ def test_first_call_agent_selection_is_qualified_before_receipt_commit(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("foreign_workspace", [False, True])
 def test_ready_deferred_priority_is_not_an_eligible_alternative(
     tmp_path: Path,
+    foreign_workspace: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path / "portfolio")
     _configure_selectable_alternative(project)
@@ -3904,6 +3943,16 @@ def test_ready_deferred_priority_is_not_an_eligible_alternative(
     project, runtime, registry_path = _write_fixture(tmp_path / "selection")
     _configure_selectable_alternative(project)
     _configure_ready_deferred_priority_preemption(project)
+    if foreign_workspace:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry["goals"][0]["coordination"]["registered_agents"].append("codex-peer")
+        registry_path.write_text(json.dumps(registry), encoding="utf-8")
+        state_path = _configure_repository_write_todo(project)
+        state_path.write_text(
+            state_path.read_text(encoding="utf-8").replace(
+                "action_kind=validate", "action_kind=implement"
+            ), encoding="utf-8",
+        )
     selection_args = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID,
@@ -3919,12 +3968,18 @@ def test_ready_deferred_priority_is_not_an_eligible_alternative(
         "ready_deferred_successor_priority_preemption"
     )
     assert "settlement_identity" not in blocked["heartbeat_receipt"]
+    _assert_action_selection_recovery_projections(blocked)
+    assert "workspace_guard" not in blocked
 
     selected_rc, selected = _run_cli(
         registry_path, runtime, *selection_args, "--todo-id", TODO_ID
     )
     assert selected_rc == 0, selected
     assert selected["selected_todo"]["todo_id"] == TODO_ID
+    if foreign_workspace:
+        assert selected["effective_action"] == "agent_workspace_repair"
+        assert selected["normal_delivery_allowed"] is False
+        assert selected["workspace_guard"]["blocks_delivery"] is True
     assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
 
 
@@ -5386,6 +5441,7 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
     obligation_id = guard["replan_action_packet"]["obligation_id"]
 
     refresh_args = (
@@ -5509,6 +5565,8 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -5984,9 +6042,29 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
     assert resumed_turn["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_read_only_settlement_omits_non_causal_delivery_workspace(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    # The two legal completion phases may commit within one clock tick. Keep
+    # the real CLI, authority and hook journal; freeze only their commit clock.
+    run = subprocess.run
+
+    def frozen_completion_clock(argv, *args, **kwargs):
+        if isinstance(argv, list) and argv[1:3] == ["-m", "loopx.cli"]:
+            program = (
+                "import loopx.todos; "
+                "import loopx.control_plane.todos.provider_terminal_lifecycle as native; "
+                "clock=lambda:'2026-09-02T12:00:00+00:00'; "
+                "loopx.todos.now_local=clock; native.now_local=clock; "
+                "from loopx.cli import main; raise SystemExit(main())"
+            )
+            argv = [argv[0], "-c", program, *argv[3:]]
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", frozen_completion_clock)
     project, runtime, registry_path = _write_fixture(tmp_path)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["control_plane"] = {
@@ -6009,6 +6087,26 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         ),
         encoding="utf-8",
     )
+    if provider != "legacy":
+        from canonical_authority_fixture import (
+            initialize_canonical_authority,
+            isolate_sqlite_runtime,
+        )
+        from loopx.control_plane.coordination.runtime_shadow import (
+            build_todo_runtime_shadow_projection,
+        )
+
+        if provider == "sqlite":
+            isolate_sqlite_runtime(tmp_path, monkeypatch)
+        todos = parse_active_state_todos(state_path.read_text(), item_limit=None)
+        initialize_canonical_authority(
+            runtime, GOAL_ID,
+            build_todo_runtime_shadow_projection(
+                goal_id=GOAL_ID, todos=todos["agent_todos"]["items"],
+                handoff_mode="soft_claim",
+            ),
+            state_path=state_path, provider=provider,
+        )
     binding = (
         "--agent-id",
         AGENT_ID,
@@ -6174,6 +6272,8 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert complete["changed"] is True
     assert complete["completion_continuation"] == "no_followup"
     assert complete["completion_recovery"] == "same_turn_terminal_closeout"
+    assert ordinary["updated_at"] == complete["updated_at"]
+    assert ordinary["completion_receipt_id"] != complete["completion_receipt_id"]
     assert complete["post_writeback_hooks"]["intent_count"] == 1
     trigger_intent = complete["post_writeback_hooks"]["intents"][0]
     assert trigger_intent["intent_kind"] == "periodic_report.trigger_evaluation"
@@ -6189,6 +6289,25 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         "terminal_closeout",
     ]
     assert "no_followup=true" in state_path.read_text(encoding="utf-8")
+
+    # Model primary commit surviving a crash before the optional checkpoint.
+    # Only this disposable fixture's sidecar is removed; the Todo, original
+    # completion receipt, Turn journal and single quota debit remain intact.
+    sidecars = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
+    terminal_sidecars = [
+        path for path in sidecars.glob("*.json")
+        if json.loads(path.read_text())["source_receipt_id"]
+        == trigger_intent["source_receipt_id"]
+    ]
+    assert len(terminal_sidecars) == 1
+    terminal_sidecars[0].unlink()
+    recovered_rc, recovered = _run_cli(registry_path, runtime, *terminal_args)
+    assert recovered_rc == 0, recovered
+    assert recovered["changed"] is False
+    assert recovered["completion_receipt_id"] == complete["completion_receipt_id"]
+    assert recovered["post_writeback_hooks"]["invoked_count"] == 1
+    assert recovered["post_writeback_hooks"]["intents"] == [trigger_intent]
+    assert _spend_run_count(runtime) == 1
 
     event_log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     completion_events = [
@@ -6218,6 +6337,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert complete_replay_rc == 0, complete_replay
     assert complete_replay["idempotent_replay"] is True
     assert complete_replay["changed"] is False
+    assert complete_replay["completion_receipt_id"] == complete["completion_receipt_id"]
     assert complete_replay["post_writeback_hooks"]["invoked_count"] == 0
     assert complete_replay["post_writeback_hooks"]["replayed_hooks"] == [
         "periodic_report.runtime_trigger"

@@ -3,9 +3,10 @@ import {spawnSync} from "node:child_process";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
+import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
-import {capacityLedger, latency, type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
+import {capacityLedger, latency, sameCapacityScan, type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
 
 test("latency has explicit nearest-rank tails and rejects absent or invalid samples", () => {
   assert.deepEqual(latency([5, 1, 4, 2, 3]), {n: 5, p50_ms: 3, p95_ms: 5, p99_ms: 5});
@@ -18,6 +19,9 @@ function axis(count: number, payloadBytes = 65536): CapacityAxis {
     sample_window: 1000, status: "passed", cleanup_verified: true,
     warm: {commit: sample(1000), head: sample(3000), receipt: sample(2000), scan_100: sample(200)},
     cold_node: sample(20), cold_cli: {mutation: sample(20), status: sample(20), quota: sample(20)},
+    cold_cli_scan: {
+      before: {sha256: "a".repeat(64), files: 1200, bytes: 9000000, skipped_private_files: 0},
+      after: {sha256: "a".repeat(64), files: 1200, bytes: 9000000, skipped_private_files: 0}},
     bounded_profile: {schema_version: "loopx_sqlite_authority_bounded_profile_v0", status: "available",
       cursor: String(count), commits: count, checkpoints: Math.ceil(count / 64), checkpoint_interval: 64,
       replay_budget_commits: 63, recovery_tail_commits: 0, retained_projection_bytes: 1024,
@@ -167,6 +171,36 @@ test("CLI latency improvement is retained as a signed difference", () => {
   assert.equal(row?.status, "passed");
 });
 
+test("status budget requires matching scan inputs; mutation and store evidence remain independent", () => {
+  for (const change of [
+    (value: CapacityAxis) => {value.cold_cli_scan = null;},
+    (value: CapacityAxis) => {delete (value as Partial<CapacityAxis>).cold_cli_scan;},
+    (value: CapacityAxis) => {value.cold_cli_scan!.after.sha256 = "b".repeat(64);},
+    (value: CapacityAxis) => {
+      value.cold_cli_scan!.before.sha256 = "b".repeat(64);
+      value.cold_cli_scan!.after.sha256 = "b".repeat(64);
+    },
+    (value: CapacityAxis) => {value.cold_cli_scan!.after.files++;},
+  ]) {
+    const baseline = axis(10000), final = axis(100000);
+    change(final);
+    const rows = capacityLedger([baseline, final]);
+    assert.equal(rows.find(row => row.id === "cold_cli_status_p95")?.status, "missing");
+    assert.equal(rows.find(row => row.id === "cold_cli_mutation_increment_p95")?.status, "passed");
+    assert.equal(rows.find(row => row.id === "head_p95")?.status, "passed");
+    assert.equal(rows.find(row => row.id === "receipt_p95")?.status, "passed");
+  }
+  const scan = axis(10000).cold_cli_scan!.before;
+  for (const malformed of [
+    {...scan, sha256: "unchecked"}, {...scan, files: 0}, {...scan, bytes: 0},
+    {...scan, bytes: NaN}, {...scan, files: 1.5}, {...scan, skipped_private_files: -1},
+  ]) assert.equal(sameCapacityScan(malformed, malformed), false);
+  const slow = axis(100000);
+  slow.cold_cli!.status = {n: 20, p50_ms: 1000, p95_ms: 2100, p99_ms: 2200};
+  assert.equal(capacityLedger([axis(10000), slow])
+    .find(row => row.id === "cold_cli_status_p95")?.status, "failed");
+});
+
 // Budget: the bounded state log proves every encoded delta and audits the
 // retained chain, so the rehearsal costs more than the version-1 layout did
 // (about 27 s here, roughly twice that on a shared CI runner).
@@ -174,10 +208,13 @@ test("small capacity entrypoint exercises real SQLite and never claims a full qu
   const directory = await mkdtemp(join(tmpdir(), "sqlite-capacity-report-"));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const output = join(directory, "report.json");
+  const started = performance.now();
   const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
     fileURLToPath(new URL("../../examples/coordination/sqlite-capacity.ts", import.meta.url)),
     "--profile", "rehearsal", "--output", output], {encoding: "utf8", timeout: 150000});
-  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.status, 0, JSON.stringify({status: child.status, signal: child.signal,
+    error_code: (child.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+    elapsed_ms: performance.now() - started, timeout_ms: 150000, stderr: child.stderr}));
   const report = JSON.parse(await readFile(output, "utf8"));
   assert.equal(report.full_d2_qualified, false);
   assert.deepEqual(report.axes.map((row: CapacityAxis) => row.completed_commits), [100, 1000]);

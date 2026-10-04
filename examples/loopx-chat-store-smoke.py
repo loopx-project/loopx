@@ -31,6 +31,17 @@ def main() -> None:
         assert public["resumable"] is True, public
         assert "upstream_thread_id" not in public, public
         assert "upstream_mode" not in public, public
+        assert public["transcript_revision"] is None, public
+        store.append_message(session_id, role="agent", text="First result", message_id="first-result")
+        first_revision = store.public_session(session)["transcript_revision"]
+        assert len(first_revision) == 64
+        store.append_message(session_id, role="agent", text="Later result", message_id="later-result", origin="manager_followup")
+        later = store.list_sessions(goal_id="goal-one", agent_id="codex")[0]
+        assert later["updated_at"] == public["updated_at"], "Transcript writes must not invent execution activity"
+        assert later["transcript_revision"] != first_revision, later
+        assert store.session_snapshot(session_id)["session"]["transcript_revision"] == later["transcript_revision"]
+        store.append_message(session_id, role="agent", text="Later result", message_id="later-result", origin="manager_followup")
+        assert store.public_session(session)["transcript_revision"] == later["transcript_revision"], "Idempotent publication is quiet"
         assert session["upstream_mode"] == "chat", session
         assert store.latest_session(goal_id="goal-one", agent_id="codex") == session
         store.update_session(session_id, status="resume_failed", last_error_code="resume_failed")
@@ -117,7 +128,7 @@ def main() -> None:
         )
         store.update_session(session_id, status="ready", active_turn_id=None)
         snapshot = store.session_snapshot(session_id)
-        assert [item["role"] for item in snapshot["messages"]] == ["user", "agent"], snapshot
+        assert [item["role"] for item in snapshot["messages"]] == ["agent", "agent", "user", "agent"], snapshot
         assert "thread-private" not in json.dumps(snapshot), snapshot
         store.append_message(
             manager_session["session_id"],

@@ -2,7 +2,7 @@ from __future__ import annotations
 from .effective_action import EffectiveAction
 
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -52,9 +52,14 @@ from .void_commit import (
     build_quota_slot_void_preview_for_decision as build_quota_slot_void_preview_for_decision,
     record_quota_slot_void_from_preview as record_quota_slot_void_from_preview,
 )
-
-QUOTA_SLOT_SPENT_CLASSIFICATION = "quota_slot_spent"
-QUOTA_SLOT_VOIDED_CLASSIFICATION = "quota_slot_voided"
+from .ledger_readback import (
+    QUOTA_SLOT_SPENT_CLASSIFICATION as QUOTA_SLOT_SPENT_CLASSIFICATION,
+    QUOTA_SLOT_VOIDED_CLASSIFICATION as QUOTA_SLOT_VOIDED_CLASSIFICATION,
+    _int_number,
+    load_quota_event_from_run as load_quota_event_from_run,
+    net_quota_slot_spend as net_quota_slot_spend,
+    quota_slot_contribution as quota_slot_contribution,
+)
 
 QuotaDecisionBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 QuotaStatusBuilder = Callable[..., dict[str, Any]]
@@ -146,6 +151,8 @@ def _resolve_preview_settlement(
     todo_id: str | None,
     replan_obligation_id: str | None,
     turn_instance_id: str | None,
+    registry_path: Path | None,
+    goal_ref: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if turn_instance_id and source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
         result = SettlementResult.failed(
@@ -176,6 +183,8 @@ def _resolve_preview_settlement(
             and not todo_id
             and not replan_obligation_id
         ),
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if readback is None:
         return {}
@@ -297,21 +306,6 @@ def _validate_goal_id_path_segment(goal_id: str) -> str:
     return value
 
 
-def _int_number(value: Any, *, default: int) -> int:
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(float(value.strip()))
-        except ValueError:
-            return default
-    return default
-
-
 def _queue_item_for_goal(status_payload: dict[str, Any], *, goal_id: str) -> dict[str, Any]:
     queue = status_payload.get("attention_queue") if isinstance(status_payload.get("attention_queue"), dict) else {}
     queue_items = queue.get("items") if isinstance(queue.get("items"), list) else []
@@ -382,6 +376,7 @@ def _latest_unspent_turn_settlement_run(
     goal_id: str,
     *,
     agent_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return the latest same-agent Turn settlement that still needs accounting.
 
@@ -395,6 +390,10 @@ def _latest_unspent_turn_settlement_run(
 
     safe_agent_id = normalize_todo_claimed_by(agent_id)
     for run in reversed(_load_goal_run_index_records(runtime_root, goal_id)):
+        if goal_ref is None and "goal_ref" in run:
+            continue
+        if goal_ref is not None and run.get("goal_ref") != dict(goal_ref):
+            continue
         run_agent_id = normalize_todo_claimed_by(run.get("agent_id"))
         if safe_agent_id and run_agent_id and safe_agent_id != run_agent_id:
             continue
@@ -579,6 +578,8 @@ def build_quota_slot_preview_for_decision(
     replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     safe_slots = max(1, _int_number(slots, default=1))
@@ -627,6 +628,8 @@ def build_quota_slot_preview_for_decision(
         todo_id=normalized_todo_id,
         replan_obligation_id=normalized_replan_obligation_id,
         turn_instance_id=turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     settlement_identity = settlement.get("identity")
     settlement_result = settlement.get("result")
@@ -698,6 +701,7 @@ def build_quota_slot_preview_for_decision(
             Path(str(raw_runtime_root)).expanduser(),
             safe_goal_id,
             agent_id=safe_requested_agent_id,
+            goal_ref=goal_ref,
         )
         if raw_runtime_root
         else None
@@ -965,82 +969,4 @@ def build_quota_slot_preview_for_decision(
         "delivery_workspace_causality": delivery_workspace_causality,
         "settlement_workspace_requirement": settlement_workspace_requirement,
         "delivery_workspace_validated": delivery_workspace_validated,
-    }
-
-
-def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
-    if str(run.get("classification") or "") not in {
-        QUOTA_SLOT_SPENT_CLASSIFICATION,
-        QUOTA_SLOT_VOIDED_CLASSIFICATION,
-    }:
-        return None
-    event = run.get("quota_event") if isinstance(run.get("quota_event"), dict) else None
-    if event:
-        return event
-
-    raw_json_path = str(run.get("json_path") or "")
-    if not raw_json_path:
-        return None
-    json_path = Path(raw_json_path).expanduser()
-    if not json_path.exists():
-        return None
-    try:
-        record = json.loads(json_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(record, dict):
-        return None
-    event = record.get("quota_event") if isinstance(record.get("quota_event"), dict) else None
-    return event
-
-
-def quota_slot_contribution(run: dict[str, Any]) -> tuple[str, str, int] | None:
-    """Classify one run's contribution to the rolling-window slot ledger.
-
-    ``goal_quota_with_spend_ledger`` enforces quota from this rule and the
-    usage summary reports from it, so both read an event the same way: the
-    quota event's ``event_type`` decides, a spend is keyed by the run it was
-    recorded against, and a void by the run it targets. A run with no usable
-    event contributes no slot rather than a default one, which is what the
-    ledger already assumed.
-    """
-
-    event = load_quota_event_from_run(run)
-    if not event:
-        return None
-    slots = max(0, _int_number(event.get("slots"), default=0))
-    if slots <= 0:
-        return None
-    event_type = str(event.get("event_type") or "")
-    if event_type == QUOTA_SLOT_SPENT_CLASSIFICATION:
-        run_key = str(event.get("run_generated_at") or run.get("generated_at") or "")
-        if not run_key:
-            return None
-        return ("spent", run_key, slots)
-    if event_type == QUOTA_SLOT_VOIDED_CLASSIFICATION:
-        voided_run_generated_at = str(event.get("voided_run_generated_at") or "")
-        if not voided_run_generated_at:
-            return None
-        return ("voided", voided_run_generated_at, slots)
-    return None
-
-
-def net_quota_slot_spend(
-    contributions: Iterable[tuple[Any, str, int]],
-) -> dict[Any, int]:
-    """Clamp each spend bucket against the voids that target it.
-
-    A void only cancels the spend recorded against the key it names, so a
-    window that no longer holds that spend is never pushed negative and a void
-    never cancels an unrelated spend.
-    """
-
-    spent: dict[Any, int] = {}
-    voided: dict[Any, int] = {}
-    for bucket, kind, slots in contributions:
-        target = spent if kind == "spent" else voided
-        target[bucket] = target.get(bucket, 0) + slots
-    return {
-        bucket: max(0, slots - voided.get(bucket, 0))
-        for bucket, slots in spent.items()
     }

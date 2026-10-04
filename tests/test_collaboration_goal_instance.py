@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import sys
@@ -71,7 +72,31 @@ def _create_source_registry(root: Path) -> Path:
     return registry
 
 
-def _recreate(registry: Path) -> None:
+def _http_snapshot(root, registry, session_id):
+    import http.client
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.registry_path, server.runtime_root = registry, root
+    server.chat_store = ChatSessionStore(root)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
+    try:
+        connection.request("GET", f"/api/chat/sessions/{session_id}")
+        response = connection.getresponse()
+        snapshot = json.loads(response.read())
+        assert response.status == 200
+        return snapshot
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+
+def _recreate(registry: Path, *, repo: Path | None = None) -> None:
     with exclusive_cross_runtime_file_lock(
         guard_path(registry, "delivery"),
         operation="test_recreate_goal",
@@ -82,6 +107,8 @@ def _recreate(registry: Path) -> None:
         ) as transaction:
             payload = transaction.payload_copy()
             payload["goals"][0]["goal_instance_id"] = INSTANCE_B
+            if repo is not None:
+                payload["goals"][0]["repo"] = str(repo)
             transaction.commit(payload)
 
 
@@ -97,7 +124,7 @@ def _brief(purpose: str) -> dict:
     }
 
 
-def _manager_request(root: Path, registry: Path, *, channel="manager"):
+def _manager_request(root: Path, registry: Path, *, channel="manager", complete=True):
     store = ChatSessionStore(root)
     session = store.create_session(
         goal_id="loopx-manager" if channel == "manager" else "delivery",
@@ -123,6 +150,8 @@ def _manager_request(root: Path, registry: Path, *, channel="manager"):
             "brief": _brief("Check the delivery plan"),
         },
     )
+    if not complete:
+        return store, session, receipt
     store.update_turn(
         session["session_id"],
         turn["turn_id"],
@@ -265,6 +294,164 @@ def test_recreated_goal_cannot_observe_or_mutate_prior_instance_requests(
             "B must not mutate A.",
             registry=registry,
         )
+
+
+def test_inbox_read_rejects_recreation_before_response_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.collaboration import links
+
+    registry = _create_source_registry(tmp_path)
+    input_path = tmp_path / "input.txt"
+    input_path.write_text("instance A", encoding="utf-8")
+    brief = {
+        **_brief("Read only the originating instance"),
+        "inputs": [
+            {
+                "ref": input_path.name,
+                "description": "Instance-bound input",
+                "sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+            }
+        ],
+    }
+    receipt = request(
+        tmp_path,
+        registry,
+        "delivery",
+        "builder",
+        "reviewer",
+        "read-before-recreation",
+        brief,
+    )
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / input_path.name).write_text("instance B", encoding="utf-8")
+    render_followthrough = links.receiver_followthrough
+
+    def recreate_before_input_read(root, registry_path, items):
+        rendered = render_followthrough(root, registry_path, items)
+        _recreate(registry, repo=replacement)
+        return rendered
+
+    monkeypatch.setattr(links, "receiver_followthrough", recreate_before_input_read)
+
+    with pytest.raises(ValueError, match="historical_mutation_forbidden"):
+        read_inbox(
+            tmp_path,
+            registry,
+            "delivery",
+            "reviewer",
+            caller_goal_ref={
+                "goal_id": "delivery",
+                "goal_instance_id": INSTANCE_A,
+            },
+        )
+
+    assert not (_root(tmp_path) / "reads" / f"{receipt['request_id']}.json").exists()
+
+
+@pytest.mark.parametrize("interruption", ["enrichment_failure", "goal_recreation"])
+def test_inbox_read_does_not_commit_peer_return_before_response_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: str,
+) -> None:
+    from loopx.control_plane.collaboration import links
+    from loopx.control_plane.collaboration.peers import return_result
+
+    registry = _create_source_registry(tmp_path)
+    receipt = request(
+        tmp_path,
+        registry,
+        "delivery",
+        "builder",
+        "reviewer",
+        "return-before-response",
+        _brief("Return only after a successful read"),
+    )
+    goal_ref = {
+        "goal_id": "delivery",
+        "goal_instance_id": INSTANCE_A,
+    }
+    read_inbox(
+        tmp_path,
+        registry,
+        "delivery",
+        "reviewer",
+        caller_goal_ref=goal_ref,
+    )
+    acknowledge(
+        tmp_path,
+        "delivery",
+        "reviewer",
+        receipt["request_id"],
+        "adopt",
+        "Review the current instance.",
+        registry=registry,
+        caller_goal_ref=goal_ref,
+    )
+    return_result(
+        tmp_path,
+        "delivery",
+        "reviewer",
+        receipt["request_id"],
+        "Review complete.",
+        registry=registry,
+        caller_goal_ref=goal_ref,
+    )
+
+    def interrupt_response(*_args):
+        if interruption == "goal_recreation":
+            _recreate(registry)
+            return None
+        raise RuntimeError("response enrichment failed")
+
+    monkeypatch.setattr(links, "receiver_followthrough", interrupt_response)
+
+    expected_error = ValueError if interruption == "goal_recreation" else RuntimeError
+    expected_message = (
+        "historical_mutation_forbidden"
+        if interruption == "goal_recreation"
+        else "response enrichment failed"
+    )
+    with pytest.raises(expected_error, match=expected_message):
+        read_inbox(
+            tmp_path,
+            registry,
+            "delivery",
+            "builder",
+            caller_goal_ref=goal_ref,
+        )
+
+    delivery = (
+        _root(tmp_path) / "replies" / receipt["request_id"] / "conclusion.delivery.json"
+    )
+    assert not delivery.exists()
+
+
+def test_historical_request_does_not_borrow_work_from_recreated_goal(tmp_path, monkeypatch):
+    from loopx.control_plane.collaboration import links
+
+    registry = _create_source_registry(tmp_path)
+    _, _, receipt = _manager_request(tmp_path, registry)
+    reads = []
+
+    def current_work(**kwargs):
+        reads.append(kwargs["goal_id"])
+        return {"ok": True, "todos": [{"todo_id": "todo_reused_work",
+            "claimed_by": "builder", "status": "done", "text": "Work from the new Goal"}]}
+
+    monkeypatch.setattr(links, "list_goal_todos", current_work)
+    links.link(tmp_path, registry, "delivery", "builder", receipt["request_id"],
+               ["todo_reused_work"], [])
+    _recreate(registry)
+    reads.clear()
+    row = query(tmp_path, registry, goal_ids=["delivery"], owner_scope=True,
+                request_id=receipt["request_id"])["rows"][0]
+    assert row["linked_todos"] == [{"todo_id": "todo_reused_work", "status": "unknown",
+        "title": None, "source": "core_todo_unavailable_or_owner_changed"}]
+    assert reads == []
 
 
 def test_late_prior_instance_result_returns_only_to_its_saved_conversation(
@@ -679,6 +866,8 @@ def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(
     _recreate(registry)
 
     assert server.tools["read_context"]()["items"] == []
+    with pytest.raises(ValueError, match="historical_mutation_forbidden"):
+        server.tools["link_work"](receipt["request_id"], evidence_ids=["sha256:" + "a" * 64])
     with pytest.raises(ValueError, match="stale_goal_instance"):
         server.tools["request_peer"](
             "reviewer",
@@ -846,9 +1035,6 @@ def test_legacy_delivery_keeps_v1_paths_ids_and_json_bytes(
 @pytest.mark.parametrize("channel", ["manager", "goal.delivery"])
 @pytest.mark.parametrize("recreated", [False, True])
 def test_app_snapshot_retains_exact_receiver_disposition(tmp_path, recreated, channel):
-    import http.client
-    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-
     registry = _create_source_registry(tmp_path)
     store, session, receipt = _manager_request(tmp_path, registry, channel=channel)
     read_inbox(tmp_path, registry, "delivery", "builder")
@@ -861,24 +1047,7 @@ def test_app_snapshot_retains_exact_receiver_disposition(tmp_path, recreated, ch
         _recreate(registry)
     # Exercise the production HTTP snapshot route, reloading the real file store.
     # No model, external message or active Goal is involved.
-    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.verbose = False
-    server.registry_path = registry
-    server.runtime_root = tmp_path
-    server.chat_store = ChatSessionStore(tmp_path)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
-    try:
-        connection.request("GET", f"/api/chat/sessions/{session['session_id']}")
-        response = connection.getresponse()
-        snapshot = json.loads(response.read())
-        assert response.status == 200
-    finally:
-        connection.close()
-        server.shutdown()
-        worker.join(timeout=5)
-        server.server_close()
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
     cards = [m["collaboration"] for m in snapshot["messages"] if m.get("collaboration")]
     assert len(cards) == 1
     assert cards[0]["request_id"] == receipt["request_id"]
@@ -911,3 +1080,198 @@ def test_app_readback_never_substitutes_a_different_instance(tmp_path, damage):
     )
     assert snapshot["messages"] == before
     assert not any(row.get("collaboration") for row in snapshot["messages"])
+
+
+@pytest.mark.parametrize("status", ["failed", "timed_out", "interrupted", "completed"])
+@pytest.mark.parametrize("channel", ["manager", "goal.delivery"])
+@pytest.mark.parametrize("exact", [False, True])
+def test_committed_handoff_returns_after_lost_originating_response(tmp_path, status, channel, exact):
+    """Losing the caller's response must not lose already delegated work."""
+    if exact:
+        registry = _create_source_registry(tmp_path)
+    else:
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry, channel=channel, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    # Simulate a caller failure after Inbox/route commit, before its handoff
+    # receipt is saved. Only disposable synthetic state is fault-injected.
+    store.update_turn(session["session_id"], turn["turn_id"], status=status, response=None)
+    store.append_message(
+        session["session_id"], role="agent", text="Caller response unavailable.",
+        turn_id=turn["turn_id"], origin="runtime",
+    )
+    original = store.load_turn(session["session_id"], turn["turn_id"])
+    acknowledge(
+        tmp_path, "delivery", "builder", receipt["request_id"], "adopt", "Checking the public input.",
+        registry=registry, caller_goal_ref=receipt.get("goal_ref"),
+    )
+    report(
+        tmp_path, "delivery", "builder", receipt["request_id"], "conclusion", "Public input checked.",
+        registry=registry, caller_goal_ref=receipt.get("goal_ref"),
+    )
+    # Reopen the real store, as the production return service does on restart.
+    restarted = ChatSessionStore(tmp_path)
+    assert drain(tmp_path, registry, restarted, None) == 1
+    assert drain(tmp_path, registry, restarted, None) == 0
+    assert restarted.load_turn(session["session_id"], turn["turn_id"]) == original
+    returns = [m for m in restarted.messages(session["session_id"]) if m.get("origin") == "manager_followup"]
+    assert len(returns) == 1
+    assert "Public input checked." in returns[0]["text"]
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    returned = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
+    assert len(returned) == 1
+    assert returned[0]["return_delivery"]["status"] == "delivered"
+    assert len([m for m in snapshot["messages"] if m["role"] == "user"]) == 1
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_committed_result_waits_for_active_caller_then_returns(tmp_path, exact):
+    registry = (_create_source_registry(tmp_path) if exact else tmp_path / "registry.json")
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status="running")
+    acknowledge(
+        tmp_path, "delivery", "builder", receipt["request_id"], "adopt", "Checking the public input.",
+        registry=registry, caller_goal_ref=receipt.get("goal_ref"),
+    )
+    report(
+        tmp_path, "delivery", "builder", receipt["request_id"], "conclusion", "Public input checked.",
+        registry=registry, caller_goal_ref=receipt.get("goal_ref"),
+    )
+    now = datetime.now(timezone.utc)
+    drain(tmp_path, registry, store, None, now=now)
+    assert not any(m.get("origin") == "manager_followup" for m in store.messages(session["session_id"]))
+    store.update_turn(session["session_id"], turn["turn_id"], status="failed", response=None)
+    # The legacy return pump retains its existing transport backoff.
+    later = now + timedelta(minutes=6)
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None, now=later) == 1
+    assert drain(tmp_path, registry, store, None, now=later) == 0
+    assert len([m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]) == 1
+
+
+@pytest.mark.parametrize("damage", ["running", "completing", "receipt", "entry", "route"])
+def test_lost_response_recovery_requires_the_same_committed_request(tmp_path, damage):
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _external_manager_request(tmp_path, registry)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status="failed", response=None)
+    if damage in {"running", "completing"}:
+        store.update_turn(session["session_id"], turn["turn_id"], status=damage)
+    elif damage == "receipt":
+        store.update_turn(session["session_id"], turn["turn_id"], response={
+            "context_handoff_receipt": {**receipt, "goal_ref": {**receipt["goal_ref"], "goal_instance_id": INSTANCE_B}},
+        })
+    elif damage == "entry":
+        for path in (_root(tmp_path) / "entries").glob(f"*/{receipt['request_id']}.json"):
+            path.unlink()
+    else:
+        route_path = _root(tmp_path) / "roundtrips" / f"{receipt['request_id']}.json"
+        route = json.loads(route_path.read_text())
+        _write(route_path, {**route, "source_id": "lark:another-request"})
+    calls = []
+    assert drain(tmp_path, registry, store, lambda *args: calls.append(args)) == 0
+    assert calls == []
+    assert not any(m.get("origin") == "manager_followup" for m in store.messages(session["session_id"]))
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_path, revoke):
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _external_manager_request(tmp_path, registry)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status="timed_out", response=None)
+    if revoke:
+        policy_path = _root(tmp_path) / "policy.json"
+        policy = json.loads(policy_path.read_text())
+        policy["sources"][session["channel_id"]]["targets"] = []
+        _write(policy_path, policy)
+    calls = []
+
+    def sender(route, current_session, current_turn, text):
+        calls.append((route, current_session, current_turn, text))
+        return {"reply_verified": True, "provider_receipt": "sha256:" + "a" * 64}
+
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), sender) == (0 if revoke else 1)
+    assert len(calls) == (0 if revoke else 1)
+    if calls:
+        route, current_session, current_turn, text = calls[0]
+        assert route["source_id"] == "lark:source"
+        assert current_session["session_id"] == session["session_id"]
+        assert current_turn["turn_id"] == turn["turn_id"]
+        assert "A completed its bounded review." in text
+        assert drain(tmp_path, registry, store, sender) == 0
+
+
+@pytest.mark.parametrize("channel", ["manager", "goal.delivery"])
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+@pytest.mark.parametrize("status", ["running", "failed"])
+def test_committed_request_remains_visible_without_a_saved_answer(tmp_path, channel, exact, status):
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry, channel=channel, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status=status, response=None)
+    read_inbox(tmp_path, registry, "delivery", "builder")
+    before = store.messages(session["session_id"])
+    for _ in range(2):
+        snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+        cards = [m for m in snapshot["messages"] if m.get("collaboration")]
+        assert len(cards) == 1
+        assert cards[0]["role"] == "user"
+        assert cards[0]["collaboration"]["request_id"] == receipt["request_id"]
+        assert cards[0]["collaboration"]["read_status"] == "supplied"
+        assert cards[0]["collaboration"]["decision"] == "pending"
+        assert cards[0]["collaboration"]["returns"] == []
+        assert store.messages(session["session_id"]) == before
+    assert store.load_turn(session["session_id"], turn["turn_id"])["status"] == status
+
+
+@pytest.mark.parametrize("damage", ["other_session", "other_client", "conflicting_receipt", "ambiguous_route", "missing_entry"])
+def test_lost_answer_readback_cannot_invent_or_rebind_a_commitment(tmp_path, damage):
+    from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status="failed", response=None)
+    route_path = _root(tmp_path) / "roundtrips" / (receipt["request_id"] + ".json")
+    route = json.loads(route_path.read_text())
+    if damage == "other_session":
+        route["session_id"] = "another-conversation"
+        _write(route_path, route)
+    elif damage == "other_client":
+        route["client_turn_id"] = "another-question"
+        _write(route_path, route)
+    elif damage == "ambiguous_route":
+        _write(route_path.with_name("b" * 64 + ".json"), route)
+    elif damage == "missing_entry":
+        next((_root(tmp_path) / "entries").glob("*/" + receipt["request_id"] + ".json")).unlink()
+    else:
+        store.update_turn(session["session_id"], turn["turn_id"], response={"context_handoff_receipt": {**receipt, "agent_id": "other"}})
+    before = store.messages(session["session_id"])
+    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=registry)
+    assert snapshot["messages"] == before
+    assert not any(m.get("collaboration") for m in snapshot["messages"])
+
+
+def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry)
+    rid, goal_ref = receipt["request_id"], receipt["goal_ref"]
+    acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Accepted", registry=registry, caller_goal_ref=goal_ref)
+    report(tmp_path, "delivery", "builder", rid, "conclusion", "Waiting for review.", registry=registry, caller_goal_ref=goal_ref)
+    assert drain(tmp_path, registry, store, None) == 1
+    _recreate(registry)
+    update = report(tmp_path, "delivery", "builder", rid, "conclusion", "Review complete.", registry=registry, caller_goal_ref=goal_ref, update_id="review-complete")
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 1
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    messages = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
+    assert [m["text"].split("\n\n")[-1] for m in messages] == ["Waiting for review.", "Review complete."]
+    assert messages[-1]["return_delivery"]["result_key"] == update["result_key"]
+    assert messages[-1]["return_delivery"]["status"] == "delivered"
+    with pytest.raises((ValueError, FileNotFoundError)):
+        report(tmp_path, "delivery", "builder", rid, "conclusion", "Wrong generation.", registry=registry, caller_goal_ref={"goal_id": "delivery", "goal_instance_id": INSTANCE_B}, update_id="wrong-instance")

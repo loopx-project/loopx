@@ -30,15 +30,28 @@ agents:
 | --- | --- | --- |
 | `plain` | One Codex exec, native Goals disabled | Absent |
 | `native-goal` | Installed native Goal transport; objective `Finish the task.` | Absent |
-| `heartbeat` | Product thin heartbeat + external scheduler, fresh each wake | Present |
+| `heartbeat` | Product thin heartbeat + external scheduler, fresh or same-session resume | Present |
 | `turn` | Public Turn CLI, typed result, independent validation, settlement | Present |
 | `loopx-goal` | Product Goal body + installed native Goal transport | Present |
 
-Only `turn` accepts `iteration_context: resume-if-available`. Core session
-compatibility determines whether it actually resumes, including after changing
-Todo. Native Goal continuation stays with Codex; blocked Goals are not
-automatically unblocked. Plain exec versus Goal app-server also changes
-transport; it does not isolate the continuation effect alone.
+`heartbeat` and `turn` accept `iteration_context: resume`. The first invocation
+creates one Codex conversation; later planning checkpoints and execution wakes
+resume that exact native session ID for the trial's Goal and Agent, including
+when the selected Todo changes. Both drivers share the product's agent-scoped
+Codex session store. `fresh` remains the runner default and starts a new session
+on each invocation. The former context name is rejected, with no alias.
+
+Resume never falls back to a new conversation when a binding is corrupt, the
+trial home/workspace/model/settings change, or Codex returns a different ID.
+Repair the configuration or explicitly select `fresh`; the next observed fresh
+session replaces the binding. A timeout preserves an observed ID without
+claiming progress. Wakes remain serialized by the outer controller. Private
+wake receipts record the requested action and confirmed native session ID;
+aggregate trajectories copy each native session once.
+
+Native Goal continuation stays with Codex; blocked Goals are not automatically
+unblocked. Plain exec versus Goal app-server also changes transport; it does
+not isolate the continuation effect alone.
 
 `turn` requires `validation_command`, an argv list for an independently
 protected validator available inside the task environment. It receives the
@@ -67,10 +80,13 @@ planning process or missing result fails the entry; it never falls back to a
 generic Todo. A blocked entry retains the referenced blockers and starts no
 execution driver. Readback proves state and ownership, not semantic plan quality.
 
-Planning uses a separate fresh `codex exec` session with native Goals disabled
-for that call. Its session is not inserted into core Turn session bindings or
-resumed by the subsequent execution. This is a planning-contract ablation, not
-an exact reproduction of same-conversation interactive `$loopx` startup.
+Planning follows the chosen context policy for heartbeat and Turn. With
+`resume`, planning and execution share the same conversation, including later
+phase planning; each checkpoint still renders fresh public task inputs and
+validates actual Todo readback. With `fresh`, each planning/execution invocation
+starts a new conversation. LoopX Goal planning uses a separate exec conversation
+because native Goal execution owns its app-server thread lifecycle. The runner
+does not claim exact equivalence to interactive `$loopx` startup.
 The default `planning_timeout_sec` is 300; planning and preparation consume the
 same `scheduler_timeout_sec` phase budget as execution. Planning sessions are
 included in native session/token aggregation. No planning checkpoint is counted

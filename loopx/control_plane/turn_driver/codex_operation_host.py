@@ -24,16 +24,20 @@ from ..collaboration.operation_handoff import (
     pending_operation_handoffs,
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
+from ..effect_runtime import EffectRuntimeRejected
 from .codex_cli import (
-    _lineage,
     _prompt,
+    normalize_codex_stdio_mcp_server,
+    codex_cli_result_schema,
+)
+from .codex_sessions import (
+    _lineage,
     _read_codex_cli_session_document,
     _codex_session_goal_ref,
     _store_codex_cli_session,
     load_codex_cli_session,
-    normalize_codex_stdio_mcp_server,
-    codex_cli_result_schema,
 )
+from ...extensions.codex_native_child import native_child_observer
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
 
@@ -77,6 +81,7 @@ def operation_tool_handler(
     profile_digest: str,
     model: str,
     reasoning_effort: str,
+    source_route: Mapping[str, str] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
 ):
     """Private closure installed only on a process owned by the Turn driver.
@@ -92,6 +97,12 @@ def operation_tool_handler(
         "revision": REVISION,
         "model": model,
         "reasoning_effort": reasoning_effort,
+    }
+    executor_route = {
+        **lineage,
+        "host_surface": "loopx-managed-codex",
+        "thread_id": session_id,
+        "profile_digest": profile_digest,
     }
 
     def handle(tool: str, arguments: Any, native: dict[str, Any]) -> dict[str, Any]:
@@ -149,11 +160,16 @@ def operation_tool_handler(
                             scope=scope,
                             cursor=arguments.get("cursor"),
                             cursor_scope=cursor_scope,
+                            executor_route=executor_route,
                         ),
                     }
             if action == "prepare":
                 request = dict(arguments["request"])
                 terms = dict(request.get("normalized_parameters") or {})
+                if "source_route" in terms and terms["source_route"] != source_route:
+                    raise ValueError("the model cannot retarget the host-selected return audience")
+                if source_route is not None:
+                    terms["source_route"] = dict(source_route)
                 for key, expected in {
                     "goal_id": lineage["goal_id"],
                     "agent_id": lineage["agent_id"],
@@ -197,6 +213,12 @@ def operation_tool_handler(
                     outcome=arguments.get("outcome"),
                 ),
             }
+        except EffectRuntimeRejected as exc:
+            if exc.diagnostic_code == "operation_source_route_ambiguous":
+                return {"ok": False, "error": "operation_source_route_ambiguous",
+                        "execution_allowed": False,
+                        "next_action": "Select a registered return audience with --codex-operation-source-route-json in the host invocation; source routing is not executor authority."}
+            return {"ok": False, "error": "operation_admission_rejected", "execution_allowed": False}
         except (ValueError, KeyError, TypeError, RuntimeError):
             # Private payloads, paths and adapter error text never enter the model tool error.
             return {
@@ -218,9 +240,11 @@ def run_codex_operation_host(
     sandbox: str = "read-only",
     model: str | None = None,
     reasoning_effort: str | None = None,
+    source_route: Mapping[str, str] | None = None,
     mcp_server: Mapping[str, Any] | None = None,
     timeout_seconds: float = 115,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    confirmed_operation_id: str | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
@@ -279,6 +303,29 @@ def run_codex_operation_host(
     ):
         raise ValueError(
             "managed operation profile changed; explicitly select a fresh iteration and obtain fresh approval"
+        )
+    if confirmed_operation_id is not None:
+        # Final admission recheck before native resume. A queued delegation must
+        # not create/rebind a Session if approval, Todo, profile or lifetime
+        # changed after the callback. This grants no tool/effect authority.
+        from ..collaboration.operation_handoff import managed_operation_binding_current
+        from ..collaboration.operation_wake import require_current_operation_scope
+
+        store = ChatActionStore(runtime_root / "chat" / "actions")
+        proposal = store.load(confirmed_operation_id)
+        if proposal is None or binding is None or action != "resume":
+            raise ValueError("confirmed operation requires its original resumable session")
+        require_current_operation_scope(registry_path, proposal["normalized_parameters"])
+        store._agent_operation_plan(
+            proposal, action="wake",
+            binding_current=managed_operation_binding_current(
+                runtime_root, proposal["normalized_parameters"]
+            ),
+            launch_context={"host": "codex-cli", "operation_tools": True,
+                            "iteration_context": (session_plan.get("context_policy") or {}).get("mode")},
+            executor_route={**lineage, "host_surface": "loopx-managed-codex",
+                            "thread_id": binding["session_id"], "profile_digest": profile_digest,
+                            "model": model, "reasoning_effort": reasoning_effort},
         )
     host_config = (
         {
@@ -340,15 +387,84 @@ def run_codex_operation_host(
             profile_digest=profile_digest,
             model=model,
             reasoning_effort=reasoning_effort,
+            source_route=source_route,
             goal_admission=goal_admission,
         )
-        return session.send(
+        route = {**lineage, "host_surface": "loopx-managed-codex",
+                 "thread_id": session.thread_id, "profile_digest": profile_digest}
+        continuations = []
+        if (runtime_root / "chat" / "actions" / "actions.json").is_file():
+            with collaboration_goal_scope(
+                registry_path, goal_id=lineage["goal_id"], agents=(lineage["agent_id"],),
+                caller_goal_ref=request.get("goal_ref"), require_active=True,
+            ) as scope:
+                pending = pending_operation_handoffs(
+                    runtime_root, lineage["goal_id"], lineage["agent_id"],
+                    registry_path=registry_path, scope=scope, executor_route=route,
+                    cursor_scope=hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest(),
+                )
+            # Bounded canonical locators only. Private terms still require the
+            # existing authenticated inspect tool; these locators grant nothing.
+            continuations = [
+                {key: item[key] for key in ("operation_id", "payload_digest", "confirmation_digest", "claim_id")}
+                for item in pending["items"] if item["status"] == "authorized_pending"
+            ]
+
+        def on_event(kind: str, event: dict[str, Any]) -> None:
+            if kind != "turn.started":
+                return
+            # send emits this only after the native turn/start response. A
+            # launched process, callback ACK or model assertion cannot issue it.
+            for locator in continuations:
+                try:
+                    agent_operation_action(
+                        runtime_root, registry_path, proposal_id=locator["operation_id"],
+                        actor={**route, "model": model, "reasoning_effort": reasoning_effort,
+                               "host_turn_id": event.get("upstream_turn_id")},
+                        action="observe_host_start", turn_key=request["turn_key"],
+                    )
+                except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    # Stop before dispatching operation tools if confirmation,
+                    # Goal or binding changed while native start was in flight.
+                    raise BuiltInHostError(
+                        "codex_operation_host_start_unrecorded", failure_kind="unknown",
+                        recovery_kind="resume_session",
+                    ) from exc
+
+        child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
+            registry_path=goal_admission.registry_path if goal_admission is not None else None)
+
+        def observe_child(item: Mapping[str, Any]) -> None:
+            if child_observer is None:
+                return
+            def record_child() -> None:
+                child_observer.observe(item, session_id=session.thread_id,
+                                       invocation_id=session.current_turn_id)
+
+            if goal_admission is None:
+                record_child()
+            else:
+                goal_admission.accept_result(record_child)
+
+        result = session.send(
             _prompt(request)
-            + "\nUse loopx_operation for pending/prepare/inspect/consume/report. "
-            "Source conversations are not executor identity. Execute only after the first receipt says execution_allowed=true. "
-            "Already consumed/unknown effects require evidence reconciliation, never retry. Never treat final-answer prose as an outcome receipt.",
+            + "\nUse loopx_operation for context/pending/prepare/inspect/consume/report. "
+            "Source conversations are not executor identity. context/pending/inspect do not require consumption. "
+            "When the admitted task authorizes proposal preparation and supplies its terms, prepare may run before human confirmation or consume; "
+            "prepare writes a canonical proposal, not a domain/external effect. execution_allowed=false is expected for prepare, not a reason to refuse it. "
+            "Use pending/inspect to reconcile an existing proposal before preparing another; do not invent missing terms or repeat an already granted preparation approval. "
+            "Only domain/external effects require the first successful consume receipt with execution_allowed=true. "
+            "Preparation or waiting for human confirmation is not task completion. Report outcomes only with original execution evidence. "
+            "Already consumed/unknown effects require evidence reconciliation, never retry. Never treat final-answer prose as an outcome receipt."
+            + ("\nCanonical confirmed operation continuations for this exact binding: "
+               + json.dumps(continuations, sort_keys=True)
+               + ". Inspect these locators through loopx_operation and consume once before any effect."
+               if continuations else ""),
             output_schema=codex_cli_result_schema(request),
+            on_event=on_event,
+            **({"on_native_item": observe_child} if child_observer is not None else {}),
         )
+        return result
     except CodexChatAgentError as exc:
         raise BuiltInHostError(
             "codex_operation_host_" + exc.error_code,

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 from .effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
@@ -174,6 +174,30 @@ class SettlementStepKind(StrEnum):
     DURABLE_WRITEBACK = "durable_writeback"
     QUOTA_SPEND = "quota_spend"
     TERMINAL_CLOSEOUT = "terminal_closeout"
+
+
+TurnProviderStepKind: TypeAlias = Literal[
+    SettlementStepKind.DURABLE_WRITEBACK,
+    SettlementStepKind.QUOTA_SPEND,
+    SettlementStepKind.TERMINAL_CLOSEOUT,
+]
+TURN_PROVIDER_STEP_KINDS: tuple[TurnProviderStepKind, ...] = (
+    SettlementStepKind.DURABLE_WRITEBACK,
+    SettlementStepKind.QUOTA_SPEND,
+    SettlementStepKind.TERMINAL_CLOSEOUT,
+)
+
+
+def require_turn_provider_step_kind(
+    step_kind: SettlementStepKind,
+) -> TurnProviderStepKind:
+    if step_kind is SettlementStepKind.DURABLE_WRITEBACK:
+        return step_kind
+    if step_kind is SettlementStepKind.QUOTA_SPEND:
+        return step_kind
+    if step_kind is SettlementStepKind.TERMINAL_CLOSEOUT:
+        return step_kind
+    raise ValueError("validation is not a provider effect step")
 
 
 class SettlementBindingKind(StrEnum):

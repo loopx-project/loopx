@@ -4,7 +4,7 @@ import math
 from datetime import timedelta
 from typing import Any, Callable
 
-from .slot_accounting import net_quota_slot_spend, quota_slot_contribution
+from .ledger_readback import net_quota_slot_spend, quota_slot_contribution
 from .spend_sources import VISIBLE_GOAL_SLOT_SPEND_SOURCE
 from .usage_collector import UsageRowError, UsageSample, collect_usage_for_run
 from ..runtime.time import now_utc

@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
-CONTEXTS = ("fresh", "resume-if-available")
+CONTEXTS = ("fresh", "resume")
 TASK_ENTRIES = ("seeded-todo", "loopx-planned")
 SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -31,8 +31,8 @@ class Execution:
             raise ValueError("unsupported task entry")
         if self.task_entry == "loopx-planned" and not self.uses_loopx:
             raise ValueError("loopx-planned requires a LoopX execution mode")
-        if self.context != "fresh" and self.mode != "turn":
-            raise ValueError("resume-if-available currently requires mode=turn")
+        if self.context != "fresh" and self.mode not in {"turn", "heartbeat"}:
+            raise ValueError("resume requires mode=turn or mode=heartbeat")
         if self.sandbox not in SANDBOXES:
             raise ValueError("unsupported Codex sandbox")
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:

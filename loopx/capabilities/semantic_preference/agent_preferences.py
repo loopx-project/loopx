@@ -1,6 +1,7 @@
 """CLI/host adaptation for the TS-owned explicit preference lifecycle."""
 from pathlib import Path
 import shlex
+from typing import Any
 
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ...control_plane.effect_runtime import effect_runtime_result
@@ -30,7 +31,14 @@ def agent_preferences(*, registry_path: Path, runtime_root: Path, goal_id: str,
     return result
 
 
-def extend_turn_start_dispatch(dispatch, *, runtime_root, registry_path, goal_id, agent_id):
+def extend_turn_start_dispatch(
+    dispatch: dict[str, Any] | None,
+    *,
+    runtime_root: Path,
+    registry_path: Path,
+    goal_id: str,
+    agent_id: str | None,
+) -> Any:
     # Cheap global negative check only; exact scope discovery remains TS-owned.
     if not agent_id or not (runtime_root / "agent-preferences").exists():
         return dispatch

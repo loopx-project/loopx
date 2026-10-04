@@ -9,9 +9,11 @@ fence 与 receipt 证明由 TypeScript 协调边界负责；Python 只读文件�
 ## 操作
 
 先显式启用并 bootstrap runtime shadow，让它捕获真实变更并通过资格校验。
-不指定模式转换时，v0 晋升仍要求 `hard_lease`。显式传 `--handoff-mode-migration preserve`
-可保留当前模式；`hard_lease` 则审核转换及现有 claim/lease。保存的计划保留这个选择，
-执行时不能覆盖它；两者都不降低捕获、来源与事务资格条件。
+新 CLI 预览默认 `preserve`，只切换存储权威、保留当前所有权策略；显式
+`--handoff-mode-migration hard_lease` 才审核策略升级及现有 claim/lease。
+旧 v0 hard-only 保存计划仍按原合同恢复，执行时不能覆盖计划选择；两者都不降低
+捕获、来源与事务资格条件。已 canonical 的 Goal 无需重新 promote，可以使用独立
+备份的 [handoff-mode 迁移](handoff-mode.md)。
 
 ```bash
 loopx --format json coordination-shadow promote \
@@ -31,7 +33,7 @@ loopx --format json coordination-shadow promote \
 不要贴到公开 PR。
 
 保存的计划决定 operation id 和资格策略，不能再叠加 `--minimum-operations` 或
-`--require-event-kind`。不传计划文件的旧命令继续沿用原默认值。
+`--require-event-kind`。不传计划文件的新 CLI 预览默认保留所有权策略。
 
 执行会在现有锁内重新捕获、校验源状态。计划变了，就在 fencing 前返回
 `local_authority_reviewed_plan_changed`。此时重新预览并审核；不要修改旧 digest
@@ -108,8 +110,8 @@ projection digest 和 partition marker；分配序号不返回事务行，drain 
 capability grant。它们在获授权的切换后继续使用既有 canonical 路由和展示合同。
 PostgreSQL 仍需要服务持有的 factory 与租户权限，不能仅靠本地 selector 接通数据库。
 
-已合入的 claim-preserving 转换与保存计划现在组合验证：File/SQLite 的默认、
-`preserve`、`hard_lease` 三种路径均使用相同资格与恢复 owner。
+保存计划与 claim-preserving 转换组合验证：File/SQLite 的历史 v0 计划及新 CLI
+preserve/hard 路径使用相同资格与恢复 owner。
 默认切换、SQLite 长时资格、晋升后导出／回退、剩余 Python 删除仍遵守 RFC 独立门槛。
 
 恢复用于向前补齐或确认原切换，不是 rollback。不要删除活跃 fence、重置 canonical

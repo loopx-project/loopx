@@ -90,6 +90,7 @@ export interface CoordinationProjectionCommitInput {
 const TODO_CONTRACT_REVISION_FIELDS: readonly (readonly string[])[] = [
   ["completion_validation_revision", "completion_validation_revision_history"],
   ["completion_result"],
+  ["completion_receipt_id"],
 ];
 
 interface HistoricalTodoContract {

@@ -42,6 +42,7 @@ def _build_scheduler_followup_decision(
     | SchedulerExecutionContextResolution
     | None,
     operator_inbox_urgency_projector: Callable[..., dict[str, object]],
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Rebuild a scheduler follow-up from the originating receipt-bound Turn."""
 
@@ -74,6 +75,7 @@ def _build_scheduler_followup_decision(
         interaction_projection_hooks=(
             repository_delivery_interaction_hook(repo_path=Path.cwd()),
         ),
+        goal_ref=goal_ref,
     )
 
 
@@ -88,6 +90,7 @@ def build_scheduler_followup_payload(
     | SchedulerExecutionContextResolution
     | None,
     operator_inbox_urgency_projector: Callable[..., dict[str, object]],
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Execute one scheduler ACK/failure command against its live decision."""
 
@@ -97,6 +100,7 @@ def build_scheduler_followup_payload(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         )
         if turn_instance_id
         else None
@@ -167,6 +171,7 @@ def build_scheduler_followup_payload(
         ),
         scheduler_context=scheduler_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+        goal_ref=goal_ref,
     )
     receipt_todo_id = (
         heartbeat_receipt_settlement_todo_id(heartbeat_receipt)

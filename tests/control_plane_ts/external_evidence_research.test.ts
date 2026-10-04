@@ -392,3 +392,19 @@ test("retirement fails closed on mutated admission semantics", () => {
     /admission_id does not match/,
   );
 });
+
+
+test("optional source selection preserves legacy identity and binds source/query mutations", () => {
+  const legacy = plan();
+  assert.equal((legacy.request as Record<string, unknown>).source_refs, undefined);
+  const bound = planExternalEvidenceRequest({request: {...request,
+    source_refs: ["https://example.com/pinned"], search_terms: ["literal"]}, providers:[methodProvider]});
+  assert.notEqual(bound.plan_id, legacy.plan_id);
+  for (const [field, value] of [["source_refs", ["https://example.com/other"]], ["search_terms", ["different"]]]) {
+    const changed = structuredClone(bound);
+    (changed.request as Record<string, unknown>)[field as string] = value;
+    assert.throws(() => recordExternalEvidenceReceiptObservation({plan:changed, receipt:receipt(bound)}), /request_id|plan_id/);
+  }
+  assert.throws(() => planExternalEvidenceRequest({request:{...request, source_refs:["file:///private"]},
+    providers:[methodProvider]}), /non-file/);
+});

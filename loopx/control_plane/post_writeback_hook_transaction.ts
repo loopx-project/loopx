@@ -80,6 +80,7 @@ interface PostWritebackSource extends JsonObject {
   durable: boolean;
   identity: JsonObject & { goal_id: string; todo_id: string | null };
   state_version: string;
+  receipt_id?: string | null;
   committed_at: string;
   projection: JsonObject;
 }
@@ -375,6 +376,7 @@ function decodeSourceFields(value: unknown): PostWritebackSource {
       "durable",
       "identity",
       "state_version",
+      ...(Object.hasOwn(source, "receipt_id") ? ["receipt_id"] : []),
       "committed_at",
       "projection",
     ],
@@ -421,6 +423,9 @@ function decodeSourceFields(value: unknown): PostWritebackSource {
       source.state_version,
       "source.state_version",
     ),
+    ...(Object.hasOwn(source, "receipt_id")
+      ? {receipt_id: optionalPythonStrippedString(source.receipt_id, "source.receipt_id")}
+      : {}),
     committed_at: pythonStrippedString(
       source.committed_at,
       "source.committed_at",
@@ -596,7 +601,11 @@ function sourceHookInput(source: PostWritebackSource, readScope: string[]): Json
     event_kind: source.event_kind,
     identity: source.identity,
     state_version: source.state_version,
-    committed_at: source.committed_at,
+    // Old sources retain their byte-for-byte identity. New lifecycle receipts
+    // carry an immutable committed id; their clock is diagnostic, not a version.
+    ...(source.receipt_id == null
+      ? {committed_at: source.committed_at}
+      : {receipt_id: source.receipt_id}),
   };
   const eventId = `pwr_${sha256(pythonCanonicalJson(receiptFacts)).slice(0, 24)}`;
   const projection = Object.fromEntries(
@@ -738,6 +747,25 @@ function intentKey(intent: unknown): string | null {
     : null;
 }
 
+function validateStoredReceipt(
+  request: TransactionRequest,
+  admitted: AdmittedHook,
+  receipt: JsonObject,
+): JsonObject {
+  // An explicit primary receipt id binds the dispatch independently of a
+  // later projection timestamp. Validate and return the stored clock rather
+  // than rewriting history; legacy timestamp identities remain exact.
+  const hookInput = request.source?.receipt_id != null
+    ? {...admitted.hook_input, receipt: {
+      ...requireJsonObject(admitted.hook_input.receipt, "hook_input.receipt"),
+      recorded_at: receipt.recorded_at,
+    }}
+    : admitted.hook_input;
+  return validatePostWritebackHookReceipt({
+    registration: admitted.contract, hook_input: hookInput, receipt,
+  });
+}
+
 function recordReceiptConflict(
   inspection: Inspection,
   admitted: AdmittedHook,
@@ -859,11 +887,7 @@ async function inspectTransaction(request: TransactionRequest): Promise<Inspecti
       if (read.receipt !== null) {
         let receipt: JsonObject;
         try {
-          receipt = validatePostWritebackHookReceipt({
-            registration: admitted.contract,
-            hook_input: hookInput,
-            receipt: read.receipt,
-          });
+          receipt = validateStoredReceipt(request, admitted, read.receipt);
         } catch {
           inspection.blocked_dispatch_ids.add(dispatchId);
           inspection.result_slots.push({
@@ -975,15 +999,13 @@ async function storeReceipt(
         if (current.receipt !== null) {
           let validated: JsonObject;
           try {
-            validated = validatePostWritebackHookReceipt({
-              registration: admitted.contract,
-              hook_input: admitted.hook_input,
-              receipt: current.receipt,
-            });
+            validated = validateStoredReceipt(request, admitted, current.receipt);
           } catch {
             return { status: "conflict", receipt: null };
           }
-          if (pythonCanonicalJson(validated) === pythonCanonicalJson(receipt)) {
+          const candidate = request.source?.receipt_id != null
+            ? {...receipt, recorded_at: validated.recorded_at} : receipt;
+          if (pythonCanonicalJson(validated) === pythonCanonicalJson(candidate)) {
             return validated.status === "retryable_failure"
               ? { status: "stored", receipt: validated }
               : { status: "replayed", receipt: validated };

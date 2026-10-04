@@ -17,8 +17,12 @@ debuggability matters.
 
 When a command is run outside a project-local `.loopx/registry.json`,
 the CLI falls back to the shared local global registry at
-`~/.codex/loopx/registry.global.json` if it exists. That registry is
-maintained automatically by `connect` and `refresh-state` so each project agent
+`~/.loopx/registry.global.json` for a fresh installation. A legacy-only
+installation continues to select `~/.codex/loopx/registry.global.json` until
+its [explicit migration](product/migrations/local-state-path-migration.md).
+If both default registries exist, implicit selection fails and `doctor`
+reports a route conflict. The selected registry is maintained automatically by
+`connect` and `refresh-state` so each project agent
 can update its own local state while dashboards still see the multi-project
 view.
 
@@ -170,7 +174,7 @@ loopx --format json status \
 
 For compute allocation, `loopx quota status` and
 `loopx quota plan` derive an agent-facing grouping from this same status
-payload. `loopx --registry "$HOME/.codex/loopx/registry.global.json"
+payload. `loopx --registry "$HOME/.loopx/registry.global.json"
 quota should-run --goal-id <goal-id>` derives a per-goal automation guard from
 that grouping for project heartbeats. These are read-only views, not a separate
 source of truth. Scripts should treat `summary.next_automatic_turn` in the
@@ -195,10 +199,12 @@ For replan, the guard carries a host-built `replan_context_v0` and the compact
 `replan_action_packet_v0`. The context projects a bounded coverage ledger from
 the agent-scoped evidence history, an uncovered frontier, and a delivery
 receipt. The acting model therefore chooses a direction from delivered context;
-it does not have to discover and execute an evidence-log command as a protocol
-preflight. `loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin`
-remains the cold-path diagnostic chronology, and its read receipt remains useful
-for observability, but a read or legacy ACK cannot close a replan obligation.
+it does not have to discover or execute an evidence command as a protocol
+preflight. The standalone evidence command is removed. Each projected evidence
+row carries an exact Goal/Agent-bound history read action. Missing fields,
+unsupported versions and unavailable references fail explicitly; valid empty
+arrays alone mean no matching evidence. Historical read receipts remain
+observable, but a read or legacy ACK cannot close a replan obligation.
 Closure requires a typed semantic delta accepted against the current obligation:
 a new surface, hypothesis, probe family, state-grounded runnable successor,
 fresh evidence-linked vision path, concrete new blocker, or coverage-backed
@@ -323,7 +329,7 @@ goals must stay out of the eligible lane even when they have a high
   "global_registry": {
     "available": true,
     "ok": true,
-    "registry": "~/.codex/loopx/registry.global.json",
+    "registry": "~/.loopx/registry.global.json",
     "current_registry": ".loopx/registry.json",
     "current_registry_is_global": false,
     "global_goal_count": 4,
@@ -576,7 +582,7 @@ Fresh shape:
 {
   "ok": true,
   "registry": ".loopx/registry.json",
-  "runtime_root": "~/.codex/loopx",
+  "runtime_root": "~/.loopx",
   "gate": "promotion_readiness",
   "gate_state": "ready",
   "can_promote": true,
@@ -1817,7 +1823,8 @@ For same-repo multi-goal projects, `project_registry_exists`,
 `goal_state_dir_exists`, and `active_state_file_exists` are goal-scoped health
 signals. A project can have both `main-control` and `side-bypass` in the same
 repo, but each selected `goal_id` should have its own
-`.codex/goals/<goal-id>/` directory. If that directory is missing, the map
+registered Goal state directory (under `.loopx/goals` for new projects). If
+that directory is missing, the map
 reports `project_goal_state_dir_not_detected:<goal-id>` and the legacy
 `project_local_goal_state_not_detected` risk even when another goal in the same
 repo is healthy.

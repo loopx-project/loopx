@@ -19,7 +19,6 @@ from ..capabilities.reliability_diagnostics import (
     append_ledger_records,
     build_diagnostic_projection,
     build_integrity_receipt,
-    ledger_path,
     ledger_ref,
     normalize_observer_envelope,
     normalize_observer_stats,
@@ -27,6 +26,7 @@ from ..capabilities.reliability_diagnostics import (
     read_ledger,
     read_ledger_records,
 )
+from ..capabilities.reliability_diagnostics.ledger import resolve_ledger_path
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 
@@ -236,8 +236,8 @@ def handle_reliability_diagnostics_command(
         registry_path=registry_path,
     )
     try:
-        path = ledger_path(runtime_root, goal_id)
         command = args.reliability_diagnostics_command
+        path = resolve_ledger_path(runtime_root, goal_id, for_write=command == "ingest")
         if command == "ingest":
             payload = _ingest(path, goal_id, str(args.input))
         else:
@@ -249,7 +249,7 @@ def handle_reliability_diagnostics_command(
                 "ok": True,
                 "command": command,
                 "goal_id": goal_id,
-                "ledger_ref": ledger_ref(goal_id),
+                "ledger_ref": path.relative_to(runtime_root.expanduser()).as_posix(),
             }
             if command == "receipt":
                 payload["receipt"] = build_integrity_receipt(reading)

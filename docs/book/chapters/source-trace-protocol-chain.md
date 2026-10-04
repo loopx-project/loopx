@@ -1,18 +1,51 @@
 # 沿一条协议链定位实现
 
-理解一个控制面行为，不能只看最终 status，也不能只看某个 reducer 的输出。你需要从 source fact
-出发，检查它经过哪些协议变换，最后形成什么 effect 与 receipt。
+## 从一个静默的字段改名开始
+
+先看一次没有报错的坏结局。它最危险的地方在于：没有任何一步失败。
+
+```text
+周一 14:02  一位贡献者认为 required_decision_scopes 这个名字太长。
+            他把它重命名得更短，同时更新了写入 schema、CLI 写入路径
+            和手边能看到的测试。
+周一 14:40  受影响的 unit test 全部通过。改动范围看起来收敛在
+            source 一侧，于是他提交了 PR。
+周一 16:10  CI 全绿，reviewer 看到 diff 只有 schema 与 writer，
+            PR 合并。
+周二 09:31  Host 开始一轮新工作。frontier 里出现一个 publish Todo。
+周二 09:31  它的 required scope 字段在新名字下不存在。reader 对缺失字段
+            的处理是“视为空集合”，于是这个 Todo 显示为没有 scope requirement。
+周二 09:34  “没有 scope requirement”意味着没有任何 Gate 覆盖它。
+            quota 选择它，TurnEnvelope 打包它，Host 执行它。
+周二 09:41  首页上线。
+周二 11:20  用户发现首页已经发布，但自己的 approval Gate 仍然是 open。
+周二 11:26  回看 run history：这条链上每一步的返回值都是成功。
+```
+
+从代码角度看，这位贡献者的改动做得相当规矩：改了写入方，改了 schema，跑了测试。他的错误在于只追踪了字段的**生产者**，没有追踪它的**消费者**。字段名同时是两侧的合同，改一侧就是改合同，而投影层的缺失字段回退把这次违反合同的行为翻译成了一次合法状态。
+
+这个场景说明本章的核心动作：**追一条链路，直到你能说出每一处消费该事实的地方，以及当事实缺失时每一处会退化成什么。**
+
+理解一个控制面行为，只看最终 status 或者某个 reducer 的输出都不够用。你需要从 source fact 出发，检查它经过哪些协议变换，最后形成什么 effect 与 receipt。
+
+## 为什么“改完跑测试就行”不够
+
+自然的做法是：改字段，跑测试，全绿就提交。问题出在测试覆盖的范围和链路覆盖的范围并不一致：
+
+- **测试覆盖的是你想到的消费者。** 单元测试断言的是被改模块的行为，它不会替你发现另一个模块正在用不同方式读同一个字段。
+- **消费关系跨语言、跨层。** 同一个字段可能被 schema 校验、被 parser 归一化、被 projection 重命名、被 renderer 格式化。这四处会分别演进，彼此并不引用。
+- **缺失字段有默认值，而默认值会做出决定。** 缺失被回退成空集合、`None` 或空串时，系统不会报错，它会继续用这个默认值参与判定。这是坏结局最隐蔽的来源。
+- **成功返回值不是证据。** 每一层都成功，合起来仍可能是错的。
+
+所以调试的问题要换掉。不要问“最终 JSON 为什么不对”，要问“**第一处违反不变量的边界在哪里**”。
 
 本章使用一个可复用场景：
 
 > 发布首页需要用户批准；与此同时，修复内部链接检查器不依赖这项批准，Agent 仍应继续。
 
-这个场景把 Gate scope、工作图、interaction channel、scheduler、bounded Turn 和 evidence 串在
-同一条链上。它也说明为什么“有一个 open user todo”不能被压缩成“整个 Goal 停止”。
+这个场景把 Gate scope、工作图、interaction channel、scheduler、bounded Turn 和 evidence 串在同一条链上。它也说明为什么“有一个 open user todo”不能被压缩成“整个 Goal 停止”。
 
-## 本章目标
-
-读完后，你应该能：
+## 读完之后你应该能
 
 - 从一个可观察错误反推 source、projection、policy、effect 与 receipt；
 - 使用协议字段和不变量设置源码阅读断点；
@@ -63,8 +96,7 @@ typed Todo / Gate facts
   -> fresh projection
 ```
 
-每个箭头都是合同边界。调试时不要问“最终 JSON 为什么不对”这样宽泛的问题；应定位第一处违反
-不变量的边界。
+每个箭头都是合同边界。调试时不要问“最终 JSON 为什么不对”这样宽泛的问题；应定位第一处违反不变量的边界。
 
 ## 第 1 站：Source facts 是否足够表达意图
 
@@ -98,27 +130,25 @@ typed Todo / Gate facts
 ```
 
 这里由 [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
-拥有 scope coverage 语义。最重要的不是字符串长什么样，而是：
+拥有 scope coverage 语义。最重要的在于：
 
 - Gate 明确声明 kind、granularity 与 scope key；
 - 被保护 Todo 明确声明 required scope；
 - 独立 Todo 不继承无关 Gate；
 - `user_action` 或自然语言提醒不被提升为 authority。
 
-如果 source 只有“等待用户确认首页”一行 prose，系统无法可靠判断它是否阻塞链接修复。此时应补齐
-source contract 或产生 repair，不应让 projection 猜测全局权限。
+如果 source 只有“等待用户确认首页”一行 prose，系统无法可靠判断它是否阻塞链接修复。此时应补齐 source contract 或产生 repair，不应让 projection 猜测全局权限。
 
 ### Source 阅读断点
 
-在源码中先找 Todo contract、Gate lifecycle 与 decision-scope schema，而不是 status renderer。
-回答：
+在源码中先找 Todo contract、Gate lifecycle 与 decision-scope schema，而非 status renderer。回答：
 
 1. 字段从 CLI/event/workbench 的哪个受控入口写入？
 2. missing、unknown 或 malformed scope 是 reject、repair 还是 compatibility fallback？
 3. Gate resolve 时只消费被覆盖 scope，还是顺手清空全部要求？
 4. retry 是否由 stable decision/event identity 保证幂等？
 
-如果这些问题没有答案，继续向下读 quota 只会放大歧义。
+第 2 问正是开头那个坏结局的入口。如果缺字段会被回退成空集合，那么改字段名就等于悄悄删掉 scope requirement。如果这些问题没有答案，继续向下读 quota 只会放大歧义。
 
 ## 第 2 站：Projection 是否保留了关系
 
@@ -193,7 +223,7 @@ open work
 
 这不是“安全绕过 Gate”。安全路径没有执行被 Gate 覆盖的 action。
 
-### Ordered policy，而不是零散布尔值
+### Ordered policy，而非零散布尔值
 
 Quota 需要处理的不只是本场景，还可能同时看到：
 
@@ -204,7 +234,7 @@ Quota 需要处理的不只是本场景，还可能同时看到：
 - capability gap；
 - throttling 或 pause。
 
-因此正确问题不是：
+因此正确问题并非：
 
 ```text
 if open_gate_count > 0, should_run = false?
@@ -217,8 +247,7 @@ if open_gate_count > 0, should_run = false?
 哪个 typed interaction mode 拥有这一轮？
 ```
 
-规则应能解释 first match、抑制条件和最终 reason。特别要测试负向规则：为什么存在 open Gate 时，
-独立 work 仍可运行；为什么存在 runnable advancement 时，不应凭空产生 monitor-derived replan。
+规则应能解释 first match、抑制条件和最终 reason。特别要测试负向规则：为什么存在 open Gate 时，独立 work 仍可运行；为什么存在 runnable advancement 时，不应凭空产生 monitor-derived replan。
 
 ### Policy 阅读断点
 
@@ -230,13 +259,13 @@ if open_gate_count > 0, should_run = false?
 2. Gate、repair、replan、monitor 与 runnable work 的顺序是否显式；
 3. `False` 决策是否也有命名规则和反例；
 4. 最终结果是否由一个 authoritative interaction contract 表达；
-5. scheduler 是否消费最终结果，而不是重新检查低层 flags。
+5. scheduler 是否消费最终结果，而非重新检查低层 flags。
 
 函数名可以帮助你找到当前 builder，但不能替代这五个检查点。
 
 ## 第 4 站：Interaction Contract 保留两个 channel
 
-本场景的关键输出不是一个 `should_run`：
+本场景的关键输出并非一个 `should_run`：
 
 ```json
 {
@@ -264,8 +293,7 @@ agent still has independent T2
 
 两个 channel 不一致并不矛盾。相反，把它们合并成一个 `action_required` 才会丢失信息。
 
-`interaction_contract` 完成仲裁后，Host 不应读取 status prose，再自行决定“既然有人等确认，就先不运行”
-或“既然 Agent 能运行，就不用展示 Gate”。
+`interaction_contract` 完成仲裁后，Host 不应读取 status prose，再自行决定“既然有人等确认，就先不运行”或“既然 Agent 能运行，就不用展示 Gate”。
 
 ## 第 5 站：TurnEnvelope 只承载已决定的下一轮
 
@@ -285,8 +313,7 @@ agent still has independent T2
 - 把完整 active state 或 raw transcript 塞进热路径；
 - 因为 Host 支持某能力就授予权限。
 
-如果 Envelope 选择了 `repair-link-checker`，后续 Turn 必须绑定这项 causal frontier。Host 的可恢复
-session 不能把它替换成之前准备发布首页的旧动作。
+如果 Envelope 选择了 `repair-link-checker`，后续 Turn 必须绑定这项 causal frontier。Host 的可恢复 session 不能把它替换成之前准备发布首页的旧动作。
 
 ## 第 6 站：LoopX Turn 形成 bounded effect
 
@@ -302,11 +329,9 @@ decide
   -> spend at most once
 ```
 
-对链接检查器修复来说，Host 可以编辑代码并运行聚焦测试，但不能顺便发布首页。即使同一 session
-里早已准备好发布命令，当前 Envelope 也没有授予该 effect。
+对链接检查器修复来说，Host 可以编辑代码并运行聚焦测试，但不能顺便发布首页。即使同一 session 里早已准备好发布命令，当前 Envelope 也没有授予该 effect。
 
-Turn 的关键身份至少应绑定 Goal、Agent、Todo、decision revision 和 idempotency/effect identity。
-中途停止必须产生 typed failure 或 resumable phase，而不是靠读取 transcript 猜执行到哪里。
+Turn 的关键身份至少应绑定 Goal、Agent、Todo、decision revision 和 idempotency/effect identity。中途停止必须产生 typed failure 或 resumable phase，而非靠读取 transcript 猜执行到哪里。
 
 ### Effect 阅读断点
 
@@ -347,8 +372,7 @@ typed blocker
   + safe retry/replan/repair route
 ```
 
-Receipt 必须属于当前 revision。旧 commit 上的 link check 不能证明新改动通过；一次 host success 也
-不能替代独立 postcondition。
+Receipt 必须属于当前 revision。旧 commit 上的 link check 不能证明新改动通过；一次 host success 也不能替代独立 postcondition。
 
 ## 第 8 站：Fresh replay 验证没有投影漂移
 
@@ -366,11 +390,10 @@ canonical events
 - `repair-link-checker` 已完成并带 validation evidence；
 - 首页 Gate 仍 open；
 - `publish-homepage` 仍被同一 scope 阻塞；
-- quota 不会再次选择已完成的链接修复；
+- quota 不会再选已完成的链接修复；
 - scheduler 根据剩余 frontier 决定等待、运行其他工作或请求用户。
 
-如果 run history 显示完成，但 status 仍列为 open，这是 projection gap；如果 status 正确，但 quota
-继续选择旧 Todo，这是 decision/replay gap。不要手工修改两个展示面让它们“看起来一致”。
+如果 run history 显示完成，但 status 仍列为 open，这是 projection gap；如果 status 正确，但 quota 继续选择旧 Todo，这是 decision/replay gap。不要手工修改两个展示面让它们“看起来一致”。
 
 ## 用协议矩阵代替调用栈笔记
 
@@ -386,7 +409,7 @@ canonical events
 | Validator | candidate + source | independent postcondition | receipt/blocker | focused smoke |
 | Writeback | receipt + revision | idempotent durable transition | event/run/spend | replay test |
 
-这张表在函数移动后仍有用；一张调用栈截图通常很快过期。
+这张表在函数移动后仍有用；一张调用栈截图通常很快过期。它也是开头那份 PR 缺的东西：一列“输入”就能暴露出 rename 的消费者还没找齐。
 
 ## 常见误读
 
@@ -410,6 +433,41 @@ Host result 仍需独立验证、writeback 和 fresh replay。
 
 如果 source、projection、decision 和 receipt 的合同都受影响，只改一个分支往往会留下第二种解释。
 
+## 代价与边界：追踪不是免费的
+
+完整追踪一条链比读一个函数慢得多，而且它并不总是必要的动作。
+
+**代价一：链路越长，追踪成本越高。** 本章的示例只有八站，真实链路可能穿过两三种语言和一次进程边界。把每一处修改都追到底，会让一处两行的修复也要读五份文档。可操作的做法是：先按影响面判断这次改动是否触及合同边界。只改 renderer 的排版时，不必重走 source 与 policy。
+
+**代价二：你读到的代码是此刻的，文档是某次维护时的。** 追踪结束时留下的矩阵，会在下一次迁移中部分失效。它的价值在于记录下**当时**的边界归属，让后来者知道哪一处需要重新确认，而非给出永久答案。
+
+**代价三：追踪会给出信心，而信心可以被局部完整误导。** 走到第八站、看到 fresh replay 正常，会让人以为链路完整。开头那个坏结局正好相反：每一步都成功，链却断了。
+
+**边界一：什么时候读源码比读协议文档更可靠。** 当你要判断“这一版实际怎么处理缺失字段”时。回退值、默认值和解析顺序写在代码里，协议的概述通常不会覆盖每种 malformed 输入，而这类细节往往正是坏结局的落点。
+
+**边界二：什么时候读协议文档比读源码更可靠。** 当你判断 authority、scope coverage 或某次变更的合法性时。一个字段可能在四五处被读写，只有一份是 canonical；逐个读实现容易把某个 consumer 的局部行为当成合同本身。
+
+**边界三：追踪能定位，不能授权。** 走完一条链不会让你有资格修改它。是否属于你、是否需要 maintainer 同意、切片是否过大，仍由公开贡献入口与 maintainer 判断。前一章讲的就是这条边界。
+
+## 具名失败：两个能自己跑的检查
+
+开头的坏结局可以被压成两条可以在干净 checkout 上执行的检查：
+
+```bash
+grep -rn "required_decision_scopes" loopx/ | wc -l
+grep -rn "required_decision_scopes" loopx/ --include=*.ts | wc -l
+```
+
+第一条给出这个名字出现过的全部位置：schema、writer、parser、projection、fixture、renderer。rename 的合格标准，是这组位置的每一处都被重新确认过一遍，而非只改掉产生它的那几行。第二条提醒你两侧的语言边界：语义所有者可能已经在另一侧，只改 Python 会留下一个仍在读旧名字的 consumer。
+
+第二条检查针对缺失字段的回退：
+
+```bash
+grep -rn "or \[\]\|or ()\|or {}\|\.get(.*, \[\])\|\.get(.*, {})" loopx/control_plane/todos/ | head -20
+```
+
+这些写法本身都合理，它们只是提醒你：**只要缺失字段会被回退成空集合，一次字段改名就能在没有任何报错的情况下删除一条 authority requirement。** 这与前述“每一层都返回成功”的坏结局来自同一个机制。
+
 ## 本章检查表
 
 面对一个控制面 bug，依次确认：
@@ -423,5 +481,15 @@ Host result 仍需独立验证、writeback 和 fresh replay。
 - [ ] Validator 是否独立于 Host 自报结果？
 - [ ] Writeback 是否幂等，并在 fresh replay 后形成正确 frontier？
 
-下一章不再只读这条链，而是实际设计一条 Control-Plane 规则变更：从 invariant 和 decision table
-开始，再选择最小实现切片。
+## 不变式
+
+追踪结束后，下面几条应该能独立成立：
+
+1. **每个被改名或改语义的字段，都要能列出全部消费者。** 只改生产者不算完成，缺失字段的回退值算一次消费者。
+2. **链上每一层返回成功，不构成链路正确的证据。** 判断依据是第一处违反不变量的边界，而非最终返回值。
+3. **缺失字段的默认值会参与判定。** 因此必须明确写出它是 reject、repair 还是 compatibility fallback。
+4. **authority 只有一份 canonical 来源。** 多处可以读同一个字段，只有一处拥有它；读取方被误当成 owner 是跨层变更最常见的解释残留。
+5. **判断 authority 时以协议文档为准，判断当前行为时以源码为准。** 两者冲突时按冲突类型选权威，并让同一次改动把另一方更新掉。
+6. **追踪只负责定位，不负责授权。** 走到链尾不会改变这次改动是否属于你。
+
+下一章不再只读这条链，而是实际设计一条 Control-Plane 规则变更：从 invariant 和 decision table 开始，再选择最小实现切片。

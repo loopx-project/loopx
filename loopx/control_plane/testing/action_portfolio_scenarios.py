@@ -14,6 +14,69 @@ from .quota_fixtures import quota_status_payload, quota_todo_item
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID = "portfolio-goal"
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID = "codex-portfolio"
 
+
+def accepted_replan_successor_status() -> dict[str, Any]:
+    """An accepted new route competes with an older, higher-priority default."""
+    agent = ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID
+    obligation = "replan-0123456789abcdef"
+    old = quota_todo_item(
+        todo_id="todo_prior_plan",
+        index=1,
+        priority="P0",
+        title="Validate the original route.",
+        claimed_by=agent,
+    )
+    successor = quota_todo_item(
+        todo_id="todo_replan_successor",
+        index=2,
+        priority="P1",
+        title="Validate the revised route against the new evidence.",
+        claimed_by=agent,
+        action_kind="validate",
+        target_key="revised-route",
+        replan_obligation_id=obligation,
+    )
+    return quota_status_payload(
+        goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
+        status="active",
+        agent_todo_items=[old, successor],
+        recommended_action=old["text"],
+        next_action=old["text"],
+        active_state_next_action=old["text"],
+        coordination={"agent_model": "peer_v1", "registered_agents": [agent]},
+        claim_scope_agent_id=agent,
+        latest_runs=[
+            {
+                "agent_id": agent,
+                "classification": "bounded_replan_progress",
+                "generated_at": "2026-08-01T01:00:00Z",
+                "autonomous_replan_ack": {
+                    "schema_version": "autonomous_replan_ack_v0",
+                    "recorded": True,
+                    "source": "todo_replan_successor_transition",
+                    "semantic_delta": {
+                        "schema_version": "replan_semantic_delta_v0",
+                        "accepted": True,
+                        "outcomes": ["new_runnable_successor"],
+                        "satisfying_outcomes": ["new_runnable_successor"],
+                        "obligation_id": obligation,
+                        "successor_origin_obligation_id": obligation,
+                        "successor_todo_id": successor["todo_id"],
+                    },
+                },
+            }
+        ],
+    )
+
+
+def accepted_replan_successor_scenario_source() -> dict[str, Any]:
+    return build_quota_should_run(
+        accepted_replan_successor_status(),
+        goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
+        agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+    )
+
+
 PLANNING_HORIZON_STRATEGIC_CONTEXT_TODO_IDS = (
     "todo_regression_gate",
     "todo_per_model_tests",

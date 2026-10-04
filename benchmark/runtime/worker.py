@@ -134,6 +134,10 @@ def turn_command(
         ),
         "--iteration-context",
         execution.context,
+        "--session-scope",
+        "agent",
+        "--codex-reasoning-effort",
+        env["REASONING_EFFORT"],
         "--codex-bin",
         env["CODEX_BIN"],
         "--codex-model",
@@ -200,6 +204,32 @@ def run_native_goal(
                 receipt["native_goal"] = compact_native_goal_receipt(observed[0])
 
 
+def native_command(env, execution, stage, wake, session_wake):
+    if session_wake is None:
+        # Preserve the baseline/Goal-planning entrypoint and its transport inputs.
+        return [
+            env["CODEX_BIN"], "exec", "--json", "--skip-git-repo-check",
+            "--sandbox", execution.sandbox, "--cd", env["LOOPX_PROJECT"],
+            *(["-c", "features.goals=false", "--output-schema", str(wake / "planning-schema.json"),
+               "--output-last-message", str(wake / "planning-result.json")] if stage == "plan" else []),
+            "-",
+        ]
+    from loopx.control_plane.turn_driver.codex_cli import _codex_command
+
+    command = _codex_command(
+        codex_bin=env["CODEX_BIN"], project=Path(env["LOOPX_PROJECT"]),
+        schema_path=wake / "planning-schema.json" if stage == "plan" else None,
+        output_path=wake / "planning-result.json" if stage == "plan" else None,
+        sandbox=execution.sandbox, model=env["MODEL_NAME"],
+        reasoning_effort=env["REASONING_EFFORT"],
+        session_id=session_wake.session_id if session_wake else None,
+        mcp_server=None,
+    )
+    if stage == "plan":
+        command[-1:-1] = ["-c", "features.goals=false"]
+    return command
+
+
 def run_once(env: dict[str, str]) -> dict:
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
@@ -229,6 +259,7 @@ def run_once(env: dict[str, str]) -> dict:
         "ok": False,
         "timed_out": False,
     }
+    session_wake = None
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
     )
@@ -266,6 +297,11 @@ def run_once(env: dict[str, str]) -> dict:
             body = heartbeat_body(env, turn_id, native_goal=execution.native_goal)
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
+        session_wake = None
+        if execution.mode in {"heartbeat", "turn"} and not (execution.mode == "turn" and stage == "execute"):
+            from benchmark.runtime.sessions import BenchmarkSessionWake
+
+            session_wake = BenchmarkSessionWake(env, execution, receipt)
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)
@@ -286,22 +322,7 @@ def run_once(env: dict[str, str]) -> dict:
                         pending.get("resume_turn_key"),
                     )
                     if execution.mode == "turn" and stage == "execute"
-                    else [
-                        env["CODEX_BIN"],
-                        "exec",
-                        "--json",
-                        "--skip-git-repo-check",
-                        "--sandbox",
-                        execution.sandbox,
-                        "--cd",
-                        env["LOOPX_PROJECT"],
-                        *([
-                            "-c", "features.goals=false",
-                            "--output-schema", str(wake / "planning-schema.json"),
-                            "--output-last-message", str(wake / "planning-result.json"),
-                        ] if stage == "plan" else []),
-                        "-",
-                    ]
+                    else native_command(env, execution, stage, wake, session_wake)
                 )
                 with (wake / "stdout.jsonl").open("w") as stdout:
                     with child_process(
@@ -347,13 +368,19 @@ def run_once(env: dict[str, str]) -> dict:
         receipt["error_kind"] = type(exc).__name__
         raise
     finally:
-        if (home / "sessions").is_dir():
-            # One authoritative copy per native session; resume must not count
-            # the same prefix again in every wake's aggregate trajectory.
-            shutil.copytree(
-                home / "sessions", log_root.parent / "sessions", dirs_exist_ok=True
-            )
-        (wake / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        try:
+            if session_wake is not None:
+                session_wake.observe(wake / "stdout.jsonl")
+        except BaseException as exc:
+            receipt.update(ok=False, error_kind=type(exc).__name__)
+            raise
+        finally:
+            if (home / "sessions").is_dir():
+                # One authoritative copy; resumed prefixes are never double counted.
+                shutil.copytree(
+                    home / "sessions", log_root.parent / "sessions", dirs_exist_ok=True
+                )
+            (wake / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt
 
 

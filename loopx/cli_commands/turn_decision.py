@@ -87,6 +87,7 @@ def _build_turn_decision(
     scheduler_execution_context: Mapping[str, Any],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> Callable[..., dict[str, Any]]:
     """Return the ``build_turn_decision`` every Turn owner resolves through.
 
@@ -96,6 +97,16 @@ def _build_turn_decision(
     Every other input is the owner's, so the two commands cannot disagree about
     the status, the scheduler context or the capability hooks behind a decision.
     """
+
+    # run-once executes in its explicit project, not the process that requests
+    # the plan (for example the App or delegation service). Resolve once and
+    # carry only that host fact into the original workspace guard. Commands
+    # without a host project retain the established invocation-cwd boundary.
+    project = getattr(args, "project", None)
+    workspace_path = (
+        Path(project).expanduser().resolve()
+        if getattr(args, "turn_command", None) == "run-once" and project is not None else None
+    )
 
     def build_turn_decision(
         *, requested_action_todo_id: str | None = None
@@ -117,6 +128,8 @@ def _build_turn_decision(
             ),
             requested_action_todo_id=requested_action_todo_id,
             turn_start_hook_dispatch=dict(turn_start_hook_dispatch or {}),
+            workspace_path=workspace_path,
+            goal_ref=goal_ref,
             interaction_projection_hooks=(
                 periodic_report_pending_intent_interaction_hook(
                     registry_path=registry_path,
@@ -194,6 +207,7 @@ def build_fresh_turn_decision_owner(
     runtime_root: Path,
     runtime_root_arg: str | None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> FreshTurnDecisionOwner:
     """Read the live status and derive the shared decision inputs from it.
 
@@ -230,6 +244,7 @@ def build_fresh_turn_decision_owner(
             scheduler_execution_context=scheduler_execution_context,
             operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             turn_start_hook_dispatch=turn_start_hook_dispatch,
+            goal_ref=goal_ref,
         ),
         requested_todo_id=getattr(args, "todo_id", None),
     )

@@ -411,9 +411,20 @@ collisions without writing broad prompt scope into todo metadata or pretending
 that a soft claim is already a hard lease. When a runnable current-agent or unclaimed
 advancement todo exists, quota may also expose
 `agent_lane_next_action.schema_version=agent_lane_next_action_v0`. That field is
-the peer's current slice for this turn; it does not overwrite the durable
-goal-level `Next Action`. `loopx status --agent-id <agent-id>` may attach the same derived field to matching status
-queue items for observation, while leaving the project-level route unchanged.
+the peer's selected task for this turn. Its `text`, identity, claim/lease and
+capability facts remain task facts. Optional `next_step` and `next_action_basis`
+come from the existing recommendation receipt, validated against the current
+selected Todo before display; they do not select a task or change authority.
+`refresh-state --agent-id PEER --next-action TEXT [--next-action-basis BASIS]`
+records this within-task step in run history without overwriting the compatibility
+`## Next Action` section. Single- and multi-peer Goals share this rule.
+`status --agent-id PEER` exposes the same derived lane and basis;
+`status --include-task-graph` summarizes all peers' routes. Source and stale-read
+boundaries are defined in the [quota contract](quota-allocation.md).
+Canonical Todos remain the task source even if their Markdown display is missing
+or stale. Promoted provider failure is an error, never permission to select a
+legacy Markdown task. Task edits, dependencies and ownership changes continue
+through their existing Todo writers; stage direction changes use Vision/replan.
 When a candidate has `target_capabilities` and missing target bridge
 capabilities, quota may mark it `capability_repair_mode=true`; scoped
 next-action selection should prefer that repair-mode candidate over ordinary
@@ -552,6 +563,16 @@ For multi-agent goals, `refresh-state` requires an explicit `--agent-id`.
 The default scoped refresh is an agent-lane run: it is useful for keeping the
 same turn's writeback/accounting identity intact, but it does not replace the
 goal-level status route.
+
+`--next-action` records a step bound to the registered Agent's selected eligible
+Todo, in either personal or Goal report scope; it does not replace shared prose.
+`--next-action-basis` optionally rejects an edit planned from an older source
+read. If the basis is stale, read the current task/step and retry; if no eligible
+task is available, resolve its existing lifecycle or routing boundary first.
+Native Turn host `next_action` remains follow-up guidance in its durable result,
+not this explicit task-step edit: completion or repair may leave no runnable
+current task. See [Next Action writeback](quota-allocation.md) for attribution,
+snapshot conflicts and the unchanged claim, lease and intent boundaries.
 
 ## Lifecycle Contract
 

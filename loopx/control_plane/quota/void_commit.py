@@ -6,8 +6,13 @@ from typing import Any
 from uuid import uuid4
 
 from ...file_lock import exclusive_file_lock
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import (
+    EffectRuntimeConflict,
+    EffectRuntimeRejected,
+    effect_runtime_result,
+)
 from ..runtime.time import now_local_iso
+from .accounting_admission import quota_accounting_admission
 from .spend_commit import quota_spend_index_digest
 from .spend_sources import DEFAULT_SLOT_SPEND_SOURCE
 
@@ -54,7 +59,7 @@ def _void_result(
 ) -> Mapping[str, Any]:
     try:
         result = effect_runtime_result("quota.void.commit", dict(params))
-    except EffectRuntimeRejected as exc:
+    except (EffectRuntimeConflict, EffectRuntimeRejected) as exc:
         raise ValueError(str(exc)) from None
     if (
         not isinstance(result, Mapping)
@@ -132,6 +137,8 @@ def commit_quota_slot_void(
     effect_id: str | None = None,
     generated_at: str | None = None,
     _operation: str = "commit",
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one TypeScript-owned quota void transaction."""
 
@@ -154,15 +161,29 @@ def commit_quota_slot_void(
         "before": dict(before),
     }
 
-    if execute:
-        # Legacy Python run writers still use the kernel lock. Hold it across
-        # the one native transaction until every index writer is in-process TS.
-        with exclusive_file_lock(index_path, operation="quota_void_commit"):
+    if registry_path is None and goal_ref is None:
+        if execute:
+            with exclusive_file_lock(index_path, operation="quota_void_commit"):
+                params["expected_index_digest"] = quota_spend_index_digest(index_path)
+                result = _void_result(params, expected_goal_id=safe_goal_id)
+        else:
             params["expected_index_digest"] = quota_spend_index_digest(index_path)
             result = _void_result(params, expected_goal_id=safe_goal_id)
     else:
-        params["expected_index_digest"] = quota_spend_index_digest(index_path)
-        result = _void_result(params, expected_goal_id=safe_goal_id)
+        with quota_accounting_admission(
+            runtime_root=runtime_root,
+            registry_path=registry_path,
+            goal_id=safe_goal_id,
+            goal_ref=goal_ref,
+            operation="quota_void_commit",
+            lock_legacy_index=execute,
+        ) as source_admission:
+            params["expected_index_digest"] = quota_spend_index_digest(index_path)
+            if goal_ref is not None:
+                params["goal_ref"] = dict(goal_ref)
+            if source_admission is not None:
+                params["source_admission"] = dict(source_admission)
+            result = _void_result(params, expected_goal_id=safe_goal_id)
     return _result_payload(result)
 
 
@@ -217,6 +238,8 @@ def record_quota_slot_void_from_preview(
     execute: bool = False,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
     reason_summary: str | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     del render_markdown
     if not preview.get("ok"):
@@ -240,4 +263,6 @@ def record_quota_slot_void_from_preview(
         execute=execute,
         source=source,
         reason_summary=reason_summary,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )

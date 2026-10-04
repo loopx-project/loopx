@@ -16,23 +16,14 @@ from ...control_plane.capability_hooks import (
     InteractionProjectionHookRegistration,
 )
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
 from .todo_source import read_report_todo_source
 from ...registry import (
     atomic_write_json,
     find_registry_goal,
 )
-from ...todos import add_goal_todo
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
-from ...presentation.renderers.periodic_report_html import render_periodic_report_html
-from ...presentation.renderers.periodic_report_markdown import (
-    render_periodic_report_markdown,
-)
-from .adapters import (
-    build_periodic_report_document,
-    build_periodic_report_source_result,
-)
-from .bindings import build_periodic_report_generation_bundle
 from .core import _reject_raw_keys
 from .post_writeback_hook import (
     PERIODIC_REPORT_POST_WRITEBACK_HOOK_ID,
@@ -56,10 +47,6 @@ from .machine_defaults import (
 )
 from .machine_store import read_periodic_report_machine_defaults
 from .cadence_journal import cadence_intent, cadence_journal_path, read_cadence_journal
-from .workspace import (
-    build_periodic_report_workspace_projection,
-    write_periodic_report_workspace_projection,
-)
 
 
 PENDING_INTENT_SCHEMA = "pending_capability_intent_projection_v0"
@@ -91,7 +78,7 @@ def _canonical_digest(value: object) -> str:
     encoded = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _intent_key(intent: Mapping[str, Any]) -> str:
@@ -1026,6 +1013,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 def _build_authored_source(
     authored: Mapping[str, Any], *, completed_at: str
 ) -> dict[str, Any]:
+    from .adapters import build_periodic_report_source_result
+
     return build_periodic_report_source_result(
         source_id="project_progress",
         source_kind="validated_project_progress",
@@ -1253,6 +1242,17 @@ def _consume_pending_periodic_report_intent(
         request=editorial_request,
         response_path=response_path,
     )
+    # Inspection and editorial preparation do not generate or publish reports.
+    # Load those adapters only after the original authored-response check.
+    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
+    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
+    from .adapters import build_periodic_report_document
+    from .bindings import build_periodic_report_generation_bundle
+    from .workspace import (
+        build_periodic_report_workspace_projection,
+        write_periodic_report_workspace_projection,
+    )
+
     source = _build_authored_source(authored, completed_at=completed_at)
     work_window = editorial_request["actual_work_window"]
     profile_ref = payload["profile_ref"]
@@ -1352,6 +1352,8 @@ def _consume_pending_periodic_report_intent(
         path=publication_candidate_path,
         candidate=publication_candidate,
     )
+    from ...todos import add_goal_todo
+
     delivery = add_goal_todo(
         registry_path=registry_path,
         goal_id=goal_id,

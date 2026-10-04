@@ -18,6 +18,7 @@ from .event_inbox import (
     inspect_lark_event_inbox,
     load_lark_event_inbox_config,
 )
+from .identity_shapes import LARK_CHAT_ID_PATTERN
 
 CONFIG_SCHEMA_VERSION_V0 = "lark_event_collector_config_v0"
 CONFIG_SCHEMA_VERSION = "lark_event_collector_config_v1"
@@ -29,7 +30,6 @@ PLAN_SCHEMA_VERSION = "lark_event_collector_plan_v0"
 STATUS_SCHEMA_VERSION = "lark_event_collector_status_v0"
 INSTALL_SCHEMA_VERSION = "lark_event_collector_install_v0"
 SERVICE_RE = re.compile(r"^loopx-[a-z0-9][a-z0-9._-]{1,73}$")
-CHAT_RE = re.compile(r"^oc_[A-Za-z0-9_-]+$")
 TIMEOUT_RE = re.compile(r"^[1-9][0-9]*(?:s|m|h)$")
 SUPPORTED_SUPERVISORS = {"launchd", "systemd"}
 SUPPORTED_EVENT_KEY = "im.message.receive_v1"
@@ -139,12 +139,29 @@ def load_lark_event_collector_config(
     raw_operation_callbacks = (
         raw_operation_callbacks if isinstance(raw_operation_callbacks, Mapping) else {}
     )
-    unknown_operation_callback_fields = set(raw_operation_callbacks) - {"enabled"}
+    unknown_operation_callback_fields = set(raw_operation_callbacks) - {"enabled", "managed_turn_wake"}
     if unknown_operation_callback_fields:
         raise ValueError("collector operation_callbacks contains unsupported fields")
     operation_callbacks_enabled = raw_operation_callbacks.get("enabled") is True
     if operation_callbacks_enabled and schema_version == CONFIG_SCHEMA_VERSION_V0:
         raise ValueError("collector operation_callbacks requires config v1")
+    managed_turn_wake = None
+    raw_wake = raw_operation_callbacks.get("managed_turn_wake")
+    if raw_wake is not None:
+        fields = {"registry_path", "goal_id", "requester_agent_id", "execution_config", "binding_id"}
+        if not isinstance(raw_wake, Mapping) or set(raw_wake) != fields:
+            raise ValueError("collector managed_turn_wake requires one explicit operator binding")
+        if not operation_callbacks_enabled:
+            raise ValueError("collector managed_turn_wake requires enabled operation callbacks")
+        if any(not isinstance(raw_wake[key], str) or not raw_wake[key]
+               or len(raw_wake[key]) > 4096 or any(ord(c) < 32 for c in raw_wake[key]) for key in fields):
+            raise ValueError("collector managed_turn_wake requires bounded string fields")
+        registry_path = Path(raw_wake["registry_path"]).expanduser()
+        if not registry_path.is_absolute():
+            raise ValueError("collector managed_turn_wake registry_path must be absolute")
+        config_ref, _ = _relative_project_path(root, raw_wake["execution_config"], "wake execution_config")
+        managed_turn_wake = {**dict(raw_wake), "registry_path": str(registry_path),
+                             "project": str(root), "execution_config": config_ref}
     for label, value, lower, upper in (
         (
             "initial_lookback_seconds",
@@ -214,7 +231,7 @@ def load_lark_event_collector_config(
                 "public-safe token"
             )
         chat_id = str(raw_route.get("chat_id") or "").strip()
-        if not CHAT_RE.fullmatch(chat_id):
+        if not LARK_CHAT_ID_PATTERN.fullmatch(chat_id):
             raise ValueError(
                 f"collector route {index + 1} chat_id must be a Lark oc_ chat id"
             )
@@ -325,6 +342,7 @@ def load_lark_event_collector_config(
         "operation_callbacks": {
             "enabled": operation_callbacks_enabled,
             "event_key": OPERATION_CALLBACK_EVENT_KEY,
+            "managed_turn_wake": managed_turn_wake,
         },
         "routes": routes,
     }
@@ -343,6 +361,7 @@ def _jq_projection(chat_ids: str | Sequence[str]) -> str:
         "event_id:(.event_id // .message_id // .id),"
         "message_id:(.message_id // .id),"
         "create_time:.create_time,content:.content,"
+        "parent_id:.parent_id,root_id:.root_id,"
         "attachment_count:(.attachment_count // 0),"
         "sender_type:(.sender_type // .sender.sender_type),"
         "sender_id:(.sender_id // .sender.id // .sender.sender_id),"
@@ -475,6 +494,7 @@ def _plan(
             "route_count": len(config["routes"]),
             "multi_chat_routing": len(config["routes"]) > 1,
             "operation_callbacks_enabled": config["operation_callbacks"]["enabled"],
+            "operation_callback_managed_wake_configured": config["operation_callbacks"]["managed_turn_wake"] is not None,
             "operation_callback_event_key": (
                 config["operation_callbacks"]["event_key"]
                 if config["operation_callbacks"]["enabled"]
@@ -725,6 +745,7 @@ def inspect_lark_event_collector(
             routes_with_event_evidence == len(config["routes"])
         ),
         "operation_callbacks_enabled": callbacks_enabled,
+        "operation_callback_managed_wake_configured": config["operation_callbacks"]["managed_turn_wake"] is not None,
         "operation_callback_listener_active": callback_listener_active,
         "operation_callback_listener_ready": callback_listener_ready,
         "operation_callback_delivery_verified": callback_delivery_verified,

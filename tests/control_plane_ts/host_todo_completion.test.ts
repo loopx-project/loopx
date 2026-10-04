@@ -44,6 +44,30 @@ test("host context read uses the original identity and cannot carry a decision",
     checkpoint_read_context_id: "receipt-a"}), /only to vision recovery/);
 });
 
+test("host settlement commands preserve an exact GoalRef", () => {
+  const instanceId = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const goalRef = {goal_id: "goal", goal_instance_id: instanceId};
+  const prepared = prepare({goal_ref: goalRef});
+  const steps = (
+    prepared.provider_effect as {steps: {args: string[]}[]}
+  ).steps;
+  for (const step of steps) {
+    assert.deepEqual(
+      step.args.slice(step.args.indexOf("--goal-instance-id"), step.args.indexOf("--goal-instance-id") + 2),
+      ["--goal-instance-id", instanceId],
+    );
+  }
+  const context = evaluateHostTodoCompletion(request("prepare", {
+    schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
+    phase: "vision_context",
+    goal_ref: goalRef,
+  }));
+  assert.deepEqual(
+    (context.args as string[]).slice(-2),
+    ["--goal-instance-id", instanceId],
+  );
+});
+
 test("vision decisions require v1 and cannot combine patch with unchanged", () => {
   assert.throws(() => prepare({vision_path: "vision.json"}), /requires v1/);
   assert.throws(() => prepare({schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,

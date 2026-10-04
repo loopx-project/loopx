@@ -16,7 +16,11 @@ from loopx.control_plane.testing.control_plane_composition_scenarios import (
 from loopx.control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
 )
-from loopx.control_plane.testing.quota_fixtures import quota_status_payload
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload,
+    quota_todo_item,
+    quota_todo_summary,
+)
 from loopx.control_plane.work_items.autonomous_replan_obligation import (
     build_autonomous_replan_obligation_payload,
 )
@@ -117,7 +121,7 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
     obligation = payload["autonomous_replan_obligation"]
     context = obligation["replan_context"]
     action = payload["replan_action_packet"]
-    assert context["evidence_source"] == "agent_scoped_evidence_log"
+    assert context["evidence_source"] == "compact_run_history"
     assert context["delivery"] == "host_projected"
     assert context["delivery_receipt"] == {
         "schema_version": "replan_context_delivery_receipt_v0",
@@ -144,6 +148,60 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
     assert payload["interaction_contract"]["agent_channel"][
         "primary_action"
     ] == "produce one typed outcome from the host-projected replan action packet"
+
+
+def test_replan_obligation_outlives_quiet_monitor_and_scoped_user_gate() -> None:
+    monitor = quota_todo_item(
+        todo_id="todo_waiting_monitor",
+        title="Watch a pending review.",
+        task_class="continuous_monitor",
+        claimed_by=AGENT_ID,
+        target_key="github:example/project:pr:123",
+        cadence="30m",
+        next_due_at="2099-01-01T00:00:00+00:00",
+    )
+    gate = quota_todo_item(
+        todo_id="todo_test_scope_gate",
+        role="user",
+        title="Provide a non-production test scope.",
+        task_class="user_gate",
+        blocks_agent=AGENT_ID,
+    )
+    status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        quota_state="operator_gate",
+        safe_bypass=True,
+        recommended_action="Wait for the test scope.",
+        agent_todos=quota_todo_summary([monitor], role="agent"),
+        user_todos=quota_todo_summary([gate], role="user"),
+        project_asset_extra={"autonomous_replan_obligation": _obligation()},
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": [AGENT_ID],
+        },
+    )
+
+    packet = build_quota_should_run(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+    )
+
+    assert packet["decision"] == "autonomous_replan_required"
+    assert packet["work_lane_contract"]["obligation"] == "quiet_until_material_monitor_transition"
+    assert packet["heartbeat_recommendation"]["recommended_mode"] == "ask_operator_gate"
+    assert packet["execution_obligation"]["must_attempt_work"] is True
+    assert packet["execution_obligation"]["kind"] == "autonomous_replan_required"
+    assert packet["execution_obligation"]["stall_threshold"] == 2
+    assert packet["interaction_contract"]["mode"] == "autonomous_replan"
+    assert packet["interaction_contract"]["user_channel"]["notify"] == "NOTIFY"
+    assert packet["interaction_contract"]["user_channel"]["actions"]
+    assert packet["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert packet["selected_todo"] is None
+    assert packet["scheduler_hint"]["action"] == "run_now"
+    assert packet["scheduler_hint"].get("consistency_error") is None
 
 
 def test_manual_evidence_read_receipt_cannot_close_replan() -> None:

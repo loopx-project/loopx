@@ -59,7 +59,7 @@ read_api_json() {
     : > "$target"
     : > "$read_error_file"
     if gh api "$@" > "$target" 2> "$read_error_file"; then
-      if jq -e 'true' "$target" > /dev/null 2>&1; then
+      if [[ -s "$target" ]] && jq -e 'true' "$target" > /dev/null 2>&1; then
         return 0
       fi
       # A 2xx answer whose body is empty or truncated is a transport fault,

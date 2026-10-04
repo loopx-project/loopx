@@ -436,6 +436,22 @@ the fixed-history measurement; CLI, traffic-window and lock-probe commits all
 extend past the fill target and are counted separately, so target-state rows
 keep their meaning.
 
+Status and quota CLI samples explicitly scan the checkout's complete `loopx/` directory by
+default. For comparisons between source revisions or installed releases, pass
+`--scan-root /path/to/fixed-public-source/loopx` to each run. Do not replace it
+with an empty or reduced fixture to meet a latency budget. The report records
+the selected root and per-axis before/after hashes, public-file counts and
+bytes from the production scan enumerator, outside the timed interval. Input
+drift fails the axis; missing or mismatched input evidence keeps the status budget
+row `missing`. Todo mutation has no scan option; its latency and independent store
+metrics remain usable. Hashes identify
+scan input, not scanner implementation or complete workload equivalence: keep
+the source/runtime, fixture, command mix and host conditions in the comparison.
+Untracked private-state contents are not read by the input probe. Synthetic
+CLI processes disable usage telemetry and preserve all normal boundary checks.
+Older reports without these input facts retain their measurements, but cannot
+establish matched status budget evidence through the current ledger.
+
 Reports carry p50/p95/p99 and counts, parent-process RSS, application request
 JSON bytes and separate DB/WAL/SHM sizes at the target history. Resource-usage
 peak RSS is process-lifetime across both groups; sampled axis RSS is separate,

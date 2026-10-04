@@ -96,3 +96,17 @@ export function normalizeCollaborationRequest(value: unknown): JsonObject {
   if (request.brief !== undefined) result.brief = normalizeCollaborationBrief(request.brief);
   return result;
 }
+
+/** Preserve source text while leaving room in the existing 128 KB inbox record. */
+export function normalizeCollaborationSourceContext(input: JsonObject): JsonObject {
+  const source = requireNonEmptyString(input.source_message, "source_message");
+  if (Array.from(source).length > 32000) {
+    throw new EffectRuntimeRequestError("collaboration source context exceeds 32000 characters; use a scoped artifact reference for larger material");
+  }
+  // JSON escaping and UTF-8 differ from character count; reserve the rest for
+  // the existing semantic brief, request identity and receiver instructions.
+  if (new TextEncoder().encode(JSON.stringify(source)).length > 98304) {
+    throw new EffectRuntimeRequestError("collaboration source context exceeds 98304 encoded bytes; use a scoped artifact reference for larger material");
+  }
+  return {source_message: source};
+}

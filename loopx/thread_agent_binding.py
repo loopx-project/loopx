@@ -395,6 +395,7 @@ def _registry_binding_resolution(
 def resolve_registry_thread_agent_binding(
     *,
     registry_path: Path,
+    registry_snapshot: dict[str, Any] | None = None,
     host_surface: str | None = None,
     thread_id: str | None = None,
     thread_link: str | None = None,
@@ -409,7 +410,7 @@ def resolve_registry_thread_agent_binding(
         )
     except ValueError as exc:
         raise ThreadBindingRequestError("thread binding request is invalid") from exc
-    payload = load_registry(registry_path)
+    payload = load_registry(registry_path) if registry_snapshot is None else registry_snapshot
     raw_matches = [
         match
         for goal in registry_goals(payload)

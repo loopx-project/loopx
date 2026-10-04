@@ -15,6 +15,7 @@ interface Progress {
 interface Monitor {
   target: string | null;
   mode: string | null;
+  material: boolean | null;
   frontier: string | null;
   todo: string | null;
   key: string | null;
@@ -131,6 +132,8 @@ function decode(value: unknown): Request {
         monitor: {
           target: optionalNonEmptyString(monitor.target_id, "target_id"),
           mode: optionalNonEmptyString(monitor.mode, "mode"),
+          material: monitor.material_change == null
+            ? null : requireBoolean(monitor.material_change, "material_change"),
           frontier: optionalNonEmptyString(monitor.frontier, "frontier"),
           todo: optionalNonEmptyString(monitor.todo_id, "todo_id"),
           key: optionalNonEmptyString(monitor.target_key, "target_key"),
@@ -211,7 +214,11 @@ function progressTrigger(runs: readonly Run[], request: Request): Trigger | null
 }
 function periodicTrigger(runs: readonly Run[], request: Request): Trigger | null {
   const durable: Run[] = [];
-  for (const run of distinctTurns(runs.filter(row => row.classification))) {
+  // Monitor liveness receipts are durable, but only a material transition is
+  // work for the periodic direction review. Monitor-specific triggers still
+  // inspect every poll in the unfiltered history window.
+  for (const run of distinctTurns(runs.filter(row => row.classification &&
+      (row.classification !== "quota_monitor_poll" || row.monitor.material === true)))) {
     durable.push(run);
     if (durable.length >= request.periodic) break;
   }

@@ -27,7 +27,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
-    state.write_text("---\nstatus: active\n---\n\n# Synthetic Goal\n\n## Agent Todo\n")
+    state.write_text("---\nstatus: active\n---\n\n# Synthetic Goal\n\n## Objective\nDeliver the independently accepted source outcome.\n\n## Agent Todo\n")
     index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
     index.parent.mkdir(parents=True)
     evidence = index.parent / "synthetic-artifact.json"
@@ -68,7 +68,8 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
 
 def _guard(call, turn: str = TURN):
     return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-                "--agent-id", AGENT, "--turn-instance-id", turn)
+                "--agent-id", AGENT, "--turn-instance-id", turn,
+                "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3")
 
 
 def _add(call, obligation_id: str):
@@ -84,6 +85,9 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
 ) -> None:
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
     original = _guard(call)
+    core_goal = original["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    assert core_goal["objective"] == "Deliver the independently accepted source outcome."
+    assert core_goal["objective_source"] == "active_state"
     identity = original["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     obligation_id = identity["replan_obligation_id"]
@@ -137,14 +141,32 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     settled = _guard(call)
     assert settled["effective_action"] == "heartbeat_settled_skip"
     assert settled.get("selected_todo") is None
+    hint = settled["scheduler_hint"]
+    assert hint["action"] == "preserve_current_schedule"
+    assert hint["app_automation"]["host_action"] == "none"
+    assert "recommended_rrule" not in hint["app_automation"]
+    assert "ack_hint" not in hint["app_automation"]
     rows = [json.loads(line) for line in index.read_text().splitlines()]
     assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
     todo = call("todo", "list", "--goal-id", GOAL, "--todo-id", added["todo_id"])["todo"]
     assert todo["status"] == "open"
+    # A later display/priority head must not displace the accepted new route.
+    competing = call("todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--text", "[P0] Validate the older independent route",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--operation-id", "competing-prior-route")
     fresh = _guard(call, "turn-independent-vision-review")
     assert fresh["effective_action"] != "heartbeat_settled_skip"
+    assert fresh["scheduler_hint"]["action"] == "run_now"
+    assert fresh["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 3
     assert fresh["goal_frontier_projection"]["acceptance_gaps"]
     assert fresh["goal_frontier_projection"]["vision_continuation_audit"]["decision"] == "acceptance_gap_open"
+    assert fresh["selected_todo"]["todo_id"] == added["todo_id"]
+    assert fresh["agent_lane_next_action"]["todo_id"] == added["todo_id"]
+    portfolio = fresh["action_portfolio"]
+    assert portfolio["primary"]["todo_id"] == added["todo_id"]
+    assert any(row["todo_id"] == competing["todo_id"] and row["selection_role"] == "alternative"
+               for row in portfolio["suggested_actions"])
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

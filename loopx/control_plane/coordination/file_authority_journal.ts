@@ -8,7 +8,7 @@ import {AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthority
   requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {decodeAuthorityTransaction, transactionForRevision,
   type JournalRevision} from "./authority_store_transactions.ts";
-import {applyAuthorityStateDelta, authorityStateCheckpointCursor, authorityStateDelta,
+import {AuthorityStateReplay, applyAuthorityStateDelta, authorityStateCheckpointCursor, authorityStateDelta,
   decodeAuthorityStateDelta, authorityStateDeltaReconstructs, isAuthorityStateCheckpoint, type AuthorityStateDelta} from "./authority_state_log.ts";
 
 export const FILE_AUTHORITY_JOURNAL_SCHEMA = "loopx_file_authority_store_v1";
@@ -88,6 +88,7 @@ export class FileAuthorityJournal {
         parseAuthorityCursor(cursor) !== BigInt(value.committed.length)) return invalid("lineage is invalid");
     const rows: StoredCommit[] = [], operations = new Set<string>();
     let previous: JsonObject | null = null, previousRevision: string | null = null;
+    let replay: AuthorityStateReplay | null = null;
     // Historical verification is CPU work inside the shared Effect server.
     // Yield between complete transactions, never publish a partially verified
     // journal. Promise.resolve() would only drain microtasks and starve sockets.
@@ -99,7 +100,16 @@ export class FileAuthorityJournal {
       }
       const {state: rawState, ...metadata} = raw;
       const state = storedState(rawState, BigInt(index + 1));
-      const transaction = decodeAuthorityTransaction({...metadata, projection: project(state, previous)});
+      if (state.kind === "checkpoint") replay = new AuthorityStateReplay(state.projection);
+      else {
+        if (replay === null) return invalid("delta has no predecessor");
+        replay.apply(state.delta);
+      }
+      // The replay owner already validates and owns the complete projection.
+      // Decode untrusted metadata, then copy the owned state without sorting
+      // every unchanged subtree again. Revision checks still cover every byte.
+      const transaction = {...decodeAuthorityTransaction({...metadata, projection: {}}),
+        projection: replay.snapshot()};
       if (parseAuthorityCursor(transaction.cursor) !== BigInt(index + 1)) return invalid("cursor lineage is invalid");
       if (operations.has(transaction.operation_id)) return invalid("operation identity is duplicated");
       if (transaction.provider_revision !== revisionFor(previousRevision, transactionForRevision(transaction))) {

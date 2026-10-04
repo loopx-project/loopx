@@ -64,6 +64,61 @@ def _observe(home: CodexHome, *thread_ids: str) -> dict[str, HostThreadActivity]
     return observe_codex_threads(thread_ids, homes=[home.root])
 
 
+def test_current_execution_reads_the_bound_home_only_and_recovers_without_preferences(home, tmp_path):
+    other = CodexHome(tmp_path / ".codex-other")
+    meta = {"timestamp": T0, "type": "session_meta", "payload": {"id": "t", "model_provider": "openai"}}
+    context = {"timestamp": T3, "type": "turn_context", "payload": {"turn_id": "new", "model": "example-model-2", "effort": "xhigh"}}
+    other.thread("t", [meta, _event(T2, "task_started", turn_id="new"), context])
+    env = {"CODEX_HOME": str(home.root), "CODEX_THREAD_ID": "t", "LOOPX_CODEX_HOMES": str(other.root)}
+    assert codex_activity.current_codex_execution_identity(env) == {"status": "unavailable", "reason": "session_not_found"}
+    path = home.thread("t", [meta, _event(T2, "task_started", turn_id="new")])
+    # Preference fields can disagree; they are not execution evidence.
+    with sqlite3.connect(home.db) as connection:
+        connection.execute("ALTER TABLE threads ADD COLUMN model TEXT DEFAULT 'old-model'")
+        connection.execute("ALTER TABLE threads ADD COLUMN reasoning_effort TEXT DEFAULT 'low'")
+    assert codex_activity.current_codex_execution_identity(env)["status"] == "unavailable"
+    with path.open("a") as stream:
+        stream.write(json.dumps(context) + "\n")
+    before = {p: p.read_bytes() for p in (home.db, path, other.db)}
+    result = codex_activity.current_codex_execution_identity(env)
+    assert result["status"] == "runtime_reported"
+    assert (result["model"], result["reasoning_effort"], result["provider"]) == ("example-model-2", "xhigh", "OpenAI")
+    assert result["active_turn_verified"] is True
+    assert all(p.read_bytes() == data for p, data in before.items())
+    assert str(home.root) not in json.dumps(result)
+
+
+def test_unbound_execution_does_not_discover_any_home(monkeypatch):
+    monkeypatch.setattr(codex_activity, "_state_db", lambda _: pytest.fail("unbound invocation must not open a store"))
+    assert codex_activity.current_codex_execution_identity({}) == {"status": "unavailable", "reason": "session_not_bound"}
+
+
+def test_review_packet_projects_real_bound_turn_metadata_into_its_template(home, monkeypatch, capsys):
+    from loopx.cli import main
+
+    home.thread("t", [
+        {"type": "session_meta", "payload": {"id": "t", "model_provider": "openai"}},
+        _event(T2, "task_started", turn_id="new"),
+        {"type": "turn_context", "payload": {"turn_id": "new", "model": "example-model-2", "effort": "xhigh"}},
+    ])
+    monkeypatch.setenv("CODEX_HOME", str(home.root))
+    monkeypatch.setenv("CODEX_THREAD_ID", "t")
+    monkeypatch.setattr("loopx.cli_commands.pr_review.resolve_current_github_login", lambda: "reviewer")
+    monkeypatch.setattr("loopx.cli_commands.pr_review.scan_github_pull_request_targets", lambda **_: {
+        "pull_requests": [{"number": 42, "title": "Repair request retry", "headRefOid": "a" * 40,
+                           "state": "OPEN", "author": {"login": "contributor"}, "files": [], "reviews": []}],
+        "complete": True,
+    })
+    assert main(["--format", "json", "pr-review", "--repo", "owner/repo", "--target-exact-head", "42@" + "a" * 40]) == 0
+    packet = json.loads(capsys.readouterr().out)
+    execution = packet["reviewer_execution"]
+    reviewer = packet["pull_requests"][0]["review_plan"]["result_template"]["reviewer"]
+    assert reviewer["declared_model"] == "example-model-2"
+    assert reviewer["declared_reasoning_effort"] == "xhigh"
+    assert reviewer["execution_observation_id"] == execution["observation_id"]
+    assert str(home.root) not in json.dumps(packet)
+
+
 def test_turn_without_end_marker_is_open(home: CodexHome) -> None:
     home.thread("t", [
         _event(T0, "task_started", turn_id="a"), _event(T1, "task_complete", turn_id="a"),
@@ -289,7 +344,8 @@ def test_app_status_route_attaches_codex_thread_activity(tmp_path: Path, monkeyp
         path = "/status.json"
         server = SimpleNamespace(
             selected_goal_id=None, registry_path=tmp_path / "registry.json", runtime_root_override=None,
-            scan_roots=[], limit=10, goal_subagent_configuration_enabled=False,
+            scan_roots=[], runtime_root=tmp_path / "runtime", limit=10,
+            goal_subagent_configuration_enabled=False,
         )
 
         def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:

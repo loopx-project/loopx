@@ -550,7 +550,7 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
         or replan_action.get("decision") != "replan_required"
         or replan_action.get("obligation_id") != obligation.get("obligation_id")
         or context.get("delivery") != "host_projected"
-        or context.get("evidence_source") != "agent_scoped_evidence_log"
+        or context.get("evidence_source") != "compact_run_history"
         or dict(context.get("delivery_receipt") or {}).get("status") != "delivered"
         or packet.get("required_reads") not in (None, [])
     ):
@@ -1137,7 +1137,7 @@ def _dispatch_behavior_command(
             "semantic_replan_writeback",
             True,
         )
-    if "evidence-log" in command:
+    if "history" in shlex.split(command):
         raise ValueError("manual_evidence_read_is_not_replan")
     raise ValueError("unexpected_command")
 

@@ -8,10 +8,12 @@ import os
 from pathlib import Path
 import re
 import tarfile
+import tempfile
 from typing import Any
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT
+from .paths import select_default_runtime_root
+from .control_plane.effect_runtime import effect_runtime_result
 
 
 STATE_BACKUP_SCHEMA_VERSION = "loopx_state_backup_v0"
@@ -325,7 +327,9 @@ def _category_stats(targets: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
         category = _target_category(str(item.get("key") or ""))
         stats = categories.setdefault(category, {"target_count": 0, **_empty_stats()})
         stats["target_count"] += 1
-        item_stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+        item_stats = item.get("stats")
+        if not isinstance(item_stats, dict):
+            item_stats = {}
         for field in STAT_FIELDS:
             stats[field] += int(item_stats.get(field, 0))
     return categories
@@ -367,9 +371,10 @@ def build_state_backup_plan(
     include_automations: bool = True,
     include_skills: bool = True,
     include_registry_projects: bool = True,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     resolved_project = _resolved(Path(project))
-    resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else DEFAULT_RUNTIME_ROOT)
+    resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else select_default_runtime_root())
     resolved_output_dir = _resolved(Path(output_dir).expanduser() if output_dir else resolved_runtime_root / "backups")
     resolved_backup_id = backup_id or _utc_timestamp()
     archive_path = resolved_output_dir / f"loopx-state-{resolved_backup_id}.tar.gz"
@@ -394,6 +399,9 @@ def build_state_backup_plan(
         "backup_id": resolved_backup_id,
         "project": str(resolved_project),
         "runtime_root": str(resolved_runtime_root),
+        "configuration_source_registry": str(registry_path or (
+            resolved_runtime_root / "registry.global.json" if include_registry_projects
+            else resolved_project / ".loopx/registry.json")),
         "registry_discovery": registry_discovery,
         "codex_home": str(_codex_home()),
         "output_dir": str(resolved_output_dir),
@@ -423,14 +431,45 @@ def build_state_backup_plan(
     }
 
 
-def _add_path_to_tar(tar: tarfile.TarFile, source: Path, archive_path: str, exclude_roots: list[Path]) -> None:
+def _add_path_to_tar(
+    tar: tarfile.TarFile, source: Path, archive_path: str, exclude_roots: list[Path],
+    staging: Path, snapshots: dict[Path, tuple[Path, dict[str, Any]]],
+) -> None:
     if _should_skip(source, exclude_roots):
         return
+    if not source.is_symlink():
+        for suffix in ("-wal", "-shm", "-journal"):
+            if source.name.endswith(suffix) and _resolved(source.with_name(source.name[:-len(suffix)])) in snapshots:
+                return
     if source.is_dir() and not source.is_symlink():
         tar.add(source, arcname=archive_path, recursive=False)
         for child in sorted(source.iterdir(), key=lambda item: item.name):
-            _add_path_to_tar(tar, child, f"{archive_path}/{child.name}", exclude_roots)
+            _add_path_to_tar(tar, child, f"{archive_path}/{child.name}", exclude_roots, staging, snapshots)
         return
+    if source.is_file() and not source.is_symlink():
+        resolved = _resolved(source)
+        snapshot = snapshots.get(resolved)
+        if snapshot is None:
+            with source.open("rb") as handle:
+                is_sqlite = handle.read(16) == b"SQLite format 3\x00"
+            if is_sqlite:
+                snapshot_path = staging / f"sqlite-{len(snapshots)}.db"
+                runtime = effect_runtime_result(
+                    "coordination.sqlite_backup.snapshot",
+                    {"source_path": str(resolved), "destination_path": str(snapshot_path)},
+                    timeout=300.0, retry_safe=False,
+                )
+                snapshot = (snapshot_path, {
+                    "source_path": str(source), "archive_paths": [],
+                    "snapshot_sha256": _sha256_file(snapshot_path),
+                    "snapshot_size_bytes": snapshot_path.stat().st_size,
+                    "runtime_identity": runtime,
+                })
+                snapshots[resolved] = snapshot
+        if snapshot is not None:
+            snapshot[1]["archive_paths"].append(archive_path)
+            tar.add(snapshot[0], arcname=archive_path, recursive=False)
+            return
     tar.add(source, arcname=archive_path, recursive=False)
 
 
@@ -468,47 +507,72 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
     }
     updated["recommended_action"] = "backup written; keep the archive local and private"
 
-    manifest_for_archive = dict(updated)
-    manifest_bytes = json.dumps(manifest_for_archive, ensure_ascii=False, indent=2).encode("utf-8")
-    with tarfile.open(archive_path, "w:gz", dereference=False) as tar:
-        for item in included:
-            if not isinstance(item, dict):
-                continue
-            source = Path(str(item.get("source_path") or "")).expanduser()
-            archive_name = str(item.get("archive_path") or source.name)
-            if source.exists() or source.is_symlink():
-                _add_path_to_tar(tar, source, archive_name, exclude_roots)
-        info = tarfile.TarInfo("manifest.json")
-        info.size = len(manifest_bytes)
-        info.mtime = int(datetime.now(timezone.utc).timestamp())
-        tar.addfile(info, io.BytesIO(manifest_bytes))
+    # A failed SQLite snapshot must not publish a partial archive or replace an
+    # earlier successful backup. Keep staging private and outside discovery.
+    with tempfile.TemporaryDirectory(prefix=".loopx-state-backup-", dir=output_dir) as temporary:
+        staging = Path(temporary)
+        staged_archive = staging / "archive.tar.gz"
+        snapshots: dict[Path, tuple[Path, dict[str, Any]]] = {}
+        with tarfile.open(staged_archive, "w:gz", dereference=False) as tar:
+            for item in included:
+                if not isinstance(item, dict):
+                    continue
+                source = Path(str(item.get("source_path") or "")).expanduser()
+                archive_name = str(item.get("archive_path") or source.name)
+                _add_path_to_tar(tar, source, archive_name, exclude_roots, staging, snapshots)
+            from .configuration_backup import capture_configuration_backup, verify_configuration_backup
+            configuration = capture_configuration_backup(
+                registry_path=Path(payload["configuration_source_registry"]),
+                runtime_root=Path(payload["runtime_root"]),
+            )
+            configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
+            info = tarfile.TarInfo("configuration-backup.json")
+            info.size, info.mode = len(configuration_bytes), 0o600
+            tar.addfile(info, io.BytesIO(configuration_bytes))
+            updated["execution"]["configuration_backup"] = verify_configuration_backup(configuration)
+            updated["execution"]["sqlite_snapshots"] = [entry[1] for entry in snapshots.values()]
+            manifest_bytes = json.dumps(updated, ensure_ascii=False, indent=2).encode("utf-8")
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(manifest_bytes)
+            info.mtime = int(datetime.now(timezone.utc).timestamp())
+            tar.addfile(info, io.BytesIO(manifest_bytes))
 
-    execution = dict(updated["execution"])
-    execution["archive_sha256"] = _sha256_file(archive_path)
-    execution["archive_size_bytes"] = archive_path.stat().st_size
-    summary = updated.get("summary") if isinstance(updated.get("summary"), dict) else {}
-    logical_source_bytes = int(summary.get("logical_source_bytes") or 0)
-    if logical_source_bytes:
-        ratio = execution["archive_size_bytes"] / logical_source_bytes
-        execution["archive_to_logical_ratio"] = round(ratio, 6)
-    else:
-        execution["archive_to_logical_ratio"] = None
-    updated["execution"] = execution
-    manifest_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        execution = dict(updated["execution"])
+        execution["archive_sha256"] = _sha256_file(staged_archive)
+        execution["archive_size_bytes"] = staged_archive.stat().st_size
+        summary = updated.get("summary")
+        if not isinstance(summary, dict):
+            summary = {}
+        logical_source_bytes = int(summary.get("logical_source_bytes") or 0)
+        execution["archive_to_logical_ratio"] = (
+            round(execution["archive_size_bytes"] / logical_source_bytes, 6)
+            if logical_source_bytes else None
+        )
+        updated["execution"] = execution
+        staged_manifest = staging / "manifest.json"
+        staged_manifest.write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        for path in (staged_archive, staged_manifest):
+            path.chmod(0o600)
+            with path.open("rb") as handle:
+                os.fsync(handle.fileno())
+        os.replace(staged_archive, archive_path)
+        os.replace(staged_manifest, manifest_path)
     return updated
 
 
 def render_state_backup_markdown(payload: dict[str, Any]) -> str:
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    total = summary.get("total_stats") if isinstance(summary.get("total_stats"), dict) else {}
-    category_stats = (
-        summary.get("category_stats") if isinstance(summary.get("category_stats"), dict) else {}
-    )
-    overlap = (
-        summary.get("contained_overlap_stats")
-        if isinstance(summary.get("contained_overlap_stats"), dict)
-        else {}
-    )
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    total = summary.get("total_stats")
+    if not isinstance(total, dict):
+        total = {}
+    category_stats = summary.get("category_stats")
+    if not isinstance(category_stats, dict):
+        category_stats = {}
+    overlap = summary.get("contained_overlap_stats")
+    if not isinstance(overlap, dict):
+        overlap = {}
     logical_source_bytes = summary.get("logical_source_bytes", total.get("bytes"))
     lines = [
         "# LoopX State Backup",
@@ -554,7 +618,9 @@ def render_state_backup_markdown(payload: dict[str, Any]) -> str:
         lines.extend(["", "## Included", ""])
         for item in included:
             if isinstance(item, dict):
-                stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+                stats = item.get("stats")
+                if not isinstance(stats, dict):
+                    stats = {}
                 lines.append(
                     f"- `{item.get('key')}` -> `{item.get('archive_path')}` "
                     f"({stats.get('paths')} paths)"

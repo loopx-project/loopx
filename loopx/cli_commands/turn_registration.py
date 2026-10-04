@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 
 from ..control_plane.operator_provider import operator_provider_environ
+from ..control_plane.turn_driver.driver import SessionBindingScope, SUPPORTED_ITERATION_CONTEXT_POLICIES
 from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     resolve_default_turn_host,
@@ -225,6 +226,15 @@ def register_turn_commands(
         help="Opt in to the owned app-server operation transport for this admitted codex-cli Turn. Reuses the original Todo/session; does not authenticate an attached Desktop or grant domain effects.",
     )
     run_once.add_argument(
+        "--codex-confirmed-operation-id",
+        help="Internal exact-operation resume fence for an operator-granted callback continuation. Requires operation tools; does not authenticate a caller or permit a domain effect.",
+    )
+    run_once.add_argument(
+        "--codex-operation-source-route-json",
+        type=json.loads,
+        help="Registered return audience {host_surface,thread_id} for operation proposals. Required when this Agent has several source routes; not executor authentication or execution permission.",
+    )
+    run_once.add_argument(
         "--codex-reasoning-effort",
         choices=list(REASONING_EFFORTS),
         help=(
@@ -374,13 +384,19 @@ def _add_turn_decision_arguments(
     )
     parser.add_argument(
         "--iteration-context",
-        choices=["fresh", "resume-if-available"],
-        default="resume-if-available",
+        choices=sorted(SUPPORTED_ITERATION_CONTEXT_POLICIES),
+        default="resume",
         help=(
             "Host context policy for this iteration. fresh starts a clean "
             "session even when a compatible prior session exists; "
-            "resume-if-available preserves the existing continuation behavior."
+            "resume continues the recorded session."
         ),
+    )
+    parser.add_argument(
+        "--session-scope",
+        choices=[scope.value for scope in SessionBindingScope],
+        default=SessionBindingScope.AGENT.value,
+        help="Codex exec conversation binding: todo isolates each Todo; agent continues across Todos in the same Goal/Agent. Turn authority and settlement stay Todo-scoped.",
     )
     parser.add_argument(
         "--resume-goal-id",

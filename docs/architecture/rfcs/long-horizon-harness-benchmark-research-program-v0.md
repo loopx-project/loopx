@@ -655,6 +655,16 @@ layer at a time:
 The study should estimate model- and work-class-specific response curves, not
 one global tool-call or Todo-count threshold. Wider is not automatically better.
 
+The proposed [long-running-work refinement](hierarchical-agent-stride-control-v0.md#75-long-running-work-and-decision-checkpoints-proposed-refinement)
+tests **decision timing**, not deferred Turn accounting. First capture one
+provider's validated result/checkpoint and bound monitor in shadow; only a
+qualified opt-in arm may suppress unchanged model admission. Keep native
+evaluation, job resources, deadlines and every owed Turn settlement identical.
+Measure observer CPU/IO, model tokens/calls, result-to-decision latency, missed
+results, duplicate execution/debits and native outcome per total budget. A
+missing callback must recover through the declared observation deadline.
+Neither a longer training run nor fewer bookkeeping calls alone qualifies it.
+
 ### 8.2 Evidence, stall detection, and semantic replan
 
 The core hypothesis is that a durable coverage ledger plus semantic progress
@@ -667,6 +677,18 @@ LHTB is the primary dynamics lab because partial reward and checkpoints expose
 whether direction changes create progress. DeepSWE validates whether the same
 mechanism improves repository outcomes without reward-specific shortcuts. ALE
 tests transfer to heterogeneous professional workflows.
+
+The proposed [experiment decision path](research-exploration-control-plane-v0.md#115-evidence-conditioned-experiment-decisions-proposed-refinement)
+qualifies result adoption separately from cadence. Hold session continuity,
+planning, model and total budget fixed; compare delivered evidence alone with
+evidence-linked continuation/successor adoption, then combine mechanisms only
+after their independent comparisons. Include valid negative evidence,
+inconclusive/conflicting measurements, failed prerequisites, justified repeats,
+uncovered same-family probes and changed inputs reopening a retired scope.
+Assess whether the executed next action follows the scoped result, alongside
+native outcome and cost. Citation/schema compliance alone is insufficient;
+forced pivots that suppress useful experiments count as failures. These are
+proposed studies, not current C2/C4 evidence or permission to launch jobs.
 
 ### 8.3 Research exploration and composition
 
@@ -958,8 +980,11 @@ model planning through the product's `todo plan` checkpoint. Planning runs
 before the selected driver, uses the shared Goal planner/Todo-delta contract,
 and consumes the phase budget without counting as advancement. Qualification
 must read back task identity and actual Todos, preserve blocked state and
-disclose the separate planning session; synthetic task success alone does not
-prove equivalence to interactive `$loopx` startup or planning effectiveness.
+disclose the context policy: heartbeat/Turn resume shares the Goal/Agent
+conversation across planning and execution, while fresh uses separate sessions.
+Exact native session ID/history conformance qualifies continuity, not task
+quality or matched-budget gains; synthetic task success alone does not prove
+equivalence to interactive `$loopx` startup or planning effectiveness.
 
 ### 11.3 Required delivery slice
 

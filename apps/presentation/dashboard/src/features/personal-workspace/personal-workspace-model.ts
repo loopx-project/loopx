@@ -1,10 +1,12 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
+import type { TurnStep } from "../../data/turn-steps";
+import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
+import type { TodoItem } from "../../data/status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
@@ -25,6 +27,12 @@ export type WorkspaceHomeLane =
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  cadence?: string | null;
+  nextDueAt?: string | null;
+  expiresAt?: string | null;
+  lastCheckedAt?: string | null;
+  targetKey?: string | null;
+  watchOnly?: boolean | null;
   completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
@@ -43,6 +51,46 @@ export type WorkspaceAgentTodo = {
   validationDigest?: string | null;
   validationRevision?: number | null;
   validationRevisionActor?: string | null;
+};
+
+/** Both active status and retained history carry the same inspector facts. */
+export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
+  "todo_id" | "text" | "done" | "status" | "claimed_by" | "evidence" | "note"
+  | "priority" | "task_class" | "task_domain" | "completed_at" | "resume_when"
+  | "resume_ready" | "resume_condition" | "completion_validation_sha256"
+  | "completion_validation_revision" | "completion_validation_revision_history"
+>, fallbackId: string): WorkspaceAgentTodo {
+  const receipt = todo.resume_condition?.resume_receipt;
+  const receiptId = receipt && typeof receipt === "object" && !Array.isArray(receipt)
+    ? (receipt as Record<string, unknown>).receipt_id : null;
+  return {
+    todoId: todo.todo_id?.trim() || fallbackId,
+    text: todo.text,
+    done: todo.status === "deferred" ? false : todo.done,
+    status: todo.status ?? null,
+    claimedBy: todo.claimed_by ?? null,
+    evidence: todo.evidence || todo.note || null,
+    priority: todo.priority ?? null,
+    taskClass: todo.task_class ?? null,
+    taskDomain: todo.task_domain ?? null,
+    completedAt: todo.completed_at ?? null,
+    resumeWhen: todo.resume_when ?? null,
+    resumeReady: todo.resume_ready ?? null,
+    resumeReceiptId: typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null,
+    validationDigest: todo.completion_validation_sha256 ?? null,
+    validationRevision: todo.completion_validation_revision ?? null,
+    validationRevisionActor: todo.completion_validation_revision_history.at(-1)?.actor_agent_id ?? null,
+  };
+}
+
+/** Host-granted workspaces that can scope the steward conversation without a Goal. */
+export type WorkspaceConversationDirectory = {
+  /** null until the host's workspace grants have been read. */
+  projects: ChatProject[] | null;
+  readFailed: boolean;
+  selectedRef: string | null;
+  /** null returns the conversation to the steward scope. */
+  onSelect: (projectRef: string | null) => void;
 };
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
@@ -121,8 +169,8 @@ export type WorkspaceGoal = {
   subagentExecution?: WorkspaceGoalSubagentConfiguration;
   nativeChildActivity?: {
     turn_instance_id: string;
-    observation: "unknown" | "coordinator_reported";
-    host_attested: false;
+    observation: "unknown" | "coordinator_reported" | "host_observed" | "mixed";
+    host_attested: boolean;
     launched_count: number;
     skipped_count: number;
     capacity_rejected_count: number;
@@ -135,6 +183,8 @@ export type WorkspaceGoal = {
 
 export type WorkspaceAttention = {
   details?: AttentionDetails;
+  /** A run-level operator gate has no User Todo to record a decision on. */
+  decisionSource?: "todo" | "run_operator_gate";
   sourceId?: string;
   blocking: boolean;
   evidence?: string | null;
@@ -215,6 +265,8 @@ export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 
 export type WorkspaceSchedule = {
   agentId?: string;
+  expiresAt?: string;
+  watchOnly?: boolean;
   executionHistory?: Array<{
     label: string;
     runId?: string;
@@ -286,8 +338,10 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
+  steps?: TurnStep[];
   collaboration?: CollaborationReadback;
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
@@ -342,6 +396,9 @@ export type WorkspaceGoalNotification = {
   configured: boolean;
   enabled: boolean;
   humanGateAutoNotifyEnabled: boolean;
+  stewardNoticeDelivery?: { pending_count: number; failed_count: number };
+  blockedNoticeAutoNotifyEnabled?: boolean;
+  blockedNoticeDelivery?: { deliveredCount: number; unverifiedCount: number; resolvedCount: number };
   lastNotifiedAt?: string | null;
   receiptCount: number;
   targetRef?: string | null;
@@ -467,19 +524,28 @@ export type PersonalWorkspaceCallbacks = {
   onSendMessage?: (
     message: string,
     agentId: string,
-    goalId: string | null,
+    contextId: string,
     attachments?: WorkspaceImageAttachment[],
-  ) => void | WorkspaceActionPreviewRequest | Promise<void | WorkspaceActionPreviewRequest>;
+  ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
-  onSelectGoal?: (goalId: string | null) => void;
+  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectView?: (view: WorkspaceGoalTab) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
-  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string; kind?: "human_gate" | "blocked_notice" }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+};
+
+// What one send hands back for review: at most one decision the owner reviews
+// now (it opens the drawer) plus candidate cards left in the conversation, such
+// as an Agent's Todo proposals. One answer may carry both.
+export type WorkspaceSendPreviews = {
+  candidates?: WorkspaceActionPreviewRequest[];
+  decision?: WorkspaceActionPreviewRequest;
 };
 
 export type WorkspaceActionPreviewRequest = {

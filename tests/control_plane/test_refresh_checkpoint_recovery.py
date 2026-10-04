@@ -32,7 +32,7 @@ def _assert_checkpoint_instructions(rendered: str) -> None:
     assert "same Goal, Agent, Todo/obligation, Turn, and delivery fields" in rendered
     assert "Remove previously executed state-mutation options" in rendered
     for option in (
-        "--next-action", "--autonomous-replan-recorded", "--repair-delta-kind",
+        "--next-action", "--next-action-basis", "--autonomous-replan-recorded", "--repair-delta-kind",
         "--usage-json", "--usage-codex-session",
     ):
         assert option in rendered
@@ -215,7 +215,9 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
     state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     original_state = state_path.read_bytes()
     if mutation:
-        assert mutation[1] in original_state.decode("utf-8")
+        assert mutation[1] not in original_state.decode("utf-8")
+        assert first["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+        assert first["recommended_action_resolution"]["recommended_action"] == mutation[1]
     supplement = (
         (
             "--vision-unchanged-reason",

@@ -4,7 +4,17 @@ A control-plane change rarely affects only one return value. A small condition c
 Agent selects, whether the user is interrupted, whether the Host wakes again, and whether the turn is
 eligible for spend.
 
-The safe sequence is not “find the `if` and change it.” It is:
+## Start with a bad outcome
+
+Consider a teaching scenario: an open User Gate has no usable scope relation, and the old handling treats it as a global block. To resume independent work, a contributor changes unknown scope into granted authority.
+
+The independent-work test passes, but another case fails: publication that depends on the Gate is also allowed. Repairing overblocking has crossed the authorization boundary.
+
+The rule needs an unknown-relation repair state, followed by a distinction between covered and independent work once scope is known.
+
+The same example tests ownership. If TypeScript already owns this decision, adding another implementation in a Python facade duplicates semantics. Repair the existing owner and verify that real callers consume the same decision.
+
+The safe sequence is not "find the `if` and change it." It is:
 
 ```text
 problem
@@ -24,20 +34,29 @@ This chapter repairs one existing contract:
 
 This restores an existing authority invariant. It does not introduce a new product capability.
 
-## What you should learn
+## Why the natural fix is not enough
 
-After this chapter, you should be able to:
+Both reactions above come from the same instinct: **the test is red, so edit until it is green.**
 
-- rewrite a bug report as source facts, an invariant, and forbidden outcomes;
-- distinguish an implementation repair, protocol clarification, additive change, and breaking migration;
-- express precedence as ordered rules, including negative rules that suppress an action;
-- choose the owning bounded context and smallest complete change surface;
-- derive contract, smoke, replay, and canary evidence from an independent semantic oracle;
-- recognize when a public-contract change needs design or owner review before implementation.
+That instinct works well on a pure implementation bug and fails on a control plane, because the "rule"
+is not a condition at all. It is a chain: source facts compile through an ordered decision into an
+interaction contract, the contract is consumed by the scheduler, and the result lands as writeback.
+Changing one cell changes the input to every downstream cell.
+
+Two consequences follow:
+
+- **Repairing the symptom relocates the error.** Reading "missing scope" as "already authorized" does
+  not remove the bug; it swaps fail-closed for fail-open, and fail-open is the more expensive state on
+  a control plane.
+- **Editing both sides manufactures a second source of truth.** When canonical semantics live on the
+  TypeScript side, an "equivalent" Python edit only makes the two implementations agree for now. It
+  does not make the rule correct, and nothing tells you which side is right at the next fork.
+
+So before editing, answer an earlier question: **which kind of change is this?**
 
 ## Classify the change before editing
 
-“Change a rule” can mean four different jobs:
+"Change a rule" can mean four different jobs:
 
 | Type | Meaning | Default response |
 | --- | --- | --- |
@@ -45,6 +64,9 @@ After this chapter, you should be able to:
 | Protocol clarification | Several interpretations exist and the contract is incomplete | Agree on semantics, then update contract and implementation together |
 | Additive protocol change | A new legal state, field, or transition is needed | Define compatibility, default, writers, and readers |
 | Breaking migration | Old input or output is no longer legal | Use explicit versioning, migration readers, release gates, and stop conditions |
+
+Misclassifying amplifies the cost of every later step: turning an implementation repair into an
+additive change attaches a long compatibility promise to what should have been a one-line fix.
 
 This chapter's case is an implementation repair. Existing
 [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
@@ -123,7 +145,7 @@ This prevents two failures:
 - changing only policy while projection continues to erase the diagnostic;
 - refactoring status, quota, and scheduler just because the chain crosses them.
 
-Change the first broken boundary and every necessary consumer—not unrelated structure.
+Change the first broken boundary and every necessary consumer, not unrelated structure.
 
 ## Step 3: Write the decision table
 
@@ -167,10 +189,10 @@ Place the rule in an explicit order:
 4. no runnable work -> wait, replan, or terminal under existing contracts
 ```
 
-Rule 1 must precede ordinary Gate wait. Otherwise “cannot determine scope” is projected as “correctly
-determined to block,” and the gap is never repaired.
+Rule 1 must precede ordinary Gate wait. Otherwise "cannot determine scope" is projected as "correctly
+determined to block," and the gap is never repaired.
 
-Rule 3 is a negative rule. It proves that a lower-level `open_gate_count` cannot preempt a candidate that is
+Rule 3 is a negative rule: it proves that a lower-level `open_gate_count` cannot preempt a candidate
 independent of the Gate. Negative rules need names, reasons, and tests just like positive repair rules.
 
 ### Review a first-match policy
@@ -265,11 +287,11 @@ Examples:
 
 - increase unrelated Gates from one to eight; the decision stays unchanged;
 - change renderer wording; authority stays unchanged;
-- change `user_action` prose to “approved”; it still grants no scope;
+- change `user_action` prose to "approved"; it still grants no scope;
 - add other-Agent backlog; current-Agent repair stays unchanged;
 - add a valid scope relation; repair resolves into the correct Gate or independent frontier.
 
-These tests protect “irrelevant changes do not change authority.”
+These tests protect "irrelevant changes do not change authority."
 
 ### 3. Focused integration
 
@@ -302,7 +324,7 @@ regression.
 
 ## Step 8: Define failure and recovery
 
-A rule is incomplete when failures have no legal next transition:
+A rule is incomplete when failures have no legal next transition. This case distinguishes at least:
 
 | Failure | State | Next step |
 | --- | --- | --- |
@@ -313,7 +335,7 @@ A rule is incomplete when failures have no legal next transition:
 | Repair write conflicts | Revision conflict | Fresh read and retry without overwriting another writer |
 | Host lacks repair capability | Capability blocker | Preserve a concrete owner action |
 
-“Keep waiting” is not a universal fallback. Waiting needs a target, resume condition, and freshness policy.
+"Keep waiting" is not a universal fallback. Waiting needs a target, resume condition, and freshness policy.
 
 ## Step 9: Handle compatibility and migration
 
@@ -335,7 +357,9 @@ legacy input
 ```
 
 Do not let legacy fields remain in new writers. Do not preserve incorrect ownership behind a permanent
-wrapper. An implementation repair protects legal behavior, not an authority leak.
+wrapper.
+
+An implementation repair protects legal behavior, not an authority leak.
 
 ## Step 10: Update the authoritative documents
 
@@ -353,6 +377,8 @@ Do not append every explanation to one course lesson, and do not turn this book 
 source. The book teaches the method; official contracts own current fields and status.
 
 ## A complete pre-implementation statement
+
+Before implementing, you can write:
 
 ```text
 Problem:
@@ -381,33 +407,79 @@ Recovery:
 
 A reviewer can judge completeness and scope before learning every implementation detail.
 
-## Common failure modes
+## Cost and boundaries: what this method gives up
 
-### Testing only the new positive result
+The ten steps above describe what to do. They also rule things out, and those exclusions are the cost.
 
-Without suppression cases, the change can alter precedence for other Agents, monitors, or Gates.
+**Cost one: repair is slower than a patch.** Turning a test green may take ten minutes. Separating
+implementation repair from protocol extension, writing the invariant, and drawing the protocol chain
+usually takes hours. What you buy is that this change cannot swap a bug for its mirror image.
 
-### Adding one boolean per branch
+**Cost two: the change surface exceeds the change.** If the first broken cell is projection and policy
+merely consumed bad input faithfully, the PR has to include projection, even though the bug report
+mentioned only policy. The invariant decides scope, not the location of the error message.
 
-Booleans quickly create illegal combinations. Prefer closed states, typed reasons, and ordered transitions.
+**Cost three: precedence must be explicit.** A predicate is short to write, but its position in the
+ordered decision pipeline has to be stated, including its relation to higher-priority rules. Omit one
+position and you omit one reviewable boundary.
 
-### Repairing policy in a renderer
+**Cost four: this chapter does not size the work for you.** It gives an order and an evidence
+requirement, not an estimate. A genuine additive protocol change can legitimately span a dozen files; an
+implementation repair usually should not.
 
-Copy cannot repair source or authority. Policy must not depend on Markdown text either.
+**Boundary one: full validation does not fit in one sitting, by design.** The repository
+[PR baseline](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md) includes lint, type, an output-budget smoke, layered `pytest`, `loopx canary premerge --from-git-diff`,
+and a public/private scan; real-path validation such as the PostgreSQL integration suites needs a
+disposable isolated instance. Start development from the most focused command and do not wait for the
+widest matrix. The full public smoke fleet exists for broad coverage and health, not for each PR's
+semantic design.
 
-### Adding an empty adapter for a future Host
+**Boundary two: when the real path is unavailable, report the evidence gap.** If a change affecting
+PostgreSQL authority cannot get a safe isolated instance, skipping that suite is not a pass. Hold
+delivery and name the gap rather than substituting other layers. A skipped test leaves that layer unverified; a failed test supplies a counterexample to diagnose. Neither establishes a pass.
 
-An adapter without a caller, capability, and receipt only increases maintenance surface.
+**Boundary three: some obligations cannot be checked automatically.** Whether a default behavior change
+was disclosed, whether the oracle is genuinely independent of implementation, and whether the PR
+description presents unverified items as verified are not machine-decidable. A reviewer finds them by
+reading the diff and the description, which is why the next chapter organizes the description itself as
+an evidence packet.
 
-### Treating characterization as correctness
+**Boundary four: this is a method, not a product contract.** The chapter does not define current fields,
+current modes, or current defaults; official protocols own those. The method stays stable across
+release cycles. The enumerations do not.
 
-Characterization proves what the system did, not what it should do. Repair contradictions and add negative
-coverage instead of refreshing a golden file.
+## Common failure modes: what these constraints stop
 
-### Refactoring every adjacent module
+Talking about rule completeness in the abstract is unconvincing. Each failure below has a corresponding
+test or command you can run.
 
-A cross-module protocol chain does not require every possible cleanup in one PR. Change only the complete
-chain required by this invariant.
+**Testing only the new result, not the suppression case.** Changing ambiguous Gates to typed repair
+without a negative case for "an unrelated Gate does not block" freezes another Agent's safe frontier.
+Together with the opening teaching scenario, this requires coverage of both unauthorized admission and wrongly blocked independent work.
+
+**Treating characterization as correctness.** Running current implementation, saving its output, and
+asserting that output as expected only proves what the system did. When a fixture conflicts with the
+invariant, repair the rule; refreshing the golden file freezes the bug into a contract. The check that
+separates the two is direct: write the source facts independently and see whether the expected value
+can be derived without running the implementation at all.
+
+**Rebuilding a TypeScript-side rule inside the Python facade.** This is the second error from the top of
+the chapter. `loopx canary premerge --from-git-diff` can expose drift between the two sides, and the
+[TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
+decides who owns a piece of logic: is it already a domain-owned decision or effect receipt? If it is,
+the change belongs on the TypeScript side and Python only adapts or projects it compatibly.
+
+**Adding booleans to every branch.** Several booleans quickly produce illegal combinations. Prefer closed
+states, typed reasons, and ordered transitions.
+
+**Fixing policy in the renderer.** Editing prose cannot repair a source or authority defect; conversely, policy
+should not depend on Markdown strings.
+
+**Refactoring every adjacent module.** A protocol chain crossing several bounded contexts does not mean
+this PR should include every possible cleanup. Change only the complete chain this invariant requires.
+
+**Adding an empty adapter for a future Host.** An adapter without a real caller, capability, and receipt
+only adds maintenance surface, and it looks like a shipped capability.
 
 ## Checklist
 
@@ -431,4 +503,23 @@ This chapter owns the external contribution method; the course owns the deeper i
 and review exercises.
 
 The next chapter takes the repair from local evidence to a public PR: quality layers, commits, boundary
-scans, and a protocol-level review packet.
+scans, and a protocol-level review packet. Every commit also needs a `Signed-off-by` trailer before
+submission, because the `Sign-off` check rejects unsigned commits; that requirement ranks alongside the
+quality requirements here, and the next chapter shows the exact form.
+
+## Invariants
+
+Five sentences you can check yourself.
+
+1. **Identify the rule's current owner.** Migrated transactions belong to their TypeScript owner; some Todo read rules still belong to Python. Follow the current contract and caller path instead of duplicating semantics in a facade.
+2. **The expected value must be derivable before the implementation runs.** If it is not, that is
+   characterization, not an oracle.
+3. **The invariant decides the change surface, not the location of the error.** Inside the first broken
+   cell and its necessary consumers lies the scope.
+4. **Failure must have a legal next step.** "Keep waiting" answers the question only when the wait has a
+   target, a resume condition, and a freshness policy.
+5. **Compatibility protects real contracts only.** Rejecting input that already violated the invariant
+   is evidence the repair works, not a regression.
+
+These five answer one question: **when a rule is implemented on both sides, read by several consumers,
+and no test color tells you whether it is right, what makes this change trustworthy?**

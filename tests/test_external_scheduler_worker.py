@@ -10,6 +10,7 @@ import sys
 import time
 
 import pytest
+from loopx import paths
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,45 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import external_scheduler_worker as worker  # noqa: E402
+
+
+def test_default_registry_follows_single_runtime_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    current_root = tmp_path / ".loopx"
+    legacy_root = tmp_path / ".codex" / "loopx"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current_root)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy_root)
+    selected: list[Path] = []
+    monkeypatch.setattr(
+        worker,
+        "run_worker",
+        lambda args: selected.append(Path(args.registry)) or 0,
+    )
+    argv = ["--goal-id", "goal", "--agent-id", "agent"]
+
+    assert worker.main(argv) == 0
+    assert selected[-1] == current_root / paths.GLOBAL_REGISTRY_FILENAME
+
+    legacy_root.mkdir(parents=True)
+    (legacy_root / paths.GLOBAL_REGISTRY_FILENAME).write_text("{}", encoding="utf-8")
+    assert worker.main(argv) == 0
+    assert selected[-1] == legacy_root / paths.GLOBAL_REGISTRY_FILENAME
+
+    current_root.mkdir()
+    (current_root / paths.GLOBAL_REGISTRY_FILENAME).write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit) as conflict:
+        worker.main(argv)
+    assert conflict.value.code == 2
+    assert "Both default LoopX registries exist" in capsys.readouterr().err
+    assert len(selected) == 2
+
+    assert worker.main(
+        [*argv, "--registry", str(legacy_root / paths.GLOBAL_REGISTRY_FILENAME)]
+    ) == 0
+    assert selected[-1] == legacy_root / paths.GLOBAL_REGISTRY_FILENAME
 
 
 def _write_executable(path: Path, source: str) -> None:
@@ -100,7 +140,7 @@ def _args(
     fake_cli: Path,
     state_file: Path,
     wake_cmd: str | None = None,
-    quota_timeout_seconds: float = 0.1,
+    quota_timeout_seconds: float = 30.0,
     wake_timeout_seconds: float = 0.1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
@@ -136,7 +176,6 @@ def test_default_invocation_persists_backoff_state(
     args = _args(
         fake_cli=fake_cli,
         state_file=root / "ignored-explicit.json",
-        quota_timeout_seconds=1.0,
     )
     args.state_file = None
 
@@ -175,7 +214,6 @@ def test_unchanged_limit_runs_final_quota_probe_before_stop(
     args = _args(
         fake_cli=fake_cli,
         state_file=root / "state.json",
-        quota_timeout_seconds=1.0,
     )
     args.once = False
 
@@ -200,6 +238,7 @@ def test_quota_probe_timeout_enters_tick_error(tmp_path: Path) -> None:
         _args(
             fake_cli=fake_cli,
             state_file=tmp_path / "quota-timeout" / "state.json",
+            quota_timeout_seconds=0.1,
         )
     )
 
@@ -239,7 +278,6 @@ def test_stop_directive_does_not_require_cold_path_scheduler_detail(
         _args(
             fake_cli=fake_cli,
             state_file=root / "state.json",
-            quota_timeout_seconds=1.0,
         )
     )
 

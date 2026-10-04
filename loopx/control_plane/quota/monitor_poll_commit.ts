@@ -8,7 +8,17 @@ import { basename, dirname, join, resolve } from "node:path";
 import { monitorSuccessorIntent, monitorSuccessorRoute } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
-import { readQuotaSettlement, QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA } from "./settlement_readback.ts";
+import {
+  QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+  readQuotaSettlementForAdmittedOwnerFromSnapshot,
+  readQuotaSettlementSnapshot,
+} from "./settlement_readback.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaGoalRef,
+  withBorrowedQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -131,6 +141,7 @@ interface MonitorRequest {
   observation: MonitorObservation;
   provider_receipt: JsonObject | null;
   status_reload_warning: JsonObject | null;
+  owner: QuotaAccountingOwner;
 }
 
 interface MonitorProviderPlan extends JsonObject {
@@ -467,6 +478,12 @@ function requestObject(value: unknown): MonitorRequest {
     observation,
     provider_receipt: jsonObject(request.provider_receipt),
     status_reload_warning: jsonObject(request.status_reload_warning),
+    owner: parseQuotaAccountingOwner({
+      goalRefValue: request.goal_ref,
+      sourceAdmissionValue: request.source_admission,
+      runtimeRoot: runtimeRoot ?? "",
+      goalId,
+    }),
   };
 }
 
@@ -548,13 +565,17 @@ interface Admission {
 async function readAuxiliarySettlement(request: MonitorRequest): Promise<JsonObject | null> {
   if (!request.runtime_root || !request.turn_instance_id ||
       !request.observation.actor_agent_id || !request.observation.settlement_todo_id) return null;
-  return await readQuotaSettlement({
+  const snapshot = await readQuotaSettlementSnapshot(
+    request.runtime_root,
+    request.goal_id,
+  );
+  return readQuotaSettlementForAdmittedOwnerFromSnapshot({
     schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
     runtime_root: request.runtime_root, goal_id: request.goal_id,
     agent_id: request.observation.actor_agent_id, todo_id: request.observation.settlement_todo_id,
     turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
     infer_turn_instance_id: false, allow_unbound_binding: false,
-  });
+  }, request.owner, snapshot);
 }
 
 async function auxiliaryMonitorAllowed(
@@ -576,7 +597,7 @@ async function auxiliaryMonitorAllowed(
   if (!request.runtime_root || !request.turn_instance_id || !decision.agent_id ||
       observation.actor_agent_id !== decision.agent_id ||
       todo === null || todo.todo_id !== settlementTodo || todo.task_class !== "advancement_task" ||
-      !["open", "done"].includes(String(todo.status)) ||
+      !["open", "done", "blocked"].includes(String(todo.status)) ||
       (todo.claimed_by != null && todo.claimed_by !== decision.agent_id) ||
       (todo.excluded_agents != null && (!Array.isArray(todo.excluded_agents) ||
         todo.excluded_agents.some(value => typeof value !== "string") ||
@@ -589,6 +610,11 @@ async function auxiliaryMonitorAllowed(
     if (settlement?.found !== true || jsonObject(jsonObject(settlement.identity)?.result)?.failure !== null ||
         progress?.schema_version !== "quota_settlement_progress_v0" ||
         progress.state === "identity_required") throw conflict();
+    // A later lifecycle hold cannot invalidate an already settled Turn's
+    // independent observation. An unsettled hold still requires recovery;
+    // neither case grants execution of the held advancement Todo.
+    if (todo.status === "blocked" &&
+        progress.state !== "settled") throw conflict();
   }
   const monitor = decision.registry_due_monitor;
   // Retain ordinary quota/due-work admission and capability/gate projections;
@@ -840,6 +866,11 @@ function buildRecord(request: MonitorRequest, allowed: Admission): JsonObject {
     monitor_target: target,
     monitor_event: event,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) {
+    record.goal_ref = goalRef;
+    event.goal_ref = goalRef;
+  }
   if (request.decision.agent_id) {
     record.agent_id = request.decision.agent_id;
     event.agent_id = request.decision.agent_id;
@@ -870,6 +901,7 @@ function requestDigest(request: MonitorRequest): string {
   // projected decision during a retry, while the logical observation remains
   // the same effect. Mutable phase/CAS/provider fields are fenced separately.
   const observation: JsonObject = { ...request.observation };
+  const goalRef = quotaGoalRef(request.owner);
   if (!observation.settlement_todo_id) delete observation.settlement_todo_id;
   return sha256(pythonJson({
     schema_version: request.schema_version,
@@ -878,6 +910,7 @@ function requestDigest(request: MonitorRequest): string {
     goal_id: request.goal_id,
     source: request.source,
     turn_instance_id: request.turn_instance_id,
+    ...(goalRef === null ? {} : { goal_ref: goalRef }),
     observation,
   }));
 }
@@ -1450,6 +1483,8 @@ function indexRecordFor(
       request_digest: fingerprint,
     },
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) indexRecord.goal_ref = goalRef;
   for (const [field, value] of Object.entries({
     agent_id: record.agent_id,
     turn_instance_id: record.turn_instance_id,
@@ -1576,6 +1611,8 @@ async function payloadFor(
       : `${request.execute ? "appended" : "dry-run preview"} monitor poll event: ` +
         `${request.goal_id} effective_action=${request.decision.effective_action}`,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) payload.goal_ref = goalRef;
   if (request.turn_instance_id) {
     payload.turn_instance_id = request.turn_instance_id;
     payload.replayed = options.replayed;
@@ -2018,10 +2055,10 @@ function validateNoEffect(receipt: JsonObject | null, plan: MonitorProviderPlan)
   }
 }
 
-export async function evaluateQuotaMonitorPollCommit(
-  value: unknown,
+async function evaluateQuotaMonitorPollRequest(
+  request: MonitorRequest,
+  indexLockHeld: boolean,
 ): Promise<QuotaMonitorPollCommitResult> {
-  const request = requestObject(value);
   const fingerprint = requestDigest(request);
   if (request.phase === "provider_rejected" && !request.execute) {
     throw new EffectRuntimeRequestError("provider rejection recovery requires execute");
@@ -2117,7 +2154,7 @@ export async function evaluateQuotaMonitorPollCommit(
   }
   const runsDir = join(request.runtime_root, "goals", request.goal_id, "runs");
   const indexPath = join(runsDir, "index.jsonl");
-  return await withFileMutationLock(indexPath, async () => {
+  const commit = async (): Promise<QuotaMonitorPollCommitResult> => {
     const receiptPath = transactionPath(runsDir, request.effect_id);
     const existing = await readReceipt(receiptPath);
     if (existing) {
@@ -2393,5 +2430,19 @@ export async function evaluateQuotaMonitorPollCommit(
       null,
       indexRecord,
     );
-  });
+  };
+  return indexLockHeld
+    ? await commit()
+    : await withFileMutationLock(indexPath, commit);
+}
+
+export async function evaluateQuotaMonitorPollCommit(
+  value: unknown,
+): Promise<QuotaMonitorPollCommitResult> {
+  const request = requestObject(value);
+  return await withBorrowedQuotaAccountingOwner(
+    request.owner,
+    async (indexLockHeld) =>
+      await evaluateQuotaMonitorPollRequest(request, indexLockHeld),
+  );
 }

@@ -70,7 +70,7 @@ try {
       const original = {
         index: 1, todo_id: "todo_original", role: "user", task_class: "user_gate",
         done: state === "superseded", status: state === "superseded" ? "done" : "open",
-        title: "Release review", text: requestBody, note: reason,
+        title: "Release review", text: requestBody, note: reason, updated_at: "2026-08-13T00:30:00Z",
         evidence, blocks_agent: "worker-one", unblocks_todo_id: "todo_target",
         decision_scope: { schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "route-one" },
         ...(state === "superseded" ? { superseded_by: "todo_replacement" } : {}),
@@ -116,11 +116,13 @@ try {
     const more = drawer.locator(".personal-compact-menu > summary");
     await more.focus(); await more.press("Tab");
     assert.ok(await page.locator(".personal-drawer-close").evaluate(element => element === document.activeElement), "Closed menus do not strand keyboard focus");
-    await drawer.getByRole("button", { name: /查看影响并决定|Review impact and decide/ }).click();
+    await drawer.getByRole("button", { name: /^(批准|Approve)$/ }).click();
     await page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
     assert.equal(preview.action_kind, "gate.resolve");
     assert.equal(preview.normalized_parameters.goal_id, "loopx-meta");
     assert.equal(preview.normalized_parameters.todo_id, "todo_original");
+    assert.equal(preview.normalized_parameters.decision, "approve");
+    assert.equal(preview.normalized_parameters.agent_id, "worker-one", "The decision is recorded for the Agent the request blocks");
     await page.locator(".personal-drawer-close").press("Escape");
     await entry.click();
     state = "unsafe";

@@ -87,7 +87,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
         ({"view": "portfolio", "path": "/unknown"}, ["unknown_argument:path"]),
         (
             {"view": "shell"},
-            ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents"],
+            ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents,agent_route"],
         ),
         ({"view": "portfolio", "offset": True}, ["offset:must_be_an_integer_at_least_0"]),
         (
@@ -115,7 +115,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
             {"view": "todos", "goal_id": "alpha", "source_id": 3},
             ["source_id:must_be_a_string"],
         ),
-        ({"goal_id": "alpha"}, ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents"]),
+        ({"goal_id": "alpha"}, ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents,agent_route"]),
     ],
 )
 def test_a_refused_read_names_the_argument_that_must_change(tmp_path, args, expected):
@@ -146,7 +146,7 @@ def test_a_refused_read_names_every_bad_argument_and_the_called_tool(tmp_path):
     )
     assert result["rejected_arguments"] == [
         "unknown_argument:path",
-        "view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents",
+        "view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents,agent_route",
         "limit:must_be_an_integer_between_1_and_12",
         "days:only_for_view_deliveries",
     ]
@@ -177,6 +177,49 @@ def test_revocation_during_read_suppresses_result(monkeypatch, tmp_path):
         "error": "authorization_changed",
     }
     assert not records
+
+
+@pytest.mark.parametrize('name', [TOOL_NAME, CONTEXT_TOOL_NAME])
+def test_exact_todo_recovers_compacted_context_without_widening_scope(monkeypatch, tmp_path, name):
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': [
+        {'todo_id': 'todo_report', 'status': 'done', 'text': 'Research report',
+         'note': 'Context. ' * 60 + 'Do not publish.', 'resume_ready': False},
+    ]})
+    tool, records = inspector(tmp_path)
+    tool.owner_scope = True
+    result = tool.read(name, {'view': 'todos', 'goal_id': 'alpha', 'todo_id': 'todo_report'})
+    assert result['matched'] == 1 and result['next_offset'] is None
+    assert result['rows'][0]['continuation'].endswith('Do not publish.')
+    assert result['rows'][0]['status'] == 'done'
+    assert result['rows'][0]['resume_ready'] is False
+    assert len(records) == 1
+    assert tool.read(name, {'view': 'todos', 'goal_id': 'outside', 'todo_id': 'todo_report'})['ok'] is False
+    assert len(records) == 1
+
+
+@pytest.mark.parametrize('arguments', [
+    {'view': 'portfolio', 'todo_id': 'todo_report'},
+    {'view': 'todos', 'todo_id': 'todo_report'},
+    {'view': 'todos', 'goal_id': 'alpha', 'todo_id': ''},
+    {'view': 'todos', 'goal_id': 'alpha', 'todo_id': 3},
+])
+def test_invalid_exact_todo_read_does_not_touch_core(monkeypatch, tmp_path, arguments):
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: pytest.fail('No source read'))
+    tool, records = inspector(tmp_path)
+    assert tool.read(TOOL_NAME, arguments)['error'] == 'invalid_arguments'
+    assert not records
+
+
+def test_exact_todo_retains_existing_encoded_row_budget(monkeypatch, tmp_path):
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': [
+        {'todo_id': 'todo_report', 'status': 'open', 'text': 'Research', 'note': 'x' * 25000},
+    ]})
+    tool, _ = inspector(tmp_path)
+    tool.owner_scope = True
+    result = tool.read(TOOL_NAME, {'view': 'todos', 'goal_id': 'alpha', 'todo_id': 'todo_report'})
+    assert result['oversized_rows'] == [0]
+    assert result['rows'][0]['status'] == 'oversized_record'
+    assert 'x' * 25000 not in json.dumps(result)
 
 
 def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
@@ -284,7 +327,7 @@ def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
         )
 
 
-@pytest.mark.parametrize("read_view", ["todos", "agents"])
+@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents", "agent_route"])
 def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
     monkeypatch, tmp_path, read_view
 ):
@@ -306,6 +349,8 @@ for line in sys.stdin:
     elif m == 'turn/start':
         text = json.dumps(r['params']['input'])
         assert 'manager_evidence_index_v1' in text
+        assert 'Required input has not arrived' in text
+        assert 'owner_must_act' in text
         print(json.dumps({'id':r['id'],'result':{'turn':{'id':'fixture-turn'}}}), flush=True)
         print(json.dumps({'id':900,'method':'item/tool/call','params':{
             'threadId':'fixture-thread','turnId':'fixture-turn','tool':'loopx_manager_read',
@@ -332,12 +377,29 @@ for line in sys.stdin:
         (tmp_path / "registry.json").write_text(json.dumps({"goals": [
             {"id": "alpha", "registered_agents": ["review-worker"]}
         ]}))
+    if read_view == "agent_route":
+        fake.write_text(fake.read_text().replace(
+            "'view':'todos','goal_id':'alpha'",
+            "'view':'agent_route','goal_id':'alpha','agent_id':'review-worker'").replace(
+            "evidence['rows'][0]['title'] == 'Check the sample result'",
+            "evidence['status'] == 'unavailable' and evidence['reason'] == 'no_binding' and evidence['host_delivery'] == 'not_attempted'"))
+        (tmp_path / "registry.json").write_text(json.dumps({"goals": [
+            {"id": "alpha", "registered_agents": ["review-worker"]}
+        ]}))
+    if read_view == "todos_exact":
+        fake.write_text(fake.read_text().replace(
+            "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
+            "evidence['rows'][0]['title'] == 'Check the sample result'",
+            "evidence['rows'][0]['continuation'].endswith('Keep this a draft; do not publish.')"))
     fake.chmod(0o755)
     collected = []
 
     def collect(*args, **kwargs):
         collected.append(kwargs)
-        return {"scope": "owner_global", "goals": [{"goal_id": "alpha"}], "snapshot_id": "fixture"}
+        return {"scope": "owner_global", "goals": [{"goal_id": "alpha", "attention": {
+            "status": "read", "items": [{"owner_must_act": False,
+                "blocker": {"cause": "Required input has not arrived"}}],
+        }}], "snapshot_id": "fixture"}
 
     monkeypatch.setattr(context, "collect_manager_turn_context", collect)
     monkeypatch.setattr(
@@ -350,6 +412,7 @@ for line in sys.stdin:
                     "todo_id": "todo_sample",
                     "text": "Check the sample result",
                     "status": "open",
+                    "note": "Public background. " * 30 + "Keep this a draft; do not publish.",
                 },
             ],
         },
@@ -393,10 +456,12 @@ for line in sys.stdin:
         assert collected == [{"include_details": False, "remote_evidence": False}]
         events = store.events_after(session["session_id"], turn["turn_id"], None)
         reads = [e for e in events if e["kind"] == "manager.evidence_read"]
-        assert (
-            len(reads) == 1
-            and reads[0]["payload"]["rows"][0]["todo_id" if read_view == "todos" else "agent_id"] == ("todo_sample" if read_view == "todos" else "review-worker")
-        )
+        assert len(reads) == 1
+        if read_view == "agent_route":
+            assert reads[0]["payload"]["reason"] == "no_binding"
+            assert reads[0]["payload"]["authority"] == "locator_only"
+        else:
+            assert reads[0]["payload"]["rows"][0]["agent_id" if read_view == "agents" else "todo_id"] == ("review-worker" if read_view == "agents" else "todo_sample")
     finally:
         runtime.close()
 

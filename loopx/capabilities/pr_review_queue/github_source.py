@@ -18,6 +18,7 @@ DETAIL_FIELDS = (
     "files",
     "reviewDecision",
     "mergeStateStatus",
+    "mergeable",
     "createdAt",
     "commits",
     "reviews",

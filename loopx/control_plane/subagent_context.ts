@@ -109,14 +109,14 @@ function boundedNativeChildActivity(value: unknown): JsonObject | null {
   if (!source || source.schema_version !== "native_subagent_activity_v0"
     || source.entrypoint_scope !== "host_native_child_tools") return null;
   const observation = String(source.observation ?? "");
-  if (!["unknown", "coordinator_reported"].includes(observation)) return null;
+  if (!["unknown", "coordinator_reported", "host_observed", "mixed"].includes(observation)) return null;
   const count = (key: string) => Number.isInteger(source[key]) && Number(source[key]) >= 0
     ? Math.min(Number(source[key]), 10_000) : 0;
   const result: JsonObject = {
     schema_version: "native_subagent_activity_v0",
     entrypoint_scope: "host_native_child_tools",
     observation,
-    host_attested: false,
+    host_attested: observation === "host_observed",
     configured_limit_kind: "upper_bound",
     configured_limit: count("configured_limit"),
     attempted_count: count("attempted_count"),
@@ -174,7 +174,7 @@ function boundedDelegationContext(value: unknown): JsonObject | null {
   const operationReceipts: JsonObject = {};
   if (rawReceipts) {
     for (const key of ["observed", "prepared", "running", "turn_returned", "accepted",
-      "rejected", "unavailable", "recovery_required"]) {
+      "rejected", "stopped", "unavailable", "recovery_required"]) {
       if (Number.isInteger(rawReceipts[key]) && Number(rawReceipts[key]) >= 0) {
         operationReceipts[key] = Math.min(Number(rawReceipts[key]), 10_000);
       }
@@ -208,14 +208,18 @@ function boundedDelegationContext(value: unknown): JsonObject | null {
   return result;
 }
 
-export function evaluateSubagentContext(value: unknown): JsonObject | null {
-  const input = requireJsonObject(value, "subagent context");
-  const policy = jsonObject(input.orchestration) ?? {};
+export function subagentContextConfiguration(value: unknown): JsonObject {
+  const policy = jsonObject(value) ?? {};
   const enabled = policy.mode === "multi_subagent" && policy.spawn_allowed === true
     && Number.isInteger(policy.max_children) && Number(policy.max_children) > 0;
+  return { ...policy, enabled };
+}
+
+export function evaluateSubagentContext(value: unknown): JsonObject | null {
+  const input = requireJsonObject(value, "subagent context");
   return projectAgentContext({
     phase: input.phase, scope: input.scope, observations: input.observations ?? {},
-    capabilities: { multi_subagent: { ...policy, enabled } },
+    capabilities: { multi_subagent: subagentContextConfiguration(input.orchestration) },
   }, [subagentContextProvider]);
 }
 

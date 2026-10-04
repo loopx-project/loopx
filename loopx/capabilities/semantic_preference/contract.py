@@ -8,6 +8,10 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ...public_safe_text import (
+    MODULE_QUALIFIED_SURFACE_PATTERN as SURFACE_RE,
+    PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE,
+)
 from ...extensions.manifest import validate_extension_id
 from ...extensions.runtime import (
     default_extension_state_file,
@@ -26,8 +30,6 @@ RECEIPT_SCHEMA = "semantic_preference_application_receipt_v0"
 MAINTENANCE_GUIDANCE_SCHEMA = "semantic_preference_maintenance_guidance_v0"
 MAINTENANCE_RECEIPT_SCHEMA = "semantic_preference_maintenance_receipt_v0"
 DOCTOR_SCHEMA = "semantic_preference_provider_doctor_v0"
-SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
-TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
 CORPUS_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 MAX_PROVIDER_OUTPUT_BYTES = 256_000
 MAX_ITEM_BYTES = 8_000

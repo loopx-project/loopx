@@ -128,3 +128,29 @@ def test_no_wait_does_not_skip_conflicting_lineage_rejection():
     duplicate = row(9, archive_state='archive')
     with pytest.raises(RuntimeError, match='duplicate succession identity'):
         summarize([row(1)], resume_source_items=[duplicate, dict(duplicate)])
+
+
+def test_filtered_summary_fuses_validation_without_another_succession_rpc(monkeypatch):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.todos.goal_todo_projection import filtered_todo_summary
+    from loopx.control_plane.todos import succession_warning
+
+    source = summarize([row(1, status="done", successor_todo_ids=["todo_summary_2"]),
+                        row(2, archive_state="archive", no_followup=True)], item_limit=None)
+    calls = []
+    original = effect_runtime.effect_runtime_result
+
+    def track(method, request, **kwargs):
+        calls.append(method)
+        return original(method, request, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
+    monkeypatch.setattr(succession_warning, "effect_runtime_result", track)
+    selected = filtered_todo_summary(source, role="agent", todo_id="todo_summary_1")
+    assert selected["done_count"] == 1 and not selected.get("completed_without_successor_count")
+    assert calls.count("todo.summary.project") == 1
+    assert "todo.succession.project" not in calls
+    next(item for item in source["items"] if item["todo_id"] == "todo_summary_1")["no_followup"] = True
+    import pytest
+    with pytest.raises(Exception, match="matching full-source"):
+        filtered_todo_summary(source, role="agent", todo_id="todo_summary_1")

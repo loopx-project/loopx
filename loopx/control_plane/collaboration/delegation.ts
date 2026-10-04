@@ -81,7 +81,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   return binding;
 }
 
-type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected";
+type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected" | "stopped";
 
 function boundedReason(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
@@ -220,7 +220,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       authority_state: authorityState, authority_next_action: authorityNextAction,
       promotion_from_surface_allowed: false,
       executor: null, effects,
-      note: "Canonical authority is unavailable, so no Turn or provider was inspected or launched. "
+      note: "Current canonical authority cannot be confirmed, so no executable permission is returned. "
+        + "No host was launched and no state was written or quota spent. "
         + "Promote or repair authority explicitly before retrying; inspection never promotes a provider.",
     };
   }
@@ -278,8 +279,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   };
 }
 const transitions: Record<Observation, readonly Observation[]> = {
-  prepared: ["running", "rejected"], running: ["turn_returned", "rejected"],
-  turn_returned: ["accepted", "rejected"], accepted: [], rejected: [],
+  prepared: ["running", "rejected", "stopped"], running: ["turn_returned", "rejected", "stopped"],
+  turn_returned: ["accepted", "rejected", "stopped"], accepted: [], rejected: [], stopped: [],
 };
 
 /** Page only the caller's existing journal. A cursor is not a fleet snapshot. */
@@ -339,7 +340,161 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   if (to === "accepted") requireThat(params.canonical_done === true
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");
+  if (to === "accepted" && from !== "accepted" && wakesItsConversation(params)) {
+    return {status: to, wake_intent: delegationWakeIntent(params)};
+  }
   return {status: to};
+}
+
+type StopPhase = "requested" | "acknowledged" | "settled" | "unknown";
+const openStopPhases: readonly StopPhase[] = ["requested", "acknowledged"];
+/** What the Host transport read back about everything the operation's Turn launched. */
+type HostProcessDrain = "not_launched" | "drained" | "draining" | "unattributable";
+const hostProcessDrains: readonly HostProcessDrain[] = ["not_launched", "drained", "draining", "unattributable"];
+/** What canonical authority proved about the hard lease the stopped execution may hold.
+ *
+ * `unchecked` until the stop resolves it, which happens only once the execution
+ * is proven gone; it never means that no lease was owed. `not_owed` is proven
+ * by canonical authority for the execution's own identity, not by its record.
+ */
+type StopLease = "unchecked" | "not_owed" | "released" | "release_unproven" | "obligation_unproven";
+const stopLeases: readonly StopLease[] = ["unchecked", "not_owed", "released", "release_unproven", "obligation_unproven"];
+/** The next step for the host: resolve the lease from canonical authority, or record a receipt phase. */
+type DelegationStopStep =
+  | {action: "resolve_lease"}
+  | {action: "record"; phase: StopPhase; terminal: boolean; reason: string};
+
+function stopRecord(phase: StopPhase, reason: string): DelegationStopStep {
+  return {action: "record", phase, terminal: !openStopPhases.includes(phase), reason};
+}
+
+/** Advance one stop request from host release facts; a receipt is never inferred from time.
+ *
+ * The stopped execution is gone once the operation lock is free, the member's
+ * Turn lane was released by the stopped worker's process group, and the Host
+ * transport reads everything the Turn launched as drained or never launched.
+ * A worker and its lane can let go while the Host supervisor is still
+ * terminating the Host, so their release proves nothing about the Host. The
+ * host reads the lane from its holder record and never takes it, so a
+ * legitimate Turn is not refused, and a holder it cannot attribute is not
+ * released.
+ *
+ * Only then may the host resolve the execution's hard lease: its release hands
+ * the member's Todo on, so it waits for the execution, and a receipt never
+ * becomes terminal before that lease is resolved. ``settled`` needs the
+ * acknowledgement of a process that held the operation lock, the execution
+ * gone and the lease released or proven not owed. Everything released without
+ * an acknowledgement means the named holder vanished before recording what it
+ * observed, which is ``unknown`` rather than a fake settlement; with a Host
+ * that cannot be attributed nothing more can be learned, so it is ``unknown``
+ * without touching the lease. An acknowledged stop whose Host cannot be
+ * attributed stays open for a later read with the same identity. A grace
+ * timeout on its own moves nothing: a worker still holding a lock still runs.
+ */
+export function decideDelegationStop(params: JsonObject): DelegationStopStep {
+  const phase = params.phase as StopPhase;
+  requireThat(openStopPhases.includes(phase), "delegation stop decision requires an open stop phase");
+  requireThat(typeof params.acknowledged === "boolean", "delegation stop acknowledgement fact required");
+  requireThat(typeof params.operation_lock_free === "boolean" && typeof params.worker_lane_released === "boolean",
+    "delegation stop release facts required");
+  requireThat(hostProcessDrains.includes(params.host_process as HostProcessDrain),
+    "delegation stop host process drain fact required");
+  requireThat(stopLeases.includes(params.lease as StopLease), "delegation stop lease fact required");
+  requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
+    "delegation stop timeout fact must be boolean");
+  requireThat(phase !== "acknowledged" || params.acknowledged === true,
+    "an acknowledged stop cannot lose its acknowledgement");
+  const operationFree = params.operation_lock_free === true;
+  const host = params.host_process as HostProcessDrain;
+  const lease = params.lease as StopLease;
+  const executionPending = !operationFree ? "operation_lock_still_held"
+    : params.worker_lane_released !== true ? "worker_lane_release_unproven"
+    : host === "draining" ? "host_process_still_running"
+    : host === "unattributable" ? "host_process_drain_unproven"
+    : null;
+  requireThat(executionPending === null || lease === "unchecked",
+    "a delegation stop resolves its lease only after its execution is proven gone");
+  const leaseStep = (open: StopPhase, terminal: StopPhase, reason: string): DelegationStopStep =>
+    lease === "unchecked" ? {action: "resolve_lease"}
+      : lease === "release_unproven" ? stopRecord(open, "required_lease_release_unproven")
+      : lease === "obligation_unproven" ? stopRecord(open, "lease_obligation_unproven")
+      : stopRecord(terminal, reason);
+  if (params.acknowledged === true) {
+    return executionPending === null
+      ? leaseStep("acknowledged", "settled", "acknowledged_worker_and_host_released")
+      : stopRecord("acknowledged", executionPending);
+  }
+  if (executionPending === null) return leaseStep("requested", "unknown", "holder_gone_without_acknowledgement");
+  if (executionPending === "host_process_drain_unproven") {
+    return stopRecord("unknown", "holder_gone_without_acknowledgement");
+  }
+  return stopRecord("requested", operationFree ? executionPending
+    : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement");
+}
+
+/** Whether an accepted result may produce a wake intent at all.
+ *
+ * Only an operation started from a conversation can be continued there. An
+ * ordinary CLI/MCP delegation has no conversation, so it keeps the transition it
+ * always had: no intent, no wake state, and no change to what a plain
+ * `wait`/`read` returns. Producing an intent and then refusing it in the pump
+ * would still widen a shared persistent projection for every caller who never
+ * enabled this capability.
+ */
+function wakesItsConversation(params: JsonObject): boolean {
+  if (params.requester == null) return false;
+  const requester = requireJsonObject(params.requester, "wake requester");
+  return requester.conversation != null;
+}
+
+/** The first transition to ``accepted`` is the one durable moment a requester
+ * can be continued without polling.  The intent names the requester, the
+ * conversation whose Turn started the operation (null when it was not started
+ * from one) and the exact accepted result; it grants no Turn and is not a
+ * second settlement.  The conversation is part of the intent identity, so the
+ * wake cannot be consumed by another conversation of the same requester. */
+function delegationWakeIntent(params: JsonObject): JsonObject {
+  const requester = requireJsonObject(params.requester, "wake requester");
+  requireThat([requester.goal_id, requester.agent_id, requester.operation_id, requester.request_id].every(text),
+    "wake intent requires the requester and result identity");
+  const goalRef = requester.goal_ref == null ? null : requireJsonObject(requester.goal_ref, "requester goal reference");
+  const origin = requester.conversation == null ? null
+    : requireJsonObject(requester.conversation, "requester conversation");
+  requireThat(origin === null || (text(origin.session_id) && text(origin.turn_id)),
+    "requester conversation requires its session and Turn");
+  const conversation = origin === null ? null : {session_id: origin.session_id, turn_id: origin.turn_id};
+  requireThat(Array.isArray(requester.artifacts) && requester.artifacts.length > 0, "wake intent requires accepted artifacts");
+  const digests = requester.artifacts.map(value => {
+    const artifact = requireJsonObject(value, "accepted artifact");
+    requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
+      && BARE_SHA256_PATTERN.test(artifact.sha256), "invalid accepted artifact reference");
+    return {ref: artifact.ref, sha256: artifact.sha256};
+  });
+  return {
+    schema_version: "loopx_delegation_wake_intent_v0",
+    intent_id: canonicalAuthoritySha256([requester.goal_id, requester.agent_id, requester.operation_id,
+      requester.request_id, digests, conversation]),
+    requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: goalRef},
+    conversation,
+    operation_id: requester.operation_id, request_id: requester.request_id,
+  };
+}
+
+/** Reading another conversation's result cannot consume its continuation. */
+export function decideDelegationWakeObservation(params: JsonObject): JsonObject {
+  const intent = requireJsonObject(params.intent, "wake intent");
+  const requester = requireJsonObject(intent.requester, "wake requester");
+  const observer = requireJsonObject(params.observer, "wake observer");
+  requireThat([observer.session_id, observer.goal_id, observer.agent_id].every(text),
+    "wake observation requires its conversation and requester");
+  const conversation = intent.conversation == null ? null
+    : requireJsonObject(intent.conversation, "wake conversation");
+  return {
+    observed: conversation?.session_id === observer.session_id
+      && requester.goal_id === observer.goal_id && requester.agent_id === observer.agent_id
+      && canonicalAuthoritySha256(requester.goal_ref ?? null)
+        === canonicalAuthoritySha256(observer.goal_ref ?? null),
+  };
 }
 
 /** Repair only a false terminal observation after the exact Turn validated.

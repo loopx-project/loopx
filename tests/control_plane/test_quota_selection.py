@@ -9,6 +9,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
 from loopx.control_plane.todos.quota_summary import summarize_user_todos_for_quota
+from loopx.control_plane.todos.todo_summary import compact_todo_group
 
 
 def summary(items):
@@ -53,16 +54,33 @@ def test_agent_execution_still_respects_claim_and_exclusion():
     assert result["claim_scope"]["other_agent_claimed_open_count"] == 1
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_quota_uses_complete_owned_commitment_count_before_display_cap(reverse):
+    own = [item(f"todo_own_{i}", task_class="advancement_task", claimed_by="agent-b", done=False)
+           for i in range(15)]
+    peers = [item(f"todo_peer_{i}", task_class="advancement_task", claimed_by="agent-a", done=False)
+             for i in range(20)]
+    rows = own + peers
+    source = compact_todo_group(list(reversed(rows)) if reverse else rows,
+        role="agent", source_section="Agent Todo", item_limit=10)
+    result = summarize_user_todos_for_quota(source, agent_identity={"agent_id": "agent-b"})
+    assert result["current_agent_claimed_advancement_count"] == 15
+    assert len(result["current_agent_claimed_advancement_items"]) < 15
+    assert all(row["claimed_by"] == "agent-b" for row in result["first_executable_items"])
+
+
 @pytest.mark.parametrize("display", ["legacy", "missing", "stale"])
 @pytest.mark.parametrize("scope", ["global_gate=true", "blocks_agent=agent-b"])
 def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, display: str, scope: str):
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     history = "\n".join(f"- [x] [P2] Completed synthetic work {i}.\n"
         f"  <!-- loopx:todo todo_id=todo_history_{i} status=done task_class=advancement_task -->" for i in range(12))
+    # A goal-wide gate cannot also bind continuation through a legacy agent claim.
+    claim = " claimed_by=agent-a" if scope == "blocks_agent=agent-b" else ""
     state.write_text("---\nstatus: active\n---\n# Goal\n## Objective\nDeliver a checked change.\n\n"
         "## Agent Todo\n" + history + "\n\n## User Todo\n"
         "- [ ] [P0] Owner approval is required.\n"
-        f"  <!-- loopx:todo todo_id=todo_gate task_class=user_gate status=open claimed_by=agent-a {scope} -->\n")
+        f"  <!-- loopx:todo todo_id=todo_gate task_class=user_gate status=open{claim} {scope} -->\n")
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id="goal-scope", domain="quota-scope", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)

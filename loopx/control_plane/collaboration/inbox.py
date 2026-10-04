@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
+from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
+from ..todos.contract import TODO_ID_PATTERN
 
 if TYPE_CHECKING:
     from .goal_instance_scope import CollaborationGoalScope
@@ -39,7 +41,9 @@ def _hash(value: Any) -> str:
 
 def _root(runtime_root: Path) -> Path:
     """Retain the shipped storage address; Agent topology is not encoded in it."""
-    return runtime_root / ".local" / "manager-context"
+    # Full request hashes plus lock sidecars can exceed MAX_PATH even in an
+    # ordinary workspace. Keep extended syntax inside the private store.
+    return windows_extended_path(runtime_root / ".local" / "manager-context")
 
 
 def _write(path: Path, value: dict) -> None:
@@ -117,6 +121,18 @@ def normalize_request(value: Any) -> dict | None:
         raise ValueError(str(exc)) from exc
 
 
+def normalize_source_context(value: str) -> str:
+    """The shared typed owner qualifies source text before persistence."""
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return str(effect_runtime_result(
+            "collaboration.source_context.normalize", {"source_message": value},
+        )["source_message"])
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def pending(
     runtime_root: Path,
     goal_id: str,
@@ -179,9 +195,10 @@ def pending(
                 if lifecycle.get("kind") == "omit":
                     continue
             item = {**row, "inbox_state": state["kind"]}
+            item["recorded_decision"] = state["recorded_decision"]
             if state["recorded_decision"] is not None:
                 item["receiver_decision_recorded"] = True
-                item["next_action"] = "Return the original audience a conclusion with manager-inbox report; do not repeat the recorded decision or reprioritize unrelated work."
+                item["next_action"] = "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."
             if state["warnings"]:
                 item["warnings"] = state["warnings"]
                 item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."
@@ -191,9 +208,9 @@ def pending(
         batch.clear()
 
     for path in paths:
-        if path.suffix != ".json":
-            continue
-        if BARE_SHA256_PATTERN.fullmatch(path.stem) and path.stem <= after:
+        if path.suffix != ".json" or not BARE_SHA256_PATTERN.fullmatch(path.stem):
+            continue  # Ignore lock holder sidecars and other non-entry files.
+        if path.stem <= after:
             continue
         try:
             batch.append(_pending_entry(path, goal_id, agent_id, scope))
@@ -454,7 +471,7 @@ def _receipt(root, lane, row):
             raise ValueError("invalid read receipt")
         if lane == "links":
             for key, pattern in [
-                ("todo_ids", re.compile(r"todo_[a-f0-9]{12}")),
+                ("todo_ids", TODO_ID_PATTERN),
                 ("evidence_ids", ENVELOPED_SHA256_PATTERN),
             ]:
                 refs = value.get(key)
@@ -493,22 +510,13 @@ def record_result(
     *,
     scope: CollaborationGoalScope | None = None,
     route: dict[str, Any] | None = None,
+    update_id: str | None = None,
 ):
     """Persist a receiver conclusion; the transport adapter validates its audience."""
     request_id = row["request_id"]
     decision, error = _receipt(root, "decisions", row)
     if error or not decision:
         raise ValueError("record the receiver decision before returning a reply")
-    if (
-        phase not in {"decision", "conclusion"}
-        or not isinstance(text, str)
-        or not text.strip()
-        or len(text) > 20000
-    ):
-        raise ValueError(
-            "a decision/conclusion phase and bounded reply text are required"
-        )
-    text = text.strip()
     if scope is not None:
         from .goal_instance_scope import decide_collaboration_lifecycle
 
@@ -518,35 +526,84 @@ def record_result(
             record=row,
             route=route,
         )
-    path = _root(root) / "replies" / request_id / (phase + ".json")
-    with _request_lock(
-        root,
-        request_id,
-        scope,
-        _root(root) / "replies" / request_id / "report.lock",
-    ):
-        value = {
-            k: row[k]
-            for k in (
-                "request_id",
-                "goal_id",
-                "agent_id",
-                "source_id",
-                "goal_ref",
-            )
-            if k in row
-        }
-        value.update(phase=phase, text=text, decision=decision["decision"])
-        if path.exists():
-            old = _read(path)
-            if any(old.get(k) != v for k, v in value.items()):
-                raise ValueError(
-                    "reply already committed; conflicting replacement rejected"
-                )
-        else:
-            if phase == "decision" and (path.parent / "conclusion.json").exists():
-                raise ValueError(
-                    "cannot publish an intermediate decision after conclusion"
-                )
-            _write(path, value | {"created_at": _now()})
-    return {"ok": True, "request_id": request_id, "phase": phase, "delivered": False}
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    folder = _root(root) / "replies" / request_id
+    with _request_lock(root, request_id, scope, folder / "report.lock"):
+        observations = [_result_observation(path.stem, _read(path)) for path in result_paths(folder)]
+        try:
+            plan = effect_runtime_result("collaboration.result.plan_publication", {
+                "request": row, "phase": phase, "text": text,
+                "decision": decision["decision"], "update_id": update_id,
+                "results": observations,
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        path = folder / (plan["result_key"] + ".json")
+        if not plan["replay"]:
+            _write(path, plan["value"] | {"created_at": _now()})
+    return {
+        "ok": True, "request_id": request_id, "phase": phase, "delivered": False,
+        **({"result_key": plan["result_key"]} if update_id is not None else {}),
+    }
+
+
+def result_paths(folder: Path):
+    """Enumerate the result-store layout, excluding delivery and lock sidecars."""
+    paths = [path for path in folder.glob("*.json")
+             if path.stem in {"decision", "conclusion"}
+             or re.fullmatch(r"conclusion-[0-9]{8}", path.stem)]
+    return sorted(paths, key=lambda path: (path.stem not in {"decision", "conclusion"},
+                                          path.stem != "decision", path.stem))
+
+
+def result_identity_matches(reply, row, path):
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        observations = [_result_observation(path.stem, reply)]
+        if reply.get("update_id") is not None:
+            observations = [_result_observation(candidate.stem, _read(candidate))
+                            for candidate in result_paths(path.parent)]
+        effect_runtime_result("collaboration.result.plan_publication", {
+            "request": row, "phase": reply.get("phase"), "text": reply.get("text"),
+            "decision": reply.get("decision"), "update_id": reply.get("update_id"),
+            "results": observations,
+        })
+    except (EffectRuntimeRejected, OSError, ValueError):
+        return False
+    return reply.get("result_key", reply.get("phase")) == path.stem
+
+
+def _result_observation(key, value):
+    """Keep full texts in their receipts rather than replaying them over the bridge."""
+    text = value.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("bounded reply text is required")
+    return {
+        "key": key,
+        "value": {field: value[field] for field in (
+            "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
+            "decision", "result_key", "previous_result_key", "update_id",
+        ) if field in value},
+        "text_chars": len(text),
+        "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+    }
+
+
+def iter_result_paths(folder: Path):
+    for request_folder in sorted(folder.glob("*")):
+        if request_folder.is_dir():
+            yield from result_paths(request_folder)
+
+
+def prior_result_delivered(path, reply):
+    """Ordered transport: a newer update cannot race an uncertain earlier send."""
+    from ..effect_runtime import effect_runtime_result
+
+    previous = reply.get("previous_result_key")
+    state_path = path.with_name(previous + ".delivery.json") if previous else None
+    delivery = _read(state_path) if state_path and state_path.exists() else None
+    return effect_runtime_result("collaboration.result.delivery_ready", {
+        "result": reply, "previous_delivery": delivery,
+    })["ready"]

@@ -116,6 +116,12 @@ failure leaves the generated files untouched.
 
 ## Control-Plane Kernel, State, And Migration
 
+- [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md)
+  ([中文版](composable-state-machines-recovery-verification-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; existing local conformance is not full composition qualification.
+  - **Current boundary:** Legal internal types, bounded recovery sequences and
+    conditional progress through existing owners and real entrypoints; no new runtime or state writer.
+
 - [Monorepo Distribution Split v0](monorepo-distribution-split-v0.md)
   ([中文版](monorepo-distribution-split-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; tracking [#5072](https://github.com/loopx-project/loopx/issues/5072).

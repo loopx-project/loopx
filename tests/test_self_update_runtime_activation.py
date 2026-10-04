@@ -770,13 +770,27 @@ def test_successful_update_revalidates_enabled_extensions(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows update boundary")
-def test_windows_execute_update_fails_closed_without_launching_bash() -> None:
+@pytest.mark.parametrize("selected_route", [False, True])
+def test_windows_execute_update_fails_closed_without_launching_bash(
+    tmp_path: Path, selected_route: bool,
+) -> None:
     payload = {"ok": True, "source": {}, "plan": {}}
+    route = (
+        {
+            "registry_path": tmp_path / "project/.loopx/registry.json",
+            "runtime_root": str(tmp_path / "selected runtime"),
+        }
+        if selected_route else {}
+    )
 
-    with mock.patch("loopx.self_update.subprocess.run") as run:
-        updated = execute_update_plan(payload)
+    with (
+        mock.patch("loopx.self_update.subprocess.run") as run,
+        mock.patch("loopx.self_update.run_archive_installer") as install,
+    ):
+        updated = execute_update_plan(payload, **route)
 
     run.assert_not_called()
+    install.assert_not_called()
     assert updated["ok"] is False
     assert updated["execution"]["status"] == "unsupported_platform"
     assert "install-windows.ps1" in updated["recommended_action"]
@@ -798,3 +812,38 @@ def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_up
     assert result["execution"]["doctor_status"] == "skipped_prior_step_failed"
     assert run.call_count == 2
     restart.assert_not_called()
+
+
+@pytest.mark.parametrize("driver", [
+    pytest.param(
+        "archive_snapshot",
+        marks=pytest.mark.skipif(os.name == "nt", reason="archive updates require a POSIX host"),
+    ),
+    "python_pip",
+    "python_pipx",
+])
+def test_update_preserves_selected_route_through_install_and_readback(tmp_path, monkeypatch, driver):
+    registry, runtime = tmp_path / "project/.loopx/registry.json", tmp_path / "selected runtime"
+    payload = build_update_plan(action="apply", doctor_payload=doctor_payload())
+    payload["install_lifecycle"].update(execution_driver=driver)
+    calls, installer_env = [], {}
+    monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+    passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
+    def install(_url, *, env, **kwargs):
+        installer_env.update(env)
+        return passed, {"stage": "installer_execution"}
+    def run(command, **kwargs):
+        calls.append(command)
+        return passed
+    monkeypatch.setattr("loopx.self_update.run_archive_installer", install)
+    monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    monkeypatch.setattr("loopx.runtime_activation.restart_managed_loopx_services", lambda: [])
+    result = execute_update_plan(payload, registry_path=registry, runtime_root=str(runtime))
+    assert result["ok"]
+    followups = calls if driver == "archive_snapshot" else calls[1:]
+    for command in followups:
+        assert command[command.index("--registry") + 1] == str(registry.resolve())
+        assert command[command.index("--runtime-root") + 1] == str(runtime)
+    if driver == "archive_snapshot":
+        assert installer_env["LOOPX_REGISTRY"] == str(registry.resolve())
+        assert installer_env["LOOPX_RUNTIME_ROOT"] == str(runtime)

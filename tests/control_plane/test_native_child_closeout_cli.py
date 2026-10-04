@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from test_native_child_replan_guard_cli import AGENT, GOAL, ROOT, TODO, TURN, _fixture
+from test_native_child_replan_guard_cli import AGENT, GOAL, ROOT, TODO, TURN, _admitted_guard, _fixture
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -16,8 +16,7 @@ def test_closed_replan_only_accepts_existing_native_operations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, True)
-    guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-                 "--agent-id", AGENT, "--turn-instance-id", TURN)
+    guard = _admitted_guard(call, True)
     original = guard["heartbeat_receipt"]["settlement_identity"]
     base = ("native-child", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
 

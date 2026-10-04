@@ -24,6 +24,9 @@ Current co-located extensions include:
   public-safe Codex App + CPA catalog compilation, qualification and upgrade
   planning;
 - [`loopx-repo-health`](loopx-repo-health/README.md): public-safe GitHub
-  repository health snapshots.
+  repository health snapshots;
+- [`loopx-text-stats`](loopx-text-stats/README.md): the Developer Book's zero-permission
+  text-statistics companion, with a complete installable package and contract tests.
+  It is a teaching distribution, not a default capability or catalog entry.
 
 The default destination is `packages/<extension-id>/`.

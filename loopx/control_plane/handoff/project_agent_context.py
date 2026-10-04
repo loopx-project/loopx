@@ -14,7 +14,7 @@ from .review_packet_context import (
     agent_member_from_item,
     agent_member_summary,
     agent_todo_texts_for_handoff,
-    project_agent_required_reads,
+    project_agent_replan_context,
     project_asset_source,
     project_asset_source_line,
 )
@@ -349,7 +349,7 @@ def project_agent_section(
     agent_member_text: str | None = None,
     handoff_followthrough_text: str | None = None,
     handoff_delivery_contract_text: str | None = None,
-    required_reads: list[dict[str, Any]] | None = None,
+    replan_context: dict[str, Any] | None = None,
     approved_operator_gate: bool = False,
     connected_delivery: bool = False,
 ) -> str:
@@ -382,20 +382,14 @@ def project_agent_section(
         if handoff_delivery_contract_text
         else None
     )
-    first_required_read = next(
-        (
-            item
-            for item in (required_reads or [])
-            if isinstance(item, dict) and item.get("command")
-        ),
-        None,
-    )
+    evidence_lines = []
+    if replan_context is not None:
+        for row in replan_context["evidence"][:1]:
+            summary = row["summary"]
+            evidence_lines.append(f"{row['evidence_ref']}: {summary}")
     required_read_line = (
-        "必读流水账：replan/接力前运行 "
-        f"`{compact_shell_command(str(first_required_read.get('command') or ''))}`；"
-        "只展开本 agent，其他 agent 只看 frontier。"
-        if first_required_read
-        else None
+        "重规划上下文（replan_context）：" + ("；".join(evidence_lines) or "当前 Agent 没有匹配证据。")
+        if replan_context is not None else None
     )
     context_lines = [
         goal_guard,
@@ -484,7 +478,7 @@ class ProjectAgentContext:
     authority_summary: str | None
     followthrough_summary: str | None
     delivery_contract: dict[str, Any] | None
-    required_reads: list[dict[str, Any]]
+    replan_context: dict[str, Any] | None
     approved_handoff: bool
     delivery_handoff: bool
 
@@ -510,7 +504,7 @@ class ProjectAgentContext:
             handoff_delivery_contract_text=handoff_delivery_contract_summary(
                 self.delivery_contract
             ),
-            required_reads=self.required_reads,
+            replan_context=self.replan_context,
             approved_operator_gate=self.approved_handoff,
             connected_delivery=self.delivery_handoff,
         )
@@ -535,7 +529,7 @@ class ProjectAgentContext:
             "authority_summary": self.authority_summary,
             "handoff_followthrough_summary": self.followthrough_summary,
             "handoff_delivery_contract": self.delivery_contract,
-            "project_agent_required_reads": self.required_reads,
+            "replan_context": self.replan_context,
             "handoff_interface_budget": build_handoff_interface_budget(text),
             "project_asset_source": self.asset_source,
         }
@@ -575,7 +569,9 @@ def assemble_project_agent_context(
         authority_summary=authority_material_summary(goal),
         followthrough_summary=handoff_followthrough_summary(item),
         delivery_contract=handoff_delivery_contract(item),
-        required_reads=project_agent_required_reads(goal_id, item),
+        replan_context=project_agent_replan_context(
+            goal_id, item, status_payload,
+        ),
         approved_handoff=operator_gate_approved_handoff(item, goal),
         delivery_handoff=connected_delivery_handoff(item, goal) and kind == "codex",
     )

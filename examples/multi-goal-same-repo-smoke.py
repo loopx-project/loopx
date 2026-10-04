@@ -153,7 +153,9 @@ def main() -> int:
         assert "project_local_goal_state_not_detected" in external_map["residual_risks"], external_map
 
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        registry["goals"][2]["state_file"] = f".codex/goals/{MAIN_GOAL}/ACTIVE_GOAL_STATE.md"
+        registry["goals"][2]["state_file"] = next(
+            goal["state_file"] for goal in registry["goals"] if goal["id"] == MAIN_GOAL
+        )
         registry_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         duplicate_payload = run_cli(root, registry_path, "registry", check=False)
         assert duplicate_payload["ok"] is False, duplicate_payload

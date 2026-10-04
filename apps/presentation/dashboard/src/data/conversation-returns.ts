@@ -6,13 +6,21 @@ type ConversationMessage = {
   sourceTurnId?: string;
   sourceCreatedAt?: string;
   role?: string;
+  pending?: boolean;
   collaboration?: ChatVisibleMessage["collaboration"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
 };
 
-/** Old sessions remain relevant while they owe a result, not forever. */
+/** Delivery of one result does not close the conversation or its later updates. */
 export function conversationReturnSessions(activeSessionId: string | undefined, messages: ConversationMessage[]): string[] {
   const sessions = new Set(activeSessionId ? [activeSessionId] : []);
+  for (const message of messages) if (message.sourceSessionId) sessions.add(message.sourceSessionId);
+  return [...sessions].sort();
+}
+
+/** Metadata can change before a new transcript row is appended. */
+export function conversationPendingReturnSessions(messages: ConversationMessage[]): string[] {
+  const sessions = new Set<string>();
   for (const message of messages) {
     const waitingForConclusion = message.collaboration && !message.collaboration.returns.some(
       (reply) => reply.phase === "conclusion" && reply.status === "delivered",
@@ -20,7 +28,7 @@ export function conversationReturnSessions(activeSessionId: string | undefined, 
     const delivery = message.returnDelivery;
     const waitingForDelivery = delivery && !["delivered", "superseded"].includes(delivery.status);
     const waitingForTranscript = message.sourceTurnId && !message.sourceMessageId;
-    if (message.sourceSessionId && (waitingForConclusion || waitingForDelivery || waitingForTranscript)) sessions.add(message.sourceSessionId);
+    if (message.sourceSessionId && (message.pending || waitingForConclusion || waitingForDelivery || waitingForTranscript)) sessions.add(message.sourceSessionId);
   }
   return [...sessions].sort();
 }
@@ -31,8 +39,14 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
   createReply: (message: ChatVisibleMessage) => T,
 ): T[] {
   const byId = new Map(messages.map((row) => [row.message_id, row]));
-  const byTurn = new Map(messages.filter((row) => row.origin !== "manager_followup")
-    .map((row) => [`${row.turn_id}:${row.role === "user" ? "user" : "assistant"}`, row]));
+  const byTurn = new Map<string, ChatVisibleMessage>();
+  for (const row of messages) {
+    if (row.origin === "manager_followup") continue;
+    const key = `${row.turn_id}:${row.role === "user" ? "user" : "assistant"}`;
+    // The Turn starts with its user request. Later user instructions have their
+    // own message IDs; they must not hydrate that original optimistic request.
+    if (row.role !== "user" || !byTurn.has(key)) byTurn.set(key, row);
+  }
   const seen = new Set(previous.filter((row) => row.sourceSessionId === sessionId).map((row) => row.sourceMessageId));
   let changed = false;
   const updated = previous.map((row) => {

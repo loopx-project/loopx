@@ -85,6 +85,8 @@ def main() -> None:
         print(
             json.dumps(
                 {
+                    "prepared": proposal,
+                    "delivered": delivered,
                     "confirmed": confirmed,
                     "waiting": waiting,
                     "unknown": ambiguous,

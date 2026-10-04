@@ -27,8 +27,10 @@ from .deep_research.catalog_entry import DEEP_RESEARCH_CATALOG_ENTRY
 from .public_safe_outbound.catalog_entry import PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY
 from .connector_registry.catalog_entry import CONNECTOR_REGISTRY_CATALOG_ENTRY
 from .external_research.catalog_entry import EXTERNAL_RESEARCH_CATALOG_ENTRY
+from .performance_diagnosis.catalog_entry import PERFORMANCE_DIAGNOSIS_CATALOG_ENTRY
 from .reliability_diagnostics.catalog_entry import RELIABILITY_DIAGNOSTICS_CATALOG_ENTRY
 from .progress_review.catalog_entry import PROGRESS_REVIEW_CATALOG_ENTRY
+from .goal_capability_organization.catalog_entry import GOAL_CAPABILITY_ORGANIZATION_CATALOG_ENTRY
 from .registry import CapabilityRegistry
 
 CAPABILITY_CATALOG_SCHEMA_VERSION = "loopx_capability_catalog_v0"
@@ -56,8 +58,10 @@ BUILTIN_CAPABILITIES: tuple[dict[str, Any], ...] = (
     PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY,
     CONNECTOR_REGISTRY_CATALOG_ENTRY,
     EXTERNAL_RESEARCH_CATALOG_ENTRY,
+    PERFORMANCE_DIAGNOSIS_CATALOG_ENTRY,
     RELIABILITY_DIAGNOSTICS_CATALOG_ENTRY,
     PROGRESS_REVIEW_CATALOG_ENTRY,
+    GOAL_CAPABILITY_ORGANIZATION_CATALOG_ENTRY,
 )
 # Preserve the original import surface while routing all reads through the registry.
 CAPABILITIES = BUILTIN_CAPABILITIES

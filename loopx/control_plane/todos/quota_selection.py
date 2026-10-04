@@ -75,6 +75,7 @@ def project_quota_planning(
                 "monitor_supported": todo_summary_monitor_writeback_supported(value),
                 "source_open_count": source_open_count,
                 "source_complete": (value.get("work_counts") or {}).get("complete", True),
+                "frontier_revision_index": value.get("advancement_frontier_revision_index"),
                 "diagnostic_limit": 3, "backlog_limit": 8, "visibility_limit": 16,
             },
         })

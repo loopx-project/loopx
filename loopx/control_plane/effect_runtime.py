@@ -37,10 +37,12 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
+    "todo.context.page",
     "goal.checkpoint_read_context.source",
     "goal.checkpoint_read_context.evaluate",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
+    "performance_diagnosis.inspect",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
@@ -56,6 +58,12 @@ CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
+
+
+class _RuntimeSourceChanged(RuntimeError):
+    def __init__(self, snapshot: _RuntimeSourceSnapshot) -> None:
+        super().__init__("runtime source changed while hashing")
+        self.snapshot = snapshot
 
 
 @dataclass(frozen=True)
@@ -280,6 +288,12 @@ def _runtime_fingerprint_for_snapshot(
 ) -> str:
     digest = hashlib.sha256()
     source_root = Path(root)
+    # Lazy imports and Python bridges resolve from this physical release. Equal
+    # bytes in another checkout must not reuse a loader whose release may retire.
+    # Resolved aliases still share one owner; source bytes remain fully checked.
+    digest.update(b"loopx_effect_runtime_source_instance_v1\0")
+    digest.update(os.fsencode(os.path.normcase(root)))
+    digest.update(b"\0")
     paths = (source_root / relative for relative, *_metadata in snapshot)
     # Reads may finish out of order; hash the same relative names and original
     # bytes in snapshot order. No disk cache or skipped freshness check.
@@ -290,28 +304,35 @@ def _runtime_fingerprint_for_snapshot(
             assert read.data is not None
             digest.update(relative.encode("utf-8"))
             digest.update(read.data)
+    current_snapshot = _runtime_source_snapshot(source_root)
+    if current_snapshot != snapshot:
+        raise _RuntimeSourceChanged(current_snapshot)
     return digest.hexdigest()
 
 
 def _runtime_fingerprint() -> str:
     root = _control_plane_root()
     resolved_root = os.fspath(root.resolve())
-    try:
-        return _runtime_fingerprint_for_snapshot(
-            resolved_root,
-            _runtime_source_snapshot(root),
-        )
-    except FileNotFoundError:
+    snapshot: _RuntimeSourceSnapshot | None = None
+    last_error: Exception | None = None
+    for _attempt in range(2):
         try:
+            if snapshot is None:
+                snapshot = _runtime_source_snapshot(root)
             return _runtime_fingerprint_for_snapshot(
                 resolved_root,
-                _runtime_source_snapshot(root),
+                snapshot,
             )
+        except _RuntimeSourceChanged as exc:
+            last_error = exc
+            snapshot = exc.snapshot
         except FileNotFoundError as exc:
-            raise EffectRuntimeStartupError(
-                "TypeScript Effect runtime source topology did not stabilize",
-                diagnostic_code="packaged_runtime_source_unstable",
-            ) from exc
+            last_error = exc
+            snapshot = None
+    raise EffectRuntimeStartupError(
+        "TypeScript Effect runtime source topology did not stabilize",
+        diagnostic_code="packaged_runtime_source_unstable",
+    ) from last_error
 
 
 @contextmanager
@@ -843,6 +864,10 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                         _node_executable(),
                         "--no-warnings",
                         "--experimental-strip-types",
+                        "--import",
+                        # ESM specifiers require file URLs on Windows; encode
+                        # reserved path characters on every platform as well.
+                        (_control_plane_root() / "effect_runtime_compile_cache.ts").as_uri(),
                         str(_runtime_server_path()),
                         "--info",
                         str(info_path),

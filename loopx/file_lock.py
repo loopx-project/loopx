@@ -18,6 +18,8 @@ import importlib
 from typing import Any, Iterator, TextIO
 from uuid import uuid4
 
+from .control_plane.runtime.file_paths import windows_extended_path
+
 try:  # pragma: no cover - exercised on POSIX hosts in integration smokes.
     fcntl: Any = importlib.import_module("fcntl")
 except ImportError:  # pragma: no cover
@@ -121,7 +123,7 @@ def _policy(value: LockAcquisitionPolicy | str) -> LockAcquisitionPolicy:
 
 
 def _lock_path(path: Path) -> Path:
-    return path.with_name(f"{path.name}.lock")
+    return windows_extended_path(path.with_name(f"{path.name}.lock"))
 
 
 def _open_lock_descriptor(path: Path, *, flags: int) -> int:
@@ -159,8 +161,14 @@ def lock_incident_path(path: Path) -> Path:
 
 
 def _lock_id(path: Path) -> str:
-    resolved = str(path.expanduser().resolve(strict=False)).encode("utf-8")
-    return hashlib.sha256(resolved).hexdigest()[:16]
+    address = str(path.expanduser().resolve(strict=False))
+    if os.name == "nt":
+        # The address syntax must not create a second diagnostic lock identity.
+        if address.startswith("\\\\?\\UNC\\"):
+            address = "\\\\" + address[8:]
+        elif address.startswith("\\\\?\\"):
+            address = address[4:]
+    return hashlib.sha256(address.encode("utf-8")).hexdigest()[:16]
 
 
 def _identity(
@@ -602,7 +610,7 @@ _EFFECT_MUTATION_INVALID_CLAIM_TOKEN = "__invalid_lock_reclaim__"
 
 
 def _effect_mutation_lock_path(path: Path) -> Path:
-    return Path(f"{path}{EFFECT_MUTATION_LOCK_SUFFIX}")
+    return windows_extended_path(Path(f"{path}{EFFECT_MUTATION_LOCK_SUFFIX}"))
 
 
 def _effect_mutation_claim_path(path: Path, token: str) -> Path:

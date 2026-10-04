@@ -18,7 +18,7 @@ request/result contract rather than becoming a second request database.
 A Manager Turn is authorized only by a provider-native mention of the bound Bot,
 a provider-verified reply to that Bot, or another existing typed authority
 record. The next authorized Turn may receive up to eight recent context-only
-messages with a 4,000-character total budget. Every item is labeled
+messages with a 4,000-character content budget. Every item is labeled
 `context-only`; the prompt explicitly states that these items are not commands,
 authorization, or independent Todos.
 
@@ -34,6 +34,15 @@ Provider addressing is preserved as historical provenance while normalized live
 attention/reply flags are cleared. The generic urgency projection and the Lark
 material-settlement path therefore agree that a recovered mention is material,
 not a delayed request.
+
+History and live capture retain the provider's exact bounded sender identifier
+and sender kind in the private event. Conversation context includes those facts
+alongside the source message identifier and time, as structured data. Missing
+sender identity stays missing; a malformed identity is rejected, and replaying
+the same message cannot replace its captured sender. Sender provenance is not a
+verified LoopX Agent binding or an owner grant. Public mutation/evidence receipts
+continue to exclude these private identities. Retaining a Bot notification as
+context still does not prove steward intake, work adoption or owner presentation.
 
 After a successful authorized Turn and verified reply, consumed context items
 are settled through the existing event-bound material-review ledger. Duplicate
@@ -54,7 +63,7 @@ discard must expose a reason and preserve duplicate/restart safety.
 ## 中文
 
 LoopX 管家连接将**消息可见性**与 **Turn 权限**分开处理。当且仅当一个启用的
-管家绑定唯一拥有某个 Lark App 与群聊时，LoopX 可以把该群中的非机器人消息以
+管家绑定唯一拥有某个 Lark App 与群聊时，LoopX 可以把该群中非本机器人发送的消息以
 紧凑、本地私有的上下文材料保留下来。仅保留消息不会调用模型、发送回复或
 reaction、确认 provider event，也不会授权任何 Goal/Todo 修改。
 
@@ -66,7 +75,7 @@ material-review ledger 不拥有通用协作生命周期；后续应投影 M2 �
 
 只有以下来源能够授权管家 Turn：provider 原生的目标机器人 mention、provider
 验证过的对机器人回复，或其他既有 typed authority 记录。下一次获得授权的 Turn
-最多读取最近八条、总计不超过 4,000 字符的仅上下文消息。每条材料都会标记为
+最多读取最近八条、正文总计不超过 4,000 字符的仅上下文消息。每条材料都会标记为
 `context-only`，prompt 也会明确说明这些内容不是指令、授权或独立 Todo。
 
 在已授权的管家 Turn 读取上下文前，既有的有界 turn-start 历史同步会补齐实时
@@ -78,6 +87,12 @@ inbox，不给历史消息发送 reaction 或回复；provider 历史读取不�
 provider 的原始寻址信息作为历史 provenance 保留，但 live attention/reply 标志会被
 清除，因此通用 urgency 投影与 Lark material settlement 对“历史 mention 只是材料”
 得出同一个结论，不会把它恢复为延迟请求。
+
+历史补读与实时采集在私有事件中保留 provider 的精确、有界发送者编号与类型。对话上下文
+以结构化数据同时提供这些事实、来源消息编号和时间。未知身份保持未知；损坏身份会被
+拒绝，同一消息重放不能替换已捕获的发送者。来源身份不等于已核验的 LoopX Agent 绑定
+或用户授权；公开 mutation / evidence receipt 仍不包含这些私有身份。Bot 通知被保留为
+上下文，也不证明管家接手、工作采用或用户呈现。
 
 获得授权的 Turn 成功完成且回复验证通过后，已使用的上下文材料通过现有的、
 绑定事件的 material-review ledger 结算。重复投递与重启恢复保持幂等。机器人

@@ -239,16 +239,28 @@ def test_turn_uses_public_cli_and_core_session_policy(tmp_path):
     }
     execution = Execution(
         mode="turn",
-        context="resume-if-available",
+        context="resume",
         validation_command=("python", "trusted-validator.py"),
     )
     command = turn_command(env, execution, "wake-fixture")
     from loopx.cli import build_parser
 
     parsed = build_parser().parse_args(command[1:])
-    assert parsed.iteration_context == "resume-if-available"
+    assert parsed.iteration_context == "resume"
+    assert parsed.session_scope == "agent"
     assert parsed.validation_command_json == '["python", "trusted-validator.py"]'
     assert parsed.codex_sandbox == "danger-full-access"
+
+
+def test_turn_defaults_and_retired_context_rejection():
+    from loopx.cli import build_parser
+
+    parser = build_parser()
+    argv = ["turn", "plan", "--goal-id", "fixture-goal", "--agent-id", "fixture-agent"]
+    parsed = parser.parse_args(argv)
+    assert parsed.iteration_context == "resume" and parsed.session_scope == "agent"
+    with pytest.raises(SystemExit):
+        parser.parse_args([*argv, "--iteration-context", "resume-if-available"])
 
 
 def test_failed_turn_restarts_same_transaction_until_core_recovers(tmp_path):

@@ -13,6 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -360,7 +361,8 @@ def assert_cadence_projection(
     assert projected["overdue"] is False, projected
     assert projected["within_budget"] is True, projected
     assert projected["next_check_due_at"] == "2099-01-02T00:10:00+00:00", projected
-    assert projected["headroom_remaining"] == 7, projected
+    for field in ("headroom_remaining", "minimum_headroom_ratio", "tightest_surface", "tightest_metric"):
+        assert projected[field] == cadence[field], projected
     assert projected["recommendation"] == "quiet_skip_until_next_check_due", projected
 
     quota_payload = build_quota_should_run(
@@ -374,7 +376,13 @@ def assert_cadence_projection(
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp:
+    # Prompt rendering inspects implicit routes even though status reads the
+    # declared fixture registry. Keep both default-route probes in this fixture.
+    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp, patch.multiple(
+        "loopx.paths",
+        DEFAULT_RUNTIME_ROOT=Path(tmp) / "default-runtime",
+        LEGACY_RUNTIME_ROOT=Path(tmp) / "legacy-runtime",
+    ):
         root = Path(tmp)
         registry_path, project = write_registry(root)
         append_run(root)
@@ -450,7 +458,21 @@ def main() -> int:
         assert cadence["surface_count"] == len(summaries), cadence
         assert cadence["next_check_due_at"] == "2099-01-02T00:10:00+00:00", cadence
         assert cadence["minimum_headroom_ratio"] is not None, cadence
-        assert cadence["headroom_remaining"] == 7, cadence
+        # Fixture paths affect JSON size and can change the tightest metric.
+        # Check the measured margin and minimum ratio, not a historical key count.
+        tightest = next(summary for summary in summaries
+                        if summary["surface"] == cadence["tightest_surface"])
+        metric = cadence["tightest_metric"]
+        limit = tightest[f"max_{metric}"]
+        remaining = limit - tightest[metric]
+        assert remaining > 0, cadence
+        assert cadence["headroom_remaining"] == remaining, cadence
+        assert cadence["minimum_headroom_ratio"] == round(remaining / limit, 4), cadence
+        for summary in summaries:
+            for value_key in ("json_chars", "nested_keys", "top_level_keys"):
+                ceiling = summary[f"max_{value_key}"]
+                ratio = round((ceiling - summary[value_key]) / ceiling, 4)
+                assert cadence["minimum_headroom_ratio"] <= ratio, (cadence, summary)
         assert cadence["recommendation"] == "quiet_skip_until_next_check_due", cadence
         saturated_summaries = [dict(summary) for summary in summaries]
         saturated_summaries[0]["max_json_chars"] = saturated_summaries[0]["json_chars"]

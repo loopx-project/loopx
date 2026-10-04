@@ -60,10 +60,11 @@ Connector registry 继续只拥有库存与遥测。`supported` 绝不映射为 
 
 ## 产品入口
 
-- CLI：`external-evidence discover|plan|receipt|admit|retire`；
-- Managed Turn：复用同五个 effect-runtime 方法；
-- Frontend/Lark：本 Core 切片不修改。后续 companion slice 只渲染同源 plan/admission
-  投影与读回，不建立第二个 registry 或生命周期。
+- CLI：`external-evidence discover|plan|execute|receipt|admit|readback|retire`；
+- Managed Turn：复用五个 typed effect-runtime 方法；显式 provider 执行与账本投影
+  使用能力的 CLI owner；
+- Frontend/Lark：现有会话答复/报告和 Markdown 运输渲染同源校验回读，
+  不建立独立 registry 或生命周期。
 
 ## 验收
 
@@ -79,6 +80,24 @@ Connector registry 继续只拥有库存与遥测。`supported` 绝不映射为 
   必须 fail closed；
 - 全部被采纳来源完成下游覆盖前不得退休；
 - CLI 与 effect-runtime TypeScript 测试在源码 checkout 中通过。
+
+## 交付检查点（2026-10-02）
+
+公开 GitHub method 已完成有界真实链路：匿名读取固定提交文件、精确 plan 回执校验、
+独立父 Agent 决定、投影到现有 deepresearch 来源账本、实际 lineage 回读与退休。
+可选 source refs 和字面检索词进入 request/plan digest；旧请求身份保持兼容。
+provider 以 `method:public-github` 内置在 extensions，能力和账本 owner 不变。
+
+通过：真实公开 provider/源码 CLI 链路；私有或过期 readiness、无效/未固定来源、
+plan/admission 篡改、部分/空/失败读取、独立采纳与覆盖、问题不匹配、预算耗尽及
+幂等重放等负向用例；打包桌面/移动会话回读与重载；现有 Lark Markdown 展示。
+不持久化来源正文。同源 Markdown 沿用现有答复/报告和 Lark 运输路径，
+无需新增前端配置或并行证据权威。
+
+命令参见[版本化能力指南](../../../loopx/capabilities/external_research/README.md#public-github-method--公开-github-方法)。
+真实 Lark 送达、带凭据 connector 执行和更广泛语义研究质量尚未验证；
+该检查点不晋升这些 provider，也不关闭 S6/S8。失败或部分结果保留原始来源退路；
+读取成功和父 Agent 采纳均不证明证据完整性。
 
 ## 非目标
 

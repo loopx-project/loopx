@@ -29,6 +29,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Automatic Execution Admission (v0)](automatic-execution-admission-v0.md) | Accepted | none | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | Accepted | none | — |
 | [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | none | [1 entry](ledger/capable-manager-semantic-handoff-v0/) |
+| [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
 | [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | — |
@@ -61,9 +62,9 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Accepted | none | — |
 | [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Accepted | none | [5 entries](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
-| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [23 entries](ledger/shared-goal-authority-state-provider-v0/) |
+| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [24 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
-| [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [12 entries](ledger/typescript-control-plane-migration-v0/) |
+| [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [14 entries](ledger/typescript-control-plane-migration-v0/) |
 
 ## Superseded (0)
 

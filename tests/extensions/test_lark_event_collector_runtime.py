@@ -18,6 +18,7 @@ from loopx.extensions.lark.event_collector_runtime import (
     _run_json_with_status,
     enrich_lark_event_reply_context,
     lark_event_requires_reply_context_lookup,
+    _reply_source_content,
     run_lark_event_collector,
 )
 
@@ -88,6 +89,27 @@ def test_reply_context_lookup_does_not_trust_unrelated_text_mentions() -> None:
         },
         bot_display_name=bot_name,
     )
+    assert lark_event_requires_reply_context_lookup(
+        {"mentions": [{"name": bot_name}], "mentioned": True, "parent_id": "om_parent"},
+        bot_display_name=bot_name,
+    )
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("A visible answer", "A visible answer"),
+    (json.dumps({"text": "A visible answer"}), "A visible answer"),
+    (json.dumps({"zh_cn": {"title": "", "content": [[{"tag": "text", "text": "A visible answer"}]]}}), "A visible answer"),
+    (json.dumps({"content": [[{"tag": "img", "image_key": "private_fixture_key"}]]}), ""),
+    (json.dumps({"operation": {"callback_token": "private_fixture_token"}}), ""),
+    (json.dumps({"schema": "2.0", "header": {"title": {"content": "Review"}},
+                 "body": {"elements": [{"tag": "button", "text": {"content": "Open"},
+                                           "value": {"callback_token": "private_fixture_token"}}]}}),
+     '<card title="Review">\n[Open]\n</card>'),
+])
+def test_reply_source_reads_visible_text_without_callback_payload(raw: str, expected: str) -> None:
+    content = _reply_source_content({"body": {"content": raw}})
+    assert content == expected
+    assert "private_fixture_" not in content
 
 
 def test_json_status_reads_nested_provider_code_from_stderr() -> None:
@@ -163,6 +185,87 @@ def test_reply_context_hydration_preserves_provider_sender_type() -> None:
     assert enriched["sender_id"] == "cli_fixture_bot"
 
 
+def test_reply_context_keeps_the_exact_parent_as_context_only() -> None:
+    messages = {
+        "om_question": {
+            "message_id": "om_question",
+            "chat_id": "oc_fixture",
+            "content": "Where is that card?",
+            "parent_id": "om_parent",
+            "sender": {"sender_type": "user", "id": "ou_fixture"},
+        },
+        "om_parent": {
+            "message_id": "om_parent",
+            "chat_id": "oc_fixture",
+            "content": "Dependency review is ready; the request is not approved.",
+            "sender": {"sender_type": "app", "id": "cli_fixture_bot"},
+        },
+    }
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        mid = argv[argv.index("--message-ids") + 1]
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps(
+                {
+                    "ok": True,
+                    "data": {"messages": [messages[mid]]},
+                }
+            ),
+            "",
+        )
+
+    enriched = enrich_lark_event_reply_context(
+        {"message_id": "om_question", "chat_id": "oc_fixture"},
+        runner=runner,
+        command_prefix=["lark-cli"],
+        profile="fixture-bot",
+        profile_app_id="cli_fixture_bot",
+        configured_chat_id="oc_fixture",
+        sleeper=lambda _seconds: None,
+    )
+    assert enriched["reply_to_bot"] is True
+    assert enriched["reply_context"] == {
+        "message_id": "om_parent",
+        "conversation_id": "oc_fixture",
+        "content": messages["om_parent"]["content"],
+    }
+
+
+def test_formatted_lookup_preserves_event_ancestry_and_thread_context() -> None:
+    root = {"message_id": "om_root", "chat_id": "oc_fixture", "thread_id": "omt_fixture",
+            "thread_message_position": "-1", "content": "Review the draft.",
+            "sender": {"sender_type": "user", "id": "ou_fixture"}}
+    current = {**root, "message_id": "om_current", "thread_message_position": "2",
+               "content": "Use the new version."}
+    revised = {**root, "message_id": "om_revised", "thread_message_position": "1",
+               "content": "Version 3 is ready.", "create_time": "2026-01-01 12:02",
+               "sender": {"sender_type": "app", "id": "cli_fixture_bot"}}
+    messages = {"om_current": current, "om_root": {**root, "thread_replies": [revised, current]}}
+    calls = []
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        mid = argv[argv.index("--message-ids") + 1]
+        calls.append(mid)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "data": {"messages": [messages[mid]]}}), "")
+
+    options = dict(runner=runner, command_prefix=["lark-cli"], profile="fixture-bot",
+                   profile_app_id="cli_fixture_bot", configured_chat_id="oc_fixture", sleeper=lambda _: None)
+    enriched = enrich_lark_event_reply_context({"message_id": "om_current", "root_id": "om_root"}, **options)
+    assert calls == ["om_current", "om_root"]
+    assert "parent_id" not in enriched and "reply_context" not in enriched
+    assert enriched["reply_to_bot"] is False  # A thread is not a verified direct bot reply.
+    assert enriched["thread_context"]["messages"][1] == {
+        "message_id": "om_revised", "conversation_id": "oc_fixture", "thread_id": "omt_fixture",
+        "position": 1, "content": "Version 3 is ready.", "content_truncated": False,
+        "sender": {"id": "cli_fixture_bot", "kind": "app"}, "created_at": "2026-01-01 12:02",
+    }
+    direct = enrich_lark_event_reply_context({"message_id": "om_current", "parent_id": "om_root"}, **options)
+    assert direct["reply_context"]["content"] == "Review the draft."
+    assert direct["parent_id"] == "om_root"
+
+
 def _operation_callback_project(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path / "project"
     project.mkdir()
@@ -226,6 +329,31 @@ def test_operation_callback_plan_requires_pinned_runtime(tmp_path: Path) -> None
     assert plan["status"] == "pinned_runtime_required"
     assert plan["operation_callbacks_enabled"] is True
     assert plan["operation_callback_console_configuration_preflighted"] is False
+
+
+def test_callback_managed_wake_configuration_is_explicit_and_read_back(tmp_path: Path) -> None:
+    project, collector = _operation_callback_project(tmp_path)
+    data = json.loads(collector.read_text())
+    config = {"registry_path": str(tmp_path / "registry.json"), "goal_id": "goal-fixture",
+              "requester_agent_id": "requester", "execution_config": ".loopx/config/delegations.json",
+              "binding_id": "operation-worker"}
+    data["operation_callbacks"]["managed_turn_wake"] = config
+    collector.write_text(json.dumps(data))
+    loaded = event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+    assert loaded["operation_callbacks"]["managed_turn_wake"] == {**config, "project": str(project)}
+    plan = plan_lark_event_collector(project=project, config_path=collector, runtime_root=tmp_path / "runtime")
+    assert plan["operation_callback_managed_wake_configured"] is True
+    assert "registry_path" not in json.dumps(plan)
+    for patch in [{"registry_path": "relative.json"}, {"execution_config": "../outside.json"},
+                  {"binding_id": "bad\nvalue"}, {"requester_agent_id": None}, {"unexpected": True}]:
+        data["operation_callbacks"]["managed_turn_wake"] = {**config, **patch}
+        collector.write_text(json.dumps(data))
+        with pytest.raises(ValueError):
+            event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+    data["operation_callbacks"] = {"enabled": False, "managed_turn_wake": config}
+    collector.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="enabled"):
+        event_collector.load_lark_event_collector_config(project=project, config_path=collector)
 
 
 def test_operation_callback_status_separates_readiness_from_qualification(
@@ -300,11 +428,21 @@ def test_operation_callback_status_separates_readiness_from_qualification(
     assert qualified["operation_callback_qualification_state"] == "callback_qualified"
 
 
+@pytest.mark.parametrize("wake_revocation", [False, True])
 def test_collector_runs_independent_operation_callback_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    wake_revocation: bool,
 ) -> None:
     project, collector = _operation_callback_project(tmp_path)
+    if wake_revocation:
+        config = json.loads(collector.read_text())
+        config["operation_callbacks"]["managed_turn_wake"] = {
+            "registry_path": str(tmp_path / "registry.json"), "goal_id": "fixture-goal",
+            "requester_agent_id": "coordinator", "execution_config": "delegations.json",
+            "binding_id": "confirmed-operation",
+        }
+        collector.write_text(json.dumps(config))
     runtime_root = tmp_path / "runtime"
     cli = tmp_path / "lark-cli-fixture"
     cli.write_text(
@@ -327,6 +465,10 @@ def test_collector_runs_independent_operation_callback_consumer(
 
     def handle(payload: dict[str, object], **kwargs: object) -> dict[str, object]:
         captured.append({"payload": payload, **kwargs})
+        if wake_revocation and len(captured) == 1:
+            config = json.loads(collector.read_text())
+            del config["operation_callbacks"]["managed_turn_wake"]
+            collector.write_text(json.dumps(config))
         return {
             "ok": len(captured) > 1,
             "schema_version": "lark_operation_callback_receipt_v0",
@@ -364,6 +506,8 @@ def test_collector_runs_independent_operation_callback_consumer(
     assert result["operation_callback_verified_count"] == 1
     assert captured[0]["runtime_root"] == runtime_root.resolve()
     assert captured[0]["action_store_root"] == runtime_root / "chat" / "actions"
+    assert (captured[0]["managed_turn_wake"] is not None) is wake_revocation
+    assert captured[1]["managed_turn_wake"] is None
     status = json.loads(
         (
             project / ".loopx/runtime/lark-collector/operation-callback-status.json"

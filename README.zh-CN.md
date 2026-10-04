@@ -7,11 +7,28 @@
 面向长程 Agent 与个人 Agent 团队的开源、本地优先控制面。<br>
 <sub>跨会话保留目标、决策与证据，连接 Codex、Claude Code、DeepSeek Harness 等已有运行时。</sub>
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![GitHub 贡献者](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
 
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
+
+<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.zh-CN.webp" alt="LoopX 个人 Agent 工作区：工作地图展示任务依赖、负责 Agent、进展与等待用户处理的决策" width="960"></a><br>
+<sub>源码构建的 App 运行预设的 <a href="demo/workspace/README.md">Workspace 场景回放</a>，未执行实时 Agent 任务 · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">观看 32 秒完整演示</a></sub>
+
+**两步在 Codex App 里用上 LoopX。** 先安装一次：
+
+```bash
+python3 -m pip install --upgrade loopx && loopx workflow-skills --install
+```
+
+重启 Codex App，在打开了你项目的对话里输入：
+
+```text
+$loopx 处理 PR 上未解决的 review 意见，保持补丁易于评审
+```
+
+<sub>LoopX 会连接项目、把工作规划成 Todo，并设置持续推进的 heartbeat。Claude Code 用 <code>/loopx &lt;复杂任务&gt;</code> · <a href="#试用-loopx">其他 Agent 宿主</a></sub>
 
 **[LHTB](https://zli12321.github.io/LHTB/index.html) · 46 个任务 · GPT-5.6 Sol：**LoopX 1.0.3 Heartbeat 平均 Reward 达到 **0.4948**，较 **Plain Codex 提升 17.3%**，较**原生 Codex Goal 提升 10.6%**。<br>
 <sub><a href="#lhtb-results">查看结果与通过率 ↓</a></sub>
@@ -28,7 +45,7 @@ LoopX 管理下一步工作、验收依据，以及什么时候需要你判断�
 
 | 你想做什么 | 从这里开始 |
 | --- | --- |
-| 让编程或研究 Agent 跨会话持续干活 | [安装并连接项目](#试用-loopx) |
+| 让编程或研究 Agent 跨会话持续干活 | [安装并开始](#试用-loopx) |
 | 在一个入口管理个人项目、定时任务与待决事项 | [个人 Agent 工作区](#认识个人-agent-工作区) |
 | 让多个 Agent 分工协作，交付可验收的结果 | [Agent 协作指南](docs/product/use-cases/cross-runtime/README.md#中文指南) |
 
@@ -37,10 +54,6 @@ LoopX 管理下一步工作、验收依据，以及什么时候需要你判断�
 把长程目标收进同一个 local-first 工作区。Goal、待关注事项、对话、任务、
 文件、定时计划与恢复状态跨天数、跨重启、跨 harness 保持持久。重新打开项目时，
 可以检查上一轮的状态与证据，再继续下一项允许执行的工作。
-
-<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">
-  <img src="docs/assets/personal-workspace/workspace-1.0.webp" alt="LoopX 工作区：用户决策、Agent 任务、持续监控与完成记录" width="960">
-</a>
 
 LoopX 1.0 将这些长程控制状态汇入 Personal Workspace。你可以在一个页面中：
 
@@ -87,28 +100,19 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 
 LoopX 把长期控制状态留在同一层紧凑状态里：
 
-```text
-目标 / issue / project
-   │
-   ▼
-LoopX state：objective + gate + todo + scope + evidence + quota
-   │
-   ├─ 需要人类判断？ ── 是 ─▶ 提出具体问题并等待
-   │
-   ├─ 有安全侧路？ ─────────▶ 执行一个有界 agent slice
-   │
-   ▼
-Codex / Claude Code / Cursor / shell agent 执行一轮
-   │
-   ▼
-写回证据 + handoff + next todo ─▶ quota 决定下一次 tick
-```
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/harness-neutral.zh.mobile.svg">
+  <img src="docs/assets/harness-neutral.zh.svg" alt="Harness 执行每一轮，LoopX 延续整份工作。" width="1200">
+</picture>
 
 Agent runtime 负责执行，LoopX 负责治理跨运行延续的控制状态，让工程、
 研究、discovery 和运营 Loop 能持续推进。它不是又一个 agent framework，也不是
 绑定某一 Provider 的编排 runtime。
 
-![LoopX control-plane board](docs/assets/control-plane-board.svg)
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/control-plane-board.zh.mobile.svg">
+  <img src="docs/assets/control-plane-board.zh.svg" alt="一轮工作是受约束的状态迁移，不是定时器。" width="1200">
+</picture>
 
 一个形象化理解是：LoopX 是
 **[面向长程 Agent 的可执行看板](docs/development/control-plane-course/00-concept-primer.md)**。
@@ -270,58 +274,36 @@ SWE-Marathon 与 LHTB 每个任务、每种模式仅保留一条有效轨迹；D
 
 ## 试用 LoopX
 
-要求：Python 3.11+ 与 Node.js 22.22.3+，推荐使用 Node.js 24 LTS。使用 console
-scripts 已加入 `PATH` 的 Python 环境；macOS 和 Linux 使用 POSIX shell，原生
-Windows 使用 PowerShell 7。Node.js 运行 LoopX 自动启动、空闲退出的 TypeScript
-Effect core，无需手工维护 daemon。Git 仅用于源码贡献与 clone/canary 工作流。
-
-无需 clone，直接从 PyPI 安装：
+先安装一次：
 
 ```bash
-python3 -m pip install --upgrade loopx
-loopx workflow-skills --install
-loopx doctor
+python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 ```
-
-已有安装可使用 `loopx update plan` 与 `loopx update apply`；LoopX 会保留检测到
-的 pip、pipx 或 archive owner，不会在升级时暗中切换安装渠道。
-
-原生 Windows PowerShell 7 可直接使用同一 PyPI release，不需要 POSIX 兼容层：
-
-```powershell
-py -3.11 -m pip install --upgrade loopx
-loopx workflow-skills --install
-loopx doctor
-```
-
-首次安装后重启 Agent host，使其重新加载 workflow skills。`pipx`、host command
-surfaces、原生 Windows checkout 安装、升级、回滚、卸载与 archive fallback 见
-[Installing LoopX](docs/guides/installing-loopx.md)。
-
-然后在项目根目录连接：
-
-```bash
-cd /path/to/your-project
-loopx connect
-loopx status
-```
-
-如果项目尚未初始化，且 `connect` 明确提示缺少状态，可以走 guided path：
-
-```bash
-loopx start-goal --guided --project . --goal-text "你的长程目标"
-```
-
-已有 LoopX state 应复用，不要覆盖。确保 `.loopx/`、`.codex/goals/`、`.local/`
-不会被提交。
 
 ### 从你已经在用的 Agent 启动
 
+重启 Agent 宿主，在打开了你项目的会话里开始：
+
+| 宿主 | 输入 |
+| --- | --- |
+| Codex App、Codex CLI | `$loopx <复杂任务>` |
+| Claude Code | `/loopx <复杂任务>` |
+| DeepSeek Harness | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中选 `loopx`，然后直接描述任务 |
+
+LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并设置宿主的循环。
+`loopx status` 显示目标、等你处理的决策和下一条 Todo；`loopx doctor` 诊断安装。
+
+需要 Python 3.11+ 与 Node.js 22.22.3+（推荐 24 LTS）。原生 Windows、`pipx`、
+升级、回滚与卸载见 [Installing LoopX](docs/guides/installing-loopx.md)。
+
+<details>
+<summary><b>其他宿主、Loop driver 与自有 runner</b></summary>
+
 | Host | 推荐入口 | Loop driver |
 | --- | --- | --- |
-| Codex App | 让 agent 在当前项目里连接 LoopX、运行 `loopx doctor`、保留已有状态，并汇报当前 gate 和下一条 todo；然后用 `$loopx <复杂任务>` 或 `/skills` 里的 `loopx`。 | Codex App heartbeat；cadence 跟随 `quota should-run.scheduler_hint` |
+| Codex App | 在打开了项目的对话里用 `$loopx <复杂任务>`，或从 `/skills` 选 `loopx`。 | Codex App heartbeat；cadence 跟随 `quota should-run.scheduler_hint` |
 | Codex App over SSH | `loopx agent-onboard --agent-type codex-app-ssh --project .` | 返回的可见 `/goal <task_body>` |
-| Codex CLI | 在项目里启动 `codex`，让它连接并诊断 LoopX，然后用 `$loopx <复杂任务>` 或 `/skills`。 | 可见 `/goal <task_body>`；默认不走隐藏 headless 执行 |
+| Codex CLI | 在项目里启动 `codex`，然后用 `$loopx <复杂任务>` 或 `/skills`。 | 可见 `/goal <task_body>`；默认不走隐藏 headless 执行 |
 | Claude Code | 安装 opt-in adapter，然后运行 `/loopx <任务>`，再运行 `/loop`。 | 由 LoopX gate 的原生 Claude Code `/loop` |
 | KunlunCode | 运行 `loopx-kunluncode connect --project . --goal-id <goal-id> --agent-id <registered-agent-id>`，添加一条有边界的 todo，再运行 `loopx-kunluncode run --project .`。 | 经 app-server 驱动原生 Goal Pro；只有 strict verification 通过后，LoopX 才写回完成与 quota |
 | OpenCode | 安装静态 command facade；recurring goal 显式 opt in `--with-goal-bridge`。 | OpenCode command facade 与显式 goal bridge |
@@ -330,7 +312,7 @@ loopx start-goal --guided --project . --goal-text "你的长程目标"
 | Antigravity CLI（agy） | 用 `loopx slash-commands --install --surface agy` 安装 skill facade，然后在项目里的 `agy` 会话中调用 `loopx` skill（或 `/loopx <复杂任务>`）。 | 会话原生 `/goal` 循环（审计至 `<!-- GOAL_COMPLETE -->`）加 `schedule` 自唤醒，随会话存活；facade 指示每次 turn/唤醒都先过 `quota should-run`——advisory 节流，非宿主强制 gate |
 | Kiro CLI | 用 `loopx slash-commands --install --surface kiro-cli` 安装 skill facade，然后在项目里的 `kiro-cli` 会话中执行 `/loopx <复杂任务>`。 | 会话原生 `/goal --max <N> <任务> Done when: <验收条件>` 循环，验收条件写入目标语句本身（宿主由该语句推导验收标准），由宿主自己的迭代预算兜底（默认 5），并通过内置 `goal` 完成契约收口；facade 指示每次 turn 与迭代都先过 `quota should-run`——advisory 节流，非宿主强制 gate |
 | DeepSeek Harness（dsh） | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中点 `loopx`，然后直接描述任务；[dsh goal-mode adapter](loopx/dsh_goal_mode/README.md) 继续支持 headless turn。 | 原生同会话续跑与 GoalBar，或 headless dsh 工作段；两条路径都遵守 LoopX authority |
-| Cursor、shell、自有 runner | 使用同一 installer 和 `loopx doctor`，再手动连接或由 runner 调用。 | 你的 shell、scheduler 或 runner |
+| Cursor、shell、自有 runner | `loopx start-goal --guided --project . --goal-text "<任务>"`，或由你的 runner 调用 LoopX。 | 你的 shell、scheduler 或 runner |
 
 可直接粘贴的完整 setup message、host-specific 路由和故障恢复见
 [Getting Started](docs/guides/getting-started.md)。Host 集成还可以查看
@@ -360,6 +342,16 @@ loopx refresh-state         # 下一轮应该看到什么？
 loopx quota spend-slot      # 为完成并验证的 slice 记账
 ```
 
+Clone 安装只面向需要 live canary wrapper 的贡献者：
+
+```bash
+git clone https://github.com/loopx-project/loopx ~/loopx
+~/loopx/scripts/install-local.sh
+loopx doctor
+```
+
+</details>
+
 ### 首次运行反馈
 
 如果 LoopX 帮你跑通了第一个任务，欢迎用一分钟提交一条公开反馈（可选，无任何
@@ -374,22 +366,6 @@ loopx quota spend-slot      # 为完成并验证的 slice 记账
 另行发送不带 ID 的 CLI 汇总，不采集内容。可在设置 → 能力中心，或通过
 `loopx usage-ping disable` / `LOOPX_USAGE_PING=0` 统一关闭；
 `loopx usage-ping status` 可预览数据。详见[基础使用统计](docs/reference/usage-ping.zh-CN.md)。
-
-成功连接后应该满足：
-
-- `loopx doctor` 通过；
-- 项目具有 `.loopx/registry.json` 和 active goal projection；
-- `loopx status` 能显示当前目标、具体 user gate 和下一条 agent todo；
-- 有可见 Loop driver，或 agent 给出精确 activation 指令；
-- 本地 runtime state 被 ignore，而不是提交。
-
-Clone 安装只面向需要 live canary wrapper 的贡献者：
-
-```bash
-git clone https://github.com/loopx-project/loopx ~/loopx
-~/loopx/scripts/install-local.sh
-loopx doctor
-```
 
 ## 能力
 

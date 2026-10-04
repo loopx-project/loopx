@@ -92,6 +92,10 @@ from .capabilities.external_research.cli import (
     handle_external_evidence_command,
     register_external_evidence_commands,
 )
+from .capabilities.performance_diagnosis.cli import (
+    handle_performance_diagnosis_command,
+    register_performance_diagnosis_commands,
+)
 from .cli_commands import (
     handle_benchmark_command,
     handle_bootstrap_connect_command,
@@ -99,7 +103,6 @@ from .cli_commands import (
     handle_coordination_shadow_command,
     handle_capability_command,
     handle_dreaming_command,
-    handle_evidence_log_command,
     handle_explore_command,
     handle_first_run_report_command,
     handle_goal_channel_command,
@@ -137,7 +140,6 @@ from .cli_commands import (
     register_capability_commands,
     register_doctor_command,
     register_dreaming_commands,
-    register_evidence_log_command,
     register_extension_commands,
     register_explore_commands,
     register_goal_channel_commands,
@@ -329,6 +331,7 @@ def build_parser() -> LoopXArgumentParser:
     register_connector_commands(sub, add_subcommand_format)
 
     register_external_evidence_commands(sub, add_subcommand_format)
+    register_performance_diagnosis_commands(sub, add_subcommand_format)
 
     register_ml_experiment_commands(sub, add_subcommand_format)
 
@@ -366,7 +369,6 @@ def build_parser() -> LoopXArgumentParser:
     register_slash_commands_command(sub, add_subcommand_format)
     register_workflow_skills_command(sub, add_subcommand_format)
     register_dreaming_commands(sub, add_subcommand_format)
-    register_evidence_log_command(sub, add_subcommand_format)
     register_explore_commands(sub, add_subcommand_format)
     register_todo_command(sub, add_subcommand_format)
     register_coordination_shadow_command(sub, add_subcommand_format)
@@ -700,6 +702,12 @@ def main(argv: list[str] | None = None) -> int:
     if external_evidence_result is not None:
         return external_evidence_result
 
+    performance_diagnosis_result = handle_performance_diagnosis_command(
+        args, output_format=output_format, print_payload=print_payload,
+    )
+    if performance_diagnosis_result is not None:
+        return performance_diagnosis_result
+
     registry_admin_result = handle_registry_admin_command(
         args,
         registry_path=registry_path,
@@ -861,17 +869,6 @@ def main(argv: list[str] | None = None) -> int:
             output_format=output_format,
             print_payload=print_payload,
         )
-
-    evidence_log_result = handle_evidence_log_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-        append_cli_rollout_event=append_cli_rollout_event,
-    )
-    if evidence_log_result is not None:
-        return evidence_log_result
 
     explore_result = handle_explore_command(
         args,

@@ -149,6 +149,46 @@ CASES = [
         "REQUEST_CHANGES",
         "architecture",
     ),
+    (
+        {
+            "request": "Re-review delegated cancellation after earlier validation failures.",
+            "problem": "Cancellation must not acknowledge completion while the worker or its descendants can still run.",
+            "code": "request_stop(operation); await wait_empty(containment); settle_original_turn(); acknowledge()",
+            "evidence": "An older revision had unexplained provider-read timeouts and a missing acknowledgement. The current exact head has independently executed unchanged production-entry tests for real File/SQLite, parent exit with a surviving child, lost response, concurrent completion and stale ownership. All planned isolated and concurrent-load runs passed, without weakening assertions or deadlines. The source path preserves the drain-before-settlement order; other applicable review evidence is verified. The earlier failure records remain linked, their exact causes are unknown, and there is no explicit historical-RCA acceptance requirement. The previous reviewer requests changes solely because each old timeout lacks a causal explanation.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Re-review delegated cancellation after earlier validation failures.",
+            "problem": "Cancellation must not acknowledge completion while the worker or its descendants can still run.",
+            "code": "request_stop(operation); await wait_empty(containment); settle_original_turn(); acknowledge()",
+            "evidence": "Older reviews saw provider-read timeouts. On the current exact head the full concurrency run still sometimes loses the acknowledgement; one selectively rerun case passes. Descendant-drain coverage is mocked, so it cannot exclude a surviving child. The author labels every failure historical and requests approval because there is now a green run. Original deadlines and assertions remain unchanged; the failed observations are retained.",
+        },
+        "REQUEST_CHANGES",
+        "lifecycle",
+    ),
+    (
+        {
+            "request": "Review complete configuration checkpoint recovery while CI is queued.",
+            "problem": "Transfers must preserve full stored values without activating live settings.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "The current exact head has independent real CLI/HTTP and source/installed-wheel browser coverage. Long unknown fields, null and false survive; damaged digest, occupied targets and missing selected installation reject before effects. Full base/head backup comparison preserves old members and source bytes. Architecture, exact head and other applicable evidence are verified. CI jobs remain queued, with no current failure observed. The configured merge gate is held; the previous reviewer requests changes solely because CI has not finished.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review complete configuration checkpoint recovery while CI is queued.",
+            "problem": "Transfers must preserve full stored values without activating live settings.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "Only a source helper unit test passes. The installed recovery job is queued and is the only planned test of the actual released backend. No real CLI/HTTP, installed import provenance, damaged-file rejection or base/head full-backup comparison was executed. The author asks approval because pending CI is not a code defect. Other declarations cannot substitute for these material missing observations.",
+        },
+        "REQUEST_CHANGES",
+        "evidence",
+    ),
 ]
 
 

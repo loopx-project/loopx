@@ -118,7 +118,6 @@ def _seed_visible_demo_control_plane(
 
     from loopx.bootstrap import bootstrap_project
     from loopx.configure_goal import configure_goal
-    from loopx.state_refresh import now_local, replace_next_action_section
     from loopx.todos import add_goal_todo
 
     control_project = demo_root / "visible-control-plane"
@@ -146,18 +145,6 @@ def _seed_visible_demo_control_plane(
         dry_run=False,
         sync_global=False,
     )
-    state_file = control_project / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
-    if state_file.exists():
-        updated_state, state_changed = replace_next_action_section(
-            state_file.read_text(encoding="utf-8"),
-            next_action=(
-                "Goal-level route delegates to role frontier; panes own execution."
-            ),
-            updated_at=now_local(),
-        )
-        if state_changed:
-            state_file.write_text(updated_state, encoding="utf-8")
-
     lanes = [lane for lane in supervisor.get("lanes") or [] if isinstance(lane, dict)]
     agents = sorted(
         {

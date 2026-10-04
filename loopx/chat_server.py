@@ -20,7 +20,13 @@ from .chat import (
     redact_local_paths,
 )
 from .chat_agent import CodexChatAgentError
-from .chat_attachments import normalize_chat_image_attachments
+from .capabilities.native_chat.project_context import ChatProjectContexts
+from .chat_attachments import (
+    CHAT_JSON_MAX_BYTES,
+    CHAT_TURN_MAX_BODY_BYTES,
+    normalize_chat_image_attachments,
+    validate_chat_turn_envelope,
+)
 from .chat_actions import ChatActionService, ProtectedActionGate
 from .chat_action_store import ACTION_KINDS, ActionConflictError, ChatActionStore
 from .chat_goal_subagent_api import (
@@ -422,6 +428,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
             self.lark_app_setup_manager.close()
         if hasattr(self, "manager_return_service"):
             self.manager_return_service.close()
+        if hasattr(self, "delegation_wake_service"):
+            self.delegation_wake_service.close()
         if hasattr(self, "lark_goal_topic_runtime"):
             self.lark_goal_topic_runtime.close()
         if hasattr(self, "runtime_controller"):
@@ -480,11 +488,11 @@ class ChatRequestHandler(
             payload["delivery_state"] = delivery_state
         self._send_json(payload, status=status)
 
-    def _read_json(self) -> dict[str, Any]:
+    def _read_json(self, *, max_bytes: int = CHAT_JSON_MAX_BYTES) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or "0")
         if length <= 0:
             raise ValueError("request body is empty")
-        if length > 64_000:
+        if length > max_bytes:
             raise ValueError("request body is too large")
         return parse_strict_json_object(self.rfile.read(length))
 
@@ -515,6 +523,8 @@ class ChatRequestHandler(
         return registry, goal
 
     def _session_context(self, session: dict[str, object]) -> dict[str, object]:
+        if session.get("project_context") is not None:
+            return self.server.runtime_controller.project_contexts.session_context(session)
         if is_manager_channel(session.get("channel_id")):
             return {"project": manager_workspace(self.server.chat_store.root, str(session["channel_id"])),
                     "objective": MANAGER_AGENT_OBJECTIVE, "title": "LoopX global manager"}
@@ -551,7 +561,7 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "mode", "context_kind"}
+            unknown = set(body) - {"goal_id", "agent_id", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
             goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
@@ -562,11 +572,21 @@ class ChatRequestHandler(
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
-            if context_kind not in {"goal", "manager"}:
-                raise ValueError("context_kind must be goal or manager")
+            if context_kind not in {"goal", "manager", "project"}:
+                raise ValueError("context_kind must be goal, manager or project")
+            project_ref = _compact_text(body.get("project_ref"), limit=80)
+            if context_kind != "project" and project_ref:
+                raise ValueError("project_ref requires an ordinary project conversation")
             if context_kind == "manager":
                 goal_id = MANAGER_AGENT_GOAL_ID
                 context = self._session_context({"channel_id": "manager"})
+            elif context_kind == "project":
+                if body.get("goal_id") is not None and body.get("goal_id") != "":
+                    raise ValueError("ordinary project conversations cannot carry a Goal")
+                goal_id = None
+                selected = self.server.runtime_controller.project_contexts.resolve(project_ref)
+                context = self._session_context({"goal_id": None, "channel_id": selected["channel_id"],
+                                                 "project_context": selected["context"]})
             else:
                 registry, goal = self._registry_and_goal(goal_id)
                 context = _goal_public_context(registry, goal)
@@ -589,6 +609,7 @@ class ChatRequestHandler(
                 objective=runtime_objective,
                 mode=mode,
                 requested_endpoint=requested_endpoint,
+                **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)
@@ -674,14 +695,19 @@ class ChatRequestHandler(
             )
             return
         try:
-            body = self._read_json()
+            body = self._read_json(max_bytes=CHAT_TURN_MAX_BODY_BYTES)
             if set(body) - {"message", "client_turn_id", "attachments"}:
                 raise ValueError("unknown turn field")
+            validate_chat_turn_envelope(body)
             message = str(body.get("message") or "").strip()
             if not message:
                 raise ValueError("message is required")
             attachments = normalize_chat_image_attachments(body.get("attachments"))
             client_turn_id = _compact_text(body.get("client_turn_id"), limit=160) or uuid.uuid4().hex
+        except (ValueError, TypeError, OverflowError) as exc:
+            self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
+            return
+        try:
             context = self._session_context(session)
             runtime_objective = str(context["objective"] or context["title"])
             turn, created = self.server.runtime_controller.submit_turn(
@@ -1042,27 +1068,50 @@ class ChatRequestHandler(
     def _goal_channel_configure(self) -> None:
         try:
             body = self._read_json()
-            if set(body) - {"goal_id", "auto_notify_human_gates"}:
+            if set(body) - {
+                "goal_id",
+                "auto_notify_human_gates",
+                "auto_notify_blocked_notices",
+            }:
                 raise ValueError("unknown Goal Channel configure field")
             goal_id = _compact_text(body.get("goal_id"), limit=160)
             auto_notify = body.get("auto_notify_human_gates")
-            if not goal_id or not isinstance(auto_notify, bool):
-                raise ValueError("goal_id and auto_notify_human_gates are required")
+            blocked_notify = body.get("auto_notify_blocked_notices")
+            if (
+                not goal_id
+                or (isinstance(auto_notify, bool) == isinstance(blocked_notify, bool))
+                or (auto_notify is not None and not isinstance(auto_notify, bool))
+                or (blocked_notify is not None and not isinstance(blocked_notify, bool))
+            ):
+                raise ValueError(
+                    "goal_id and exactly one boolean notification setting are required"
+                )
             source_registry, binding_path = self._goal_channel_context(goal_id)
-            if auto_notify:
+            if auto_notify is True or blocked_notify is True:
                 extension_blocker = self._goal_channel_extension_ready()
                 if extension_blocker is not None:
-                    self._send_error(extension_blocker, status=400, error_code="extension_unavailable")
+                    self._send_error(
+                        extension_blocker,
+                        status=400,
+                        error_code="extension_unavailable",
+                    )
                     return
             packet = configure_lark_goal_channel_automation(
                 registry=source_registry,
                 goal_id=goal_id,
                 binding_path=binding_path,
-                human_gate_auto_notify=auto_notify,
+                human_gate_auto_notify=auto_notify
+                if isinstance(auto_notify, bool)
+                else None,
+                blocked_notice_auto_notify=blocked_notify
+                if isinstance(blocked_notify, bool)
+                else None,
                 execute=True,
             )
         except ValueError as exc:
-            self._send_error(str(exc), status=400, error_code="invalid_goal_channel_configure")
+            self._send_error(
+                str(exc), status=400, error_code="invalid_goal_channel_configure"
+            )
             return
         except Exception:
             self._send_error(
@@ -1073,7 +1122,9 @@ class ChatRequestHandler(
             return
         if not packet.get("ok"):
             packet["error"] = _compact_text(
-                packet.get("public_summary") or packet.get("blocker") or "Goal Channel configure failed"
+                packet.get("public_summary")
+                or packet.get("blocker")
+                or "Goal Channel configure failed"
             )
         self._send_json(packet, status=200 if packet.get("ok") else 400)
 
@@ -1303,6 +1354,13 @@ class ChatRequestHandler(
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/chat/projects":
+            self._send_json({"ok": True, "projects": [
+                {"project_ref": context["project_ref"], "title": Path(context["workspace_path"]).name,
+                 "grant": context["grant"]}
+                for context in self.server.runtime_controller.project_contexts.available()
+            ]})
+            return
         if path == "/healthz":
             self._send_json({"ok": True})
             return
@@ -1526,6 +1584,7 @@ def serve_chat(
     server.runtime_controller = ChatRuntimeController(
         store=server.chat_store,
         registry_path=resolved_registry_path,
+        project_contexts=ChatProjectContexts(resolved_scan_roots),
         manager_scope_resolver=lambda session: authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
@@ -1570,6 +1629,21 @@ def serve_chat(
     server.lark_goal_topic_runtime.start()
     from .extensions.lark.manager_returns import start_return_service
     server.manager_return_service = start_return_service(server, runtime_root)
+    from .chat_loopx_mode import DelegationWakeService
+
+    def _wake_goal_context(session):
+        registry = load_registry(server.registry_path)
+        goal = next(
+            (item for item in registry_goals(registry) if str(item.get("id") or "") == str(session["goal_id"])),
+            None,
+        )
+        if goal is None:
+            raise ValueError("goal_id was not found in the active LoopX registry")
+        return _goal_public_context(registry, goal)
+
+    server.delegation_wake_service = DelegationWakeService(
+        server.runtime_controller, goal_context=_wake_goal_context
+    ).start()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
     print("Agent boundary: local adapters, read-only sandbox, approval policy never", flush=True)

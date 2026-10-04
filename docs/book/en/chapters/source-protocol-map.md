@@ -1,14 +1,25 @@
 # Developer contribution map and protocol entrypoints
 
-Contributing to LoopX does not only mean changing the Kernel, and it does not only mean building an
-Extension. External developers can improve control-plane rules, Capabilities and Domain State, Providers,
-Hosts and Runners, projections and dashboards, documentation and fixtures, or independently distributed
-packages. The first decision is not a directory. It is the outcome you intend to ship and the contract
-that owns it.
+## Start from a rejected PR
 
-The easiest wrong way to read LoopX source is to open the largest Python module and follow function calls
-until the behavior feels familiar. That reveals implementation, but not why the behavior exists or which
-consumers must remain compatible after a change.
+Consider a teaching scenario: a contributor wants nonblocking notices not to alter publication authority. They search related text, change an operator-summary renderer, and add a passing test. The typed scope/authority owner still makes the old decision.
+
+The mistake is equating a reader of a field with the owner of its rule. Search helps locate candidates; follow callers to distinguish the module deciding legal transitions from display-only consumers.
+
+## Why "search harder, then edit" does not hold
+
+The instinctive fix is to search more carefully and read more. That only hides the problem further:
+
+- **The hit count tells you nothing.** One authority concept typically appears in a dozen modules — schema, parser, projection, renderer, decision table, test fixture — and each plays a different role in the same concept.
+- **Files move; protocol responsibility does not.** Migration moved the semantics of complete transactions to the other side, so intuition built from directory names stops working at the next release.
+- **Review sees a function inventory.** If the PR can only say "I changed these three functions," the reviewer cannot name the invariant that broke, and cannot say when to reject the change.
+- **Green tests do not certify the slice.** A regression test aimed at the module you edited will happily endorse the wrong interpretation.
+
+So the durable route is slower but stable: state which contract you are changing, then find the implementation. This chapter is that route.
+
+Contributing to LoopX does not only mean changing the Kernel, and it does not only mean building an Extension. External developers can improve control-plane rules, Capabilities and Domain State, Providers, Hosts and Runners, projections and dashboards, documentation and fixtures, or independently distributed packages. The first decision is not a directory. It is the outcome you intend to ship and the contract that owns it.
+
+The easiest wrong way to read LoopX source is to open the largest Python module and follow function calls until the behavior feels familiar. That reveals implementation, but not why the behavior exists or which consumers must remain compatible after a change.
 
 External contributors need a more durable route:
 
@@ -21,15 +32,13 @@ developer job
   -> current implementation and validation
 ```
 
-This chapter is a protocol-first source map. It is not a complete API catalog, and it does not ask you to
-memorize current function names. Its job is to help you identify the contract your Issue or PR will change.
+This chapter is a protocol-first source map. It is not a complete API catalog, and it does not ask you to memorize current function names. Its job is to help you identify the contract your Issue or PR will change.
 
 ## What you should learn
 
 After this chapter, you should be able to:
 
-- decide whether a contribution belongs to the Control Plane, a Capability, a Provider, a Host or Runner,
-  a projection or documentation surface, or Extension lifecycle;
+- decide whether a contribution belongs to the Control Plane, a Capability, a Provider, a Host or Runner, a projection or documentation surface, or Extension lifecycle;
 - record the capability id, provider id, and built-in or extension-delivered placement;
 - place protocol work in the state, work-graph, Turn/Host, or evidence family;
 - distinguish a canonical contract, read model, Host adapter, and renderer;
@@ -64,8 +73,7 @@ Expected receipt: linked decision and lifecycle event
 Validation surface: decision table plus quota integration smoke
 ```
 
-This card is more useful than “I will modify `quota.py`.” Files can move. The contract and forbidden
-outcome remain reviewable.
+This card is more useful than "I will modify `quota.py`." Files can move. The contract and forbidden outcome remain reviewable. Revisit the opening PR: had the author written `Invariant at risk: a notice cannot grant authority` and `Source of truth: typed Gate and Todo requirements`, that second line would have routed him to the owner module instead of the wording template.
 
 ## Choose the contribution outcome and placement first
 
@@ -89,27 +97,19 @@ Then choose the contribution surface from the caller-visible outcome:
 | Projection / Dashboard / Docs / fixtures | Reader-facing models, explanation, and public-safe evidence | CLI renderer, dashboard, protocol documentation, synthetic fixture | Browser write authority or another state machine |
 | Extension / package lifecycle | Independent install, activation, doctor, upgrade, rollback, and compatibility | Standalone package or a Capability Provider delivery unit | Capability domain policy or automatic authority |
 
-These surfaces can compose without collapsing into a generic “plugin”:
+These surfaces can compose without collapsing into a generic "plugin":
 
-- define a Capability and Domain State when you introduce a stable caller result, then choose a core or
-  Extension-delivered Provider;
-- preserve an existing Capability when only the external service implementation changes, and add a
-  Provider with the appropriate lifecycle;
-- build an operator dashboard from public-safe projections rather than parsing private project files or
-  inventing a browser write path;
-- keep Host continuation on the existing quota, scheduler, and Turn contracts instead of adding another
-  scheduler inside a Runner;
-- use a standalone Extension for a deterministic, zero-permission command without inventing a fake
-  Capability.
+- define a Capability and Domain State when you introduce a stable caller result, then choose a core or Extension-delivered Provider;
+- preserve an existing Capability when only the external service implementation changes, and add a Provider with the appropriate lifecycle;
+- build an operator dashboard from public-safe projections rather than parsing private project files or inventing a browser write path;
+- keep Host continuation on the existing quota, scheduler, and Turn contracts instead of adding another scheduler inside a Runner;
+- use a standalone Extension for a deterministic, zero-permission command without inventing a fake Capability.
 
-A new module, CLI option, or schema needs a real caller, active call site, or explicit compatibility
-contract. Keep hypothetical Providers, Runners, and projections in design or Todo state until the shipped
-path exists.
+A new module, CLI option, or schema needs a real caller, active call site, or explicit compatibility contract. Keep hypothetical Providers, Runners, and projections in design or Todo state until the shipped path exists.
 
 ## Five core protocol families
 
-The protocol directory grows with the product. External contributors do not need to read it alphabetically.
-Choose a family from the job you are doing.
+The protocol directory grows with the product. External contributors do not need to read it alphabetically. Choose a family from the job you are doing.
 
 ### 1. State and projection
 
@@ -119,8 +119,9 @@ This family answers:
 
 Start with:
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
-  for append-only events, replay, idempotency, and privacy partitioning;
+- `event_sourced_state_contract_v0` is retired (historical design). Current Todo state follows the
+  selected File/SQLite authority — see [the state substrate](state-substrate.md); run history and rollout
+  events keep their own record responsibilities;
 - [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
   for the typed read-only projection over the active-state workbench;
 - [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
@@ -130,14 +131,12 @@ Start with:
 
 Typical jobs:
 
-- status and the event ledger disagree;
 - the active-state parser drops a field;
 - the task graph loses lineage or truncation diagnostics;
 - retry duplicates a lifecycle effect;
 - a dashboard needs another field.
 
-The dashboard example begins with “which source owns this field?” It does not begin with a new editable UI
-state.
+The dashboard example begins with "which source owns this field?" It does not begin with a new editable UI state.
 
 ### 2. Work graph, authority, and peers
 
@@ -164,8 +163,7 @@ Typical jobs:
 - monitor and advancement precedence is wrong;
 - a Host can execute an action but lacks the required decision scope.
 
-Review authority first and implementation branches second. Words such as `approved`, `owner`, or
-`waiting for user` do not replace a typed scope relation.
+Review authority first and implementation branches second. Words such as `approved`, `owner`, or `waiting for user` do not replace a typed scope relation.
 
 ### 3. Quota, interaction, and scheduling
 
@@ -184,7 +182,7 @@ Start with:
 - [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
   for composition among Todo, Gate, quota, evidence, and scheduler state.
 
-The core contract is not one `should_run` boolean:
+The core contract is a precedence-ordered final result beyond one `should_run` boolean:
 
 ```text
 source facts
@@ -194,8 +192,7 @@ source facts
   -> scheduler_hint
 ```
 
-A user Gate can require a user response while the Agent channel still requires independent safe work.
-Collapsing both channels into a boolean damages interaction and scheduling at the same time.
+A user Gate can require a user response while the Agent channel still requires independent safe work. Collapsing both channels into a boolean damages interaction and scheduling at the same time.
 
 ### 4. Bounded Turn and Host effects
 
@@ -224,8 +221,7 @@ Keep three responsibilities separate:
 | Execute a bounded effect | Host adapter | LoopX pretending an external action occurred |
 | Judge the postcondition | Independent validator | The Host's natural-language success claim |
 
-A session handle, raw stdout, or transcript can help Host recovery. It cannot become Goal authority or
-completion proof.
+A session handle, raw stdout, or transcript can help Host recovery. It cannot become Goal authority or completion proof.
 
 ### 5. Evidence, recovery, and quality
 
@@ -244,8 +240,7 @@ Start with:
 - [Public/Private Boundary](https://github.com/huangruiteng/loopx/blob/main/docs/public-private-boundary.md)
   for evidence that may enter the public repository.
 
-Quality is not a final testing appendix. The protocol card's forbidden outcomes and expected receipt should
-determine the validation design before implementation.
+Quality is not a final testing appendix. The protocol card's forbidden outcomes and expected receipt should determine the validation design before implementation.
 
 ## Map a protocol family to a bounded context
 
@@ -262,15 +257,7 @@ Protocols define cross-module contracts. Bounded contexts identify which change 
 | `handoff` | Cross-runtime handoff, review packets, and owner routes |
 | `work_items` | Attention, selection, and operator-facing work read models |
 
-On the `v0.5.4` migration baseline, bounded context and implementation language are separate dimensions.
-Complete transactions under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` now
-have TypeScript semantic owners. Examples include Vision refresh, the local task-lease lifecycle, quota
-spend/void/monitor-poll commit, and receipt-bound scheduler follow-up. Adjacent Python facade modules may
-serve only as CLI transport, legacy projection, an explicit external Provider or Host effect, or
-writeback that has not migrated. Read the shipped baseline in the
-[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
-and trace the active request handler and caller before assigning ownership. A Python entrypoint does not
-prove that Python still owns the decision.
+On the `v0.5.4` migration baseline, bounded context and implementation language are separate dimensions. Complete transactions under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` now have TypeScript semantic owners. Examples include Vision refresh, the local task-lease lifecycle, quota spend/void/monitor-poll commit, and receipt-bound scheduler follow-up. Adjacent Python facade modules may serve only as CLI transport, legacy projection, an explicit external Provider or Host effect, or writeback that has not migrated. Read the shipped baseline in the [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) and trace the active request handler and caller before assigning ownership. A Python entrypoint does not prove that Python still owns the decision.
 
 Ask:
 
@@ -309,17 +296,9 @@ Treat repository routes as owners, not as automatic placement from a directory n
 | Operator projection | Status, frontstage, or projection owner; a renderer only consumes the typed model |
 | Documentation and validation | Owning protocol document, `tests/`, `examples/`, or a public-safe fixture |
 
-Current capability packages own their documentation and register through `catalog_entry.py`. Before
-contributing, run `loopx capability list --format json` and
-`loopx capability show <capability-id> --format json` to confirm that the capability is registered and to
-read its entry commands, Provider boundary, and durable validation. A directory or README alone does not
-prove that a capability is shipped.
+Current capability packages own their documentation and register through `catalog_entry.py`. Before contributing, run `loopx capability list --format json` and `loopx capability show <capability-id> --format json` to confirm that the capability is registered and to read its entry commands, Provider boundary, and durable validation. A directory or README alone does not prove that a capability is shipped.
 
-Code under `loopx/capabilities/<name>/` is not automatically a public Capability; it still needs explicit
-registration and a real caller contract. `loopx/extensions/` is not a bucket for every external
-integration; it owns generic Extension lifecycle, while an independently versioned Provider belongs in its
-delivery package. Keep private helpers with the nearest owner instead of promoting them to a Capability or
-Extension merely because they span several files.
+Code under `loopx/capabilities/<name>/` is not automatically a public Capability; it still needs explicit registration and a real caller contract. `loopx/extensions/` is not a bucket for every external integration; it owns generic Extension lifecycle, while an independently versioned Provider belongs in its delivery package. Keep private helpers with the nearest owner instead of promoting them to a Capability or Extension merely because they span several files.
 
 ## Function names are search anchors, not the curriculum
 
@@ -329,11 +308,9 @@ The official maintainer course and source provide current implementation anchors
 2. Confirm that the symbol still owns the same input, output, and invariant.
 3. Cite the contract and invariant in a PR; use symbol names only to help reviewers navigate the diff.
 
-In the current source, you may begin from a quota-decision builder, Turn driver, or task-graph builder.
-Those anchors can move into better bounded contexts. Your mental model should survive the move.
+In the current source, you may begin from a quota-decision builder, Turn driver, or task-graph builder. Those anchors can move into better bounded contexts. Your mental model should survive the move.
 
-If a document needs twenty function names to explain one behavior, it is probably copying implementation
-instead of teaching the protocol.
+If a document needs twenty function names to explain one behavior, it is probably copying implementation instead of teaching the protocol.
 
 ## Choose a public contribution entrypoint
 
@@ -349,7 +326,7 @@ Do not infer public work from maintainer-local state. Use public surfaces:
 
 Do not create public tasks from:
 
-- `.loopx/`, `.codex/goals/`, or live active state;
+- `.loopx/`, `.loopx/goals/`, or live active state;
 - private benchmark traces, raw Agent sessions, or verifier output;
 - internal documents, production credentials, or machine paths;
 - speculative duplication of `Maintainer-owned` live runs.
@@ -364,19 +341,17 @@ Contributions do not have to change runtime code. Public tasks can also deliver:
 - fake-Host, fake-Provider, and no-sink integration examples;
 - Extension scaffolds, manifest compatibility, and lifecycle smokes.
 
-For every artifact, state the reader-visible result, the authority that maintains the fact, and the event
-that makes the document, fixture, or compatibility claim stale.
+For every artifact, state the reader-visible result, the authority that maintains the fact, and the event that makes the document, fixture, or compatibility claim stale.
 
 ### How a community signal becomes bounded work
 
-This section and its Chinese counterpart are semantic mirrors. A material difference in cases, status,
-conclusions, or link targets is a documentation defect.
+This section and its Chinese counterpart are semantic mirrors. A material difference in cases, status, conclusions, or link targets is a documentation defect.
 
 <!-- community-casebook:signal-to-bounded-work:start -->
 <!-- community-casebook:question-before-fix -->
 
 **A question can be a contribution.** In
-[“How do I give a task a stopping point?”](https://github.com/huangruiteng/loopx/discussions/3069),
+["How do I give a task a stopping point?"](https://github.com/huangruiteng/loopx/discussions/3069),
 a user reported that a completed task kept spinning. Before declaring a product defect, the community
 separated the report into four testable hypotheses: Goal acceptance, terminal closure, quota budget, and
 monitor cadence. Useful Q&A turns an imprecise experience into a minimal diagnostic path instead of
@@ -385,7 +360,7 @@ guessing a code location.
 <!-- community-casebook:user-idea-to-contract -->
 
 **Map a methodology suggestion to existing contracts first.**
-[“Look back and retain”](https://github.com/huangruiteng/loopx/issues/2353)
+["Look back and retain"](https://github.com/huangruiteng/loopx/issues/2353)
 started from long-term user experience: an Agent should explain why its route changed and which earlier
 work remains valid. The discussion did not immediately create a second memory system. It first compared
 the idea with the evidence log, Vision acceptance, and `goal_path_delta_v0`, then identified the remaining
@@ -396,7 +371,7 @@ semantic gap. An Issue like this can improve product direction without shipping 
 **Narrow authority before claiming implementation.** The
 [Pi `task_lease_v0` task](https://github.com/huangruiteng/loopx/issues/3549)
 records the existing capability owner, Host facade, in-scope work, non-goals, target base branch, and
-validation commands before implementation. It does not turn “Pi needs lease operations” into a new
+validation commands before implementation. It does not turn "Pi needs lease operations" into a new
 scheduler, storage system, or automatic lease lifecycle.
 
 These records are learning examples, not copies of current task state. Before participating, reopen the
@@ -444,8 +419,7 @@ A meeting does not replace a versioned RFC, bounded Issue, PR review, or maintai
 
 A coherent slice can usually be described as one protocol result:
 
-> Make `decision_scope_v0` select typed repair when scope relations are missing instead of treating the Gate
-> as global authority.
+> Make `decision_scope_v0` select typed repair when scope relations are missing instead of treating the Gate as global authority.
 
 This is usually too broad:
 
@@ -462,23 +436,46 @@ source
   -> validation
 ```
 
-Do not submit only a helper in the middle of the chain. Do not add speculative enums, CLI flags, or adapters
-without a real call site.
+Do not submit only a helper in the middle of the chain. Do not add speculative enums, CLI flags, or adapters without a real call site.
 
-## Checklist
+## Cost and boundary: what this map does not cover
 
-Before entering the source, confirm:
+A protocol-first route beats guessing from directories, but it carries its own costs and has clear conditions under which it stops working.
 
-- [ ] Which contribution surface and caller outcome does this work serve?
-- [ ] What are the capability id, provider id, and delivery placement when they apply?
-- [ ] Which protocol family owns the problem?
-- [ ] What are the canonical source and primary writer?
-- [ ] Which invariant is at risk?
-- [ ] What are the legal and forbidden transitions?
-- [ ] Which bounded context owns the change reason?
-- [ ] Which public fixture or smoke proves the shipped path?
-- [ ] Is the task public and claimable rather than maintainer-owned live work?
-- [ ] Can the PR be described as one complete protocol result?
+**Cost one: locating one owner is much slower than one grep.** Walking "protocol family to invariant to bounded context to implementation anchor" means reading a protocol document, a decision table, and one real caller. For an obvious one-line fix that looks like overhead. What it buys is an explanation that survives review and survives a file move.
 
-The next chapter traces one scoped-Gate scenario through source, projection, decision, Turn, receipt, and
-fresh replay.
+**Cost two: protocol documents lag the code.** Documents are maintained by people; code is checked by CI. When they disagree, do not assume the document is right. The workable rule: a document states **responsibility ownership** (which contract owns this), and code states **current behavior** (what this release does). Resolve an ownership conflict in favor of the RFC and protocol; resolve a behavior conflict in favor of the source, and update the document as part of that same PR.
+
+**Cost three: no entrypoint tells you which file to edit.** This map supplies an order of judgment, and the final location still comes from a real call site. That is deliberate: any index that claims to name the file goes stale within a release.
+
+**Boundary one: when reading source beats reading the protocol document.** Three cases: the document does not cover the branch you hit; you suspect the read model and the actual write disagree; you need to cite a specific invariant in a PR and the document offers only a summary. Read the source then, and write what you found back into the document.
+
+**Boundary two: when reading the protocol document beats reading source.** When you are deciding authority, scope coverage, lifecycle legality, or migration ownership. Those answers do not live in one function; they may be implemented on both sides, while only one side is canonical. Reading source here is the easier way to be misled by a local implementation.
+
+**Boundary three: this map does not cover product decisions.** The priority of `Starter` and `Focused` tasks, which direction deserves investment, and whether an RFC should be accepted are not answered by a protocol map. It only guarantees that your slice is attached to the right contract.
+
+## Named failures: one real wrong landing spot
+
+The opening PR can be restated as a reproducible check. On a clean checkout:
+
+```bash
+grep -rn "waiting for user" loopx/ | wc -l
+grep -rln "required_decision_scopes" loopx/control_plane/todos/ | head
+```
+
+The first command counts hits in presentation and parsing layers. The second names the owner of scope requirements. Both can read the same concept, but only the second maintains "a notice cannot grant authority." A PR that touches only a file from the first group cannot make that invariant testable; it adds one more place that interprets it.
+
+A second named failure is quieter: editing the owner module while never checking whether a projection layer already parses the same field independently. Authority is then decided correctly, while status still reports the old blocking relation. The reader sees a Gate coverage that does not exist. Both failures get a discrimination method at the end of the next chapter.
+
+## Invariants
+
+Before entering the source, confirm these hold on their own:
+
+1. **The owner of a rule is the module that decides legal transitions, not the module that first prints words about it.** If you cannot name the protected invariant, the change is not yet located.
+2. **A PR description carries one complete causal chain: source, invariant, decision, projection or effect, receipt, validation.** A slice that can only list function names cannot be reviewed.
+3. **Documents describe responsibility ownership; code describes current behavior.** When they conflict, pick the authority by conflict type and make this PR update the other side.
+4. **Code under `loopx/capabilities/<name>/` does not prove the Capability is shipped.** Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
+5. **Placement precedes implementation.** The capability id, provider id, and built-in or extension-delivered choice come with a written reason before the first line of code.
+6. **Tasks come from public entrypoints.** Public Contributor Tasks, Issues, and fixtures are the only source of work you can participate in; live active state and maintainer-local judgment are not.
+
+The next chapter traces one scoped-Gate scenario through source, projection, decision, Turn, receipt, and fresh replay.

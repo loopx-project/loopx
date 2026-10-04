@@ -5,9 +5,33 @@ from copy import deepcopy
 from typing import Any
 
 from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
+from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 12
+REVIEW_POLICY_REVISION = 18
+
+# Reuse the existing evidence fields for publication, rather than inventing a
+# second problem assessment or treating a jargon denylist as comprehension.
+PROBLEM_EXPLANATION_PUBLICATION: dict[str, Any] = {
+    "section": "动机",
+    "fields": ["affected_caller_or_operator", "before_after_scenario",
+               "observable_outcome", "non_goals"],
+    "increment_fields": ["remaining_gap"],
+    "rule": (
+        "Write these existing problem_context fields as concise public-safe plain-language "
+        "sentences and publish their wording in 动机 before architecture and specification detail. "
+        "Name who encounters the problem and the triggering task; use one concrete before/after "
+        "scenario with the old failure and its practical cost; describe the proposed observable "
+        "improvement and this PR's boundary. Distinguish intended improvement from verified "
+        "behavior and remaining defects. For justified_increment also publish remaining_gap. "
+        "A reader unfamiliar with repository internals must understand why this change matters "
+        "without opening an issue, RFC or source file. Define necessary terms at first use; "
+        "symbols, protocol identifiers, test counts and verdicts cannot replace the explanation. "
+        "Then attach exact-head code and specification evidence in the later sections. "
+        "Publication matching checks visibility and consistency, not truth or comprehension; "
+        "the reviewer must independently judge clarity and whether the scenario is real."
+    ),
+}
 
 # A red check is an observation, not evidence that the reviewed PR caused it.
 # This contract belongs to review judgment; merge readiness still owns whether
@@ -25,7 +49,7 @@ VALIDATION_FAILURE_ATTRIBUTION = {
     ],
     "external_fields": ["independent_evidence", "retry_or_recovery_owner"],
     "rule": (
-        "Classify every required failed or skipped validation before choosing a review verdict. "
+        "Classify every currently required failed or skipped validation before choosing a review verdict. "
         "A pre-existing failure is non-blocking for review only when the same check on an "
         "immutable base and exact head has the same normalized failing identity and detail, "
         "the PR does not alter that failure's causal path, and the changed invariant has "
@@ -35,6 +59,23 @@ VALIDATION_FAILURE_ATTRIBUTION = {
         "pr_regression or unresolved and request changes. Report unrelated red checks and "
         "their recovery separately from the PR verdict: APPROVE may be correct while merge "
         "readiness remains on hold. Never relax a hard limit or required check to make it green."
+    ),
+    "evidence_scope": (
+        "The validation matrix assesses the exact reviewed head, not the union of all historical "
+        "test failures. Retain relevant earlier runs, revisions, commands and failure signatures "
+        "in the existing result/evidence text; explain which current evidence supersedes them "
+        "and why it covers the originally exposed invariant and conditions. An unexplained "
+        "historical cause alone does not require REQUEST_CHANGES when independent current "
+        "evidence is sufficient. Do not invent a causal explanation or claim the old failure "
+        "was fixed. A later green run alone does not resolve intermittency: consider the whole "
+        "bounded run set, concurrency, environment and coverage; do not select only successes, "
+        "remove assertions or loosen limits. Mark a still-material instability or coverage gap "
+        "failed or unverified, even if the latest command passed. Name the affected invariant, "
+        "present evidence gap and smallest discriminating check in the existing finding fields. "
+        "Full historical root-cause attribution is required only where it is necessary to "
+        "resolve that current risk or an explicit accepted contract requires it. Preserve "
+        "unresolved risks and separate merge gates; history is neither an automatic veto nor "
+        "permission to dismiss an existing review."
     ),
 }
 
@@ -137,6 +178,100 @@ SCOPE_COVERAGE_ASSESSMENT = {
     ),
 }
 
+# A published review speaks for an agent or a person, and a reader from another
+# operator has no other way to weigh it. This is provenance carried by the
+# result itself, not review evidence: no reviewer can "verify" its own identity,
+# so a gap here makes the result unpublishable rather than blocking the author.
+REVIEWER_DECLARATION = {
+    "actor_kinds": ["model_agent", "human_operator"],
+    "declaration_sources": ["runtime_reported", "self_reported"],
+    "fields": ["actor_kind", "declaration_source"],
+    "model_agent_fields": ["declared_model", "declared_provider"],
+    "body_marker": "Reviewer:",
+    "rule": (
+        "Every result names who wrote it. actor_kind is model_agent or human_operator. "
+        "A model_agent gives declared_model and declared_provider in ordinary "
+        "product-family wording, and the published body repeats actor_kind, model and "
+        "provider on exactly one visible `Reviewer:` line, so a reader on another host "
+        "or organization can tell a model wrote the review and weigh it without private "
+        "context. declaration_source records whether the host runtime reported the "
+        "identity or the reviewer stated it; a reviewer that cannot observe its exact "
+        "build names the family it knows instead of inventing a version. The declaration "
+        "is provenance, not a credential: it authenticates nothing, authorizes no private "
+        "access and gives the verdict no extra weight. Never put an endpoint, gateway, "
+        "account, credential or router-qualified identifier in it. When reviewer_execution "
+        "is runtime_reported, use its model, provider, reasoning_effort and observation_id "
+        "in declared_model, declared_provider, declared_reasoning_effort and "
+        "execution_observation_id. Publish runtime_reported and the effort (or "
+        "effort_unavailable) on the Reviewer line. This is the latest host-recorded Turn, "
+        "not a configured preference or proof of backend weights. CLI result checking "
+        "rereads that session; a switch requires fresh execution attribution. The bounded "
+        "read may leave active_turn_verified false; identity does not prove liveness. When the "
+        "host observation is unavailable, retain that gap and publish self_reported; do "
+        "not invent an exact build, claim runtime_reported or blame the PR author. "
+        "An offline saved-packet consistency check cannot establish current execution."
+    ),
+}
+
+# Reviewers from different operators share no context or memory; the accepted
+# specification is the one reference both sides can open independently. Map the
+# head onto it criterion by criterion instead of onto the author's narrative.
+SPEC_BASIS_ASSESSMENT: dict[str, Any] = {
+    "decision_values": ["mapped", "no_spec", "not_yet_proven"],
+    "blocking_decisions": ["not_yet_proven"],
+    "fields": ["decision", "spec_source", "reason"],
+    "spec_source_values": [
+        "accepted_rfc",
+        "accepted_contract_doc",
+        "linked_issue_or_task",
+        "review_thread",
+        "none",
+    ],
+    "mapped_fields": ["spec_ref", "spec_revision", "criteria"],
+    "published_text_fields": ["spec_ref", "spec_revision"],
+    # The repository's own documents are pinned by a full commit id; a branch or
+    # tag moves, so it cannot name the text the review judged against.
+    "commit_pinned_spec_sources": ["accepted_rfc", "accepted_contract_doc"],
+    "criterion_fields": ["criterion_id", "requirement", "disposition"],
+    "disposition_fields": {
+        "implemented": ["symbol_or_path", "validation_ref"],
+        "deferred": ["reason", "successor_or_gap"],
+        "out_of_scope": ["reason"],
+        "not_met": ["observed_gap", "minimum_repair"],
+    },
+    "blocking_dispositions": ["not_met"],
+    "rule": (
+        "Read the target repository's own accepted specification for the touched surface "
+        "before the implementation: an accepted RFC, an accepted contract or protocol "
+        "document, the linked issue or task, then a maintainer-agreed frame in the review "
+        "thread. For mapped, give spec_ref as a public path or link and spec_revision as "
+        "the immutable revision judged against, so a reviewer from another operator opens "
+        "the same text, and one criteria row per material acceptance criterion with the "
+        "specification's own identifier when it has one, the requirement as written and "
+        "its disposition at this exact head. implemented names a real symbol or path and "
+        "the validation that exercises it; deferred names the reason and the successor or "
+        "remaining gap; out_of_scope cites the specification or accepted task boundary, "
+        "not author preference; not_met names the observed gap and minimum repair and "
+        "blocks approval. Publish spec_ref, spec_revision and every criterion_id in the "
+        "review body: the body is the only part another operator reads, and a path alone "
+        "moves with the branch while the revision pins the text the review judged against. "
+        "Give spec_ref, spec_revision and criterion_id as non-empty strings: each is "
+        "published and matched against the body as a whole token, so EX-1 inside EX-10 "
+        "or C1 inside a commit id is not publication. For accepted_rfc and "
+        "accepted_contract_doc, spec_revision is the full commit id; a branch or tag "
+        "name moves and cannot pin the text. "
+        "Derive requirements from the "
+        "specification, never from the patch. When the change edits the specification it "
+        "cites, judge the criteria as accepted before this change and treat the edit as a "
+        "finding to justify; a specification rewritten to match its implementation is not "
+        "an independent reference. Do not invent criteria, promote a future or aspirational "
+        "property to a current obligation, or impose this repository's roadmap on another "
+        "repository. With no written specification use no_spec, spec_source none and a "
+        "reason; problem_context remains the delivery judgment. An unread or unavailable "
+        "specification is not_yet_proven."
+    ),
+}
+
 CODE_AREAS = {
     "product_runtime",
     "app_or_ui_surface",
@@ -210,7 +345,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             _section(
                 "动机",
                 floors["动机"],
-                "Use `problem_context`: verified goal basis, old behavior, before/after outcome and delivery verdict. Explain outcome_impact on sustained progress and the user journey, including accepted tradeoffs or scoped inapplicability. Distinguish completing the scoped goal from a justified increment; explain why this is a complete useful slice, not just why the code works.",
+                PROBLEM_EXPLANATION_PUBLICATION["rule"] + " Use verified problem_context, not author claims alone. Explain why doing nothing leaves a real problem and why this is a complete useful slice. Put the specification reference and criterion mapping in 具体改动, and delivery verdict/outcome_impact in 我的整体评价; keep the opening understandable on its own.",
             ),
             _section(
                 "改动思路",
@@ -220,7 +355,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             _section(
                 "具体改动",
                 floors["具体改动"],
-                "Use `changed_line_classification` and `symbol_map`. Code changes require `### 关键代码讲解` for 2-5 behavior-bearing exact-head symbols; docs-only changes use `### 关键内容讲解`.",
+                "Use `changed_line_classification` and `symbol_map`. Code changes require `### 关键代码讲解` for 2-5 behavior-bearing exact-head symbols; docs-only changes use `### 关键内容讲解`. Cite problem_context.spec_basis.spec_ref and map each criterion_id to implemented/deferred/out_of_scope/not_met at this head, or state that no written specification exists.",
             ),
             _section(
                 "对主干的风险",
@@ -236,6 +371,8 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
         "review_order": _review_order(key_files),
         "output_hint": (
             "Render the verified structured result using the five sections. "
+            "Open the body with one `Reviewer:` line (reviewer_declaration.body_marker) "
+            "carrying result.reviewer's actor_kind, model and provider. "
             "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
         ),
     }
@@ -245,11 +382,16 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
     return {
         "schema_version": "pull_request_review_execution_contract_v2",
         "policy_revision": REVIEW_POLICY_REVISION,
+        "approval_closeout": approval_closeout_contract(),
         "purpose": (
             "Define the evidence that must exist before a detailed review verdict; "
             "host skills route this contract but must not reimplement it."
         ),
         "evidence_status_values": ["verified", "unverified", "not_applicable"],
+        # Provenance and spec binding travel with every result, so a host skill
+        # routes them from here instead of inventing its own wording.
+        "reviewer_declaration": deepcopy(REVIEWER_DECLARATION),
+        "spec_basis_assessment": deepcopy(SPEC_BASIS_ASSESSMENT),
         "decision_procedure": {
             "order": [
                 "establish_goal",
@@ -316,6 +458,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
         "evidence_requirements": [
             {
                 "evidence_id": "problem_context",
+                "publication": deepcopy(PROBLEM_EXPLANATION_PUBLICATION),
                 "outcome_impact": OUTCOME_IMPACT_ASSESSMENT,
                 "required_when": "always",
                 "verdict_values": [
@@ -335,6 +478,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "smaller_fix_analysis",
                     "observable_outcome",
                     "outcome_impact",
+                    "spec_basis",
                     "non_goals",
                 ],
                 "fields_by_verdict": {
@@ -762,9 +906,17 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "ci_policy": "required" if wait_for_ci else "not_consulted",
                 "wait_for_ci": wait_for_ci,
                 "validation_source": (
-                    "Repository-native local validation and final CI observation are required. "
-                    "Attribute failed checks before judging the PR; an unrelated red check "
-                    "may hold merging without requiring code changes on this PR."
+                    "Repository-native validation must establish the changed invariants at the "
+                    "reviewed head. Observe currently available CI without making completion "
+                    "or success of every remote job a prerequisite for APPROVE. "
+                    "repository_required_checks records the validation required for the code "
+                    "judgment; required means review evidence, not GitHub branch protection. "
+                    "Record pending remote jobs separately as diagnostic rows with required=false "
+                    "when independent current evidence already covers their relevant invariants. "
+                    "If a pending job is the only decisive coverage, keep that invariant's row "
+                    "required and unverified. Attribute current failures before judging the PR. "
+                    "Pending CI alone does not justify REQUEST_CHANGES; merge readiness still "
+                    "enforces its configured CI policy."
                     if wait_for_ci else
                     "Repository-native local validation at the reviewed head. "
                     "Do not fetch, poll, or wait for GitHub CI. Missing, pending, "
@@ -1115,7 +1267,9 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "pre-existing failure or external infrastructure, and the PR's changed "
                 "invariant is covered. Record the separate merge-readiness hold; do not ask "
                 "this PR to repair unrelated code or budgets. Unattributed, introduced, or "
-                "worsened failures still block approval."
+                "worsened current failures still block approval. Apply validation_matrix's "
+                "evidence_scope to earlier observations; historical root-cause completeness "
+                "is not an independent approval gate."
             ),
             "open_pr_unjustified_delivery": (
                 "REQUEST_CHANGES when problem_context is off_goal, fragmented or "
@@ -1276,6 +1430,9 @@ def build_review_plan(item: Mapping[str, Any]) -> dict[str, Any]:
             "findings": [],
             "residual_risk": "",
             "review_body": "",
+            "reviewer": {field: "" for field in (
+                *REVIEWER_DECLARATION["fields"], *REVIEWER_DECLARATION["model_agent_fields"],
+            )},
             "verdict": "unverified",
         },
     }
@@ -1342,8 +1499,9 @@ def build_agent_response_contract(*, wait_for_ci: bool = True) -> dict[str, Any]
             "Before evidence commands, obey pull_requests[].review_action_kind. A null action stays in pull_requests inventory but is excluded from review_sequence, carries no execution artifacts, and remains readback-only; generic re-review wording selects the PR but does not force duplicate evidence for an already concluded or merged no-action row.",
             "Execute each non-null pull_requests[].review_plan against the shared review_execution_contract before drafting prose.",
             "Do not infer verified evidence from title, labels, changed-file counts, metadata_risk_hint, or green CI alone.",
-            ("Observe final CI in addition to repository-native local validation, then attribute red checks before judging this PR; review approval and merge readiness are separate." if wait_for_ci else "Do not fetch, poll, or wait for CI for review or merge readiness. repository_required_checks means repository-native local validation; attribute base-equivalent failures and keep missing affected-invariant evidence blocking."),
+            ("Observe available CI alongside repository-native validation. APPROVE does not require every CI job to finish or succeed when independent current evidence covers the changed invariants; pending CI is a separate merge-readiness hold. Keep missing decisive coverage and material current failures blocking, and apply validation_matrix's evidence_scope to history." if wait_for_ci else "Do not fetch, poll, or wait for CI for review or merge readiness. repository_required_checks means repository-native local validation; attribute base-equivalent failures and keep missing affected-invariant evidence blocking."),
             "Recheck the exact remote head before verdict and publication.",
+            "After publishing and reading back APPROVE, execute review_execution_contract.approval_closeout; approval alone does not clear another reviewer's effective blocking review.",
             "Render the verified result through a non-null pull_requests[].review_template; host skills must not maintain a competing depth checklist.",
         ],
     }

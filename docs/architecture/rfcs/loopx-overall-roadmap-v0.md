@@ -8,7 +8,7 @@
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
-**Local authority retirement checkpoint (2026-09-28).** R5/T4 now use the [reconciled deletion and qualification cadence](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md). Reviewed local cutover and native drain are merged; whole-Goal execution/consumer closure, profile qualification and default-entry adoption still have separate exits. Delete a replaced writer with its last caller; retain necessary migration/receipt readers. Existing GoalRef/Turn PRs own their affected consumers. R6 PostgreSQL service qualification is separate, and the historical PR-count estimates are not current forecasts.
+**Local authority closeout checkpoint (2026-10-02).** R5/T4 use the [current validation → migration → deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02), rechecked at `9b0486dc1`. Close existing #5413/#5466/#5283, qualify one installed reversible candidate, then decide a bounded opt-in cohort separately from release-default admission. Canonical creation, legacy-policy migration and last-writer deletion have named exits; delete replaced Python owners with their last callers. R6 remains separate. No fixed remaining-PR count or historical test count certifies completion.
 
 Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
 is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
@@ -74,12 +74,12 @@ P0 blocks correctness or continuity in the current user journey. P1 enables repe
 | **S2 Typed kernel and durable authority · P0/P1** | Effect/Todo/quota/recovery owners, TS migration and store candidates exist; writer cutover/provider promotion remain incomplete | Migrate one real transaction/recovery lifecycle at a time, with semantic counterexamples before cutover/deletion. R1 correctness precedes migration volume. Require real backend, concurrency/fence, ambiguous commit, retention/export recovery, bridge costs and D1–D3 evidence |
 | **S3 Goal planning and multi-Agent collaboration · P0/P1** | Vision/replan, peer frontiers, claim/lease, directory, manager_context and explicit continuation exist; general handoff/shared amendment remain incomplete | R2 proves peer dependency; R3 closes parallel joins, pipelines, help/review, continuation and automatic return; R4 delivers one intent-preserving amendment class. Cover cycles, invalidated inputs, rejection/deferral, lease transfer, competing bases and aggregate acceptance |
 | **S4 Runtime/host/daemon · P0/P1** | Attached/managed, Turn, broker, runtime connectors and Desktop repairs exist; registration does not establish executable capacity | Qualify multi-Turn supervision for one real supported combination; restart/cancel/drain/stop retain work and fence old executors. Then expand host parity, unique service-profile ownership, clean installation and upgrades; show unsupported adapter capabilities |
-| **S5 Frontend, Lark and human interaction · P0/P1** | Local chat, settings, proposals and partial Goal Channel verticals exist; shared audience/session/work readback needs qualification | One journey spans settings, work graph, handoff, blockers, cost, corrections, artifacts and return. Shared typed projections; reconnect/repeated-click/stale/original-route cases. [Live team workspace](live-team-workspace-v0.md) makes exchange, revision and original-coordinator continuation visible. Then intelligent review, keyboard accessibility, bilingual terminology, actionable errors and offline degradation; interrupt only for actual decisions |
+| **S5 Frontend, Lark and human interaction · P0/P1** | Local chat, settings, proposals and partial Goal Channel verticals exist; shared audience/session/work readback needs qualification | One journey spans settings, work graph, handoff, blockers, cost, corrections, artifacts and return. Shared typed projections; reconnect/repeated-click/stale/original-route cases. Realtime IM reuses Chat/Turn: isolate independent conversations on one listener, then qualify ordinary DM onboarding, explicit role selection, busy-session admission, provisional progress, media and exact permission callbacks through [the shared operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). [Live team workspace](live-team-workspace-v0.md) makes exchange, revision and original-coordinator continuation visible. Its [Work-scale map track](live-team-workspace-v0.md#11-delivery-order-and-relationship-to-aggressive-r2-progress) draws each Goal's typed Todo relations first (W1), then live state and outputs on the same nodes. Then intelligent review, keyboard accessibility, bilingual terminology, actionable errors and offline degradation; interrupt only for actual decisions |
 | **S6 Materials, evidence, memory and learning · P1** | Authority registry, material lifecycle/frontier, decision context, reward memory and turn recall exist; direction baseline and parts of attribution remain proposed | Connect material revision→same-Agent read→decision reference→artifact/outcome. Expose expiry/revocation/source loss and forgetting policy. Handoff preserves decision-relevant summaries and authorized artifacts; qualify OpenViking/Obelisk as optional providers. Prove causal utility with controls, not relevance alone |
 | **S7 Budget, scheduling and fleet scale · P0 observation/P1–P2 expansion** | Quota/scheduler and partial usage aggregates exist; full provider cost, distributed reservations and hundred-Agent concurrency need evidence | Separate configured budget, admission, consumption and estimates; unknown is not zero and replay cannot double-charge. R7 pagination/bounded summaries and [complete-history transport](typescript-control-plane-migration-v0.md), including refresh/replay/single-debit evidence beyond the RPC limit; provider/host limits, fairness, backpressure, event wake and isolation; report registration/activity/throughput and cost per accepted outcome separately |
 | **S8 Capabilities, extensions and domain integration · P1/P2** | Capability catalog, extension lifecycle, hooks, engineering/research/content/office capabilities and computer-use contracts exist | First exercise the shared control plane with existing issue-fix/PR-review and material/research callers. Every provider has readiness/version/permissions/default-off/uninstall/rollback/isolation and real-entry evidence. New domain effects start with one simulated operation, not a marketplace or workflow DSL |
 | **S9 Identity, authority, privacy and trust · continuous P0/P1–P2 remote** | Public/private scope, capability gates, fencing and confirmation contracts belong to existing owners | R1/R3 cover sender/audience/artifact scope and stale authority; R6 authenticates tenant/Goal/actor/host, rotation/revocation and least privilege. Qualify credential custody, untrusted tool/document inputs, dependency supply chain, audit retention/deletion and vulnerability response through real paths; roles/messages/memory mint no write authority |
-| **S10 Reliability, diagnostics and operations · P0/P1** | Recovery/canary, read-only diagnostics prototype and DSH event adapter exist; C0/C1, overhead and full operations qualification are open | Failure classification→observable state→recovery drill→regression prevention; process/storage/network/delivery failures and data growth. Accepted Chat requests must settle even when runtime preparation fails before dispatch; qualify missing runtime assets, stop races and recovery without replay under [the shared conversation operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). Use [bounded repair lookup and targeted diagnostics](../../../skills/loopx-self-repair/references/targeted-diagnostics.md) to reduce redundant reads above the provider boundary; measure backend-specific cold/warm reads, writes and lock waits separately. Freeze SLO/RPO/RTO/capacity/retention boundaries and measure before qualification. Runbooks include upgrade, restore, stop and human takeover; test counts do not prove recovery |
+| **S10 Reliability, diagnostics and operations · P0/P1** | Recovery/canary, read-only diagnostics prototype and DSH event adapter exist; C0/C1, overhead and full operations qualification are open | Failure classification→observable state→recovery drill→regression prevention; process/storage/network/delivery failures and data growth. Accepted Chat requests must settle even when runtime preparation fails before dispatch; qualify missing runtime assets, stop races and recovery without replay under [the shared conversation operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). A context/provider read returning after the stop wait must honor the persisted Turn and exact Session claim: no late provider dispatch or handoff, even when a fresh request has completed. This bounded GQ08 repair does not certify upstream interrupt fidelity or effects already admitted elsewhere. Use [bounded repair lookup and targeted diagnostics](../../../skills/loopx-self-repair/references/targeted-diagnostics.md) to reduce redundant reads above the provider boundary; measure backend-specific cold/warm reads, writes and lock waits separately. Freeze SLO/RPO/RTO/capacity/retention boundaries and measure before qualification. Lark transport backpressure and drain retain the App consumer lease; unpersisted buffered lines are not accepted work or completion receipts. Runbooks include upgrade, restore, stop and human takeover; test counts do not prove recovery |
 | **S11 Evaluation and scientific research · continuous P1/P2 research** | Benchmark toolkit, Explore, long-horizon portfolio and ten frontier-science tracks have designs/partial implementations | Pin native/passive/governed arms, model/harness/budget/task split and evaluator; report native scores, cost, failures, attention and uncertainty. Prioritize sequential evidence, continuation and stride; memory, formal kernel, curriculum/evolution, active experiments and multiscale state follow T01–T10 gates without automatic production treatment |
 | **S12 Release, developer experience and community governance · P0 hygiene/P1** | Install/source validation, registration, DCO/PR, test layers, contributor routes and bilingual docs exist | Qualify first work and upgrade/rollback from clean machines/release artifacts; host/OS support follows the release contract. Reduce localization/test/review effort for useful changes; preserve exact-head evidence, fixtures, compatibility, maintainer routing and contributor credit; retire duplicate protocols/stale evidence |
 | **S13 Adoption, ecosystem and sustainability · P1 discovery/P2 pilots** | Public adoption loop, showcases, licensing/governance and observer-first product contract exist; paid PMF is unproven | Gather independent first/repeat usage and exit reasons; reproducible cases and pilots with fixed budgets/acceptance/rollback. Retain reusable adapters/delivery guides. Account for model/compute/storage/support and maintenance costs; only repeated demand justifies commercial hosting/support/distribution decisions, with no invented SLA or open-source-term change |
@@ -305,6 +305,7 @@ subsystem was not performed. Section 8 records the focused audit.
 
 | RFC | Stream | Current boundary | Next slice / acceptance |
 | --- | --- | --- | --- |
+| [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md) | S2/S3/S10 | Design only; local conformance is reusable evidence | P1: one typed boundary, then ownership/writeback/settlement fault sequences and conditional progress; production entrypoint and real-backend evidence |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.md) | S2 | Accepted; core implemented, adoption continues | P0: reuse effect/recovery, cover R1 partial commits; retain domain-local replan ACK |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | S2 | Accepted; whole-transaction migration active | P0/P1: R1–R4 hot transactions first; T0–T4 caller/deletion/cost evidence; no full rewrite prerequisite |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | S2 | Accepted; registry/inventory/drift and subsequent typed slices exist | P1: converge by semantic role and active producer/consumer; no name-based enum merging; review schema changes separately |
@@ -312,7 +313,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | S3 | Accepted; Stage 1/2 and owner acceptance readback; full intent/commit incomplete | P1: #3836 governed acceptance amendments and peer adoption; R4 CAS/lease impact, conflicts and lost-response receipts |
 | [Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | S3/S6 | Accepted; material read-model proposal | P1: #2831 direction-material revision to acceptance basis linkage; same-Agent/current-revision fixtures |
 | [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | S3/S5 | Accepted; read-model proposal | P1: derive milestone/guard/next transition from typed facts; no process engine |
-| [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | S1/S3 | Accepted; partial profile/intake, M1–M4 not fully qualified | P0→P1: R1/R2 real teams, R3 semantic peer work and durable return; continuation matrix and A1–A20 |
+| [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | S1/S3 | Accepted; shared request assessment/Core-link context and scoped worker linking qualified; M1–M4 not fully qualified | P0→P1: owner → steward → managed Agent authority inheritance, receiver-owned planning, actual work and original-route return in R1/R2 real teams and R3; continuation matrix and A1–A20. An authorized steward group retains its owner's managed read/effect scope; do not reduce it merely because the entrypoint is external |
 | [Manager runtime profile v0](manager-runtime-profile-v0.md) | S1/S4 | Accepted; private Codex profile exists, general qualification incomplete | P0: real tools/session/recovery and scoped authority; runtime labels do not qualify behavior |
 | [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md) | S4 | Selection record; bounded runtime/team-card evidence | P0: R2 on qualified bindings; qualify harness/model/profile/host separately, not from one smoke |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | S3/S6 | Stage A shipped; filename does not imply general memory substrate | P1: R3 reuses prepare/inspect/adopt; retain same-host/unleased limits until replacement qualifies |
@@ -330,8 +331,8 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Human Attention Wishlist v0](human-attention-wishlist-v0.md) | S5/S11 | Accepted; Held | P3: reopen only on repeated second real need; sidecar cannot alter gates/quota/scheduling |
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 + R2/R3 | Accepted; canonical operation seam exists, managed native transport under owner review | Qualify source-context vs admitted-executor separation, exact human approval→one-shot consumption→domain evidence→original-route return; owned Turn/delegation need not await Desktop authentication. Live approval/effect/wakeup remain unqualified; finance provider stays separate |
 | [Provider-side authorization at effect acceptance (v0)](provider-effect-acceptance-v0.md) | S8/S9, supporting S2/S4 | Accepted design only; no runtime integration or qualified provider | M1: controlled provider and deterministic revoke/crash/replay conformance; strict production wiring remains gated by exact Goal lifetime, receipt retention and independent provider qualification |
-| [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Accepted; partial M2 composition/successor | P1: independently verify observation/write-time gate/closure basis; defer inferred triggers and model selection |
-| [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Accepted; M1 read-only observation | P2: matched shadow stride experiment with costs/events; no direct production cadence change |
+| [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Accepted; partial M2 composition/successor; §11.5 result/adoption refinement proposed | P1: one real provider result -> scoped interpretation -> adopted step/successor, exact lineage/shared write gate and packaged readback; qualify shadow before opt-in, retain composition gaps; defer inference and M4 portfolio ranking |
+| [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Accepted; M1 read-only observation; §7.5 checkpoint/monitor binding proposed | P2: matched shadow decision timing with observer/model costs and lost-result recovery; preserve per-Turn settlement, no default cadence change |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.md) | S1/S3/S6/S8/S11 | Accepted; read-only settings/context inspection slice | P1: correction→fresh-session decision across existing owners, then demand-driven composition and measured method evolution; no universal memory database or second opt-in |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | S6/S11 | Accepted; Stage 1 verified-outcome binding | P1 read-only reducer→P2 pilot: distinguish recalled/applied/utility, no automatic ranking change |
 | [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | S6/S8 | Accepted; optional read-only evaluation | P2: explicit gap recall with resolvable provenance/access, off-path parity; no work authority |
@@ -430,6 +431,10 @@ Use scoped discovery and permitted recovery before requesting manual IDs.
 Private-owner discovery is broad by default across registered local resources
 and authorized connected sources; a delivery allowlist, missing live binding or
 bounded first page must not hide an otherwise visible responsible Agent.
+Sender-bound local context delivery now defaults to active registered recipients
+across Goals, with current/future registration and explicit revocations resolved
+by the shared TS source owner. Selected-audience enrollment remains explicit;
+this is neither a remote grant nor proof of worker adoption.
 Keep discovery, audience evidence access, delegation and execution readiness
 separate, as specified by [manager §5.5](capable-manager-semantic-handoff-v0.md#55-responsibility-discovery-and-receiver-owned-planning).
 
@@ -449,6 +454,29 @@ negative cases and per-surface evidence. All live case results start unqualified
 Keep existing R/G/M/A identifiers and canonical Todos; do not create a parallel
 roadmap, scheduler or achievement ledger. Release claims require observed
 results, not this plan or merged prerequisite PRs.
+
+### Goal lifetime across creation and small-team delivery
+
+R1–R3/G1 adopt the [Goal-instance RFC's product integration path](goal-instance-identity-and-orphan-recovery-v0.md#product-integration-through-existing-roadmap-journeys)
+through the existing [golden-query lifecycle variant](../../product/use-cases/steward/golden-queries.md#goal-lifetime-creation-collaboration-and-recovery).
+Prioritize GQ01/02 creation and Agent reuse, GQ05/11/12 dependent delivery and
+review, then GQ08/09 correction/stop/resume as one small-team journey. Distinguish
+ordinary continuation within one Goal from explicit retirement and same-alias
+recreation: registered Agent, host session/execution generation and work attempt
+remain separate identities. Old work must not settle a successor's quota,
+complete its work or enter its accepted synthesis; current and unrelated work
+must still progress and return to the initiating conversation.
+
+R5 lifetime/recovery delivery stays with #5206; R1–R3 retain entry, receiver
+adoption, independent acceptance and return. #5389 qualifies the quota owner,
+not the whole journey. Run the ordinary pilot on a supported profile; qualify
+the isolated recreation variant only after the selected profile's M2/M3 gates,
+plus M4 where recovery is used. Activation and `execution_authority: false`
+holds remain. P1 adds GQ15 budget allocation and orphan recovery at create/connect;
+P2 adds GQ16 authenticated cross-host recovery. Packaged App and independent CLI
+readback come first, with Lark separately qualified. These refine existing
+acceptance, without adding a roadmap milestone or treating a prerequisite merge
+as product completion.
 
 ### Collaboration and Handoff Between LoopX Agents
 
@@ -575,6 +603,62 @@ bounded R2 recovery slice, not runtime provisioning or G1 completion; caller
 admission, fresh task derivation and frontend/Lark qualification remain open.
 中文：异常读回区分本次调用未知副作用与原 Turn 的持久观察/待核对效果，只完成
 R2 的一个恢复切片；调用方准入、新任务生成与前端/Lark 验收仍未闭环。
+
+[PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
+S2/S10 read-preview cost slice. Summary and succession validation share the
+existing TS owner request; empty succession skips transport. Read models are
+isolated from mutation adapters, and unselected report, Lark, extension and Host
+routes load lazily. Compatibility exports retain the original owner objects;
+complete provider facts, counts, ordering and acceptance remain authoritative.
+Only the long-lived MCP service reuses a private read-only Python CLI worker,
+under the existing TS Host supervisor. Each request re-enters the original
+CLI/Turn owner with fresh authority and validation reads. CLI and Goal Chat HTTP
+retain fresh subprocesses; execution, resume and mutations keep their existing
+leased transport. Fixed workspace/registry/runtime/Goal/Agent/Todo partitions,
+source/environment invalidation, 60-second requests, 128 requests, 30-second idle
+and five-minute lifetime limits bound the worker. A confirmed ordinary retirement
+can replace the worker for an unaccepted request within the original deadline;
+accepted-request failures and uncertain cleanup never permit replay. Source
+metadata remains complete and fresh; directory-entry traversal reduces caller
+IO without caching authority or results. Git-root reuse is confined to a single
+fresh observation. Projection discovery still rejects ambiguous mirrors and
+never selects a machine default or migrates state.
+
+Qualification follows the frozen
+[caller-path protocol](../../reference/local-delegation.md#preview-performance-qualification--预检性能验收),
+with all original functional cases, exact complete-result parity, unchanged
+fixtures and six alternating pairs per File/SQLite provider. Historical failed
+experiments remain failed: at `b7cb2dc3`, File's added cold maximum exceeded the
+one-second allowance, although warm/sequence savings and SQLite passed. The
+current repair also closes reproduced idle/lifetime retirement races. Its final
+head needs independent qualification; fewer imports/RPCs or one fast sample are
+not acceptance. Current results and exact head belong in the PR's validation
+record. Sustained R2, real caller adoption, cold-CLI/p95 qualification and provider
+admission remain separate open acceptances; this PR does not retire Python
+planning or establish a machine default.
+
+中文：
+[#5283](https://github.com/loopx-project/loopx/pull/5283) 是拟交付的 S2/S10
+只读预检成本切片：摘要与继承验证共用既有 TS owner 请求，空继承行跳过传输；
+读模型与写适配器分离，未选中的报告、Lark、扩展及 Host 路由延迟加载。兼容导出
+保持原 owner 对象身份，完整源事实、计数、排序与当前验收仍是权威。
+只有长驻 MCP 服务复用由既有 TS Host 监督的私有只读 Python CLI worker，每次
+重新进入原 CLI/Turn owner 并新读权限与 validator；CLI 与 Goal Chat HTTP 保留
+fresh subprocess，执行、恢复和写入沿用原租约传输。固定 workspace/registry/
+runtime/Goal/Agent/Todo 分区、源码/环境失效、单次 60 秒、最多 128 次、空闲 30 秒
+及总寿命 5 分钟形成边界。确认正常退役且请求尚未接收时，才可在原截止时间内换一次
+worker；已接收请求失败或清理不确定不允许重放。源码元数据仍完整新读，目录条目
+遍历只减少调用方 IO，不缓存权限或结果。Git 根目录只在同次新鲜观测内复用。
+投影发现仍拒绝歧义镜像，不选择机器默认、不迁移状态。
+
+按既定[调用路径标准](../../reference/local-delegation.md#preview-performance-qualification--预检性能验收)
+保留全部原功能案例，核对完整结果相等、fixture 未变及每个 File/SQLite provider
+六组交替配对。旧失败保持失败：`b7cb2dc3` 的 File 冷读最大值新增超过 1 秒，虽热读、
+序列净节省及 SQLite 已通过。本次还修复了已复现的空闲/寿命退役竞争，最终头须
+独立验收；导入/RPC 减少或单次加速不算验收。确切头及当前结果由 PR 验证记录维护。
+R2 持续运行、真实调用方采用、冷 CLI/p95 与 provider 准入仍是独立开放验收；
+此 PR 不代表 Python 规划退役或机器默认切换。
+
 The same owner-local panel now opens current validated artifact text and its
 version/source identifiers, accepts feedback through the original coordinator
 inbox and exposes coordinator pause with its actual scope. Stale reads clear prior
@@ -622,10 +706,41 @@ Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
 
+**S1/S5 attention checkpoint.** Local steward/Goal Turns now receive canonical
+blocker and concrete owner-request facts without a Lark connection. The shared
+TS read model coalesces one Todo's blocker/decision; common content adapters and
+blocker collection serve local intake and external transport. This closes a
+Turn-preparation evidence gap. Existing external sends now use configured,
+restricted steward synthesis, with saved-body retries and same-blocker coverage.
+This does not close local proactive presentation or G1/G2 acceptance.
+Presentation Stage 2 and the [Goal Channel contract](goal-channel-collaboration-v0.md#local-steward-intake-and-optional-channel-delivery)
+retain material-delta admission, existing-budget wake, semantic synthesis,
+presented/read/recovery receipts and independently authorized sink delivery.
+Qualify one no-channel blocker/fallback/owner-decision/recovery journey through
+the original packaged conversation before claiming smart automatic notices.
+Include the [worker notification variant](../../product/use-cases/steward/golden-queries.md#worker-notifications--负责人主动找你):
+source-created facts must reach steward intake and the user's current conversation
+without relying solely on a provider Bot mention. History provenance retention is
+a bounded adapter repair; it does not establish proactive intake or receiver
+adoption. Reuse the existing Stage 2/R3 owner for source revisions, audience,
+budget, delivery/recovery and resolved-request suppression. App presentation is
+the first acceptance surface; connected-host and Lark delivery are separately
+qualified rather than inferred from a successful group send.
+
 - **Owner:** manager RFC M2/M3; migrate existing `manager_context` request/tracking/return into one typed collaboration transaction, incorporating the #4094 adapter.
 - **Delivery:** preserve purpose, decisions, constraints, evidence references and expected return. Receivers independently adopt/defer/reject/replan. Accepted work, committed result and delivered answer are separate facts; existing outbox provides automatic return.
 - **Exit:** actual manager→worker and worker→worker callers; follow-up messages, lost source session, oversized answer, duplicate callback, successful send with lost ACK and transport restart. CLI, packaged frontend and Lark read back the same result with audience isolation. Ordinary already-authorized work gains no second confirmation.
 - **Migration/rollback:** characterize first, record old writer/reader mappings and deletion payoff; disabling new production must leave old requests drainable. Do not retain two writable lifecycles.
+
+The GQ08 App correction path now retains inline adjustments and ingress identity
+across view changes/reload through the same TS client cache as the composer.
+Restoration never dispatches work, and a terminal Turn cannot inherit a new
+Turn's target. Shared conversation ordering keeps the original request before
+its pending work even when durable admission timestamps arrive later; accepted
+corrections retain their session identity and creation time. Packaged recovery,
+blocked storage, coexisting drafts and real
+Chat ingress/store regression are bounded evidence; live recipient adoption,
+installed readback and Lark correction still belong to R3 qualification.
 
 R3 also qualifies the handoff RFC's hierarchical A6/A8/A13 extension: a managed
 worker requests, validates and integrates another peer's artifact before returning
@@ -646,12 +761,24 @@ callback; neither may appear as work completed or a second user-visible reply.
 This uses the R3 collaboration owner and current managed Turn wake instead of
 a separate steward scheduler.
 
+For App continuity in GQ07–GQ09, qualify chosen Manager/Goal view restoration
+through reload and browser Back/Forward using the existing typed route and
+draft owner. Keep source/Goal identity and prove navigation causes no work
+mutation or Turn replay. This bounded presentation qualification does not
+close R3's receiver-adoption, steering or original-route return acceptance.
+
 R3 entry qualification also covers ordinary human messages in an explicitly
 configured steward group without a mention. The shared TS admission rule owns
 trigger semantics; Lark supplies provider identity and the existing inbox owns
 deduplication and return. App settings select and read back the trigger per
 connection. External host-tool permission and sender-bound delegation remain
 separate gaps; receiving a request does not establish execution authority.
+
+Resolve source context before routing: a short reply retains the exact
+same-conversation parent, with missing and truncated material explicit. TS owns the bounded context projection;
+Lark transport and the private inbox preserve provider ancestry without granting
+instruction or operation authority. Real store/protocol fixtures cover ingress
+and replay; installed interpretation and original-route result remain R3 gates.
 
 Before choosing a recipient, the shared conversation must resolve the desired
 outcome against relevant current evidence. Already-satisfied requests return the
@@ -684,15 +811,19 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 - **Owner:** TS T0–T4 and shared-authority D1–D3; retain their numbering and gates.
 - **Selection:** prioritize an entire hot-path transaction or recovery lifecycle used by R1–R4. Record before/after callers, owners, crossings, actual deletions and performance. Stop adding per-field Python→TS RPCs; do not rebuild the merged Todo update.
 - **Delivery:** qualify full-source reads, one-way Markdown projection, event/receipt retention, restart recovery, capacity and long-term cost on the selected local profile. Source failure cannot fall back to legacy. R1 cannot put large plan bodies into the coordination head.
-- **Exit:** affected real CLI/backend, immutable baseline versus candidate comparison, negative/mutation coverage, three-arm rehearsal and applicable D2 soak of at least ten days. D3 retains explicit cutover approval. This audit runs no new soak and promotes no provider.
+- **Exit:** use shared-authority Section 7.2's separate decisions for a bounded change, reversible opt-in cohort and released default. Each requires affected real CLI/backend and independent baseline/negative/recovery evidence at its own scope. Formal D2 retains applicable volume and at least ten-day evidence; a cohort need not wait for that certificate. D3 retains explicit cutover authority. This plan runs no soak or provider promotion.
 - **Rollback:** reviewed fenced export/import and schema-aware downgrade; replacing a binary cannot restore old write authority.
 
-The [Goal instance/recovery proposal](goal-instance-identity-and-orphan-recovery-v0.md)
-adds a bounded R5 dependency for R2/R3 retirement and late-result safety. Its M0
-codec is shipped; lifetime admission, commit fencing and recovery are not. Reuse
-TS transaction and existing provider owners, qualify the local path first, and
-keep R6 service identity and D1–D3 promotion separate. This checkpoint does not
-activate identity or require every R1–R4 change to wait for the full lifecycle.
+The [Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.md)
+adds a bounded R5 dependency for R2/R3 retirement and late-result safety. The
+codec and source-session lifetime transaction exist; attached Chat, handoff and
+Turn-journal fences have individual qualification, and #5389 adds quota
+settlement. First-party host enforcement is partial; remaining inventory owners,
+old-writer/effect-drain qualification, M4 recovery and M5 product acceptance stay
+open in #5206. Reuse those TS/provider owners and the creation/collaboration
+journey above. R6 service identity and D1–D3 promotion remain separate. This
+checkpoint does not activate identity or make every R1–R4 change wait for the
+full lifecycle.
 
 ### R6: Local/Cloud Convergence
 

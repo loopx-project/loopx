@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   resolveRefreshRecommendation,
+  resolveLaneRecommendation,
 } from "../../loopx/control_plane/work_items/refresh_recommendation.ts";
 
 const baseRequest = {
@@ -147,4 +148,58 @@ test("explicit recommendation remains authoritative", () => {
   assert.equal(result.recommended_action_source, "explicit_arg");
   assert.equal(result.authority, "explicit");
   assert.equal(result.settlement_alignment, "not_applicable");
+});
+
+const laneContext = {
+  goal_id: "goal-shared", source_revision: "sha256:" + "a".repeat(64),
+  registered_agents: ["agent-a", "agent-b"], agent_id: "agent-a",
+  selected_todo: baseRequest.agent_lane_candidate,
+  task_facts: baseRequest.agent_lane_candidate, prior_resolution: null,
+};
+
+test("a lane step refines the selected task without rewriting its identity or text", () => {
+  const read = resolveLaneRecommendation(laneContext);
+  const result = resolveLaneRecommendation({...laneContext, write: {
+    text: "Try a smaller experiment.", expected_basis: read.basis,
+  }});
+  assert.equal(result.admitted, true);
+  const resolution = result.resolution as Record<string, unknown>;
+  assert.equal(resolution.todo_id, "todo_higher_priority");
+  assert.equal(resolution.recommended_action_source, "agent_lane_step");
+  const projected = resolveLaneRecommendation({...laneContext, prior_resolution: resolution});
+  const selected = projected.selected_todo as Record<string, unknown>;
+  assert.equal(selected.text, baseRequest.agent_lane_candidate.text);
+  assert.equal(selected.next_step, "Try a smaller experiment.");
+  assert.notEqual(projected.basis, read.basis);
+});
+
+test("a peer's step is not adopted; a stale task or source cannot resurrect a step", () => {
+  const first = resolveLaneRecommendation({...laneContext, write: {text: "Try an experiment."}});
+  for (const change of [
+    {agent_id: "agent-b"},
+    {task_facts: {...laneContext.task_facts, updated_at: "later"}},
+    {source_revision: "sha256:" + "b".repeat(64)},
+    {selected_todo: {...laneContext.selected_todo, status: "done"}},
+  ]) {
+    const result = resolveLaneRecommendation({...laneContext, ...change, prior_resolution: first.resolution});
+    assert.equal((result.selected_todo as Record<string, unknown>).next_step, undefined);
+  }
+});
+
+test("ordinary personal writeback needs no goal report scope; the same actor's old basis conflicts", () => {
+  const read = resolveLaneRecommendation(laneContext);
+  const first = resolveLaneRecommendation({...laneContext, write: {text: "Inspect evidence.", expected_basis: read.basis}});
+  const conflict = resolveLaneRecommendation({...laneContext, prior_resolution: first.resolution,
+    write: {text: "Replace the old step.", expected_basis: read.basis}});
+  assert.equal(conflict.admitted, false);
+  assert.equal(conflict.error_code, "next_action_basis_conflict");
+});
+
+test("unknown actors, absent tasks and peer-owned tasks fail closed", () => {
+  for (const change of [
+    {registered_agents: []}, {agent_id: "unknown"}, {selected_todo: null},
+    {selected_todo: {...laneContext.selected_todo, claimed_by: "agent-b"}},
+  ]) {
+    assert.equal(resolveLaneRecommendation({...laneContext, ...change, write: {text: "Try."}}).admitted, false);
+  }
 });
