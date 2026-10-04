@@ -16,6 +16,7 @@ Choose one installation owner and keep it authoritative:
 | --- | --- | --- | --- |
 | Normal release | Python package environment | `python3 -m pip install loopx` | `loopx update apply` or the manual pip sequence below |
 | Isolated CLI on an externally managed machine | `pipx` | `pipx install loopx` | `pipx upgrade loopx`, then refresh LoopX host material |
+| Existing uv tool environment | `uv` | `uv tool install loopx` | `uv tool upgrade loopx`, then refresh LoopX host material |
 | Contributor or source qualification | Git checkout | clone/fetch plus `scripts/install-local.sh` | update the checkout explicitly, rerun the installer, validate `loopx-canary` before promotion |
 | No-clone recovery fallback | LoopX archive snapshot | published archive installer | `loopx update apply` |
 
@@ -67,6 +68,50 @@ pipx install loopx
 loopx workflow-skills --install
 loopx doctor
 ```
+
+## macOS service identity and workspace selection
+
+Use the existing `scripts/macos-dashboard-launchagent.sh` from a matching
+checkout to manage the status and Chat services. `LOOPX_BIN_DIR` selects the
+single installed CLI owner; the helper asks that command's installation-only
+doctor for its Python executable and service identity. It does not install a
+second model runner or read registered projects to qualify the package.
+
+```bash
+LOOPX_GLOBAL_REGISTRY="$HOME/.loopx/registry.global.json" \
+LOOPX_CHAT_CODEX_HOME="$HOME/.codex" \
+LOOPX_CHAT_SCAN_PATHS_JSON='["/absolute/path/to/project-one", "/absolute/path/to/project-two"]' \
+bash scripts/macos-dashboard-launchagent.sh install
+bash scripts/macos-dashboard-launchagent.sh status
+```
+
+The generated Chat plist preserves the registry, selected Codex home and
+workspace directory array across `install`/`restart`; an explicit environment
+override changes that selection. Paths must be existing absolute directories;
+up to 32 are accepted. Selection enables discovery, while Core authorization
+still owns conversation grants. An empty array retains the CLI's default
+scan behavior. Existing plists without a workspace array also retain that
+behavior until an operator explicitly selects directories. Missing or malformed
+selected paths fail before either plist is replaced. The resolved registry is
+passed verbatim, including when its filename differs from the default global
+registry filename.
+
+Snapshot identities retain their release id and source revision. A non-editable
+wheel instead exposes an additive `package_fingerprint` in the existing
+`loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package
+files, including Python, TypeScript and frontend assets. Editable, unowned,
+redirected or incomplete packages cannot claim this fingerprint. It distinguishes
+same-version artifacts for local service reuse; it does not certify a release,
+publisher or source commit. Both services capture their identity at startup, so
+an in-place upgrade cannot make an old process report the replacement's identity.
+An unqualified install fails before the helper stops an existing service.
+
+After upgrading with the chosen package manager, use `restart` to replace the
+owned local services and verify the exact running Chat identity. `stop` unloads
+them; `uninstall` also removes their two plists. Restoring a prior package through
+the same installation owner and restarting provides rollback. Source and
+synthetic canary evidence do not establish actual login-after-reboot or provider
+message acceptance.
 
 ## Native Windows PowerShell 7
 

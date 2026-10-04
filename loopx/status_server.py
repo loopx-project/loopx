@@ -237,6 +237,10 @@ class StatusHTTPServer(ThreadingHTTPServer):
     ssh_config_path: Path | None
     verbose: bool
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.runtime_identity = release_runtime_identity()
+        super().__init__(*args, **kwargs)
+
 
 class StatusRequestHandler(BaseHTTPRequestHandler):
     server: StatusHTTPServer
@@ -985,7 +989,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
     def _local_dashboard_api_payload(self) -> dict[str, Any]:
         return {
             "source": "serve-status",
-            "runtime_identity": release_runtime_identity(),
+            "runtime_identity": self.server.runtime_identity,
             "status_url": self.server.status_path,
             "health_url": "/healthz",
             "readiness_url": "/?readiness=1",

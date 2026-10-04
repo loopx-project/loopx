@@ -22,7 +22,7 @@ from .paths import configured_runtime_route, default_runtime_route, global_regis
 from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
-from .release_manifest import load_release_manifest, release_version_tag
+from .release_manifest import load_release_manifest, release_runtime_identity, release_version_tag
 from .skill_install_readback import (
     ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
     PACKAGED_HOST_SKILL_IDS,
@@ -1109,6 +1109,7 @@ def collect_doctor(
     payload = {
         "ok": all(check["ok"] for check in checks if check["required"]),
         "mode": "deep" if deep else "standard",
+        "service_runtime_identity": release_runtime_identity(),
         "agent_type": canonical_agent_type,
         "python": {
             "executable": sys.executable,

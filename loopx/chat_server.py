@@ -425,6 +425,9 @@ class ChatHTTPServer(ThreadingHTTPServer):
     goal_subagent_configuration_enabled: bool
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Freeze before serving: an in-place package upgrade must not retag the
+        # old process with the identity of bytes it has never loaded.
+        self.runtime_identity = release_runtime_identity()
         super().__init__(*args, **kwargs)
         self.completed_todo_pages = CompletedTodoPages()
 
@@ -1380,7 +1383,7 @@ class ChatRequestHandler(
                 "manager": manager_capabilities_projection(
                     self.server.runtime_controller, self.server.chat_store
                 ),
-                "runtime_identity": release_runtime_identity(),
+                "runtime_identity": self.server.runtime_identity,
                 "agent_backend": "multi_adapter",
                 "sandbox": "read-only",
                 "approval_policy": "never",
