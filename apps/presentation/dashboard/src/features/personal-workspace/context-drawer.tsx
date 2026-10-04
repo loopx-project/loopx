@@ -29,6 +29,7 @@ import {
 
 import type {
   PersonalWorkspaceCallbacks,
+  WorkspaceActionPreviewRequest,
   WorkspaceAgentOption,
   WorkspaceAttention,
   WorkspaceDrawerSelection,
@@ -155,19 +156,23 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const [todoAgentId, setTodoAgentId] = useState(agents.find((agent) => agent.available)?.agentId ?? "codex");
   const [todoPriority, setTodoPriority] = useState("");
   const [todoResumeWhen, setTodoResumeWhen] = useState("");
+  const [previewFailure, setPreviewFailure] = useState<{identity: string; message: string} | null>(null);
+  const previewAttemptRef = useRef(0);
   const closeRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const selectionIdentity = selection.kind === "run" ? `run:${selection.item.runId}`
     : selection.kind === "proposal" ? `proposal:${selection.item.previewId}`
-      : selection.kind === "todo" ? `todo:${selection.item.todoId}`
-        : selection.kind === "attention" ? `attention:${selection.item.todoId}`
+      : selection.kind === "todo" ? `todo:${selection.item.goalId}:${selection.item.todoId}`
+        : selection.kind === "attention" ? `attention:${selection.item.goalId}:${selection.item.todoId}`
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
                 : `goal:${selection.item.goalId}`;
 
   useEffect(() => {
+    previewAttemptRef.current += 1;
+    setPreviewFailure(null);
     setRepositoryCopyState("idle");
     setDiagnosticsOpen(false);
     setRunDrawerTab("record");
@@ -370,9 +375,22 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     if (await performRunAction(run, "correct", () => onCorrectRun(run, message))) setCorrection("");
   }
 
+  async function previewAction(request: WorkspaceActionPreviewRequest) {
+    const attempt = ++previewAttemptRef.current;
+    setPreviewFailure(null);
+    try {
+      await callbacks.onPreviewAction?.(request);
+    } catch (error) {
+      if (attempt !== previewAttemptRef.current) return;
+      setPreviewFailure({identity: selectionIdentity, message: t("feedback.previewFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      })});
+    }
+  }
+
   async function previewTodoTransition(todo: WorkspaceTodo, operation: TodoOperation, label: string, resumeWhen?: string) {
     if (operation === "successor_create") {
-      await callbacks.onPreviewAction?.({
+      await previewAction({
         actionKind: "todo.create",
         context: { goal_id: todo.goalId, kind: "todo", todo_id: todo.todoId },
         idempotencyKey: `workspace-todo-successor-${todo.todoId}-${Date.now().toString(36)}`,
@@ -381,7 +399,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       });
       return;
     }
-    await callbacks.onPreviewAction?.({
+    await previewAction({
       actionKind: "todo.update",
       context: { goal_id: todo.goalId, kind: "todo", todo_id: todo.todoId },
       idempotencyKey: `workspace-todo-${todo.todoId}-${operation}-${Date.now().toString(36)}`,
@@ -399,7 +417,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
 
   async function previewDecision(attention: WorkspaceAttention, decision: DecisionOutcome) {
     if (readOnly || !canDecideAttention(attention)) return;
-    await callbacks.onPreviewAction?.({
+    await previewAction({
       actionKind: "gate.resolve",
       context: { goal_id: attention.goalId, kind: "todo", todo_id: attention.todoId },
       idempotencyKey: `workspace-decision-${attention.todoId}-${decision}-${Date.now().toString(36)}`,
@@ -603,6 +621,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       </header>
 
       <div className="personal-drawer-body">
+        {previewFailure?.identity === selectionIdentity ? <p className="personal-proposal-explainer" role="alert">{previewFailure.message}</p> : null}
         {selection.kind === "attention" ? (
           <>
             <AttentionDetailCard item={selection.item} onSelect={onSelectAttention} successor={attentionSuccessor(selection.item, attentionHistory)} />
@@ -666,7 +685,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                     <select aria-label={t("drawer.reassign")} onChange={(event) => setTodoAgentId(event.target.value)} value={todoAgentId}>
                       {agents.filter((agent) => agent.available).map((agent) => <option key={agent.agentId} value={agent.agentId}>{agent.label}</option>)}
                     </select>
-                    <button className="personal-secondary-action" onClick={() => void callbacks.onPreviewAction?.({
+                    <button className="personal-secondary-action" onClick={() => void previewAction({
                       actionKind: "todo.update",
                       context: { goal_id: selection.item.goalId, kind: "todo", todo_id: selection.item.todoId },
                       idempotencyKey: `workspace-todo-${selection.item.todoId}-reassign-${todoAgentId}-${Date.now().toString(36)}`,
@@ -680,7 +699,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                       {["P0", "P1", "P2", "P3", "P4"].map((priority) => <option key={priority} value={priority}>{priority}</option>)}
                       <option value="clear">{t("drawer.taskPriorityClear")}</option>
                     </select>
-                    <button className="personal-secondary-action" disabled={!todoPriority} onClick={() => void callbacks.onPreviewAction?.({
+                    <button className="personal-secondary-action" disabled={!todoPriority} onClick={() => void previewAction({
                       actionKind: "todo.update",
                       context: {goal_id: selection.item.goalId, kind: "todo", todo_id: selection.item.todoId},
                       idempotencyKey: `workspace-todo-${selection.item.todoId}-priority-${todoPriority}-${Date.now().toString(36)}`,
