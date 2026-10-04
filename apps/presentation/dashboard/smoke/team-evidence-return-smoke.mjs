@@ -47,6 +47,47 @@ try {
   await verificationGap.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-verifier-gap-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 980});
+  // Losing an optional adoption cannot erase freshly verified correction evidence.
+  const unavailableDownstream = route => route.request().postDataJSON()?.operation === "read"
+    && route.request().postDataJSON()?.operation_id === "accepted-synthesis"
+    ? route.fulfill({status: 503, json: {error: "downstream observation unavailable"}}) : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", unavailableDownstream);
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  const adoptionGap = evidence.getByText("采用证据无法核验", {exact: false});
+  await adoptionGap.waitFor({timeout: 3000});
+  await verificationGap.waitFor();
+  assert.equal(await evidence.getByRole("button", {name: "阅读原始产物", exact: true}).count(), 1);
+  assert.equal(await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).count(), 1);
+  assert.equal(await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).count(), 0);
+  await page.screenshot({path: resolve(outputDir, "team-adoption-unavailable-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await adoptionGap.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-adoption-unavailable-mobile.png"), animations: "disabled"});
+  await page.setViewportSize({width: 1512, height: 980});
+  await page.unroute("**/api/chat/sessions/*/loopx", unavailableDownstream);
+  // Revoke the refreshed owner receipt after this reader's earlier current observation.
+  mode.fixtureAdoptionState = "unavailable";
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  await adoptionGap.waitFor({timeout: 3000});
+  assert.equal(await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).count(), 0);
+  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await original().waitFor();
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  await adoptionGap.waitFor({timeout: 3000});
+  mode.fixtureAdoptionState = "current";
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).waitFor();
+  const unavailableCore = route => route.request().postDataJSON()?.operation === "read"
+    && route.request().postDataJSON()?.operation_id === "review-objection"
+    ? route.fulfill({status: 409, json: {error: "review version revoked"}}) : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", unavailableCore);
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  await evidence.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
+  assert.equal(await verificationGap.count(), 0, "A lost core revision still clears the trace");
+  assert.equal(await evidence.getByRole("button", {name: "阅读原始产物", exact: true}).count(), 0);
+  await page.unroute("**/api/chat/sessions/*/loopx", unavailableCore);
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).click();
   await evidence.getByLabel("证据内容: objection.json").waitFor();
   await evidence.getByRole("button", {name: "original-analysis", exact: true}).click();
@@ -124,7 +165,7 @@ try {
   assert.ok(await openEvidence.first().evaluate(el => el === document.activeElement));
   assert.equal(api.turnRequests.length, 0);
   assert.equal(api.loopxModeRequests.filter(row => row.operation === "message").length, 0);
-  console.log("team-evidence-return: passed (packaged navigation, keyboard return, fresh evidence/list, revocation, list failure/recovery, pagination, mobile and no execution)");
+  console.log("team-evidence-return: passed (packaged navigation, downstream loss/revocation/restoration, core loss, keyboard return, fresh evidence/list, pagination, mobile and no execution)");
 } finally {
   await workspace?.close();
   await browser?.close();
