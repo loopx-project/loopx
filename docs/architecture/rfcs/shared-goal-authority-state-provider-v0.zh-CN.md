@@ -34,6 +34,15 @@
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
 或所有 Python 消失。本节替代陈旧的当前数量估算，不覆盖历史执行证据。
 
+**新建 opt-in（2026-10-04，拟议）。** 既有
+[设备设置和 CLI/App 创建 owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
+可固定 File/SQLite 目标与 `soft_claim`/`hard_lease` 策略，初始化空 canonical
+权威并恢复原创建回执。隔离真实 provider 的 CLI/HTTP 与打包设置验证覆盖原操作
+重试、旧 writer fence、已完成存储丢失和非法策略恢复。完成后的重试不再解析
+Python Markdown 源；未完成的新建仅在 typed owner 请求时捕获源。默认关闭及
+发布版 v0 行为保持，活跃 legacy writer 仍有调用方。这是有界 L9 前置，不代表
+安装态升级、整 Goal 恢复、D2、cohort 准入或发布默认验收；这些既有出口保持开放。
+
 **所有权精简阶段（2026-10-01）。** R5/T4 将存储晋升与策略迁移分开：新 CLI
 promote 默认保留策略，正常策略目标收敛为 soft/hard。canonical 策略迁移复用晋升
 规则、完整归档和 command receipt owner，用一笔 CAS 保留 assignment、lease
