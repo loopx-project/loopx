@@ -135,6 +135,9 @@ native execution ending is not Goal acceptance or proof of result delivery.
 
 The Core request persists a timestamped observation before provider delivery.
 Duplicate events retain that snapshot instead of switching to a newer Session.
+A selected Agent target keeps its exact bound Session: observation reads that
+Session even when it is failed or closed, and never falls back to a newer
+conversation.
 Missing execution evidence and unknown states stay explicitly unavailable.
 These commands open no Session, invoke no model and create no Goal. `/help`
 shows role-specific commands and the existing Settings → Lark entry for workspace,

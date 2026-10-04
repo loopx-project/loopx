@@ -70,11 +70,17 @@ class ChatExternalConversations:
         if target:
             authority = self.bindings.resolve_agent_target(selected, target)
             row["agent_audience"] = authority["audience"]
-            current = controller.store.load_session(target["session_id"])
+            # Observation must retain failed or closed originals, so read the
+            # exact frozen target Session without lifecycle filtering.
+            current = next((candidate for candidate in controller.store.session_candidates(
+                goal_id=None, agent_id=selected["binding"]["executor_endpoint_id"],
+                channel_id=selected["channel_id"])
+                if candidate.get("session_id") == target["session_id"]),
+                controller.store.load_session(target["session_id"]))
         else:
             current = controller.store.latest_session(goal_id=None,
             agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
-        if row["command"] in {"status", "help"}:
+        if row["command"] in {"status", "help"} and not target:
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
             current = max(controller.store.session_candidates(goal_id=None,
