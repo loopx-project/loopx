@@ -406,11 +406,105 @@ must satisfy the checkpoint before terminal closeout; it neither re-authors the
 outcome nor spends a second time. Never invent an unchanged reason to clear a gap.
 Typed in-flight continuations keep their existing exemption.
 
+### Opt-in first delivery freshness
+
+First delivery protection extends the built-in Todo, checkpoint and Turn owners;
+it introduces no new provider or actor authority. It is off by default. Supported
+profiles are local-registry Goals with File or SQLite canonical Todo authority
+and an admitted, named Turn. Source-session GoalRef admission, other providers,
+managed DSH/operation-tools execution and compound repair/replan effects are
+rejected on this path. Existing non-opted-in behavior and checkpoint-only
+recovery retain their separate admission rules.
+
+The stages are independent: prepare and validate the candidate, commit the
+allowed result operation, read the resulting state, judge the direction outside
+source/provider locks, commit that direction, then finish settlement. Managed
+no-followup completion remains deferred until after refresh and quota spend.
+Neither Todo completion nor a satisfied direction checkpoint certifies Goal
+completion.
+
+After the ordinary quota guard admits the Turn, direct CLI callers read a result
+basis before preparing the candidate:
+
+```sh
+loopx --format json checkpoint-context --goal-id example --agent-id agent-a \
+  --todo-id todo_page --turn-instance-id turn-1 --purpose delivery_result
+```
+
+Validate against that basis. Pass its `read_context_id` to `todo complete` as
+`--delivery-read-context`, retaining the Goal, Agent, Todo, Turn and original
+candidate/validation options. The Todo owner checks historical receipts first,
+compares relevant facts against its current authority head, and commits an exact
+delta and receipt with revision CAS. Unrelated revisions may retry without
+another model decision. A related change requires rechecking the candidate.
+
+After the allowed result commit, read the direction:
+
+```sh
+loopx --format json checkpoint-context --goal-id example --agent-id agent-a \
+  --todo-id todo_page --turn-instance-id turn-1 --purpose first_delivery \
+  --decision-scope goal
+```
+
+Read the returned basis and produce a new Vision or unchanged reason. Submit it
+using the existing delivery fields plus `refresh-state --first-delivery
+--checkpoint-read-context ID --progress-scope goal`. Both `agent_lane` and `goal`
+scopes bind complete membership and dependency closure; no-followup requires
+Goal scope. Reading more work grants no authority to write another Agent's work.
+Final submission protects registry, Goal state, index and the real provider
+through append. It rejects `--next-action` and Codex session usage booking as
+compound effects; explicit usage observations can accompany the run. Lock order:
+index, registry, maintenance, Todo projection, state, then provider. Model calls
+and validation commands stay outside this section.
+
+Managed callers add `--first-delivery` to their existing qualified
+`turn run-once --execute` command. The persisted plan retains enrollment on
+`--resume-turn-key`; an unprotected adapter cannot recover it. The first Host
+receives `delivery_result_context`. After validation and any allowed completion,
+a separate direction-only Host receives current context and echoes its identity.
+At most two direction attempts are allowed per Turn; these are real inference
+calls, independently of the single quota debit. Failure, exhaustion or
+`revalidate_result` retains the candidate and receipts for recovery. No-followup
+also requires `terminal_ready`. Codex direction calls use an ephemeral read-only
+session without MCP write tools. Generic adapters must honor the direction-only
+IO contract. Retry a failed stage with the original resume key and
+`--retry-failed-turn`; do not reexecute the completed implementation.
+
+MCP callers use `complete_task(first_delivery=true)`. The v2 protocol first
+returns `result_review_pending` with a result context. Validate, then call again
+with `delivery_read_context_id`; it commits the ordinary completion and returns
+`direction_pending`. Judge that context and call again with both
+`delivery_read_context_id` and `read_context_id`, plus the new Vision/reason.
+`review_task_vision(first_delivery=true)` can reread a rejected direction; it
+never attaches a new token automatically to an old Vision. Final no-followup
+binds the committed direction and checks current work after spend. Existing
+v0/v1 callers retain their contracts.
+
+Execution, status and quota readbacks expose `first_delivery_progress`: result and
+direction commits, quota spend, pending stage and recovery action. Shared and Agent-scoped
+status mirror recovery text into the existing next-action field used by the
+dashboard and channel projections. These receipt observations are neither new
+workflow authority nor a Goal completion signal.
+
+After a lost response, retry the original request. `checkpoint-context` for its
+first-delivery identity verifies an indexed direction and artifacts before
+returning `committed`. A proved empty append can retry after freshness validation.
+JSON/Markdown without a complete consistent index remains
+`checkpoint_commit_unknown`: preserve the original identity and artifacts for
+operator reconciliation; another Turn cannot bypass that unresolved append.
+The files, provider, quota and Git are not one transaction.
+
+To disable, omit the opt-in for **new** Turns. Finish or explicitly isolate
+enrolled pending Turns with a compatible runtime before downgrading. Preserve
+receipts and successful artifacts. Existing integration receipts, exact candidate
+SHA validation and ref CAS still own code publication. This adds no cross-host,
+PostgreSQL or model-quality guarantee.
+
 ### Read basis for checkpoint-only recovery
 
 Missing-checkpoint supplementation now requires an explicit read receipt. This is
 a default admission change for both legacy and newly committed Turn writebacks;
-normal first writebacks and non-Turn vision authoring retain their existing rules.
+non-opted-in first writebacks and non-Turn vision authoring retain their existing rules.
 From the original working directory and with the original registry/runtime/project/
 state-file options, read the basis for the exact settlement:
 
