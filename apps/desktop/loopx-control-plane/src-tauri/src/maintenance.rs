@@ -321,10 +321,8 @@ impl Maintenance {
         self.publish("error", details)
     }
 }
-// Bounded reinstall of this App's bundled snapshot, shared by the recovery
-// action and the operator's pairing choice. The version-scoped journal keeps an
-// interrupted install resumable and can only ever authorize this App's own
-// snapshot.
+// Bounded reinstall of this App's bundled snapshot. Persist the qualified
+// promotion before reconnecting; the old discovery cache must not undo it.
 async fn reinstall_bundled_runtime(app: &AppHandle) -> Result<Value, String> {
     // A separate CLI selection belongs to its installation owner. Never
     // promote a snapshot that this same window cannot select afterwards.
@@ -335,11 +333,18 @@ async fn reinstall_bundled_runtime(app: &AppHandle) -> Result<Value, String> {
     }
     state.publish("installing_runtime", json!({}));
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        bundled_runtime::install_private(&handle).map(|_| ())
-    })
-    .await
-    .map_err(|_| "runtime_install_failed".to_string())??;
+    let executable =
+        tauri::async_runtime::spawn_blocking(move || bundled_runtime::install_private(&handle))
+            .await
+            .map_err(|_| "runtime_install_failed".to_string())??;
+    crate::runtime_selection::remember(
+        app,
+        &crate::runtime_selection::Selection {
+            executable,
+            explicit: false,
+            environment_override: false,
+        },
+    )?;
     *state.runtime_retry.lock().unwrap() = RuntimeRetry::default();
     Ok(state.publish("connecting", json!({})))
 }
@@ -578,7 +583,10 @@ fn runtime_state_publishes_own_phase(error: &str) -> bool {
 }
 
 fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, String> {
-    use crate::runtime_selection::{compare_official_commits, compare_runtimes, Selection};
+    use crate::runtime_selection::{
+        compare_official_commits, compare_runtimes, is_private_runtime, prefer_current_bundle,
+        Selection,
+    };
     use std::cmp::Ordering as VersionOrder;
     let mut selection = crate::runtime_selection::selected(app)?;
     let mut installed = crate::services::runtime_identity_for_executable(&selection.executable);
@@ -592,32 +600,40 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     let _guard = state.acquire()?;
     let bundled = bundled_runtime::identity(app)?;
     let candidate = json!({"package_version":app.package_info().version.to_string(), "source_revision":bundled["source_revision"]});
+    let private_executable = bundled_runtime::private_executable(app)?;
     // Only a launch-time developer override pins a runtime. Ordinary launches
     // reconcile discovery, a previous choice, and the App-owned installation.
     if !selection.environment_override {
         let mut candidates = crate::services::discovered_loopx_executables();
-        candidates.push(
-            bundled_runtime::private_executable(app)?
-                .to_string_lossy()
-                .into_owned(),
-        );
+        candidates.push(private_executable.to_string_lossy().into_owned());
         for executable in candidates {
             if executable == selection.executable {
                 continue;
             }
             if let Some(identity) = crate::services::runtime_identity_for_executable(&executable) {
                 let replace = installed.as_ref().is_none_or(|current| {
-                    compare_runtimes(
-                        app.package_info(),
-                        current,
-                        &identity,
-                        compare_official_commits,
-                    ) == Some(VersionOrder::Less)
+                    if is_private_runtime(&executable, &private_executable)
+                        && identity["source_revision"] == bundled["source_revision"]
+                    {
+                        prefer_current_bundle(
+                            app.package_info(),
+                            current,
+                            &identity,
+                            is_private_runtime(&selection.executable, &private_executable),
+                            compare_official_commits,
+                        )
+                    } else {
+                        compare_runtimes(
+                            app.package_info(),
+                            current,
+                            &identity,
+                            compare_official_commits,
+                        ) == Some(VersionOrder::Less)
+                    }
                 });
                 if replace {
                     selection = Selection {
                         executable,
-
                         explicit: false,
                         environment_override: false,
                     };
@@ -634,12 +650,13 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
         return Err("runtime_identity_unavailable".into());
     }
     let newer_bundle = installed.as_ref().is_none_or(|current| {
-        compare_runtimes(
+        prefer_current_bundle(
             app.package_info(),
             current,
             &candidate,
+            is_private_runtime(&selection.executable, &private_executable),
             compare_official_commits,
-        ) == Some(VersionOrder::Less)
+        )
     });
     if newer_bundle && !selection.environment_override {
         let mut prepared = None;
@@ -651,7 +668,6 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
             Ok(()) => {
                 selection = Selection {
                     executable: prepared.ok_or("runtime_install_failed")?,
-
                     explicit: false,
                     environment_override: false,
                 };

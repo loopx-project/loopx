@@ -107,16 +107,11 @@ pub(crate) fn forget(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-// Native launch coordination only. Core continues to qualify installation
-// identity. Equal package versions need Git ancestry, never install timestamps
-// or lexical SHA order; an offline/diverged answer keeps the usable runtime.
-pub(crate) fn compare_runtimes(
+fn compare_package_versions(
     package: &tauri::utils::PackageInfo,
     installed: &Value,
     candidate: &Value,
-    compare_commits: impl FnOnce(&str, &str) -> Option<std::cmp::Ordering>,
 ) -> Option<std::cmp::Ordering> {
-    use std::cmp::Ordering;
     fn parse_like<T: std::str::FromStr>(_: &T, text: &str) -> Option<T> {
         text.parse().ok()
     }
@@ -128,7 +123,19 @@ pub(crate) fn compare_runtimes(
     left.build = Default::default();
     right.pre = Default::default();
     right.build = Default::default();
-    match left.cmp(&right) {
+    Some(left.cmp(&right))
+}
+
+// Native launch coordination only. Core continues to qualify installation
+// identity. Unknown ancestry is not a claim about which runtime is newer.
+pub(crate) fn compare_runtimes(
+    package: &tauri::utils::PackageInfo,
+    installed: &Value,
+    candidate: &Value,
+    compare_commits: impl FnOnce(&str, &str) -> Option<std::cmp::Ordering>,
+) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    match compare_package_versions(package, installed, candidate)? {
         Ordering::Equal => {
             let left = installed["source_revision"].as_str()?;
             let right = candidate["source_revision"].as_str()?;
@@ -139,6 +146,40 @@ pub(crate) fn compare_runtimes(
             }
         }
         order => Some(order),
+    }
+}
+
+pub(crate) fn is_private_runtime(executable: &str, private_executable: &Path) -> bool {
+    let releases = private_executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(|root| fs::canonicalize(root.join("releases")).ok());
+    fs::canonicalize(executable)
+        .ok()
+        .zip(releases)
+        .is_some_and(|(executable, releases)| executable.starts_with(releases))
+}
+
+// A saved App-owned release path is a discovery cache, not a developer pin.
+// For the same release base, the current App can maintain its own snapshot
+// even when rebased sources or offline ancestry cannot be ordered. Preserve
+// provably newer runtimes and independently installed CLIs. Callers still
+// qualify the current bundle/installed identity before connecting services.
+pub(crate) fn prefer_current_bundle(
+    package: &tauri::utils::PackageInfo,
+    installed: &Value,
+    bundle: &Value,
+    app_owned: bool,
+    compare_commits: impl FnOnce(&str, &str) -> Option<std::cmp::Ordering>,
+) -> bool {
+    use std::cmp::Ordering;
+    match compare_runtimes(package, installed, bundle, compare_commits) {
+        Some(Ordering::Less) => true,
+        None => {
+            app_owned
+                && compare_package_versions(package, installed, bundle) == Some(Ordering::Equal)
+        }
+        _ => false,
     }
 }
 
@@ -262,6 +303,96 @@ mod tests {
         );
         let value: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(value.as_object().unwrap().len(), 2);
+    }
+    #[test]
+    fn current_app_maintains_only_its_own_unordered_same_base_snapshot() {
+        use std::cmp::Ordering;
+        let package = tauri::utils::PackageInfo {
+            name: "LoopX".into(),
+            version: "1.2.4-main.20261005".parse().unwrap(),
+            authors: "contributors",
+            description: "desktop",
+            crate_name: "desktop",
+        };
+        let bundle = json!({"package_version":"1.2.4-main.20261005", "source_revision":"bundle"});
+        for (version, app_owned, relation, expected) in [
+            ("1.2.4", true, None, true),
+            ("1.2.4", false, None, false),
+            ("1.2.4", true, Some(Ordering::Greater), false),
+            ("1.2.4", false, Some(Ordering::Less), true),
+            ("1.2.4", true, Some(Ordering::Equal), false),
+        ] {
+            let installed = json!({"package_version":version, "source_revision":"installed"});
+            assert_eq!(
+                prefer_current_bundle(&package, &installed, &bundle, app_owned, |_, _| relation),
+                expected,
+                "ownership={app_owned} relation={relation:?}"
+            );
+        }
+        for (version, expected) in [("1.2.5", false), ("1.2.3", true), ("invalid", false)] {
+            let installed = json!({"package_version":version, "source_revision":"installed"});
+            assert_eq!(
+                prefer_current_bundle(&package, &installed, &bundle, true, |_, _| panic!(
+                    "different or invalid versions do not need ancestry"
+                )),
+                expected
+            );
+        }
+        assert!(!prefer_current_bundle(
+            &package,
+            &bundle,
+            &bundle,
+            true,
+            |_, _| panic!("the already current snapshot needs no reinstall or network")
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_release_ownership_follows_canonical_paths_not_path_text() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("runtime/bin/loopx");
+        let release = root.path().join("runtime/releases/release/scripts/loopx");
+        fs::create_dir_all(release.parent().unwrap()).unwrap();
+        fs::create_dir_all(private.parent().unwrap()).unwrap();
+        fs::write(&release, "qualified elsewhere").unwrap();
+        symlink(&release, &private).unwrap();
+        assert!(is_private_runtime(private.to_str().unwrap(), &private));
+        assert!(is_private_runtime(release.to_str().unwrap(), &private));
+        let external = root.path().join("runtime/releases-other-loopx");
+        fs::write(&external, "independent CLI").unwrap();
+        let escape = root.path().join("runtime/releases/escape");
+        symlink(&external, &escape).unwrap();
+        for candidate in [external, escape, root.path().join("missing")] {
+            assert!(!is_private_runtime(candidate.to_str().unwrap(), &private));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn remembering_a_completed_promotion_replaces_the_old_release_on_restart() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let directory = fs::canonicalize(root.path()).unwrap();
+        let old = directory.join("old-loopx");
+        let new = directory.join("new-loopx");
+        fs::write(&old, "old installed snapshot").unwrap();
+        fs::write(&new, "qualified new snapshot").unwrap();
+        let launcher = root.path().join("loopx");
+        symlink(&old, &launcher).unwrap();
+        let preference = root.path().join("runtime-selection.json");
+        write_preference(&preference, launcher.to_str().unwrap()).unwrap();
+        assert_eq!(
+            read_preference(&preference).unwrap(),
+            Some(old.to_string_lossy().into_owned())
+        );
+        fs::remove_file(&launcher).unwrap();
+        symlink(&new, &launcher).unwrap();
+        // This is the install result used by both startup and explicit Repair.
+        write_preference(&preference, launcher.to_str().unwrap()).unwrap();
+        assert_eq!(
+            read_preference(&preference).unwrap(),
+            Some(new.to_string_lossy().into_owned())
+        );
     }
     #[test]
     fn broken_selection_is_not_treated_as_a_missing_installation() {
