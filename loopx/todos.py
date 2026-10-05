@@ -151,24 +151,6 @@ from .control_plane.work_items.task_lease import (
 ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = max(0, MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - 2)
 
 
-def require_registered_todo_excluded_agents(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    excluded_agents: Any,
-    field: str = "excluded_agents",
-) -> list[str]:
-    return sorted(
-        require_registered_agent_id(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            field=field,
-        )
-        for agent_id in require_todo_excluded_agents(excluded_agents, field=field)
-    )
-
-
 def add_todo_to_lines(
     lines: list[str],
     *,
@@ -594,10 +576,7 @@ def add_goal_todo(
     )
     registered_agents = registered_agent_ids_from_registry(registry_path, goal_id)
     effective_excluded_agents = (
-        require_registered_todo_excluded_agents(
-            registry_path=registry_path, goal_id=goal_id,
-            excluded_agents=excluded_agents,
-        )
+        require_todo_excluded_agents(excluded_agents)
         if excluded_agents is not None
         else None
     )
@@ -1208,9 +1187,8 @@ def update_goal_todo(
             runtime_root=shadow_runtime_root,
         )
         effective_excluded_agents = (
-            [] if clear_excluded_agents else require_registered_todo_excluded_agents(
-                registry_path=registry_path, goal_id=goal_id, excluded_agents=excluded_agents,
-            ) if excluded_agents is not None else None
+            [] if clear_excluded_agents else require_todo_excluded_agents(excluded_agents)
+            if excluded_agents is not None else None
         )
         completion_metadata_updates_override = None
         if completion_validation_gate is not None:
