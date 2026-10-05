@@ -101,3 +101,43 @@ def test_misplaced_delta_rejects_before_write_and_corrected_packet_roundtrips(tm
         dry_run=False, autonomous_replan_recorded=False))
     assert result["agent_vision"]["path_delta"] == delta
     assert json.loads(index.read_text().splitlines()[-1])["agent_vision"]["path_delta"] == delta
+
+
+@pytest.mark.parametrize("omitted", [None, "path_delta", "evidence_refs"])
+def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path, omitted):
+    from loopx.control_plane.work_items.progress_observation import replan_writeback_requirements
+
+    source = Path(__file__).resolve().parents[2] / "examples/project/goal-vision-refresh-state-budget-smoke.py"
+    spec = importlib.util.spec_from_file_location("vision_closeout_fixture", source)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    registry, runtime, _ = fixture.write_fixture(tmp_path)
+    contract = replan_writeback_requirements({
+        "satisfying_semantic_outcomes": ["fresh_vision_path_outcome"],
+    })["writeback_contract"]["vision_authoring"]
+    # Consumer test: execute the projected example, but derive the expected
+    # acceptance independently: missing a path or evidence must still replan.
+    packet = copy.deepcopy(contract["minimal_example"])
+    if omitted == "path_delta":
+        packet.pop("path_delta", None)
+    elif omitted == "evidence_refs":
+        packet.get("path_delta", {}).pop("evidence_refs", None)
+    path = tmp_path / "vision.json"
+    fixture.write_json(path, packet)
+    result = fixture.payload(fixture.run_cli(
+        registry, runtime, vision_path=path, check=True,
+        dry_run=False, autonomous_replan_recorded=False,
+    ))
+    assert result["vision_checkpoint"]["satisfied"] is True
+    quota = fixture.run_quota(registry, runtime)
+    gaps = quota["goal_frontier_projection"]["acceptance_gaps"]
+    outcome_gaps = [g for g in gaps if g["kind"] == "vision_outcome_checkpoint_required"]
+    assert bool(outcome_gaps) is (omitted is not None)
+    if omitted:
+        checks = outcome_gaps[0]["component_checks"]
+        assert checks["evidence_refs_present"] is False
+        assert checks["path_outcome_valid"] is (omitted == "evidence_refs")
+    else:
+        persisted = result["agent_vision"]
+        assert persisted["path_delta"]["outcome"] == "continue"
+        assert persisted["path_delta"]["evidence_refs"]

@@ -427,6 +427,10 @@ retains claim authority. Real Legacy/File/SQLite retry and negative cases qualif
 that boundary. Larger errors versus avoided help, actual model token/retry costs,
 source-mode repair and short normal/full replan context remain separate evidence
 questions; this does not close long-goal or provider-performance acceptance.
+Material-closeout guidance now enters the existing settlement step before writing;
+the shared [authoring example](../../reference/protocols/goal-vision-replan-contract-v0.md)
+carries a complete evidence-linked continuation. Real CLI write/read negatives
+qualify that guidance seam; avoided model retries and sustained cost remain open.
 
 ### Delivery semantics: correctness before migration
 

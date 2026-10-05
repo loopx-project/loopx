@@ -64,6 +64,14 @@ const GOAL_PATH_DELTA_LIST_LIMITS = {
   evidence_refs: [4, 140],
 } as const;
 
+// Guidance for the existing material-closeout qualification, not a new gate.
+export const VISION_MATERIAL_CLOSEOUT_HINT =
+  "For material semantic_closeout, provide " +
+  "vision_patch.acceptance_summary and top-level path_delta (outcome=continue/no_change/replan, " +
+  "prior_assumption, observed_reality, retained/changed/stopped, evidence_refs). " +
+  "An unchanged reason only reuses an already evidence-linked current vision. " +
+  "Checkpoint satisfied alone does not qualify the outcome.";
+
 /** Authoring hints share the validator's limits; they grant no transition authority. */
 export function visionAuthoringContract(): JsonObject {
   return {
@@ -78,10 +86,16 @@ export function visionAuthoringContract(): JsonObject {
     },
     common_states: ["vision_patch_proposed", "vision_closed", "no_followup"],
     advancement_policies: [...GOAL_VISION_ADVANCEMENT_POLICIES],
-    minimal_example: {schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed", vision_patch: {
-      vision_summary: "Scoped outcome", acceptance_summary: "Verified evidence and remaining gap",
-    }},
-    authoring_hint: "Fields are optional, not a checklist. Keep the whole decision compact; total includes path_delta. Do not copy the delivery evidence report into every field.",
+    minimal_example: {
+      schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed",
+      vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
+      path_delta: {
+        outcome: "continue", prior_assumption: "Viable route.",
+        observed_reality: "Evidence supports the route.", retained: ["Route"],
+        evidence_refs: ["evidence:verified-result"],
+      },
+    },
+    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,
     unchanged_reason_limit: VISION_UNCHANGED_REASON_LIMIT,
     path_delta: {
@@ -94,7 +108,7 @@ export function visionAuthoringContract(): JsonObject {
         ([field, [maxItems, maxChars]]) => [field, {item_type: "string", max_items: maxItems, max_item_chars: maxChars}],
       )),
     },
-    rule: "Compare acceptance with evidence. vision_closed closes a stage, not the Goal; no_followup requires no remaining scoped work. A changed mainline needs path_delta; respect the live replan contract.",
+    rule: "Material closeout: acceptance_summary + evidence-linked path_delta. Changed mainline: outcome=replan. vision_closed closes a stage, not Goal; no_followup: no scoped work.",
   };
 }
 // Bounded typed fallback declarations survive prepare unchanged so the

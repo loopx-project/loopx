@@ -426,6 +426,50 @@ def test_backpressured_supervisor_input_uses_original_parent_deadline(tmp_path, 
         transport.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX anonymous-pipe deadline")
+@pytest.mark.parametrize("size", [65536, 524288])
+def test_backpressured_send_cannot_finish_a_frame_after_deadline(tmp_path, size):
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    trigger = tmp_path / "resume"
+    # Resume the actual pipe reader only after _send has reported a timeout.
+    # A surviving writer must not finish the request when capacity returns.
+    reader = f"""import json,os,select,sys,time
+from pathlib import Path
+trigger=Path({str(trigger)!r})
+print('ready',flush=True)
+while not trigger.exists():time.sleep(.005)
+fd=sys.stdin.fileno();os.set_blocking(fd,False);chunks=[]
+while select.select([fd],[],[],.2)[0]:
+    data=os.read(fd,65536)
+    if not data:break
+    chunks.append(data)
+data=b''.join(chunks)
+print(json.dumps({{'bytes':len(data),'complete_frame':data.endswith(b'\\n')}}),flush=True)
+"""
+    process = subprocess.Popen([sys.executable, "-c", reader], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, text=True)
+    transport = DelegationPreviewTransport()
+    transport._process = process
+    value = {"kind": "request", "id": 1, "argv": ["x" * size], "timeout_ms": 100}
+    try:
+        assert process.stdout.readline().strip() == "ready"
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            transport._send(value, started + 0.1, 0.1)
+        assert time.monotonic() - started < 0.4
+        trigger.touch()
+        process.wait(timeout=3)
+        result = json.loads(process.stdout.readline())
+        assert result["bytes"] < len((json.dumps(value) + "\n").encode())
+        assert result["complete_frame"] is False
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+        transport.close()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX retirement cleanup fence")
 @pytest.mark.parametrize("retirement", ["idle", "lifetime", "broken_pipe"])
 @pytest.mark.parametrize("startup_delay", [0, 0.35], ids=["ready", "slow-worker"])

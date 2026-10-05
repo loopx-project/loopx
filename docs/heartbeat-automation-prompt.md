@@ -104,9 +104,13 @@ the variable available to argument expansion in Bash/zsh. Reuse the same value
 on retries. Native Goal entry remains host-specific and does not inherit this
 heartbeat bootstrap.
 
-Thin's ceiling is 2,500 characters (previously 1,900), and compact's is 6,500
-(previously 6,200): the additional room covers shared safety and an executable
-Turn/guard block rather than omitting identities or static obligations.
+Thin's presentation regression ceiling is 3,000 characters (previously 2,500);
+compact remains 6,500. These are measured regression budgets, not external host
+limits or execution quota. Keep admission, continuation, scope and authority
+instructions readable rather than abbreviating them to fit a historical number.
+Peer workspace and claim/lease requirements come from the current quota contract
+and repository rules; registration alone does not impose an independent worktree.
+Repository-specific worktree requirements still apply.
 
 The automation lifecycle is the reference for shared execution, not a wrapper
 around native Goal behavior. Thin automation and Codex CLI/SSH, TraeX and Ark

@@ -296,6 +296,15 @@ M7 只有在至少产生一个下列最终 effect 时才有理由存在：
 
 配额收尾适配现在消费 TS readback 按回执归约的结算进度，不再独立把存在 spend run 当作已结算。正常刷新、重放和扣款响应共享该投影；可执行命令绑定原 Agent 和路由。补回执复用现有幂等 writer。这是有界的 M7.4 接入，没有增加共享 executor 或 authority store，也不证明 Todo 终态或 Goal 验收完成。
 
+R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity、带条件的步骤顺序和
+宿主交接。签名覆盖 v5 能检测计划被删除或修改；没有计划的输入保留原覆盖版本。
+真实 CLI 验证覆盖提前扣额度被拒绝、原 Turn 写回和结算一次，以及幂等重放。
+这补上了投影缺口；同 Turn 缓存详情、普通轮与 replan 上下文选择、模型行为收益
+尚未验收，8 KiB 目标和交付时增长检查保持不变。见
+[TurnEnvelope](../../reference/protocols/turn-envelope-v0.md)。
+
+现有 R5 CLI 支持在展示投影前显式保存完整决策（`quota should-run --decision-output-dir`，要求明确 Turn id）。每次调用使用新的私有目录；读取观察不重跑 guard，选择 Todo 或变更 lease 后仍须重新准入。Python 仅适配文件传输，复用共享决策与 TypeScript envelope owner。本阶段解决显式调用方遭遇输出截断后的读回，不代表 worker 已采用、normal/replan 上下文自动选择或模型效率已验收。参见 [TurnEnvelope 捕获契约](../../reference/protocols/turn-envelope-v0.md)。
+
 ### 还缺什么
 
 - 通用共享 executor 被有意保留为空。当前 adapter 共享 plan/receipt algebra，却拥有不同的执行边界，因此 M7.3 应以 no-follow-up 关闭，而不是用推测性 framework 填充。
