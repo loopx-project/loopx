@@ -479,6 +479,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    todoRequestTexts: new Map(),
+    todoRequestReads: [],
     decidedGateTodoIds: new Set(),
     hostThreadActivity: {},
     answerForMessage: null,
@@ -728,6 +730,15 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         },
       );
     }
+    for (const goal of fixture.attention_queue.items) {
+      for (const todo of goal.agent_todos?.items ?? []) {
+        if (todo.todo_id) {
+          const key = JSON.stringify([goal.goal_id, todo.todo_id]);
+          if (!state.todoRequestTexts.has(key)) state.todoRequestTexts.set(key, todo.text);
+          todo.text = state.todoRequestTexts.get(key).slice(0, 500);
+        }
+      }
+    }
     for (const [goalId, activity] of Object.entries(state.hostThreadActivity)) {
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
       if (goal) goal.host_thread_activity = activity;
@@ -900,6 +911,16 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/chat/todo/detail") {
+      const goalId = url.searchParams.get("goal_id");
+      const todoId = url.searchParams.get("todo_id");
+      state.todoRequestReads.push({ goalId, todoId });
+      const text = state.todoRequestTexts.get(JSON.stringify([goalId, todoId]));
+      await route.fulfill({ json: text === undefined ? { ok: false, error: "Task not found" } : {
+        ok: true, goal_id: goalId, todo_id: todoId, text, status: "open", archive_state: "active", updated_at: null,
+      } });
+      return;
+    }
     if (url.pathname === "/api/chat/completed-todos") {
       const total = url.searchParams.get("goal_id") === "progress-projection" ? 4087 : 0;
       const offset = Number(url.searchParams.get("cursor") || 0);
@@ -913,6 +934,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           completion_validation_revision_history: index === 0 ? [{ revision: 3, previous_declaration_sha256: "b".repeat(64), declaration_sha256: "a".repeat(64), actor_agent_id: "example-reviewer", revised_at: "2026-08-01T00:00:00Z" }] : [],
         };
       });
+      for (const item of items) state.todoRequestTexts.set(JSON.stringify([url.searchParams.get("goal_id"), item.todo_id]), item.text);
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }

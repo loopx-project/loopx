@@ -394,6 +394,15 @@ Implementation checkpoint ([#5587](https://github.com/loopx-project/loopx/pull/5
 This remains a presentation/readback slice. `responds_to` does not certify an objection. Current native acceptance validates the canonical task and configured validators, but its readback does not expose an independent verifier identity and exact-version receipt. The revision therefore shows that missing evidence explicitly, even beside a valid requester adoption. The evidence reader separately exposes the current validation source, definition digest and check/file-pin counts from the existing typed validation plan. CLI and HTTP readback carry the same path-free observation after the original checks pass; failed validation or changed pins withdraw it with the report. This rule identity is not a persisted success or independent-verifier receipt. The frontend must consume such evidence from the existing acceptance owner when available; it cannot infer it from the reviewer name, relationship or artifact hash.
 
 Packaged desktop, 390px, keyboard/reduced-motion and pagination checks cover these returns and recovery. An isolated production SQLite/HTTP/CLI fixture also rejects changed output, withdraws its list acceptance and restores the original version without launching additional work. [Public-safe fixture views](../../reference/local-delegation.md#inspect-accepted-evidence-and-return) make these states reviewable. These checks do not establish a real objection, independent semantic acceptance, installed native behavior or L1 completion. The existing real correction episode must still be exercised through the packaged UI and independently read back with Section 9's missing/lost-observation cases.
+Task inspectors read the original request on demand through the existing Todo
+authority. Status/list summaries and thin reads retain their bounded budget;
+an exact non-thin CLI read now returns the complete source text. The packaged
+drawer distinguishes loading, unavailable source and display-only legacy ids,
+offers retry, and discards stale selection responses. A failed read never
+reuses an earlier full body. File/SQLite CLI and loopback HTTP checks cover
+active/retained requests and recovery; packaged desktop/390px checks cover a
+988-character request, mismatched identity, late response and keyboard return.
+These read-only checks do not certify semantic acceptance or L1 completion.
 Motion is retained
 only when it clarifies these transitions;
 remove effects that obscure absent execution, absent acceptance or source loss.
