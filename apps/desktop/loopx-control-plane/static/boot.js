@@ -68,6 +68,7 @@ const forgetSelection = document.querySelector("#forget-selection");
 let nextAction = "check";
 let working = false;
 let channelInitialized = false;
+let runtimeExplicit = false;
 document.querySelector("#retry").onclick = () => location.reload();
 channel.onchange = () => { channelInitialized = true; render({phase:"idle"}); };
 const labels = {
@@ -114,6 +115,9 @@ const errors = {
   backup_failed: "无法备份当前版本，更新已停止。请检查磁盘空间后重试。",
 };
 function codeText(code, phase) {
+  if (runtimeExplicit && ["runtime_identity_unavailable", "runtime_selection_explicit"].includes(code)) {
+    return "启动参数 LOOPX_BIN 固定了当前运行时。请通过该安装方式修复它，或移除、修正 LOOPX_BIN 后重新打开 App；清除记住的选择不会改变此参数。";
+  }
   if (typeof code === "string" && /^runtime_install_exit_(\d+|signal)$/.test(code)) {
     // Exit 2 from install-local.sh is its "no usable Python 3.11+" gate; the
     // same exit can technically be a usage error, so the wording stays
@@ -215,6 +219,7 @@ async function refresh() {
       channel.value = result.state?.details?.channel ?? (result.app_version?.includes("-main.") ? "main" : "stable");
       channelInitialized = true;
     }
+    runtimeExplicit = result.runtime_selection?.explicit === true;
     rollback.hidden = !result.rollback_available;
     forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
