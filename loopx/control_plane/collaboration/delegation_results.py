@@ -5,10 +5,54 @@ not promote a Goal or attest to a model's reasoning or the truth of an artifact.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+
 from .inbox import _entry, _read, _write
 from .peers import input_readiness, require_operation_id
 from ..effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
 from ...file_lock import exclusive_file_lock
+
+
+def _artifacts(binding):
+    """Bounded host IO; the typed owner decides version/check relationships."""
+    workspace = Path(binding["workspace"]).resolve()
+    artifacts = []
+    for ref in binding["output_refs"]:
+        path = workspace / ref
+        if not path.resolve().is_relative_to(workspace) or path.is_symlink() or not path.is_file():
+            raise ValueError("delegation artifact unavailable or outside workspace")
+        if path.stat().st_size > 128_000:
+            raise ValueError("delegation artifact exceeds bounded return size")
+        with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                             | getattr(os, "O_NOFOLLOW", 0)), "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("delegation artifact must be a regular file")
+            content = stream.read(128_001)
+        if len(content) > 128_000:
+            raise ValueError("delegation artifact exceeds bounded return size")
+        artifacts.append({"ref": ref, "sha256": hashlib.sha256(content).hexdigest(),
+                          "text": content.decode("utf-8")})
+    if len(json.dumps(artifacts).encode()) > 64_000:
+        raise ValueError("delegation aggregate return exceeds limit")
+    return artifacts
+
+
+def accepted_result(service, binding):
+    before = _artifacts(binding)
+    validation = service._validate(binding)  # Executes the current canonical rules.
+    after = _artifacts(binding)
+    observation = effect_runtime_result("collaboration.delegation.checked_artifacts", {
+        "binding": binding, "plan": validation["plan"],
+        "before": [{"ref": row["ref"], "sha256": row["sha256"]} for row in before],
+        "after": [{"ref": row["ref"], "sha256": row["sha256"]} for row in after],
+        "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    })
+    return {"artifacts": after, "validation": observation}
 
 
 def operation_brief(service, row):

@@ -66,6 +66,49 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
   return {todo_id: todo.todo_id, state: "ready", source, observation,
     effects, canonical_done: todo.done === true && todo.status === "done"};
 }
+
+/** Fresh host check observation, not an independent-verifier or persisted receipt.
+ * Host IO brackets the actual checks; only stable declared output versions return. */
+export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
+  const binding = requireJsonObject(params.binding, "delegation binding");
+  const plan = requireJsonObject(params.plan, "current validation plan");
+  requireThat(plan.todo_id === binding.todo_id && plan.state === "ready" && plan.canonical_done === true,
+    "delegation requires current canonical completion");
+  const observation = requireJsonObject(plan.observation, "current validation observation");
+  requireThat((observation.source === "goal_acceptance" || observation.source === "todo_validation")
+    && typeof observation.basis_sha256 === "string" && BARE_SHA256_PATTERN.test(observation.basis_sha256)
+    && Number.isInteger(observation.check_count) && Number(observation.check_count) > 0
+    && Number.isInteger(observation.pinned_file_count) && Number(observation.pinned_file_count) >= 0,
+  "current validation basis required");
+  requireThat(typeof params.checked_at === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(params.checked_at)
+    && Number.isFinite(Date.parse(params.checked_at)), "host check time required");
+  const refs = binding.output_refs;
+  requireThat(Array.isArray(refs) && refs.length > 0
+    && refs.length <= 20 && new Set(refs).size === refs.length,
+  "declared output refs required");
+  const versions = (value: unknown) => {
+    requireThat(Array.isArray(value) && value.length === refs.length,
+      "declared output versions required");
+    const rows = value.map(item => {
+      const row = requireJsonObject(item, "output version");
+      requireThat(text(row.ref) && !row.ref.startsWith("/") && !row.ref.includes("\\")
+        && !row.ref.split("/").includes("..") && refs.includes(row.ref)
+        && typeof row.sha256 === "string" && BARE_SHA256_PATTERN.test(row.sha256),
+      "valid declared output version required");
+      return {ref: row.ref, sha256: row.sha256};
+    });
+    requireThat(new Set(rows.map(row => row.ref)).size === rows.length, "duplicate output version");
+    return rows.sort((a, b) => a.ref.localeCompare(b.ref));
+  };
+  const before = versions(params.before);
+  const after = versions(params.after);
+  requireThat(canonicalAuthoritySha256(before) === canonicalAuthoritySha256(after),
+    "delegation output changed during validation; recheck the original output");
+  return {source: observation.source, basis_sha256: observation.basis_sha256,
+    check_count: observation.check_count, pinned_file_count: observation.pinned_file_count,
+    checked_at: params.checked_at, output_versions: after};
+}
 export function selectDelegationBinding(params: JsonObject): JsonObject {
   const config = requireJsonObject(params.config, "delegation configuration");
   requireThat(config.schema_version === "loopx_local_delegation_v0", "unsupported delegation configuration");

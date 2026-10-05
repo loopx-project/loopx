@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -115,6 +115,33 @@ test("current validation provenance identifies definitions without exporting pri
   assert.equal(combined.pinned_file_count, 1);
   assert.notEqual(combined.basis_sha256, observed.basis_sha256);
   assert.doesNotMatch(JSON.stringify(combined), /private|Independent verification|validation_argv/);
+});
+
+test("fresh host checks bind stable declared output versions, without attesting independence", () => {
+  const plan = delegationValidationPlan({binding, declaration, basis: {...validationBasis,
+    todo: {...validationTodo, status: "done", done: true}}});
+  const outputs = [{ref: "output.json", sha256: "a".repeat(64)}];
+  const checkedAt = "2026-01-02T03:04:05.123456Z";
+  const args = {binding, plan, before: outputs, after: outputs, checked_at: checkedAt};
+  assert.deepEqual(delegationCheckedArtifacts(args), {...plan.observation as object,
+    checked_at: checkedAt, output_versions: outputs});
+  assert.deepEqual(delegationCheckedArtifacts({...args, after: [{...outputs[0], private_log: "never export"}]}),
+    delegationCheckedArtifacts(args));
+  assert.throws(() => delegationCheckedArtifacts({...args, after: [{...outputs[0], sha256: "b".repeat(64)}]}),
+    /output changed during validation/);
+  for (const versions of [[], [outputs[0], outputs[0]], [{...outputs[0], ref: "other.json"}],
+    [{...outputs[0], ref: "/private/output.json"}], [{...outputs[0], sha256: "not a digest"}]]) {
+    assert.throws(() => delegationCheckedArtifacts({...args, after: versions}));
+    assert.throws(() => delegationCheckedArtifacts({...args, before: versions}));
+  }
+  for (const patch of [{canonical_done: false}, {state: "unbound"}, {todo_id: "other"},
+    {observation: {...plan.observation as object, check_count: 0}}])
+    assert.throws(() => delegationCheckedArtifacts({...args, plan: {...plan, ...patch}}));
+  for (const time of [null, "invalid", "2026-01-02", "2026-01-02T03:04:05+00:00"])
+    assert.throws(() => delegationCheckedArtifacts({...args, checked_at: time}), /host check time/);
+  const two = [{ref: "output.json", sha256: "a".repeat(64)}, {ref: "second.txt", sha256: "c".repeat(64)}];
+  assert.deepEqual(delegationCheckedArtifacts({...args, binding: {...binding, output_refs: ["output.json", "second.txt"]},
+    before: two, after: [...two].reverse()}).output_versions, two);
 });
 
 test("same explicit grant contract applies to a coordinator and an ordinary member", () => {
