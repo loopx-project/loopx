@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..runtime.agent_scoped_evidence_log import build_agent_scoped_required_read
 from ..runtime.public_safety import compact_text
 
 
@@ -178,23 +177,25 @@ def agent_member_summary(item: dict[str, Any] | None) -> str | None:
     return compact_packet_text(" ".join(str(part) for part in parts if part))
 
 
-def project_agent_required_reads(
-    goal_id: str,
-    item: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
+def project_agent_replan_context(
+    goal_id: str, item: dict[str, Any] | None, status_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    from ..work_items.replan_context_codec import project_replan_context
+
     member = agent_member_from_item(item)
     if not member:
-        return []
+        return None
     agent_id = str(member.get("agent_id") or "").strip()
-    read = build_agent_scoped_required_read(
-        goal_id=goal_id,
-        agent_id=agent_id,
-        reason=(
-            "read this target agent's thin evidence ledger before replan or "
-            "handoff continuation; other agents stay frontier-only"
-        ),
-    )
-    return [read] if read else []
+    if not agent_id:
+        return None
+    asset = (item or {}).get("project_asset") or {}
+    acceptance = next((candidate for candidate in (
+        (item or {}).get("goal_acceptance_contract"), asset.get("goal_acceptance_contract"),
+        ((item or {}).get("agent_todos") or {}).get("goal_acceptance_contract"),
+        (asset.get("agent_todos") or {}).get("goal_acceptance_contract"),
+    ) if isinstance(candidate, dict) and candidate.get("enabled") is True), None)
+    return project_replan_context(goal_id=goal_id, agent_id=agent_id, runs=(), source_status=status_payload,
+                                  goal_acceptance_contract=acceptance)
 
 
 def project_asset_source(item: dict[str, Any] | None) -> str:

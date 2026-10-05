@@ -85,6 +85,7 @@ LOCAL_AUTHORITY_SHADOW_PROTOCOL_KEYS = (
 )
 LEGACY_WRITER_FENCE_PROTOCOL_KEYS = (
     "fence_schema",
+    "creation_fence_schema",
     "engage_request_schema",
     "result_schema",
     "write_check_request_schema",
@@ -150,6 +151,7 @@ REPLAN_SETTLEMENT_PROTOCOL_KEYS = (
 )
 LEGACY_WRITER_FENCE_CONSTANT_NAMES = {
     "fence_schema": "LEGACY_COORDINATION_WRITER_FENCE_SCHEMA",
+    "creation_fence_schema": "NEW_GOAL_WRITER_FENCE_SCHEMA",
     "engage_request_schema": "LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA",
     "result_schema": "LEGACY_COORDINATION_WRITER_FENCE_RESULT_SCHEMA",
     "write_check_request_schema": "LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA",

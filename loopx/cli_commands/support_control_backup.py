@@ -90,6 +90,7 @@ def handle_backup_state_command(
             include_automations=not bool(args.no_automations),
             include_skills=not bool(args.no_skills),
             include_registry_projects=not bool(args.current_project_only),
+            registry_path=(Path(args.project).expanduser() / ".loopx/registry.json") if args.current_project_only else None,
         )
         if args.execute:
             payload = execute_state_backup_plan(payload)

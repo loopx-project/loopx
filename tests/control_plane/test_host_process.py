@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -11,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from loopx import collaboration_mcp as delegation_module
 from loopx.control_plane.turn_driver.executor import _run_host
 from loopx.control_plane.turn_driver.host_process_transport import (
+    HOST_PROCESS_RECORD_ENV,
     HostOutputLines,
     run_host_process,
 )
@@ -57,7 +60,8 @@ def test_real_generic_host_roundtrip_and_stream_budget(tmp_path: Path) -> None:
     assert overflow["reason"] == "host stdout exceeded the result budget"
 
 
-def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path) -> None:
+@pytest.mark.parametrize("deadline", [None, 20])
+def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path, deadline) -> None:
     def reject(_text: str) -> None:
         raise ValueError("consumer stopped")
 
@@ -71,7 +75,7 @@ def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path) -> None:
             ],
             project=tmp_path,
             input_text="",
-            timeout_seconds=20,
+            timeout_seconds=deadline,
             on_stdout=reject,
         )
     assert time.monotonic() - started < 8
@@ -204,3 +208,230 @@ def test_windows_transport_relay_preserves_argv_and_stdin(tmp_path: Path) -> Non
     )
     assert result["ok"] is True
     assert result["value"] == {"args": values, "input": {}}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
+def test_host_process_record_names_the_owned_group_and_is_not_inherited(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_ENV, execution_host_drain, prepare_host_process_record,
+    )
+
+    record_path = tmp_path / "op.host.json"
+    assert execution_host_drain(record_path) == "unattributable"
+    prepare_host_process_record(record_path)
+    assert execution_host_drain(record_path) == "not_launched"
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record_path))
+    host = ("import json,os,sys;print(json.dumps({'env': os.environ.get(%r), 'pid': os.getpid(),"
+            " 'pgid': os.getpgid(0)}))" % HOST_PROCESS_RECORD_ENV)
+    result = _run_host({}, argv=[sys.executable, "-c", host], project=tmp_path, timeout_seconds=5)
+    assert result["ok"] is True
+    # A nested LoopX run inside the Host cannot overwrite its parent's record.
+    assert result["value"]["env"] is None
+    record = json.loads(record_path.read_text())
+    assert record["phase"] == "finished"
+    assert record["host_pid"] == result["value"]["pid"] == record["process_group"] == result["value"]["pgid"]
+    assert execution_host_drain(record_path) == "drained"
+    observed = record_path.read_bytes()
+    prepare_host_process_record(record_path)
+    assert record_path.read_bytes() == observed, "initialization must not overwrite execution evidence"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
+def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_SCHEMA_VERSION, execution_host_drain,
+    )
+    from loopx.file_lock import lock_holder_host_label
+
+    path = tmp_path / "op.host.json"
+    live = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], start_new_session=True)
+    gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    gone.wait(timeout=10)
+
+    def drain(**fields):
+        path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                                    "host": lock_holder_host_label(), "owner_pid": 1,
+                                    "supervises": "host", "supervision": "direct", **fields}))
+        return execution_host_drain(path)
+
+    try:
+        # A live supervisor or a live Host group is still draining.
+        assert drain(phase="launching", bridge_pid=live.pid, process_group=None) == "draining"
+        assert drain(phase="spawned", bridge_pid=gone.pid, process_group=live.pid) == "draining"
+        assert drain(phase="finished", bridge_pid=gone.pid, process_group=live.pid) == "draining"
+        assert drain(phase="spawned", bridge_pid=gone.pid, process_group=gone.pid) == "drained"
+        # A supervisor gone before it reported a group may have spawned one anyway.
+        assert drain(phase="launching", bridge_pid=gone.pid, process_group=None) == "unattributable"
+        assert drain(phase="finished", bridge_pid=gone.pid, process_group=None) == "drained"
+        for fields in ({"phase": "invalid", "bridge_pid": gone.pid, "process_group": None},
+                       {"phase": "finished", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "supervision": None},
+                       {"phase": "spawned", "bridge_pid": None, "process_group": gone.pid},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": "1"},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": 1},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "host": "another-machine"},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "schema_version": "other"},
+                       # A record must say which group it supervises.
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "supervises": None},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "supervises": "nested_host"}):
+            assert drain(**fields) == "unattributable", fields
+        path.write_text("{not json")
+        assert execution_host_drain(path) == "unattributable"
+    finally:
+        live.kill()
+        live.wait(timeout=10)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group transport parity")
+def test_explicit_environment_reaches_the_host_and_stays_out_of_the_record(tmp_path: Path) -> None:
+    """A caller-supplied environment is used, and the record marker is not inherited.
+
+    The bridge runs on the caller's mapping: it may pin the release the Host must
+    run, and it names the record the supervisor owns. Replacing that mapping with
+    the ambient one would silently change which code the Host runs and lose the
+    record; passing it through unchanged would leak the record marker into a
+    nested run that must not overwrite its parent's record.
+    """
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_ENV, execution_host_drain, run_host_process,
+    )
+
+    record_path = tmp_path / "op.host.json"
+    excluded = "LOOPX_TRANSPORT_PARITY_EXCLUDED"
+    selected = "LOOPX_TRANSPORT_PARITY_SELECTED"
+    host = ("import json,os,sys;print(json.dumps({'selected': os.environ.get(%r),"
+            " 'excluded': os.environ.get(%r), 'record': os.environ.get(%r),"
+            " 'pgid': os.getpgid(0), 'pid': os.getpid()}))" % (selected, excluded, HOST_PROCESS_RECORD_ENV))
+    environment = {**os.environ, selected: "caller-selected", HOST_PROCESS_RECORD_ENV: str(record_path)}
+    environment.pop(excluded, None)
+    chunks: list[str] = []
+    observation = run_host_process([sys.executable, "-c", host], project=tmp_path, input_text="",
+                                   timeout_seconds=15, environment=environment,
+                                   on_stdout=chunks.append)
+    assert observation["outcome"] == "exited", observation
+    value = json.loads("".join(chunks))
+    assert value["selected"] == "caller-selected"
+    assert value["excluded"] is None
+    # The record is the supervisor's, and it is not a Host input.
+    assert value["record"] is None
+    record = json.loads(record_path.read_text())
+    assert record["phase"] == "finished"
+    assert record["host_pid"] == value["pid"] == record["process_group"] == value["pgid"]
+    assert execution_host_drain(record_path) == "drained"
+    # The caller's mapping is the caller's.
+    assert environment[HOST_PROCESS_RECORD_ENV] == str(record_path)
+    assert environment[selected] == "caller-selected"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group transport parity")
+def test_hard_leased_cli_pins_the_release_and_the_record_through_the_transport(tmp_path, monkeypatch) -> None:
+    """`_cli`'s pinned release and Host record only reach the CLI through the transport.
+
+    The managed CLI runs under the bridge, so the environment `_cli` builds is
+    only effective if the transport consumes it. Capture what `_cli` hands the
+    transport instead of restating the native propagation the parity test covers.
+    """
+    from loopx.collaboration_mcp import Delegations
+
+    runner = Delegations(tmp_path, tmp_path / "registry.json", "goal", "lead", tmp_path / "config.json")
+    monkeypatch.setenv("PYTHONPATH", "/ambient")
+    handed = {}
+
+    def transport(*args, **kwargs):
+        handed.update(kwargs)
+        handed["argv"] = args[0]
+        kwargs["on_stdout"]("{}")
+        return {"outcome": "exited", "output_complete": True, "returncode": 0}
+
+    monkeypatch.setattr("loopx.control_plane.turn_driver.host_process_transport.run_host_process", transport)
+    record = tmp_path / "op.host.json"
+    runner._cli({"agent_id": "analyst", "todo_id": "todo", "workspace": str(tmp_path)}, "todo", "claim",
+                host_record=record, delegated_lease={"lease": {}, "ttl_seconds": None,
+                                                     "renew_argv": [], "read_argv": []})
+    assert handed["environment"]["PYTHONPATH"].split(os.pathsep)[0] == str(delegation_module._release_root())
+    # One record names the execution; the transport places its leased supervisor's record.
+    assert handed["environment"][HOST_PROCESS_RECORD_ENV] == str(record)
+    index = handed["argv"].index("--host-process-record")
+    assert handed["argv"][index + 1] == str(record)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
+def test_execution_drain_needs_every_group_a_leased_run_launched(tmp_path: Path) -> None:
+    """The Host transport alone reads one execution's records, whatever its topology.
+
+    A leased run's supervisor records the private CLI beside the owner's record
+    and the actual Host writes that record, so an outer exit proves nothing
+    about the nested Host. A record that does not say what it supervises, or
+    sits where the other kind belongs, attributes nothing.
+    """
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_SCHEMA_VERSION, execution_host_drain, host_process_supervisor_record,
+    )
+    from loopx.file_lock import lock_holder_host_label
+
+    record = tmp_path / "op.host.json"
+    supervisor = host_process_supervisor_record(record)
+    live = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], start_new_session=True)
+    gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    gone.wait(timeout=10)
+
+    def written(path, supervises, group, supervision):
+        path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                                    "host": lock_holder_host_label(), "owner_pid": 1, "supervises": supervises,
+                                    "supervision": supervision,
+                                    "phase": "finished", "bridge_pid": gone.pid, "process_group": group}))
+
+    cases = [
+        # (supervisor record, owner's record, observation)
+        (None, None, "unattributable"),
+        (None, ("host", gone.pid, "direct"), "drained"),
+        (None, ("host", live.pid, "direct"), "draining"),
+        (("nested_host", gone.pid, "leased"), None, "unattributable"),
+        (("nested_host", gone.pid, "leased"), ("host", gone.pid, "leased"), "drained"),
+        # A later direct recovery Host still reads the earlier outer group.
+        (("nested_host", gone.pid, "leased"), ("host", gone.pid, "direct"), "drained"),
+        # Losing either leased record leaves the surviving peer insufficient.
+        (None, ("host", gone.pid, "leased"), "unattributable"),
+        (None, ("host", live.pid, "leased"), "draining"),
+        # The leased CLI exited while its nested Host still runs.
+        (("nested_host", gone.pid, "leased"), ("host", live.pid, "leased"), "draining"),
+        (("nested_host", live.pid, "leased"), ("host", gone.pid, "leased"), "draining"),
+        # A group still seen running outranks a missing proof.
+        (("nested_host", live.pid, "leased"), "corrupt", "draining"),
+        (("nested_host", gone.pid, "leased"), "corrupt", "unattributable"),
+        # Records that do not say what they supervise, or say the wrong thing.
+        (None, (None, gone.pid, "leased"), "unattributable"),
+        (None, ("nested_host", gone.pid, "leased"), "unattributable"),
+        (("host", gone.pid, "leased"), ("host", gone.pid, "leased"), "unattributable"),
+        ((None, gone.pid, "leased"), None, "unattributable"),
+    ]
+    try:
+        for outer, owned, expected in cases:
+            for path, fact in ((supervisor, outer), (record, owned)):
+                path.unlink(missing_ok=True)
+                if fact == "corrupt":
+                    path.write_text("{corrupt")
+                elif fact is not None:
+                    written(path, *fact)
+            assert execution_host_drain(record) == expected, (outer, owned)
+    finally:
+        live.kill()
+        live.wait(timeout=10)
+
+
+def test_default_turn_deadline_is_optional_and_real_transport_accepts_none(tmp_path):
+    from loopx.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["turn", "run-once", "--goal-id", "fixture",
+                              "--agent-id", "agent", "--project", str(tmp_path)])
+    assert args.timeout_seconds is None
+    result = run_host_process(
+        [sys.executable, "-c", "import time;time.sleep(.15);print('finished')"],
+        project=tmp_path, input_text="", timeout_seconds=None,
+    )
+    assert result["outcome"] == "exited"
+    assert result["returncode"] == 0

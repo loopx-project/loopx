@@ -305,6 +305,13 @@ promotion gate。
 本地晋升等待容量与自然时间双重资格化，不等待 PostgreSQL 服务，也不在第十天使
 receipt 过期。
 
+调用方恢复的有界切片现有 [claim 参数指引](../../reference/source-cli-entrypoint.md#claim-argument-recovery--claim-参数恢复)：
+一次拒绝同时列出缺失／非法参数，保留原 argv 绑定，不猜 executor 或改变 source/lease
+准入。语法／展示归现有 CLI adapter，claim 权威保留在 TypeScript。真实
+Legacy/File/SQLite 重试与负例只验收这个边界。较大错误与省掉 help 的取舍、实际模型
+token／重试成本、source-mode 修复和常规短上下文／replan 完整历史仍是分别待验证的
+问题；不代表长目标或 provider 性能验收完成。
+
 ### 交付语义：先修正规则，再迁移
 
 Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、
@@ -850,6 +857,12 @@ codec；较大的完整事实快照通过私有临时文件和摘要绑定的引
 这修复 T3/S2 的结算阻塞并补充 S7/R7 的传输增长证据，不代表全历史解析已经恒定
 内存，也不证明分布式执行。游标/checkpoint 归约保留为以测量驱动、完整源语义一致
 为前提的后续工作，不再造 Python 规则。见[历史决策证据](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.zh-CN.md)。
+
+**Checkpoint 恢复编写契约。** 现有 TS vision owner 只能投影校验器接受的恢复
+选项：没有持久 vision 时，缺失的 checkpoint 必须提交 vision patch；有该基线时
+才提供 unchanged reason。Authoring 契约复用校验器的 `todo_delta` 限制：保留前
+八项，每个保留项至多 80 字符。隔离的真实 CLI 恢复必须保持原结算身份和 replay
+约束。这闭合恢复指引的正确性缺口，不代表上下文、IO 或延迟成本已降低。
 
 **恢复边界（2026-09-22）。** [authority archive 命令](../../reference/authority-archive.md)
 由现有 TS coordination owner 负责历史校验、状态 delta 重建和可重入恢复；Python

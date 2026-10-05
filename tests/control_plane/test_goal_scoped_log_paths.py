@@ -63,7 +63,7 @@ def test_supervisor_event_builder_rejects_unsafe_goal_id() -> None:
         )
 
 
-def test_evidence_log_cli_rejects_unsafe_goal_without_writing_outside_root(
+def test_history_evidence_cli_rejects_unsafe_goal_without_writing_outside_root(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -86,7 +86,9 @@ def test_evidence_log_cli_rejects_unsafe_goal_without_writing_outside_root(
             str(runtime_root),
             "--format",
             "json",
-            "evidence-log",
+            "history",
+            "--evidence-ref",
+            "replan-evidence-missing",
             "--goal-id",
             "../escape",
             "--agent-id",

@@ -27,7 +27,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
-    state.write_text("---\nstatus: active\n---\n\n# Synthetic Goal\n\n## Agent Todo\n")
+    state.write_text("---\nstatus: active\n---\n\n# Synthetic Goal\n\n## Objective\nDeliver the independently accepted source outcome.\n\n## Agent Todo\n")
     index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
     index.parent.mkdir(parents=True)
     evidence = index.parent / "synthetic-artifact.json"
@@ -85,6 +85,9 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
 ) -> None:
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
     original = _guard(call)
+    core_goal = original["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    assert core_goal["objective"] == "Deliver the independently accepted source outcome."
+    assert core_goal["objective_source"] == "active_state"
     identity = original["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     obligation_id = identity["replan_obligation_id"]

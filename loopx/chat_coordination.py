@@ -50,6 +50,9 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
         # so it gets the bounded read inline.
         remote_evidence=not isinstance(adapter, CodexAppServerAdapter),
     )
+    if scope.get("bound_steward") is True and isinstance(context.get("bound_steward"), dict):
+        from .capabilities.native_chat.external_conversations import ChatExternalConversations
+        context["bound_steward"]["executions"] = ChatExternalConversations(controller).commission_evidence(session)
     controller.store.append_event(session_id, turn_id, kind="manager.context", payload=context)
     if scope["kind"] == "external_audience":
         scope_id = str(context.get("authorization_scope_id") or "")
@@ -63,7 +66,11 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                     "next_action": "Reconnect the manager to the intended Goal and retry the same message.",
                 },
             )
-        if session.get("manager_authorization_scope_id") != scope_id:
+        if scope.get("bound_steward") is True:
+            # A new, explicitly confirmed commission extends this same owner's
+            # scope. Refresh tools/evidence without manufacturing a new thread.
+            controller.store.update_session(session_id, manager_authorization_scope_id=scope_id)
+        elif session.get("manager_authorization_scope_id") != scope_id:
             adapter.close_session()
             with controller.lock:
                 if controller.adapters.get(session_id) is adapter:

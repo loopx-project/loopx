@@ -189,6 +189,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.goals.deletion_service",
     "loopx.control_plane.goals.goal_amendment_proposal",
     "loopx.control_plane.projects.registry_codec",
+    "loopx.control_plane.testing.cli_output_semantics",
     "loopx.control_plane.testing.release_commit_qualification",
     "loopx.control_plane.todos.completion_result",
     "loopx.control_plane.todos.completion_transaction",

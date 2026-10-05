@@ -7,19 +7,21 @@ import {DelegationPreflightStatus} from "./delegation-preflight-status";
 
 type Member = {id: string; agent_id: string; todo_id: string};
 type DelegationRecord = DelegationInventory["items"][number];
-type PulseBucket = "executing" | "validating" | "accepted" | "attention" | "dispatched" | "unknown";
+type PulseBucket = "executing" | "validating" | "accepted" | "attention" | "stopped" | "dispatched" | "unknown";
 type CheckTone = "unchecked" | "ready" | "unverified" | "blocked";
 
 const PULSE_BUCKETS: Record<DelegationState, PulseBucket> = {
   executing: "executing", validating: "validating", accepted: "accepted",
   rejected: "attention", recovery_required: "attention", unavailable: "attention",
-  dispatched: "dispatched", unknown: "unknown",
+  // A recorded stop is not proof its Host group released; it is its own bucket.
+  stopped: "stopped", dispatched: "dispatched", unknown: "unknown",
 };
 const PULSE_LABELS: Record<PulseBucket, {zh: string; en: string}> = {
   executing: {zh: "执行中", en: "Executing"},
   validating: {zh: "正在验收", en: "Validating"},
   accepted: {zh: "已通过", en: "Accepted"},
   attention: {zh: "需要处理", en: "Needs attention"},
+  stopped: {zh: "已登记停止", en: "Stop on record"},
   dispatched: {zh: "等待回读", en: "Awaiting readback"},
   unknown: {zh: "状态未知", en: "Unknown"},
 };
@@ -41,6 +43,8 @@ function StateIcon({state}: {state: DelegationState | PulseBucket | CheckTone}) 
   if (state === "validating") return <Loader2 aria-hidden="true" size={14}/>;
   if (state === "accepted" || state === "ready") return <CheckCircle2 aria-hidden="true" size={14}/>;
   if (state === "dispatched") return <Clock3 aria-hidden="true" size={14}/>;
+  // A recorded stop is an explicit terminal marker, not an unknown to triage.
+  if (state === "stopped") return <CircleDashed aria-hidden="true" size={14}/>;
   if (state === "unverified") return <ShieldCheck aria-hidden="true" size={14}/>;
   if (state === "unchecked") return <CircleDashed aria-hidden="true" size={14}/>;
   if (state === "unknown") return <CircleHelp aria-hidden="true" size={14}/>;
@@ -130,7 +134,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
     else unboundRecords.push(row);
   }
   const pulse = items.reduce((counts, row) => {counts[PULSE_BUCKETS[delegationState(row)]] += 1; return counts;},
-    {executing: 0, validating: 0, accepted: 0, attention: 0, dispatched: 0, unknown: 0} as Record<PulseBucket, number>);
+    {executing: 0, validating: 0, accepted: 0, attention: 0, stopped: 0, dispatched: 0, unknown: 0} as Record<PulseBucket, number>);
   const visibleBuckets = (Object.keys(PULSE_LABELS) as PulseBucket[]).filter(bucket => bucket !== "unknown" || pulse.unknown > 0);
 
   function renderRecord(row: DelegationRecord, showAgent: boolean) {

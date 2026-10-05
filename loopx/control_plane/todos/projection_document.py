@@ -1,8 +1,21 @@
 """Parse replaceable Todo regions once, preserving every byte of surrounding prose."""
 from collections.abc import Mapping
 from dataclasses import dataclass
+import json
 
 from .machine_region import TodoRegion, find_todo_regions, visible_markdown_lines
+
+
+def recovered_todo_projection_skeleton(goal_id: str) -> str:
+    """The display recovery codec; it does not restore missing Goal intent."""
+    return (
+        f"---\ngoal_id: {json.dumps(goal_id, ensure_ascii=False)}\n---\n\n"
+        "# Recovered Todo projection\n\n"
+        "> Regenerated from canonical Todo authority. Non-Todo sections "
+        "are not in this provider snapshot and were not recovered. "
+        "This is a Todo projection, not a complete Goal-state restore.\n\n"
+        "## Agent Todo\n"
+    )
 
 
 @dataclass(frozen=True)

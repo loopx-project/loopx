@@ -496,6 +496,7 @@ class ChatActionNormalizationMixin:
                     "heartbeat",
                     "stop_condition",
                     "initial_todos",
+                    "native_token_budget",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -508,6 +509,13 @@ class ChatActionNormalizationMixin:
                 "goal_id": goal_id,
                 "title": _text(values.get("title"), field="title", limit=200),
             }
+            if values.get("native_token_budget") is not None:
+                budget = values["native_token_budget"]
+                if type(budget) is not int or not 1 <= budget <= 999_999_999:
+                    raise ValueError("native_token_budget must be an explicit positive token allowance")
+                if values.get("agent_id") != "codex":
+                    raise ValueError("native continuation requires the Codex endpoint")
+                result["native_token_budget"] = budget
             for field in (
                 "objective",
                 "completion_criteria",

@@ -75,6 +75,63 @@ No frontend asset or layout changes, so no repackaging is needed for this slice.
 transport。现有 usage-settings HTTP 交互验证共享机器设置。没有前端资源或布局
 改动，因此此切片无需重新打包前端。
 
+## Claim argument recovery / Claim 参数恢复
+
+Parsed `todo claim` usage errors now include `error_code=todo_claim_invalid_arguments`
+and one `recovery` object. Its `cli_args` is an argv array with the original
+registry/runtime, Goal/Todo, supplied actor/executor, project/state path,
+preview, operation identity and lease/CAS values. Review `remove_flags`, then
+append each `requires_flags` entry with an explicit value before retrying.
+Retry from the original working directory when supplied paths are relative.
+A missing executor is never inferred from the actor. The command can still
+fail admission, registration, ownership, source-mode or lease validation.
+This is recovery guidance, not an authority grant or automatic retry.
+Unknown flags, invalid flag values and parser-required global inputs retain
+their existing argparse diagnostics before this handler is reached.
+
+For example, a claim with an actor but no `--claimed-by`, plus an unsupported
+`--turn-instance-id`, reports both in the same packet. The retry excludes the
+Turn flag; it neither starts a new Turn nor re-fetches a quota packet. A lease
+expected version of `0` is retained, including when its missing idempotency key
+must be supplied. Canonical-only flags on legacy state remain a source-mode
+rejection; this grammar projection does not remove them or promote state.
+
+The existing Python CLI grammar/formatting adapter owns this local error code
+and argv projection. The shared TypeScript claim transaction remains the
+authority owner; no new capability, setting, provider or bridge RPC is added.
+JSON and Markdown expose the same repair facts. Source and console CLI callers
+gain the guidance; frontend/Lark controls and persisted contracts do not change.
+Successful commands retain their output. Invalid claim option combinations now
+use the claim-specific validator before shared checks, so their first human
+diagnostic can differ; existing claim-specific and Turn diagnostics remain.
+
+已解析的 `todo claim` 用法错误现在返回上述 error code 和一个 `recovery`：`cli_args` 用 argv
+数组保留原路由、Goal/Todo、已提供的 actor/executor、project/state、preview、
+operation 身份和 lease/CAS。先检查 `remove_flags`，再为每个 `requires_flags`
+补入显式值后重试；路径为相对路径时，沿用原调用的工作目录。不会从 actor 猜执行者。
+修复语法后仍可能被注册、所有权、source mode 或 lease 校验拒绝。这是恢复指引，
+不授予权限，也不自动执行。
+未知 flag、非法 flag 值和缺 parser 必填输入仍先走既有 argparse 诊断。
+缺 `--claimed-by` 又误带 Turn 参数时，一次 packet 同时列出两处；修复不另建 Turn
+或重新读取 quota。CAS=0 保留，缺 lease key 时必须填写；legacy 上的 canonical 参数
+继续按模式拒绝，不静默删除或 promote。语法／展示沿用 Python CLI adapter，
+事务权限仍归 TS claim owner；不新增 capability、设置、provider 或 RPC。
+JSON/Markdown 展示相同事实，source/console 获得指引，frontend/Lark 控件和持久合同
+不变。成功输出保持原行为；非法参数先经过 claim validator，首条人类诊断可能改变，
+既有 claim 专属和 Turn 诊断保留。
+
+Real CLI tests execute the returned argv against isolated Legacy, File and
+SQLite state, including preview/replay, actor mismatch, canonical-mode refusal,
+hard-lease admission and CAS=0. They do not qualify PostgreSQL transaction
+changes, sustained provider performance, model retry rates or benchmark scores.
+Measure the error-plus-recovery journey: the richer error costs more bytes;
+avoiding a separate help lookup is a consumer benefit, not backend IO savings.
+
+真实 CLI 测试在隔离 Legacy/File/SQLite 上执行返回的 argv，覆盖 preview/replay、
+actor 错配、canonical 模式拒绝、hard lease 和 CAS=0；不代表 PostgreSQL 事务改动、
+长程 provider 性能、模型重试率或 benchmark 得分验收。应测整个错误到恢复路径：
+错误本身增加字节，省掉一次 help 是调用方收益，不等于后端 IO 优化。
+
 ## Qualification / 验收
 
 Fresh-interpreter regressions compare source and console entries, preserve

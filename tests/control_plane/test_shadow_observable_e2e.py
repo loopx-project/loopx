@@ -170,19 +170,20 @@ def test_lease_arguments_cas_transfer_and_replay(caller: Caller) -> None:
     assert w.call('task-lease', 'inspect', '--todo-id', todo)['ok'] is True
 
 
-def test_refresh_and_reward_owned_prose(caller: Caller) -> None:
+def test_refresh_bound_step_and_reward_owned_prose(caller: Caller) -> None:
     w = caller
     todo = w.add('Canonical record must survive prose')
     record = w.read(todo)
     args = ('refresh-state', '--agent-id', 'agent-a', '--progress-scope', 'goal', '--classification', 'continue',
-            '--recommended-action', 'Inspect persisted arguments.', '--vision-unchanged-reason', 'Same bounded validation.',
+            '--recommended-action', 'Read the independent lease snapshot.', '--vision-unchanged-reason', 'Same bounded validation.',
             '--next-action', 'Read the independent lease snapshot.', '--no-global-sync')
     before = w.primary()
     assert w.call(*args, '--dry-run')['ok'] is True
     assert w.primary() == before
     refreshed = w.call(*args)
     assert refreshed['ok'] is True, refreshed
-    assert 'Read the independent lease snapshot.' in w.state.read_text()
+    assert 'Read the independent lease snapshot.' not in w.state.read_text()
+    assert refreshed['recommended_action_resolution']['recommended_action_source'] == 'agent_lane_step'
     assert w.read(todo) == record
     args = ('reward', '--actor-kind', 'owner', '--recorded-at', '2026-09-01T12:00:00+00:00', '--decision', 'continue',
         '--reward', 'positive', '--reason-summary', 'Retained argument evidence.', '--write-active-state-summary')

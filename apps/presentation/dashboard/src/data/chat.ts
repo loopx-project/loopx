@@ -8,6 +8,7 @@ import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
   type AgentResponse,
+  type ChatProject,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -18,6 +19,23 @@ import type {DelegationPreflight} from "./delegation-preflight.js";
 const configuredChatOrigin = String(import.meta.env?.VITE_LOOPX_CHAT_ORIGIN ?? "")
   .trim()
   .replace(/\/+$/, "");
+
+export type ConfigurationBackupResult = {
+  ok: boolean; status?: string; goal_count: number; machine_configuration_present: boolean;
+  sha256: string; checkpoint_ref?: string;
+};
+
+export function exportConfigurationBackup(goalIds?: string[]) {
+  return requestJson<ConfigurationBackupResult & {backup: Record<string, unknown>}>("/api/chat/configuration-backup/export", {
+    method: "POST", body: JSON.stringify(goalIds === undefined ? {} : {goal_ids: goalIds}),
+  });
+}
+
+export function restoreConfigurationCheckpoint(backup: Record<string, unknown>, execute: boolean) {
+  return requestJson<ConfigurationBackupResult>("/api/chat/configuration-backup/restore", {
+    method: "POST", body: JSON.stringify({backup, expected_sha256: backup.sha256, execute}),
+  });
+}
 
 function chatApiUrl(path: string) {
   if (!configuredChatOrigin || /^https?:\/\//.test(path)) {
@@ -641,16 +659,42 @@ export async function recordProjectionExchange(options: {
   );
 }
 
+/** The App's conversation targets; each owns exactly one Core Chat channel. */
+export type ConversationContext =
+  | { kind: "manager" }
+  | { kind: "goal"; goalId: string }
+  | { kind: "project"; projectRef: string };
+
+// Goal ids are single path segments, so a key containing "/" never names a Goal.
+const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
+
+export function conversationContextKey(context: ConversationContext): string {
+  if (context.kind === "manager") return "manager";
+  return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
+}
+
+export function conversationContextOfKey(key: string): ConversationContext {
+  if (key === "manager") return { kind: "manager" };
+  if (key.startsWith(PROJECT_CONVERSATION_KEY_PREFIX)) {
+    return { kind: "project", projectRef: key.slice(PROJECT_CONVERSATION_KEY_PREFIX.length) };
+  }
+  return { kind: "goal", goalId: key };
+}
+
+export function conversationChannelId(context: ConversationContext): string {
+  if (context.kind === "manager") return "manager";
+  return context.kind === "goal" ? `goal.${context.goalId}` : `project.${context.projectRef}`;
+}
+
 export async function createChatSession(
-  goalId: string,
+  context: ConversationContext,
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
-  contextKind: "goal" | "manager" = "goal",
   signal?: AbortSignal,
 ) {
   return requestJson<{
     agent_id: string;
-    goal_id: string;
+    goal_id: string | null;
     ok: true;
     resumed: boolean;
     session_id: string;
@@ -660,7 +704,10 @@ export async function createChatSession(
     // An omitted ``agent_id`` means "no explicit executor pick": the channel
     // owner resolves its own default. Sending this client's own default would
     // silently re-point the steward channel away from its configured executor.
-    body: JSON.stringify({ goal_id: goalId, agent_id: agentId, mode, context_kind: contextKind }),
+    // A project Session carries only the host-issued reference, never a Goal.
+    body: JSON.stringify(context.kind === "project"
+      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, mode }
+      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, mode, context_kind: context.kind }),
   });
 }
 
@@ -674,7 +721,8 @@ export type ChatStreamEvent = {
 
 export type ChatSessionSummary = {
   session_id: string;
-  goal_id: string;
+  goal_id: string | null;
+  project_ref?: string | null;
   agent_id: string;
   adapter_kind: string;
   channel_id?: string;
@@ -691,6 +739,12 @@ export type ChatSessionSummary = {
   host_surface?: string | null;
   manager_runtime?: ManagerRuntimeSessionReadback | null;
 };
+
+export type { ChatProject };
+
+export async function fetchChatProjects(signal?: AbortSignal) {
+  return requestJson<{ok: true; projects: ChatProject[]}>("/api/chat/projects", {signal});
+}
 
 /** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */
 export type ChatSessionMode = "managed_runtime" | "attached_host";
@@ -1109,14 +1163,17 @@ export function readManagedGoalResult(goalId: string, todoId: string) {
   );
 }
 export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
-  | "executing" | "validating" | "dispatched" | "unknown";
+  | "stopped" | "executing" | "validating" | "dispatched" | "unknown";
 type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null};
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
-// "executing" and "validating" require an active worker observation, never the stored status alone.
 export function delegationState(row: DelegationStateFacts): DelegationState {
   if (row.status === "unavailable") return "unavailable";
   if (row.status === "accepted") return "accepted";
   if (row.status === "rejected") return "rejected";
+  // A recorded stop precedes recovery: only the separate stop receipt proves
+  // the original execution released its Host group, so the stored status alone
+  // must not be read as work still needing recovery.
+  if (row.status === "stopped") return "stopped";
   if (row.recovery_required) return "recovery_required";
   if (row.status === "running" && row.worker_active) return "executing";
   if (row.status === "turn_returned" && row.worker_active) return "validating";
@@ -1127,6 +1184,7 @@ const DELEGATION_STATE_LABELS: Record<DelegationState, {zh: string; en: string}>
   unavailable: {zh: "无法核验", en: "Unavailable"},
   accepted: {zh: "已通过当前验收", en: "Currently accepted"},
   rejected: {zh: "未通过验收", en: "Rejected"},
+  stopped: {zh: "停止已登记", en: "Stop recorded"},
   recovery_required: {zh: "需要恢复原执行", en: "Original execution needs recovery"},
   executing: {zh: "执行中", en: "Executing"},
   validating: {zh: "正在验收", en: "Validating"},
@@ -1559,7 +1617,8 @@ export const capabilityConfigurationFieldSchema = z.object({
   key: z.string(),
   label: z.string(),
   description: z.string(),
-  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule"]),
+  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule", "pr_review_agent_orders"]),
+  agents: z.array(z.string()).optional(),
   nullable: z.boolean().optional(),
   required: z.boolean(),
   minimum: z.number().int().optional(),
@@ -2318,4 +2377,38 @@ export async function updateGoalOwnership(body: { goal_id: string; mode: Executi
     }
     throw error;
   }
+}
+
+
+const privateAgentSessionSchema = z.object({session_id: z.string(), goal_id: z.string(), agent_id: z.string(), executor_endpoint_id: z.string()});
+const privateAgentTargetSchema = privateAgentSessionSchema.extend({target_ref: z.string(), host_ref: z.string(), goal_instance_id: z.string().nullable()});
+const privateConversationSchema = z.object({
+  binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
+  project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
+  grant: z.enum(["workspace_read", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
+  pending_count: z.number().int(), recovery_count: z.number().int(),
+  agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
+});
+const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+  connections: z.array(privateConversationSchema)});
+export type PrivateConversation = z.infer<typeof privateConversationSchema>;
+export async function fetchPrivateConversations() {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
+}
+export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project") {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind}),
+  }));
+}
+export async function disconnectPrivateConversation(bindingId: string, revision: number) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+    method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
+  }));
+}
+
+export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
+  }));
 }

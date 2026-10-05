@@ -8,10 +8,10 @@ from ..machine_configuration.contract import (
     MachineConfigurationNamespace,
 )
 from .scheduling import (
-    DEFAULT_REVIEW_PRIORITY,
     PullRequestReviewPriority,
     normalize_review_priority,
 )
+from .order import configuration
 
 PULL_REQUEST_REVIEW_MACHINE_DEFAULTS_SCHEMA = (
     "pull_request_review_machine_defaults_v0"
@@ -21,24 +21,17 @@ PULL_REQUEST_REVIEW_MACHINE_DEFAULTS_SCHEMA = (
 def normalize_pull_request_review_machine_defaults(
     raw: Mapping[str, Any],
 ) -> dict[str, Any]:
-    unknown = sorted(set(raw) - {"schema_version", "review_priority", "wait_for_ci"})
-    if unknown:
-        raise ValueError(
-            "pull_request_review contains unsupported fields: "
-            + ", ".join(unknown)
-        )
     if raw.get("schema_version") != PULL_REQUEST_REVIEW_MACHINE_DEFAULTS_SCHEMA:
         raise ValueError(
             "pull_request_review must use "
             + PULL_REQUEST_REVIEW_MACHINE_DEFAULTS_SCHEMA
         )
-    wait_for_ci = raw.get("wait_for_ci", True)
-    if type(wait_for_ci) is not bool:
-        raise TypeError("pull_request_review.wait_for_ci must be a boolean")
     return {
-        "wait_for_ci": wait_for_ci,
+        "wait_for_ci": True,
+        "review_order": "forward",
+        **configuration({"action": "normalize", "allow_agents": False,
+                         "configuration": {k: v for k, v in raw.items() if k != "schema_version"}}),
         "schema_version": PULL_REQUEST_REVIEW_MACHINE_DEFAULTS_SCHEMA,
-        "review_priority": normalize_review_priority(raw.get("review_priority")).value,
     }
 
 
@@ -51,14 +44,14 @@ def pull_request_review_machine_configuration_namespace() -> MachineConfiguratio
         apply_public_update=lambda _current, update: dict(update),
         title="Pull-request review",
         description=(
-            "Machine defaults for review priority and CI waiting, with complete "
-            "Goal overrides. Other developers rank first and CI waiting is enabled "
-            "by default. Disabling CI waiting preserves required local validation "
+            "Forward/reverse PR review order and CI waiting, with Goal defaults "
+            "and registered-Agent direction overrides. Forward is the default. "
+            "Disabling CI waiting preserves required local validation "
             "and grants no GitHub, Todo, push, or merge authority."
         ),
         default_configuration={
             "schema_version": PULL_REQUEST_REVIEW_MACHINE_DEFAULTS_SCHEMA,
-            "review_priority": DEFAULT_REVIEW_PRIORITY.value,
+            "review_order": "forward",
             "wait_for_ci": True,
         },
     )
@@ -86,7 +79,7 @@ def review_priority_machine_default(
             "machine_configuration.namespaces.pull_request_review must be an object"
         )
     normalized = normalize_pull_request_review_machine_defaults(raw)
-    return normalize_review_priority(normalized["review_priority"])
+    return normalize_review_priority("owner-first" if normalized["review_order"] == "reverse" else "other-developers-first")
 
 
 __all__ = [

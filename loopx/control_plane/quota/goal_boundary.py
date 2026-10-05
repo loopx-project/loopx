@@ -420,9 +420,9 @@ def goal_boundary(
         boundary.setdefault("capabilities", {})["reward_memory"] = reward_capability
     if goal.get("next_probe"):
         boundary["next_probe"] = str(goal.get("next_probe"))
-    if isinstance(goal.get("explore_graph"), dict):
+    if isinstance(goal.get("explore_graph"), dict) or (goal.get("spawn_policy") or {}).get("explore_harness"):
         boundary["explore_graph"] = compact_explore_graph_policy(
-            goal.get("explore_graph")
+            goal.get("explore_graph"), (goal.get("spawn_policy") or {}).get("explore_harness")
         )
     spawn_policy = (
         goal.get("spawn_policy") if isinstance(goal.get("spawn_policy"), dict) else None

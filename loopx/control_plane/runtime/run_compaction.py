@@ -357,6 +357,10 @@ def compact_run_base(
         compact["subagents"] = subagents[:max_subagent_activity_items]
         compact["subagent_count"] = len(subagents)
 
+    if isinstance(run.get("recommended_action_resolution"), dict):
+        resolution = run["recommended_action_resolution"]
+        if resolution.get("step_revision"):
+            compact["recommended_action_resolution"] = dict(resolution)
     return compact
 
 

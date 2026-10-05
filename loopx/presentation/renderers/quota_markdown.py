@@ -391,6 +391,8 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"- agent_lane_next_action_text: {markdown_scalar(agent_lane_next_action.get('text'))}"
             )
+        if agent_lane_next_action.get("next_step"):
+            lines.append(f"- agent_lane_next_step: {markdown_scalar(agent_lane_next_action['next_step'])}")
     agent_lane_frontier_hint = as_dict(payload.get("agent_lane_frontier_hint"))
     if agent_lane_frontier_hint:
         lines.append(

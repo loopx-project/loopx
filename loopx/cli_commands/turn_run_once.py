@@ -278,7 +278,10 @@ def execute_turn_run_once(
                 state_file=None,
                 classification=str(result["classification"]),
                 recommended_action=str(result["recommended_action"]),
-                next_action=str(result["next_action"]),
+                # A host's next_action is follow-up guidance, not refresh-state's
+                # explicit within-task step edit (which requires a runnable Todo).
+                # Keep both host texts in the durable host_result, including for
+                # completion/repair, without decorating a completed or blocked task.
                 delivery_batch_scale=str(result["delivery_batch_scale"]),
                 delivery_outcome=str(result["delivery_outcome"]),
                 delivery_workspace_path=delivery_workspace_path,
@@ -774,7 +777,7 @@ def execute_turn_run_once(
                     "model": args.codex_model,
                     "reasoning_effort": args.codex_reasoning_effort,
                     "mcp_server": args.codex_mcp_server_json,
-                    "timeout_seconds": max(1.0, args.timeout_seconds - 5.0),
+                    "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
                 }
                 if goal_admission is not None:
                     options["goal_admission"] = goal_admission

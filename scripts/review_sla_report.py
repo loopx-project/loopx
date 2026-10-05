@@ -42,7 +42,7 @@ REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # .github/GOVERNANCE.md. Only these accounts can satisfy the published
 # first-response target; tests/test_review_sla_report.py checks this list
 # against that table.
-DEFAULT_RESPONDERS = ("huangruiteng", "steven-kid", "maxliux5")
+DEFAULT_RESPONDERS = ("huangruiteng", "steven-kid", "maxliux5", "loopx-agent")
 # Fallback only for inputs that carry no actor type (an old --input file).
 # GitHub's typed actors are authoritative: a Bot is never a responder even
 # when its login looks human, and a human whose login starts with "copilot"

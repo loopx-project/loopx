@@ -1,0 +1,20 @@
+.personal-private-conversation { display: grid; gap: 18px; }
+.personal-private-conversation > p { margin: 0; }
+.personal-private-conversation label { display: grid; gap: 8px; font-size: 13px; }
+.personal-private-conversation select {
+  width: 100%; min-height: 40px; padding: 10px 12px;
+  border: 1px solid var(--pw-line-strong); border-radius: 8px;
+  background: var(--pw-card); color: var(--pw-text); font: inherit;
+}
+.personal-private-conversation .personal-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.personal-private-conversation button {
+  justify-self: start; min-height: 36px; padding: 8px 12px;
+  border: 1px solid var(--pw-line-strong); border-radius: 8px;
+  background: var(--pw-card); color: var(--pw-text); cursor: pointer; font-size: 13px;
+}
+.personal-private-conversation button:disabled { color: var(--pw-muted); cursor: default; opacity: .6; }
+.personal-private-conversation :is(button, select):focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-private-conversation form { display: grid; gap: 12px; }
+.personal-private-conversation form button[type="submit"] { background: var(--pw-text); color: var(--pw-card); }
+.personal-private-conversation [role="alert"] { color: var(--pw-red); }
+.personal-private-conversation [role="status"]:empty { display: none; }

@@ -267,6 +267,15 @@ function bindingMatches(lines: readonly string[]): BindingMatch[] {
   return matches;
 }
 
+/** Decode the existing typed breadcrumb; arbitrary prose cannot select work. */
+export function projectNextActionBinding(value: unknown): JsonObject {
+  const request = requiredObject(value, "next action binding");
+  const lines = stringArray(request.lines, "next action binding lines");
+  const matches = bindingMatches(lines);
+  return {todo_id: matches.length === 1 && matches[0].schema === NEXT_ACTION_BINDING_SCHEMA &&
+    visibleNextActionEntries(lines).length === 1 ? matches[0].todoId : null};
+}
+
 function hasBindingDirective(lines: readonly string[]): boolean {
   const bounds = headingBounds(lines, "Next Action");
   if (!bounds) return false;

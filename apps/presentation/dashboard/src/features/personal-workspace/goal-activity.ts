@@ -8,7 +8,7 @@ export type WorkspaceGoalExecution =
   | { kind: "unknown" };
 
 export type GoalSessionFact = {
-  goal_id: string;
+  goal_id: string | null;
   agent_id: string;
   active_turn_id: string | null;
   host_surface?: string | null;

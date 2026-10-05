@@ -106,7 +106,7 @@ def register_todo_command(
     todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For todo add/update, set the lifecycle status.")
     todo_parser.add_argument("--note", help="Public-safe note to attach to a lifecycle transition.")
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
-    todo_parser.add_argument("--result-file", help="For todo complete, bind a bounded local .json, .md or .txt result to the independently accepted completion.")
+    todo_parser.add_argument("--result-file", help="For todo complete with bound Goal acceptance criteria, bind a bounded local .json, .md or .txt result. A Todo validator alone is insufficient; use --evidence for a local artifact pointer.")
     todo_parser.add_argument(
         "--validation-command",
         help=(

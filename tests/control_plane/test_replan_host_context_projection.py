@@ -121,7 +121,7 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
     obligation = payload["autonomous_replan_obligation"]
     context = obligation["replan_context"]
     action = payload["replan_action_packet"]
-    assert context["evidence_source"] == "agent_scoped_evidence_log"
+    assert context["evidence_source"] == "compact_run_history"
     assert context["delivery"] == "host_projected"
     assert context["delivery_receipt"] == {
         "schema_version": "replan_context_delivery_receipt_v0",

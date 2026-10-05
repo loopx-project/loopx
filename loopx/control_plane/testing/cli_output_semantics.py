@@ -6,6 +6,8 @@ import re
 import shlex
 from typing import Any
 
+from loopx.control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+
 
 def heartbeat_user_language_prompt_revision(text: str) -> str | None:
     """Attribute the one-time user-language prompt transition in CLI probes.
@@ -19,6 +21,20 @@ def heartbeat_user_language_prompt_revision(text: str) -> str | None:
         "Lang=user; default=en; mix=asked/scoped.",
     )
     return "heartbeat_user_language_v1" if any(rule in text for rule in rules) else None
+
+
+def heartbeat_peer_admission_prompt_revision(text: str) -> str | None:
+    """Attribute readable peer guidance for a one-time CLI budget transition.
+
+    This recognizes the complete reviewed instruction block for validation only;
+    workspace and claim/lease admission remain owned by the live quota contract.
+    """
+    block = (
+        "Follow the current quota claim/lease and workspace contract plus repository rules. "
+        "Follow todo continuation policy. Task-scoped coordination grants no authority over "
+        "other agents. Keep scope in the heartbeat prompt, not todo metadata."
+    )
+    return "heartbeat_peer_admission_v1" if block in text else None
 
 
 def host_prompt_static_safety_revision(text: str) -> str | None:
@@ -194,6 +210,18 @@ def guided_todo_delta_schema_versions(value: Any) -> list[str]:
 
 def todo_work_counts_schema_versions(value: Any) -> list[str]:
     return _schema_versions_for_key(value, "work_counts")
+
+
+def next_action_basis_count(value: Any) -> int:
+    """Count rendered read fences for the one-time task-step projection change."""
+    if isinstance(value, list):
+        return sum(next_action_basis_count(child) for child in value)
+    if not isinstance(value, dict):
+        return 0
+    basis = value.get("next_action_basis")
+    return int(isinstance(basis, str) and ENVELOPED_SHA256_PATTERN.fullmatch(basis) is not None) + sum(
+        next_action_basis_count(child) for child in value.values()
+    )
 
 
 def markdown_headings(text: str) -> list[str]:

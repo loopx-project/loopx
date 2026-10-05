@@ -152,8 +152,8 @@ does not claim managed supervisor recovery, outer wake/timer ownership, or a
 cross-process resume guarantee.
 
 See `docs/integrations/deepseek-harness-connector.md` for the full connector
-walkthrough and `examples/dsh-turn-host-adapter-smoke.py` plus
-`examples/loopx-turn-dsh-e2e-smoke.py` for hermetic smokes. With the optional
+walkthrough, `tests/test_dsh_goal_mode.py` for the adapter contract, and
+`examples/loopx-turn-dsh-e2e-smoke.py` for the hermetic end-to-end smoke. With the optional
 SDK installed, run `examples/loopx-turn-dsh-real-e2e-smoke.py` once with
 `--host generic-cli` and once with `--host dsh`; both paths clear ambient DSH
 home variables and prove the explicit SDK-home wiring.

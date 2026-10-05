@@ -65,7 +65,7 @@ def _checkpoint_instructions(checkpoint: Mapping[str, Any]) -> str:
         "`--progress-evidence-id`, `--progress-coverage-complete`. Do not add options absent "
         "from the original command or change its delivery target.",
         "- Remove: Remove previously executed state-mutation options, even when their "
-        "values are unchanged: `--next-action`, `--autonomous-replan-recorded`, "
+        "values are unchanged: `--next-action`, `--next-action-basis`, `--autonomous-replan-recorded`, "
         "`--repair-delta-kind`, `--usage-json`, `--usage-codex-session`. "
         "Remove dependent options that become invalid without them.",
         "- Add: Echo `--checkpoint-read-context` from the read, and add only one valid vision decision: a valid `--agent-vision-json` packet "

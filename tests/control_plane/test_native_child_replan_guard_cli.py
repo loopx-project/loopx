@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -91,11 +90,8 @@ def _admitted_guard(call, todo_bound: bool) -> dict:
             "--stage", "decision", "--operation", "spawn", "--outcome", "started",
             "--entrypoint-id", "generic_host", "--execute", expected_code=1)
         assert "admitted" in rejected["error"]
-        deferred = call(*guard_args, "--todo-id", TODO, expected_code=1)
-        assert deferred["action_selection_qualification"]["state"] == "deferred"
-        assert "settlement_identity" not in deferred["heartbeat_receipt"]
-        [reentry] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
-        guard = call(*shlex.split(reentry)[1:])
+        guard = call(*guard_args, "--todo-id", TODO)
+        assert guard["normal_delivery_allowed"] is False
         assert guard["heartbeat_receipt"]["pending_action_selection"]["settlement_bound"] is True
         assert guard["retained_action_selection"]["disposition"] == "preserve_retained_todo"
     return guard

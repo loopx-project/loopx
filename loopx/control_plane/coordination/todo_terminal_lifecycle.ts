@@ -1229,6 +1229,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {goal_acceptance_guard: acceptance}, "decision_rejection");
   }
   const acceptanceRequirements = acceptanceCompletionRequirements(completionHead, input.goal_id, input.todo_id);
+  if (input.completion_result != null && acceptanceRequirements === null) {
+    return terminalFailure("completion_result_rejected",
+      "--result-file requires Goal acceptance criteria bound to this Todo; a Todo validator alone does not establish Goal acceptance. " +
+      "Use --evidence for a local artifact pointer, or bind approved Goal acceptance criteria before retrying --result-file.",
+      {next_action: "Keep the same Todo/Turn and complete with --evidence, or configure approved bound Goal acceptance criteria."},
+      "decision_rejection");
+  }
   const acceptanceBinding = acceptanceRequirements === null ? null
     : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
   let acceptanceEvidence: JsonObject | null = null;
@@ -1597,6 +1604,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_identity_source:
       completion === null ? null : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
+    completion_receipt_id: target.todo.completion_receipt_id ?? null,
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     // A preview that omits this would show an unconditional close for work the

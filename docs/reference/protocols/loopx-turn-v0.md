@@ -22,6 +22,30 @@ The protocol is host-neutral. A Codex CLI adapter is the first target, but the
 driver lifecycle must not depend on Codex-specific session files, transcript
 formats, or benchmark task schemas.
 
+### Execution deadline defaults
+
+`turn run-once` now has no default single-turn wall-time limit (previously
+120 seconds). The built-in Codex hosts and generic managed host transport wait
+for natural completion or cancellation. `--timeout-seconds` remains an explicit
+operator-selected deadline for bounded execution or recovery tests.
+
+The external heartbeat scheduler likewise has no default wake-command deadline
+(previously 600 seconds); `--wake-timeout-seconds` opts into one. Quota probes,
+provider request/idle liveness checks, validation commands, output budgets,
+lease fencing and process-group cleanup retain their own boundaries. Cancellation
+still terminates the owned process tree; disabling an execution timer does not
+authorize continued effects after cancellation or lease loss.
+
+Benchmark adapters retain their declared total trial deadline. The shared Harbor
+adapter defaults a call to the remaining trial allowance, including its existing
+startup/cleanup reserve, instead of imposing an independent 4700-second wake cap.
+Explicit per-call settings in existing experiment configurations remain explicit
+protocol choices; omit them for natural continuation.
+
+单轮执行默认不再计时终止：Turn 的原 120 秒上限和外部 heartbeat 的原 600 秒
+wake 上限均改为显式选择。取消、租约失效、输出限制、请求存活检查和进程清理
+仍生效。benchmark 仍遵守整场总预算，默认不另设 4700 秒的单轮上限。
+
 ## Mental Model
 
 LoopX Turn is a four-stage control loop, not another agent runtime:

@@ -94,9 +94,14 @@ def capability_configuration_editor(
         },
         "goal_storage": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
-            "fields": [_field("new_goal_provider", "New Goal storage target (after promotion)", "select",
+            "fields": [_field("new_goal_provider", "New Goal storage provider", "select",
                               options=["file", "sqlite"], required=True,
-                              description="Fixed at creation. Existing Goals need a separate backed-up migration; this setting does not promote them.")],
+                              description="Fixed at creation. Existing Goals need a separate backed-up migration."),
+                       _field("canonical_creation", "Create canonical authority", "boolean", required=True,
+                              description="Explicit opt-in for future Goals. Disabled retains the post-promotion target behavior."),
+                       _field("new_goal_handoff_mode", "New Goal execution policy", "select",
+                              options=["soft_claim", "hard_lease"], required=True,
+                              description="Used only with canonical creation. Agents inherit the Goal policy; this grants no tool permissions.")],
         },
         "todo_replan_cadence": {
             "supported_scopes": ["machine", "goal"],
@@ -292,7 +297,8 @@ def capability_configuration_editor(
             "supported_scopes": ["goal"],
             "writable_scopes": ["goal"],
             "fields": [
-                _field("enabled", "Enabled", "boolean"),
+                _field("mode", "Exploration mode", "select", options=("off", "evidence", "planning"),
+                       description="Evidence only, or evidence with planning. Spawn authority is separate."),
                 _field(
                     "profile",
                     "Planner profile",
@@ -362,14 +368,14 @@ def capability_configuration_editor(
             "fields": [
                 _field("wait_for_ci", "Wait for CI", "boolean", description="When disabled, use local validation without querying or waiting for CI. This grants no merge authority."),
                 _field(
-                    "review_priority",
-                    "Review priority",
+                    "review_order",
+                    "Review direction",
                     "select",
-                    options=("other-developers-first", "owner-first"),
+                    options=("forward", "reverse"),
                     required=True,
                     description=(
-                        "Default ranks actionable PRs whose author differs from the "
-                        "authenticated reviewer before the reviewer's own PRs."
+                        "Forward ranks other authors first, oldest first within tiers. "
+                        "Reverse inverts the whole actionable queue before the batch limit."
                     ),
                 ),
             ],
@@ -569,7 +575,7 @@ def _merge_goal_feature(
             entry[field] = deepcopy(feature[field])
     entry["configuration_editor"] = capability_configuration_editor(
         capability_id,
-        explore_harness_profiles=explore_harness_profiles,
+        explore_harness_profiles=feature.get("profiles") or explore_harness_profiles,
     )
     if "machine" in entry["available_scopes"]:
         entry["effective_value_policy"] = "goal_override_over_live_machine_default"

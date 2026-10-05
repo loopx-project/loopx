@@ -123,7 +123,10 @@ def test_structured_previews_isolate_concurrent_registry_and_workspace_facts(
 ):
     """Same public Goal name, different authorities: no cwd or decision leakage."""
     first_root, first = service
-    provider_request = SimpleNamespace(param=request.node.callspec.params["service"])
+    provider_request = SimpleNamespace(
+        param=request.node.callspec.params["service"],
+        addfinalizer=request.addfinalizer,
+    )
     second_root, second = delegation_service.__wrapped__(
         tmp_path / "second", provider_request, monkeypatch
     )

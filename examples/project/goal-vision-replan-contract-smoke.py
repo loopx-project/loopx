@@ -133,7 +133,7 @@ def main() -> int:
             "`vision_gap_judge_v0` instruction packet",
             "the agent is told to compare the active vision",
             "projected required reads",
-            "`loopx evidence-log",
+            "`replan_context` supplies",
             "bounded public web research",
             "`done=true` is only valid",
             "explicit completion with authoritative evidence",

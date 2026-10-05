@@ -567,6 +567,21 @@ provider-neutral aggregate requires a separate reviewed transaction boundary.
 `Next Action` remains compatibility prose and a read projection. It is never a
 claim, lease, Goal amendment, replan settlement, or authority decision.
 
+Integrated recommendation checkpoint: `refresh-state --next-action` evolves
+the existing recommendation receipt into an actor-bound, within-Todo step;
+it no longer overwrites the compatibility prose. Single and multiple peers
+use the same rule. The existing lane selector chooses work, then the TS
+recommendation owner decorates it with a still-valid step. Task text and
+claim/lease prerequisites remain intact. Peer summaries use those same derived
+routes, with no independent plan store. Source/task/actor-step read fences reject
+stale writes and discard stale read decorations. See the
+[writeback contract](../../quota-allocation.md).
+
+This advances advisory continuity, not Stage 3 amendment commit. The source-facts
+digest is not a canonical intent revision; run history is not the shared
+Todo/claim/lease transaction store. Ordinary task changes, protected intent,
+acceptance, Vision and replan settlement retain their existing owners.
+
 ### 9.1 Semantic handoff and execution-route integration
 
 Use the existing alignment projection to supply a receiver's actual work
