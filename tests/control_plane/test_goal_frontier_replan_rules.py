@@ -870,6 +870,7 @@ def _ack(generated_at: str, delta_kind: str = "goal_vision_patch") -> dict[str, 
         "generated_at": generated_at,
         "schema_version": "autonomous_replan_ack_v0",
         "recorded": True,
+        "semantic_delta": {"accepted": True, "outcomes": ["fresh_vision_path_outcome"]},
         "delta_contract": {
             "schema_version": "repair_delta_contract_v0",
             "required": True,
@@ -1037,12 +1038,13 @@ def test_open_user_action_owns_empty_frontier_without_obligation() -> None:
 
     assert obligation is None, "open user-owned work owns the empty frontier"
 
-def test_vision_patch_ack_settles_newer_gap_from_the_ack_turn() -> None:
+@pytest.mark.parametrize("delta_kind", ["goal_vision_patch", "goal_vision_replan_trigger"])
+def test_old_vision_ack_does_not_cover_later_gap(delta_kind: str) -> None:
     gap_time = "2026-08-13T09:10:00+08:00"
     ack_time = "2026-08-13T09:00:00+08:00"
 
     obligation = derive_goal_frontier_replan_obligation_from_summaries(
-        user_todo_summary={"open_count": 1},
+        user_todo_summary={"open_count": 0},
         agent_todo_summary={
             "open_count": 0,
             "claimed_advancement_open_count": 0,
@@ -1055,9 +1057,14 @@ def test_vision_patch_ack_settles_newer_gap_from_the_ack_turn() -> None:
         agent_id="current-agent",
         existing_replan_obligation=None,
         acceptance_gaps=_vision_gap_with_generated_at(gap_time),
-        latest_replan_ack=_ack(ack_time, delta_kind="goal_vision_patch"),
+        latest_replan_ack=_ack(ack_time, delta_kind=delta_kind),
     )
 
-    assert obligation is None, (
-        "a goal_vision_patch ack settles vision gaps written by the ack turn itself"
-    )
+    assert obligation is not None, "later evidence must rearm even after a vision-patch ACK"
+
+
+def test_vision_ack_and_gap_from_same_durable_run_do_not_rearm() -> None:
+    from loopx.control_plane.goals.goal_frontier import _vision_gap_acknowledged
+
+    timestamp = "2026-08-13T09:00:00+08:00"
+    assert _vision_gap_acknowledged(_vision_gap_with_generated_at(timestamp), _ack(timestamp))

@@ -292,3 +292,29 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
     assert.equal(refusal.planning_guidance, undefined);
   }
 });
+
+
+test("vision ACK freshness covers its durable run, never later gaps or unknown timestamps", () => {
+  const at = "2026-08-13T09:00:00+08:00";
+  const ack = {recorded: true, generated_at: at,
+    semantic_delta: {accepted: true, outcomes: ["fresh_vision_path_outcome"]},
+    delta_contract: {delta_kinds: ["goal_vision_patch"]}};
+  const request = {operation: "vision_ack", ack, acceptance_gaps: [{generated_at: at}]};
+  assert.equal(projectReplanSemantics(request).acknowledged, true);
+  assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{generated_at: "2026-08-13T01:00:00Z"}]}).acknowledged, true);
+  for (const generated_at of ["2026-08-13T09:01:00+08:00", null, "invalid", "2026-08-13T09:00:00"]) {
+    assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{generated_at: at}, {generated_at}]}).acknowledged, false);
+  }
+  for (const invalid of [{recorded: false}, {generated_at: null},
+    {semantic_delta: {accepted: false, outcomes: ["fresh_vision_path_outcome"]}},
+    {semantic_delta: {accepted: true, outcomes: []}}]) {
+    assert.equal(projectReplanSemantics({...request, ack: {...ack, ...invalid}}).acknowledged, false);
+  }
+  assert.equal(projectReplanSemantics({...request, acceptance_gaps: []}).acknowledged, false);
+  const completion = {kind: "vision_outcome_checkpoint_required",
+    source: "recent_completed_advancement_todo", completed_at: at};
+  assert.equal(projectReplanSemantics({...request, acceptance_gaps: [completion]}).acknowledged, true);
+  assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{...completion,
+    completed_at: "2026-08-13T09:01:00+08:00"}]}).acknowledged, false);
+  assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{completed_at: at}]}).acknowledged, false);
+});

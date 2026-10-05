@@ -527,6 +527,10 @@ simultaneously select a candidate monitor. Owner binding and fresh completion
 validation remain required. This repairs R1/S2/S3 continuity, not R4's general
 intent-preserving amendment or provider promotion. Real File/SQLite CLI
 regressions cover recovery admission and continued refusal of unbound completion.
+Later vision gaps also rearm after an older
+patch ACK; its label cannot waive new evidence. When the new canonical successor
+removes that frontier duty before writeback, exact source reconstruction preserves
+the admitted Turn through refresh/spend without admitting successor execution.
 
 ### R2: Continuous Small-team Execution
 

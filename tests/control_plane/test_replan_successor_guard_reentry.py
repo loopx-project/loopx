@@ -21,7 +21,7 @@ TURN = "turn-periodic-successor-review"
 ROOT = Path(loopx.__file__).resolve().parents[1]
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, later_vision: bool = False):
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project", tmp_path / "runtime"
@@ -42,6 +42,18 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
         "vision_patch": {"acceptance_summary": "Independently validate a source artifact.",
                          "advancement_policy": "repeat_until_closed"},
     }, goal_id=GOAL, agent_id=AGENT))
+    if later_vision:
+        # A settled periodic review is older than the new acceptance gap.
+        # The real guard must not turn its vision-patch label into a waiver.
+        old = {**runs[1], "generated_at": "2026-08-01T00:29:00Z",
+            "autonomous_replan_ack": {
+                "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+                "delta_contract": {"delta_kinds": ["goal_vision_patch"]},
+                "semantic_delta": {"accepted": True, "outcomes": ["fresh_vision_path_outcome"],
+                    "satisfying_outcomes": ["fresh_vision_path_outcome"],
+                    "trigger_kinds": ["periodic_review_due"], "trigger_checkpoints": [],
+                    "obligation_id": "replan-1111111111111111"}}}
+        runs = [{**runs[0], "generated_at": "2026-08-01T00:30:00Z"}, old]
     index.write_text("".join(json.dumps(row) + "\n" for row in reversed(runs)))
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
@@ -60,16 +72,22 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
             capture_output=True, text=True, timeout=60)
         payload = json.loads(result.stdout)
-        assert result.returncode == expected_code, (payload.get("error"), payload.get("reason"))
+        assert result.returncode == expected_code, {k: payload.get(k) for k in ["error", "reason", "autonomous_replan_obligation", "heartbeat_receipt", "goal_frontier_projection"]}
         return payload
 
+    if later_vision:
+        call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+            "--text", "Observe the independent external gate", "--task-class", "continuous_monitor",
+            "--action-kind", "monitor", "--target-key", "external-gate",
+            "--cadence", "30m", "--next-due-at", "2099-01-01T00:00:00Z",
+            "--expires-at", "2099-01-02T00:00:00Z")
     return call, runtime, index
 
 
-def _guard(call, turn: str = TURN):
+def _guard(call, turn: str = TURN, *, expected_code: int = 0):
     return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
                 "--agent-id", AGENT, "--turn-instance-id", turn,
-                "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3")
+                "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3", expected_code=expected_code)
 
 
 def _add(call, obligation_id: str):
@@ -80,11 +98,17 @@ def _add(call, obligation_id: str):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("later_vision", [False, True])
 def test_successor_guard_returns_original_settlement_not_repeated_planning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool,
 ) -> None:
-    call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, later_vision=later_vision)
     original = _guard(call)
+    if later_vision:
+        assert original["goal_frontier_projection"]["normalized_progress"]["agent_monitor_open_count"] == 1
+        assert original["decision"] == "autonomous_replan_required"
+        assert original["execution_obligation"]["must_attempt_work"] is True
+        assert original["autonomous_replan_obligation"]["triggers"][0]["kind"] == "vision_acceptance_gap"
     core_goal = original["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert core_goal["objective"] == "Deliver the independently accepted source outcome."
     assert core_goal["objective_source"] == "active_state"
@@ -171,10 +195,11 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("invalidation", ["wrong_owner", "deferred", "unclaimed"])
+@pytest.mark.parametrize("later_vision", [False, True])
 def test_invalidated_successor_cannot_rebind_or_close_original_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, invalidation: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, invalidation: str, later_vision: bool,
 ) -> None:
-    call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, later_vision=later_vision)
     original = _guard(call)
     identity = original["heartbeat_receipt"]["settlement_identity"]
     added = _add(call, identity["replan_obligation_id"])
@@ -186,11 +211,11 @@ def test_invalidated_successor_cannot_rebind_or_close_original_turn(
          "--todo-id", added["todo_id"], *edit)
     # Invalidation may leave the original duty open, which is a legal guard
     # read. It must not grant successor settlement from a stale creation ACK.
-    guarded = _guard(call)
+    guarded = _guard(call, expected_code=1 if later_vision and invalidation == "unclaimed" else 0)
     assert guarded["heartbeat_receipt"]["settlement_identity"] == identity
     assert guarded.get("selected_todo") is None
-    assert guarded["autonomous_replan_obligation"].get("resolution_mode") != "receipt_bound_replan_settlement"
-    assert guarded["replan_action_packet"].get("settlement_only") is not True
+    assert (guarded.get("autonomous_replan_obligation") or {}).get("resolution_mode") != "receipt_bound_replan_settlement"
+    assert (guarded.get("replan_action_packet") or {}).get("settlement_only") is not True
     denied = call(*shlex.split(prior_actions[0])[1:], "--no-global-sync",
                   "--suppress-external-sinks", expected_code=1)
     assert denied.get("appended") is not True

@@ -50,6 +50,7 @@ REWARD_MEMORY_OUTCOME_COMPACT_RULE = (
     "provider calls; no raw/private content."
 )
 SCHEDULER_HINT_APPLICATION_RULE = (
+    "Bootstrap/min interval is a floor; follow current backoff. "
     "`scheduler_hint` no-spend. host_action=pause_or_delete_current_heartbeat -> "
     "automation_update stop once, verify, end; else apply_needed -> RRULE via "
     "automation_update; unavailable -> use fallback_hint.cli_args only when projected "
@@ -58,11 +59,13 @@ SCHEDULER_HINT_APPLICATION_RULE = (
     "ack_needed -> ack."
 )
 SCHEDULER_HINT_COMPACT_RULE = (
+    "Bootstrap/min interval is a floor; follow current backoff. "
     "host_action=pause_or_delete_current_heartbeat: automation_update stop; "
     "else RRULE apply via automation_update, projected fallback_hint when unavailable, "
     "then ack/fail. No spend."
 )
 SCHEDULER_HINT_THIN_RULE = (
+    "Bootstrap/min=floor; follow backoff. "
     "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend); "
     "else RRULE/projected-fallback_hint/ack/fail."
 )

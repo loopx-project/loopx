@@ -202,8 +202,32 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
   return {cli_semantic_args: PROGRESS_CLI_ARGS, writeback_contract: {}};
 }
 
+/** Vision gaps use their durable run or completed-chain source timestamp.
+ * A patch label proves no relationship to a later run; equal timestamps cover
+ * the atomic writeback without granting a permanent waiver for new gaps.
+ */
+function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
+  if (!Array.isArray(request.acceptance_gaps)) {
+    throw new EffectRuntimeRequestError("vision ACK requires acceptance_gaps");
+  }
+  const ack = object(request.ack);
+  const delta = object(ack.semantic_delta);
+  const timestamp = (value: unknown): number => typeof value === "string" &&
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
+  const acknowledgedAt = timestamp(ack.generated_at);
+  const gaps = request.acceptance_gaps.map(value => {
+    const gap = object(value);
+    return timestamp(gap.generated_at ?? (gap.kind === "vision_outcome_checkpoint_required" &&
+      gap.source === "recent_completed_advancement_todo" ? gap.completed_at : null));
+  });
+  return {acknowledged: ack.recorded === true && delta.accepted === true &&
+    strings(delta.outcomes).length > 0 && Number.isFinite(acknowledgedAt) &&
+    gaps.length > 0 && gaps.every(time => Number.isFinite(time) && time <= acknowledgedAt)};
+}
+
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation === "vision_ack") return acknowledgeVisionEvidence(request);
   if (request.operation === "turn_transition") return projectTurnTransition(request);
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
