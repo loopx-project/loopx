@@ -463,6 +463,47 @@ def _emit_quota_result(
     return 0 if payload.get("ok") else 1
 
 
+def _read_back_committed_heartbeat(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    runtime_root: Path,
+    turn_instance_id: str,
+    stall_observation: str,
+    requested_todo_id: str | None,
+    goal_ref: dict[str, str] | None,
+) -> None:
+    """Expose selection only after the original heartbeat receipt is read back."""
+    receipt = find_heartbeat_receipt(
+        runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+    )
+    if receipt:
+        rollout_event_value = payload.get("rollout_event")
+        rollout_event: Mapping[str, object] = (
+            rollout_event_value if isinstance(rollout_event_value, Mapping) else {}
+        )
+        payload["heartbeat_receipt"] = heartbeat_receipt_view(
+            receipt,
+            turn_instance_id=turn_instance_id,
+            status="committed" if rollout_event.get("appended") else "replayed",
+        )
+        commit_requested_action_selection(payload, requested_todo_id=requested_todo_id)
+    else:
+        fail_heartbeat_receipt(
+            payload,
+            turn_instance_id=turn_instance_id,
+            stall_observation=stall_observation,
+            reason=(
+                "heartbeat receipt append could not be read back; retry "
+                "quota should-run with the same --turn-instance-id"
+            ),
+        )
+
+
 def handle_quota_command(
     args: argparse.Namespace,
     *,
@@ -839,45 +880,19 @@ def handle_quota_command(
                         *(["goal_ref"] if goal_ref is not None else []),
                     ],
                 )
-                receipt = find_heartbeat_receipt(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
+                _read_back_committed_heartbeat(
+                    payload,
+                    args,
+                    runtime_root=runtime_root,
                     turn_instance_id=heartbeat_turn_id,
+                    stall_observation=heartbeat_stall_observation,
+                    requested_todo_id=(
+                        action_selection.requested_todo_id
+                        if action_selection is not None
+                        else None
+                    ),
                     goal_ref=goal_ref,
                 )
-                if receipt:
-                    rollout_event_value = payload.get("rollout_event")
-                    rollout_event: Mapping[str, object] = (
-                        rollout_event_value
-                        if isinstance(rollout_event_value, Mapping)
-                        else {}
-                    )
-                    payload["heartbeat_receipt"] = heartbeat_receipt_view(
-                        receipt,
-                        turn_instance_id=heartbeat_turn_id,
-                        status="committed"
-                        if rollout_event.get("appended")
-                        else "replayed",
-                    )
-                    commit_requested_action_selection(
-                        payload,
-                        requested_todo_id=(
-                            action_selection.requested_todo_id
-                            if action_selection is not None
-                            else None
-                        ),
-                    )
-                else:
-                    fail_heartbeat_receipt(
-                        payload,
-                        turn_instance_id=heartbeat_turn_id,
-                        stall_observation=heartbeat_stall_observation,
-                        reason=(
-                            "heartbeat receipt append could not be read back; retry "
-                            "quota should-run with the same --turn-instance-id"
-                        ),
-                    )
         else:
             append_cli_rollout_event(
                 payload,

@@ -193,7 +193,7 @@ def _default_process_factory(args: list[str]) -> subprocess.Popen[str]:
 
 
 def _target_for_profile_chat(
-    target_payload: Mapping[str, Any],
+    target_payload: Mapping[str, object],
     *,
     profile: str,
     chat_id: str,
@@ -201,10 +201,10 @@ def _target_for_profile_chat(
     active_target_refs: set[str] | None = None,
     root_id: str = "",
     binding_payloads: Mapping[str, object] | None = None,
-) -> tuple[str, Mapping[str, Any]] | None:
+) -> tuple[str, Mapping[str, object]] | None:
     targets = target_payload.get("targets")
     targets = targets if isinstance(targets, Mapping) else {}
-    candidates: list[tuple[str, Mapping[str, Any]]] = []
+    candidates: list[tuple[str, Mapping[str, object]]] = []
     for target_ref, target in targets.items():
         if active_target_refs is not None and str(target_ref) not in active_target_refs:
             continue
@@ -243,7 +243,7 @@ def _target_for_profile_chat(
 
 
 def _topic_roots_for_target(
-    binding_payloads: Mapping[str, Any], *, target_ref: str
+    binding_payloads: Mapping[str, object], *, target_ref: str
 ) -> list[str]:
     roots: list[str] = []
     for goal_id, payload in binding_payloads.items():
@@ -255,7 +255,7 @@ def _topic_roots_for_target(
 
 
 def _topic_roots_for_bindings(
-    bindings: list[Mapping[str, Any]], *, target_ref: str
+    bindings: list[Mapping[str, object]], *, target_ref: str
 ) -> list[str]:
     roots: list[str] = []
     for binding in bindings:
@@ -276,9 +276,9 @@ def _topic_roots_for_bindings(
 
 
 def _binding_payloads_for_target(
-    binding_payloads: Mapping[str, Any], *, target_ref: str
-) -> dict[str, Mapping[str, Any]]:
-    selected: dict[str, Mapping[str, Any]] = {}
+    binding_payloads: Mapping[str, object], *, target_ref: str
+) -> dict[str, Mapping[str, object]]:
+    selected: dict[str, Mapping[str, object]] = {}
     for goal_id, payload in binding_payloads.items():
         if not isinstance(payload, Mapping):
             continue
