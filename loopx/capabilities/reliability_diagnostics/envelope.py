@@ -13,8 +13,10 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from enum import StrEnum
+from fractions import Fraction
 from typing import Any
 
 from ...control_plane.runtime.public_safety import (
@@ -275,6 +277,28 @@ def _observed_at(value: Any) -> str:
 
 def parse_observed_at(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def observed_at_microseconds(value: str) -> int | Fraction:
+    """Exact UTC microseconds, including precision datetime would truncate."""
+
+    parsed = parse_observed_at(value)
+    elapsed = parsed - datetime.min.replace(tzinfo=timezone.utc)
+    key: int | Fraction = (elapsed.days * 86_400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
+    zone_start = max(value.rfind("+"), value.rfind("-"), value.rfind("Z"))
+    for match in re.finditer(r"[.,](\d+)", value):
+        digits = match.group(1)
+        remainder = digits[6:]
+        offset_fraction = match.start() > zone_start
+        # fromisoformat also discards the entire fraction of a zero-second offset.
+        if offset_fraction and not parsed.utcoffset():
+            adjustment = Fraction(Decimal("0." + digits)) * 1_000_000
+        elif remainder:
+            adjustment = Fraction(Decimal("0." + remainder))
+        else:
+            continue
+        key += -adjustment if offset_fraction and value[zone_start] == "+" else adjustment
+    return key
 
 
 def _clock(value: Any) -> ObserverClock:

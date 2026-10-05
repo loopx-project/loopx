@@ -113,6 +113,20 @@ def test_chat_capabilities_expose_public_runtime_identity() -> None:
         server.server_close()
 
 
+def test_chat_keeps_its_startup_identity_after_package_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = {"schema_version": "loopx_runtime_identity_v1", "package_fingerprint": "sha256:original"}
+    monkeypatch.setattr("loopx.chat_server.release_runtime_identity", lambda: dict(current))
+    server, thread = _start_server()
+    try:
+        current["package_fingerprint"] = "sha256:replacement"
+        response = _request(server.server_address[1], method="GET", origin=None)
+        assert json.loads(response.read())["runtime_identity"]["package_fingerprint"] == "sha256:original"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_chat_json_rejects_foreign_cors_origin() -> None:
     server, thread = _start_server()
     try:
@@ -208,6 +222,55 @@ def test_chat_action_context_cannot_persist_or_emit_overflowed_float(
         assert b"Infinity" not in response_body
         assert json.loads(response_body)["error_code"] == "invalid_action_preview"
         assert action_store.list() == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_chat_preview_preserves_canonical_actor_refusal(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority, isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Derived display\n", encoding="utf-8")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime),
+        "goals": [{"id": "goal-preview", "repo": str(tmp_path), "state_file": state.name,
+            "coordination": {"registered_agents": ["agent-a"]}}]}), encoding="utf-8")
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-preview", handoff_mode="hard_lease", todos=[{
+        "schema_version": "todo_item_v0", "source_section": "Agent Todo", "index": 1,
+        "todo_id": "todo_preview", "text": "Retain original work", "role": "agent", "status": "open",
+        "done": False, "archive_state": "active", "claimed_by": "agent-a", "priority": "P1",
+        "note": "完整来源 " * 3000,
+    }])
+    initialize_canonical_authority(runtime, "goal-preview", projection, state_path=state, provider=provider)
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-preview", include_leases=True)
+    server, thread = _start_server()
+    server.action_store = ChatActionStore(tmp_path / "actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry)
+    try:
+        response = _request(server.server_address[1], method="POST", origin=None,
+            path="/api/actions/preview", body=json.dumps({
+                "action_kind": "todo.update", "summary": "Set priority",
+                "normalized_parameters": {"goal_id": "goal-preview", "todo_id": "todo_preview",
+                    "operation": "edit", "priority": "P2"},
+                "context": {}, "idempotency_key": "priority-without-actor",
+            }).encode())
+        payload = json.loads(response.read())
+        assert response.status == 400
+        assert payload["error_code"] == "actor_required"
+        assert "retry" in payload["error"].lower()
+        assert str(tmp_path) not in json.dumps(payload)
+        assert "完整来源" not in json.dumps(payload, ensure_ascii=False)
+        assert server.action_store.list() == []
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-preview", include_leases=True) == before
     finally:
         server.shutdown()
         thread.join(timeout=5)

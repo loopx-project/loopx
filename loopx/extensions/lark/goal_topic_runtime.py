@@ -105,13 +105,15 @@ class LarkGoalTopicTurnFailed(RuntimeError):
 
 _EVENT_PROJECTION = (
     '{schema_version:"lark_event_inbox_event_v0",'
-    "event_id:(.event_id // .message_id // .id),"
-    "message_id:(.message_id // .id),"
-    "create_time:.create_time,content:.content,"
-    "sender_id:(.sender_id // .sender.id // .sender.sender_id "
-    "// .event.sender.sender_id // .event.sender.id),"
+    "event_id:(.event_id // .header.event_id // .message_id // .event.message.message_id // .id),"
+    "message_id:(.message_id // .message.message_id // .event.message.message_id // .id),"
+    "create_time:(.create_time // .message.create_time // .event.message.create_time),"
+    "content:(.content // .message.content // .event.message.content),"
+    "sender_id:(.sender_id.open_id? // .sender_id // .sender.id // .sender.sender_id.open_id? // .sender.sender_id "
+    "// .event.sender.sender_id.open_id? // .event.sender.sender_id // .event.sender.id),"
     "sender_type:(.sender_type // .sender.sender_type // .event.sender.sender_type),"
-    "chat_id:.chat_id,"
+    "chat_id:(.chat_id // .message.chat_id // .event.message.chat_id),chat_type:(.chat_type // .message.chat_type // .event.message.chat_type),"
+    "message_type:(.message_type // .msg_type // .message.message_type // .event.message.message_type),"
     "root_id:(.root_id // .message.root_id // .event.message.root_id),"
     "parent_id:(.parent_id // .reply_to // .message.parent_id // .message.reply_to "
     "// .event.message.parent_id // .event.message.reply_to),"
@@ -154,6 +156,10 @@ def _active_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict[str, 
                     "bot_app_id": str(identity.get("bot_app_id") or ""),
                 },
             )
+    for profile, config in dict(snapshot.get("private_profiles") or {}).items():
+        if profile in profiles:
+            raise ValueError("an App cannot own both private and group listeners")
+        profiles[profile] = dict(config)
     return profiles
 
 
@@ -403,6 +409,7 @@ def poll_lark_goal_topic_profile_once(
     provider_runner: Any = subprocess.run,
     reply_runner: CommandRunner = _default_simple_runner,
     proposal_deliverer: ProposalDeliverer | None = None,
+    private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
 ) -> dict[str, Any]:
     """Consume one bounded event batch for an App and reuse Inbox reply/ACK."""
 
@@ -443,6 +450,11 @@ def poll_lark_goal_topic_profile_once(
     event_statuses: list[str] = []
     event_reasons: list[str | None] = []
     for event in events:
+        if profile in dict(snapshot.get("private_profiles") or {}):
+            private_result = private_admitter(profile, dict(event)) if private_admitter else {"status": "private_admission_unavailable"}
+            event_statuses.append(str(private_result.get("status") or "unknown"))
+            event_reasons.append(None)
+            continue
         scoped, rejection = _profile_event_route(
             profile=profile,
             snapshot=snapshot,
@@ -498,6 +510,7 @@ def stream_lark_goal_topic_profile(
     reply_runner: CommandRunner = _default_simple_runner,
     health_sink: HealthSink | None = None,
     proposal_deliverer: ProposalDeliverer | None = None,
+    private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
     review_callback_handler: ReviewCallbackHandler | None = None,
 ) -> dict[str, Any]:
     """Keep one bounded long-lived CLI consumer attached between messages."""
@@ -606,6 +619,7 @@ def stream_lark_goal_topic_profile(
             provider_runner=provider_runner,
             reply_runner=reply_runner,
             proposal_deliverer=proposal_deliverer,
+            private_admitter=private_admitter,
         )
         with result_lock:
             if int(result.get("event_count") or 0) and not provider_ready:

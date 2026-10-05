@@ -50,7 +50,7 @@ SURFACE_BUDGETS = {
         "consumer": "wake and route one bounded turn",
         "cold_path": "quota should-run, status, or review-packet --handoff-only",
         # Includes generator metadata and scoped commands, not just task_body.
-        # The independent 2,500-character thin body cap remains unchanged.
+        # The independent 3,000-character thin body cap is checked separately.
         "max_json_chars": 5_400,
         "max_nested_keys": 40,
         "max_top_level_keys": 30,

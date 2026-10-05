@@ -196,3 +196,18 @@ def test_a_spewing_provider_on_stderr_is_its_own_failure() -> None:
 
     assert result.failure_kind == "stderr_too_large"
     assert result.stdout == b""
+
+
+def test_no_execution_deadline_preserves_completion_and_output_budget():
+    result = run_capped_process(
+        [sys.executable, "-c", "import time;time.sleep(.1);print('done')"],
+        stdin=b"", timeout_seconds=None, output_limit_bytes=1024,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == b"done"
+    assert result.failure_kind is None
+    limited = run_capped_process(
+        [sys.executable, "-c", "import sys,time;print('x'*2000,flush=True);time.sleep(30)"],
+        stdin=b"", timeout_seconds=None, output_limit_bytes=1024,
+    )
+    assert limited.failure_kind == "response_too_large"

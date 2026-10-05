@@ -239,6 +239,119 @@ closed.
 
 ## Compatibility
 
+### Source period assessment (extension 0.8.3)
+
+The additive Python APIs `assess_period_encoding(context)` and
+`assess_period_comparison(input)` share their result with the direct CLI:
+
+```sh
+loopx-finance-value-discovery assess-period --input-json period.json
+```
+
+The input is `finance_period_comparison_input_v1` with exactly `left`, `right`
+and `period_intent` (`same_period` or `cross_period`) in addition to its version.
+Each operand has `source_digest`, `context` and `economic_period`. Null context
+means the original context is missing; a source API's projected end or a stored
+observation's dates cannot manufacture one. A finite context contains exactly
+`startDate`/`endDate` or `instant`, retaining the original literal strings.
+
+The Finance-owned encoding API follows fixed [XBRL 2.1 §4.7.2, Recommendation
+with 2013 errata](https://www.xbrl.org/Specification/XBRL-2.1/REC-2003-12-31/XBRL-2.1-REC-2003-12-31%2Bcorrected-errata-2013-02-20.html#_4.7.2):
+date-only starts mean the same midnight; date-only ends/instants mean the next
+midnight; explicit times receive no extra day. It retains an absent timezone,
+reports local-only or unproven duration ordering separately from absolute
+boundaries, and never rewrites source labels. The bounded lexical subset uses
+AD years 0001–9999, at most six fractional second digits, and explicit offsets
+up to ±14:00. Unsupported encodings, forever, incomplete contexts and calendar
+overflow fail closed. This is not complete XML Schema, taxonomy or DTS validation.
+
+An economic declaration has exactly `context_source_digest`, `evidence_ref`,
+`role`, `start`, `end` and `start_basis`, with optional `event_instant` and
+`event_mapping_evidence_ref`. Boundaries are explicit dateTimes or null; an
+unstated timezone stays unknown. `role` is an exact, bounded source-parent
+token, not a global alias or inferred role. `start_basis` is `calendar` or
+`event`; an event start requires an explicit instant, timezone and evidence
+reference for its relationship to the duration. Calendar starts cannot silently
+consume event metadata. The declaration's context digest must match the
+operand's source digest, and its absolute boundaries must match the encoded
+duration. Missing evidence, unknown ordering, distinct roles, wrong bindings or
+missing/mismatched event mappings make this assessment ineligible. Equal dates
+or known numeric accuracy do not supply those declarations.
+
+The result `finance_period_comparison_assessment_v1` preserves both encodings,
+parent declarations and reason codes. `period_evidence_eligible` applies only
+to this declared period axis: same-period intent requires equal absolute
+boundaries and exact roles; cross-period intent requires distinct boundaries
+and exact roles. It does not assert non-overlap, comparable metric semantics,
+source truth, source authenticity, lifecycle, PIT or financial admission.
+Economic admission currently covers finite durations; an encoded instant is
+still interpreted but cannot be promoted to a return duration. Source context
+identity/QName, original bytes, extraction and economic evidence remain with
+the source/parent caller. That caller must independently admit those inputs,
+match its retained current payload/handoff pin, and enforce subject/unit/basis,
+purpose, withdrawal/conflict and cutoff rules before consuming the period axis.
+Digest equality or a reference alone authenticates nothing: the output fixes
+`source_evidence_authenticated`, `source_lifecycle_assessed`,
+`financial_admission` and `trading_allowed` to false.
+
+A processed ineligible assessment exits 0; inspect eligibility and reasons.
+Malformed input exits 1 with an error packet. Existing reducers/replays and
+numeric accuracy keep their original bytes and behavior. This is an optional
+direct CLI/API prerequisite; managed protocol dispatch, Lusen immutable input
+version/pin integration, App/Lark and financial utility remain separate stages.
+No catalog entry, Core authority, default installation or source call is added.
+Consumers must qualify the exact new API/schema/version pair; restore their
+original inputs, pins and binary pair to opt out or roll back, rather than
+deleting declarations from frozen evidence. Old binaries do not supply this API.
+
+中文：新增期间 API/CLI 分开编码边界与父审经济期间声明，原字面值和时区缺证
+保持。事件到收益 duration 的映射必须显式提供，日期相等或精度已知不能填补。
+`period_evidence_eligible` 只说明这个声明维度通过检查，不认证来源、PIT、生命周期
+或金融/交易准入。当前经济检查限定有限 duration，instant 不自动变成 duration。
+源 context/bytes/父审、原 payload/pin 与撤回/时点门禁沿既有调用者 owner；Lusen
+成对协议、App/Lark、发布和效用分别验收，旧回放不随升级改写。
+
+### Producer-declared numeric accuracy (extension 0.8.2)
+
+The Python API `assess_numeric_accuracy(value, declaration)` is an additive,
+Finance-owned interpretation of ordinary numeric `decimals`/`precision`
+attributes. It returns `finance_numeric_accuracy_assessment_v1`. Source
+adapters retain the original QName, context, unit, scale, label roles, source
+version and clocks; they pass the already decoded numeric string and only the
+accuracy attributes to this function. Raw value/attribute strings are retained.
+
+Missing declarations and `precision="0"` remain unknown. Positive precision
+infers decimals without floating-point arithmetic; zero with positive precision
+infers `INF`. Both accuracy attributes, malformed attributes and non-finite
+values fail closed. Displayed decimal places never supply missing accuracy.
+`INF` means producer-declared exactness for that lexical fact, not independently
+verified financial truth. These rules follow [XBRL 2.1 §4.6.3–6](https://www.xbrl.org/Specification/XBRL-2.1/REC-2003-12-31/XBRL-2.1-REC-2003-12-31%2Bcorrected-errata-2013-02-20.html).
+Nil and fraction facts are outside this ordinary numeric API.
+
+The assessment does not invent a rounding interval or certify an economic
+ratio, calculation-linkbase consistency, global concept aliases, first
+availability or PIT eligibility. Calculation consistency requires its own
+relationship, context/unit and coverage evidence. Source labels cannot replace
+fact contexts. `independent_truth_verified`, `arithmetic_identity_verified` and
+`trading_allowed` remain false.
+
+```python
+from loopx_finance_value_discovery import assess_numeric_accuracy
+
+assessment = assess_numeric_accuracy("14.5000", {"decimals": "INF"})
+assert assessment["state"] == "producer_declared_exact"
+assert not assessment["independent_truth_verified"]
+```
+
+This helper does not change prior evaluation/replay bytes or install another
+provider. Consumers opt in through their owning input version and must report
+missing Finance support on that path rather than silently drop the declaration.
+Existing consumers that do not call it retain their previous behavior. Rollback
+uses the original consumer/input and Finance version, without rewriting stored
+evidence. The paired source consumer and actual wheel qualification remain
+separate delivery steps; no new CLI operation, App view or Lark renderer is
+claimed by this Python prerequisite.
+
 ### Contract exit liquidity / 合约退出流动性 (extension 0.8.0)
 
 `finance_contract_liquidity_input_v0` is an additive Finance-owned contract.

@@ -2,6 +2,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -202,8 +203,33 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
   return {cli_semantic_args: PROGRESS_CLI_ARGS, writeback_contract: {}};
 }
 
+/** Vision gaps use their durable run or completed-chain source timestamp.
+ * A patch label proves no relationship to a later run; equal timestamps cover
+ * the atomic writeback without granting a permanent waiver for new gaps.
+ */
+function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
+  if (!Array.isArray(request.acceptance_gaps)) {
+    throw new EffectRuntimeRequestError("vision ACK requires acceptance_gaps");
+  }
+  const ack = object(request.ack);
+  const delta = object(ack.semantic_delta);
+  const timestamp = (value: unknown): bigint | null => typeof value === "string" &&
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? parseTodoTimestampMicros(value) : null;
+  const acknowledgedAt = timestamp(ack.generated_at);
+  const gaps = request.acceptance_gaps.map(value => {
+    const gap = object(value);
+    return timestamp(gap.generated_at ?? (gap.kind === "vision_outcome_checkpoint_required" &&
+      gap.source === "recent_completed_advancement_todo" ? gap.completed_at : null));
+  });
+  return {acknowledged: ack.recorded === true && delta.accepted === true &&
+    strings(delta.outcomes).some(outcome => VISION_OUTCOMES.some(known => known === outcome)) &&
+    acknowledgedAt !== null &&
+    gaps.length > 0 && gaps.every(time => time !== null && time <= acknowledgedAt)};
+}
+
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation === "vision_ack") return acknowledgeVisionEvidence(request);
   if (request.operation === "turn_transition") return projectTurnTransition(request);
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");

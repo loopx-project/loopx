@@ -628,6 +628,16 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return parsedPayload as T;
 }
 
+export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal) {
+  const query = new URLSearchParams({goal_id: goalId, todo_id: todoId});
+  const result = z.object({
+    ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
+    status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+  }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
+  if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  return result;
+}
+
 export async function fetchChatStatus() {
   return chatStatusSchema.parse(await requestJson<unknown>("/status.json"));
 }
@@ -1133,6 +1143,8 @@ export type DelegationReadback = {
   operation_id: string; request_id: string; agent_id: string; todo_id: string;
   status: string; worker_active: boolean; recovery_required: boolean;
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
+  validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
+    check_count: number; pinned_file_count: number};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
@@ -1617,7 +1629,8 @@ export const capabilityConfigurationFieldSchema = z.object({
   key: z.string(),
   label: z.string(),
   description: z.string(),
-  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule"]),
+  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule", "pr_review_agent_orders"]),
+  agents: z.array(z.string()).optional(),
   nullable: z.boolean().optional(),
   required: z.boolean(),
   minimum: z.number().int().optional(),
@@ -2376,4 +2389,38 @@ export async function updateGoalOwnership(body: { goal_id: string; mode: Executi
     }
     throw error;
   }
+}
+
+
+const privateAgentSessionSchema = z.object({session_id: z.string(), goal_id: z.string(), agent_id: z.string(), executor_endpoint_id: z.string()});
+const privateAgentTargetSchema = privateAgentSessionSchema.extend({target_ref: z.string(), host_ref: z.string(), goal_instance_id: z.string().nullable()});
+const privateConversationSchema = z.object({
+  binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
+  project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
+  grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
+  pending_count: z.number().int(), recovery_count: z.number().int(),
+  agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
+});
+const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+  connections: z.array(privateConversationSchema)});
+export type PrivateConversation = z.infer<typeof privateConversationSchema>;
+export async function fetchPrivateConversations() {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
+}
+export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write") {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant}),
+  }));
+}
+export async function disconnectPrivateConversation(bindingId: string, revision: number) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+    method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
+  }));
+}
+
+export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
+  }));
 }

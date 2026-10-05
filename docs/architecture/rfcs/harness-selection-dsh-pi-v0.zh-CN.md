@@ -84,8 +84,8 @@ canonical 完成仍是不同事实；本切片不提供动态派生授权或另�
 ### 托管宿主绑定与真实环境验证（2026-09-15）
 
 一个托管宿主绑定要说明四件事：宿主适配器、provider、模型，以及凭据来自哪里。
-DSH 绑定是 DSH Turn 宿主 + provider `deepseek-official` + 模型 `deepseek-v4-flash`
-（DeepSeek V4.1 Flash）+ 推理档位 `high`，端点取自运维方环境（`DEEPSEEK_BASE_URL`），
+DSH 绑定是 DSH Turn 宿主 + provider `deepseek-official` + 模型 `deepseek-flash`
+（DeepSeek-V4.1-Flash）+ 推理档位 `high`，端点取自运维方环境（`DEEPSEEK_BASE_URL`），
 凭据取自运维方环境（`DEEPSEEK_API_KEY`）。
 
 LoopX **选择**托管有界 Turn 的默认宿主，而从不由启动时的意外推断
@@ -123,14 +123,19 @@ LoopX **选择**托管有界 Turn 的默认宿主，而从不由启动时的意�
 
 两个托管面从同一个所有者解析**执行档位**
 （`loopx/control_plane/turn_driver/execution_profile.py`）：provider
-`deepseek-official`、模型 `deepseek-v4-flash`（DeepSeek V4.1 Flash）、推理档位
+`deepseek-official`、模型 `deepseek-flash`（DeepSeek-V4.1-Flash）、推理档位
 `high`，可由 `LOOPX_TURN_PROVIDER` / `LOOPX_TURN_MODEL` /
 `LOOPX_TURN_REASONING_EFFORT` 覆盖，更低优先级为历史变量 `DSH_PROVIDER` /
-`DSH_MODEL`。回读是一行 `execution_profile`：出货形态为 `deepseek-v4-flash@high`，
+`DSH_MODEL`。回读是一行 `execution_profile`：出货形态为 `deepseek-flash@high`，
 仅当 provider 不是出货值时前置为 `<provider>/…`。之所以只有一行，是因为每个 plan
 载荷都携带它，而面向 agent 的输出预算是一份契约；该行写出什么值，就是实际会跑的值，
 因此 owner 自己设定的模型会以自身出现。凭据为选定档位提供认证，从不参与选型；凭据
 唯一解析的是"无人显式选择时有界 Turn 的出货宿主默认值"，且该解析自带来源回读。
+
+**修订（2026-10-04）：** 出货模型默认值由已退役的 `deepseek-v4-flash` 拼写改为同一
+DeepSeek-V4.1-Flash 世代的正式 ID `deepseek-flash`。该退役拼写仍被厂商端点接受，
+并继续作为显式 `LOOPX_TURN_MODEL` / `DSH_MODEL` 覆盖可用，因此仍固定旧拼写的宿主
+属于配置变更，而不是代码变更。
 
 该绑定的证据按来源区分：
 

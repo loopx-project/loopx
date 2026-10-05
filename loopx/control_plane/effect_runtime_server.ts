@@ -29,8 +29,7 @@ const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
   "todo.context.page",
-  "goal.checkpoint_read_context.source",
-  "goal.checkpoint_read_context.evaluate",
+  "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
   "performance_diagnosis.inspect",
@@ -109,6 +108,9 @@ const idleMs = parseIdleMs(process.env.LOOPX_EFFECT_RUNTIME_IDLE_MS);
 let idleTimer: NodeJS.Timeout;
 let pendingRequests = 0;
 let resolveDrain: (() => void) | undefined;
+let publicationComplete = false;
+let resolvePublication: () => void;
+const publicationReady = new Promise<void>((resolve) => { resolvePublication = resolve; });
 const handlers = createEffectRuntimeHandlers({
   fingerprint,
   requestShutdown: () => {
@@ -119,7 +121,7 @@ const handlers = createEffectRuntimeHandlers({
 function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   clearTimeout(idleTimer);
   // Idleness starts after effects finish, not when their sockets connect.
-  if (pendingRequests > 0 || shutdownRequested || !server.listening) return;
+  if (!publicationComplete || pendingRequests > 0 || shutdownRequested || !server.listening) return;
   idleTimer = setTimeout(() => server.close(), idleMs);
   idleTimer.unref();
 }
@@ -178,6 +180,10 @@ const server = createServer((socket) => {
       let sink: FileHandle | null = null;
       let dispatched = false;
       try {
+        // The locator becomes visible inside the publication lock. A first
+        // response must wait for its release: otherwise an immediate process
+        // death can strand an incomplete cleanup claim before the next write.
+        await publicationReady;
         let parsed: unknown;
         try {
           parsed = JSON.parse(
@@ -283,21 +289,31 @@ server.on("close", () => {
 });
 
 server.listen(0, "127.0.0.1", async () => {
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("invalid address");
-  await withFileMutationLock(infoPath, async () => {
-    await atomicWriteJson(infoPath, {
-      schema_version: INFO_SCHEMA,
-      fingerprint,
-      pid: process.pid,
-      host: "127.0.0.1",
-      port: address.port,
-      token,
-      // A managed runtime is reused per source revision, so the Node/SQLite pair
-      // serving a goal is not necessarily the one the caller resolves from PATH.
-      runtime_identity: sqliteRuntimeIdentity(),
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("invalid address");
+    await withFileMutationLock(infoPath, async () => {
+      await atomicWriteJson(infoPath, {
+        schema_version: INFO_SCHEMA,
+        fingerprint,
+        pid: process.pid,
+        host: "127.0.0.1",
+        port: address.port,
+        token,
+        // A managed runtime is reused per source revision, so the Node/SQLite pair
+        // serving a goal is not necessarily the one the caller resolves from PATH.
+        runtime_identity: sqliteRuntimeIdentity(),
+      });
+      await chmod(infoPath, 0o600);
     });
-    await chmod(infoPath, 0o600);
-  });
-  resetIdleTimer(server);
+    publicationComplete = true;
+    resolvePublication();
+    resetIdleTimer(server);
+  } catch (error) {
+    // Reuse the shared error owner's safe codes, never the raw Node error,
+    // locator path, token or stack. The launcher already consumes this startup
+    // envelope; publication failure must not collapse into a bare exit code.
+    const { code } = effectRuntimeErrorPayload(error);
+    failStartup(code, `TypeScript Effect runtime could not publish its startup locator (${code})`);
+  }
 });

@@ -25,11 +25,11 @@
 | [App 会话与可复用的异步工作投递](app-conversation-and-async-inbox-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：自动执行准入（v0）](automatic-execution-admission-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | 已接受 | none | — |
-| [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/capable-manager-semantic-handoff-v0/) |
+| [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md) | [2 条](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/external-evidence-research-capability-v0/) |
 | [RFC：前沿科学研究计划 v0](frontier-science-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Goal Channel 协作模型 v0](goal-channel-collaboration-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -46,7 +46,7 @@
 | [RFC：团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Harness Benchmark 与研究计划 v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |
-| [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | — |
+| [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0 / 管家运行模式 v0](manager-runtime-profile-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Monorepo 内的发行物拆分（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -62,9 +62,11 @@
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 已接受 | none | — |
 | [RFC：LoopX 控制面 TypeScript 渐进迁移方向 v0](typescript-control-plane-migration-v0.zh-CN.md) | 已接受 | 无 | [14 条](ledger/typescript-control-plane-migration-v0/) |
 
-## 已被替代 (0)
+## 已被替代 (1)
 
-_无_
+| RFC | 头部状态 | 替代 / 关闭 | Ledger |
+| --- | --- | --- | --- |
+| [RFC：个人事项持续跟进（v0）](personal-follow-through-v0.zh-CN.md) | 已被替代 | 无; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 条](ledger/personal-follow-through-v0/) |
 
 ## 已退役（Retired 或 Rejected） (0)
 

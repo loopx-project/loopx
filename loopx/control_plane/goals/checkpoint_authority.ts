@@ -10,6 +10,7 @@ import {openRuntimeAuthorityStore, requireLocalAuthorityRuntimeRoot} from "../co
 import {loadLegacyCoordinationWriterFence} from "../coordination/legacy_writer_fence.ts";
 import {indexCoordinationProjectionTodos, validateCoordinationTodoReadModel} from "../coordination/coordination_projection.ts";
 import {readGoalAcceptance} from "./acceptance_contract.ts";
+import {evaluateCheckpointReadContext} from "./checkpoint_read_context.ts";
 
 export async function withCheckpointAuthority(
   root: string, goalId: string, facts: JsonObject, save: (facts: JsonObject) => JsonObject,
@@ -40,11 +41,15 @@ export async function withCheckpointAuthority(
 
 /** Called while the Python adapter holds the local source locks. Optimistic
  * receipts are allowed to go stale after this operation returns. */
-export async function readCheckpointAuthority(value: unknown): Promise<JsonObject> {
-  const request = requireJsonObject(value, "checkpoint source request");
+export async function resolveCheckpointReadContext(value: unknown): Promise<JsonObject> {
+  const request = requireJsonObject(value, "checkpoint read context request");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
-  const goalId = goalPathSegment(request.goal_id);
+  const identity = requireJsonObject(request.identity, "identity");
+  const goalId = goalPathSegment(identity.goal_id);
   const facts = requireJsonObject(request.facts, "checkpoint facts");
   requireNonEmptyString(requireJsonObject(facts.source, "checkpoint source").state_file, "state_file");
-  return await withCheckpointAuthority(root, goalId, facts, current => current);
+  const current = await withCheckpointAuthority(root, goalId, facts, current => current);
+  // Reduce the captured snapshot after releasing the read fence, as before.
+  // Only commitCheckpoint holds the provider fence through its final check/save.
+  return evaluateCheckpointReadContext({...request, facts: current});
 }

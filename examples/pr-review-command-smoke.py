@@ -260,7 +260,7 @@ def main() -> int:
     assert request["command"] == "/loopx-pr-review", request
     assert (
         request["cli_command"]
-        == "loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open|merged|all] [--review-priority other-developers-first|owner-first] [--since ISO]"
+        == "loopx pr-review [--goal-id GOAL --agent-id AGENT] [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open|merged|all] [--review-order forward|reverse] [--since ISO]"
     ), request
     assert request["privacy_mode"] == "public_safe_github_metadata", request
     assert request["dry_run"] is True, request

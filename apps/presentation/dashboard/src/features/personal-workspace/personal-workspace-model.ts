@@ -41,11 +41,16 @@ export type WorkspaceAgentTodo = {
   dependencies?: string[];
   done: boolean;
   evidence?: string | null;
+  note?: string | null;
   nextTransition?: string | null;
   priority?: string | null;
   status?: string | null;
   taskClass?: string | null;
   taskDomain?: string | null;
+  /** Original request retained when text is shortened for a card. */
+  requestText?: string;
+  /** The authority id, absent when a legacy projection needs a display-only id. */
+  sourceTodoId?: string | null;
   text: string;
   todoId: string;
   validationDigest?: string | null;
@@ -65,11 +70,14 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     ? (receipt as Record<string, unknown>).receipt_id : null;
   return {
     todoId: todo.todo_id?.trim() || fallbackId,
+    sourceTodoId: todo.todo_id?.trim() || null,
+    requestText: todo.text,
     text: todo.text,
     done: todo.status === "deferred" ? false : todo.done,
     status: todo.status ?? null,
     claimedBy: todo.claimed_by ?? null,
-    evidence: todo.evidence || todo.note || null,
+    evidence: todo.evidence ?? null,
+    note: todo.note ?? null,
     priority: todo.priority ?? null,
     taskClass: todo.task_class ?? null,
     taskDomain: todo.task_domain ?? null,

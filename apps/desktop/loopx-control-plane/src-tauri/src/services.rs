@@ -132,9 +132,22 @@ pub struct ServiceSet {
     pub healed: bool,
 }
 
+/// Freeze one selected artifact for both concurrently started services.
+pub(crate) struct SelectedRuntime {
+    pub executable: String,
+    pub identity: Option<serde_json::Value>,
+}
+
 impl ServiceSet {
-    pub fn start(progress: impl Fn(&[ServiceKind]) + Sync) -> Result<Self, ServiceError> {
-        Self::collect(connect_all(SERVICE_KINDS, connect, progress))
+    pub(crate) fn start(
+        runtime: &SelectedRuntime,
+        progress: impl Fn(&[ServiceKind]) + Sync,
+    ) -> Result<Self, ServiceError> {
+        Self::collect(connect_all(
+            SERVICE_KINDS,
+            |kind| connect(kind, runtime),
+            progress,
+        ))
     }
 
     /// Fold finished connection attempts into one owned set. Every outcome
@@ -218,10 +231,10 @@ fn connect_all<const N: usize>(
     })
 }
 
-fn connect(kind: ServiceKind) -> ServiceOutcome {
+fn connect(kind: ServiceKind, runtime: &SelectedRuntime) -> ServiceOutcome {
     let mut owned = None;
     let mut healed = false;
-    let result = connect_service(kind, &mut owned, &mut healed);
+    let result = connect_service(kind, runtime, &mut owned, &mut healed);
     ServiceOutcome {
         owned,
         healed,
@@ -231,11 +244,12 @@ fn connect(kind: ServiceKind) -> ServiceOutcome {
 
 fn connect_service(
     kind: ServiceKind,
+    runtime: &SelectedRuntime,
     owned: &mut Option<OwnedService>,
     healed: &mut bool,
 ) -> Result<(), ServiceError> {
-    let executable = loopx_executable();
-    let expected_runtime_identity = runtime_identity_for_executable(&executable);
+    let executable = &runtime.executable;
+    let expected_runtime_identity = &runtime.identity;
     let stale_deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         match probe(kind, expected_runtime_identity.as_ref()) {
@@ -256,7 +270,7 @@ fn connect_service(
                 // service (KeepAlive + throttle) has time to restart on the
                 // current release; unknown (Foreign) processes keep the
                 // hard error.
-                terminate_verified_listener(kind, &executable, kind.port())?;
+                terminate_verified_listener(kind, executable, kind.port())?;
                 *healed = true;
                 if Instant::now() >= stale_deadline {
                     return Err(ServiceError(format!(
@@ -275,7 +289,7 @@ fn connect_service(
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }
-                terminate_verified_listener(kind, &executable, kind.port())?;
+                terminate_verified_listener(kind, executable, kind.port())?;
                 *healed = true;
                 break;
             }
@@ -297,7 +311,7 @@ fn connect_service(
                     )));
                 }
                 Probe::Stale => {
-                    terminate_verified_listener(kind, &executable, kind.port())?;
+                    terminate_verified_listener(kind, executable, kind.port())?;
                     *healed = true;
                     request_platform_managed_start(kind);
                 }
@@ -312,7 +326,7 @@ fn connect_service(
         )));
     }
 
-    let mut command = Command::new(&executable);
+    let mut command = Command::new(executable);
     configure_runtime_environment(&mut command);
     command
         .args(kind.command_args())
@@ -340,7 +354,7 @@ fn connect_service(
                 )));
             }
             Probe::Stale => {
-                terminate_verified_listener(kind, &executable, kind.port())?;
+                terminate_verified_listener(kind, executable, kind.port())?;
                 *healed = true;
                 thread::sleep(Duration::from_millis(200));
             }
@@ -638,6 +652,13 @@ pub(crate) fn loopx_executable() -> String {
                 .into_owned();
         }
     }
+    discovered_loopx_executables()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "loopx".to_string())
+}
+
+pub(crate) fn discovered_loopx_executables() -> Vec<String> {
     let mut candidates = vec![
         PathBuf::from("/usr/local/bin/loopx"),
         PathBuf::from("/opt/homebrew/bin/loopx"),
@@ -645,12 +666,20 @@ pub(crate) fn loopx_executable() -> String {
     if let Some(home) = env::var_os("HOME") {
         candidates.insert(0, PathBuf::from(home).join(".local/bin/loopx"));
     }
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.is_file())
-        .or_else(|| resolve_executable_path("loopx", env::var_os("PATH").as_deref()))
-        .map(|candidate| candidate.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "loopx".to_string())
+    if let Some(path) = resolve_executable_path("loopx", env::var_os("PATH").as_deref()) {
+        candidates.push(path);
+    }
+    let mut discovered = Vec::new();
+    for path in candidates.into_iter().filter(|path| path.is_file()) {
+        let executable = fs::canonicalize(&path)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        if !discovered.contains(&executable) {
+            discovered.push(executable);
+        }
+    }
+    discovered
 }
 
 // Finder/launchd do not load a user's interactive shell profile. Use the same
@@ -870,9 +899,55 @@ fn runtime_identity_for_executable_with_path(
     let resolved = resolve_executable_path(executable, search_path)?;
     let canonical = fs::canonicalize(resolved).ok()?;
     let release_root = canonical.parent()?.parent()?;
-    let manifest = fs::read_to_string(Path::new(release_root).join("release.json")).ok()?;
-    let payload = serde_json::from_str::<serde_json::Value>(&manifest).ok()?;
-    runtime_identity_from_manifest(&payload)
+    if let Ok(manifest) = fs::read_to_string(Path::new(release_root).join("release.json")) {
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&manifest) {
+            if let Some(identity) = runtime_identity_from_manifest(&payload) {
+                return Some(identity);
+            }
+        }
+    }
+    // Core owns package qualification and hashing. Do not recreate RECORD,
+    // editable-install or byte-fingerprint rules inside the native shell.
+    let mut command = Command::new(canonical);
+    configure_runtime_environment(&mut command);
+    command.args(["--format", "json", "doctor", "--installation-only"]);
+    let output = timed_output(command)?;
+    if !output.status.success() {
+        return None;
+    }
+    let payload = serde_json::from_slice(&output.stdout).ok()?;
+    identity_from_installation_doctor(&payload)
+}
+
+fn identity_from_installation_doctor(payload: &serde_json::Value) -> Option<serde_json::Value> {
+    if payload["ok"] != true || payload["scope"] != "installation_only" {
+        return None;
+    }
+    let identity = payload.get("service_runtime_identity")?;
+    if identity["schema_version"] != "loopx_runtime_identity_v1"
+        || !identity["package_version"].is_string()
+        || !is_owned_package_identity(identity)
+    {
+        return None;
+    }
+    // This shape is shared with the HTTP startup fence, not source attestation.
+    Some(serde_json::json!({
+        "schema_version": identity["schema_version"],
+        "package_version": identity["package_version"],
+        "release_id": identity["release_id"],
+        "source_revision": identity["source_revision"],
+        "package_fingerprint": identity["package_fingerprint"],
+    }))
+}
+
+pub(crate) fn is_owned_package_identity(identity: &serde_json::Value) -> bool {
+    identity["release_id"].is_null()
+        && identity["package_fingerprint"]
+            .as_str()
+            .and_then(|value| value.strip_prefix("sha256:"))
+            .is_some_and(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
 }
 
 fn status_readiness_error(kind: ServiceKind) -> ServiceError {
@@ -988,6 +1063,48 @@ fn classify_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn package_identity_requires_core_installation_qualification() {
+        let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
+            "package_version":"1.2.4", "release_id":null, "source_revision":null,
+            "package_fingerprint":format!("sha256:{}", "a".repeat(64)), "path":"PRIVATE"});
+        let qualified = serde_json::json!({"ok":true,"scope":"installation_only","service_runtime_identity":identity});
+        let observed = identity_from_installation_doctor(&qualified).unwrap();
+        assert!(is_owned_package_identity(&observed));
+        assert!(observed.get("path").is_none());
+        let mut rejected = qualified.clone();
+        rejected["ok"] = serde_json::json!(false);
+        assert!(identity_from_installation_doctor(&rejected).is_none());
+        rejected = qualified.clone();
+        rejected["scope"] = serde_json::json!("global");
+        assert!(identity_from_installation_doctor(&rejected).is_none());
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!("sha256:not-a-digest"),
+        ] {
+            rejected = qualified.clone();
+            rejected["service_runtime_identity"]["package_fingerprint"] = value;
+            assert!(identity_from_installation_doctor(&rejected).is_none());
+        }
+    }
+
+    #[test]
+    fn same_version_package_replacement_cannot_reuse_old_http_services() {
+        let installed = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
+            "package_version":"1.2.4", "release_id":null, "source_revision":null,
+            "package_fingerprint":format!("sha256:{}", "a".repeat(64))});
+        let mut running = installed.clone();
+        running["package_fingerprint"] = serde_json::json!(format!("sha256:{}", "b".repeat(64)));
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\r\n{}",
+            serde_json::json!({
+            "schema_version":"loopx_chat_capabilities_v1", "runtime_identity":running})
+        );
+        assert_eq!(
+            classify_response(ServiceKind::Chat, &response, Some(&installed)),
+            Probe::Stale
+        );
+    }
 
     #[test]
     fn service_commands_stay_loopback_and_global() {

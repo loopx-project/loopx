@@ -1,10 +1,10 @@
 # RFC: Capable Agent Manager and Semantic Work Handoff (v0)
 
 - **RFC status:** Accepted
-- **Supersedes / closes:** none
+- **Supersedes / closes:** [Personal Follow-through independent proposal](personal-follow-through-v0.md)
 - **Delivery maturity:** Partial; private runtime profile, team-plan confirmation and Todo materialization shipped; complete M1–M4 remain unqualified.
 - **Authors / owners:** LoopX maintainers; manager engineering owner
-- **Created / last normative revision:** 2026-09-13 / 2026-09-15
+- **Created / last normative revision:** 2026-09-13 / 2026-10-04
 - **Implementation baseline:** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **Language mirror:** [中文版](capable-manager-semantic-handoff-v0.zh-CN.md)
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Manager continuity](../../reference/protocols/manager-evidence-and-continuity-v0.md), [Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md), [Desktop frontends](desktop-execution-frontends-v0.md), [Shared authority](shared-goal-authority-state-provider-v0.md), [Shared Goal alignment/amendment](shared-goal-alignment-and-governed-amendment-v0.md), [TS migration](typescript-control-plane-migration-v0.md)
@@ -586,6 +586,21 @@ readback and Lark steering remain separate acceptance.
 Reuse existing capability instructions, context hooks, memory and scheduling owners. Reusable methods may inform planning and handoff, with their source/version visible; remembered lessons do not replace accepted task state or current verification. Stable recurring work may use the existing schedule/event path after its task and replay behavior are understood. This RFC does not add a routine engine, compulsory method learning, a new hook family or business-specific automation.
 
 Parallel work does not imply isolated execution resources. Reuse runtime serialization/leases for shared browser screens or mutable workspaces, separately from Core work ownership. Separate screens, agent names or conversation tabs are not permission boundaries. If a runtime lacks the required coordination, serialize the affected operation and expose the wait; unrelated evidence work can continue. M1 reports actual resource behavior rather than assuming a shared cloud-computer design.
+
+### 5.11.1 Lark personal follow-through profile
+
+[Lark personal follow-through](../../product/use-cases/office-operations/personal-follow-through.md)
+is a bounded application of this manager contract. Personal commitment interpretation,
+source coverage, deadline evidence and attention-cost evaluation stay in the profile;
+shared lifecycle, standing grants, preparation, recovery and return belong to this
+RFC and its referenced typed owners. The profile explicitly maps to
+A3/A5–A10/A13–A15/A20 and existing M1–M4, superseding the independent personal M1–M3
+plan. Reuse canonical User/Agent Todos, existing proposals and artifact references;
+add no parallel state, scheduler or approval layer. Proactive triggers use the existing
+schedule/event path and actual grants. The profile's TypeScript/Node requirement is
+bounded and does not mandate unrelated repository-wide migration. Scenario CLI code,
+scripted tests and this consolidation close no acceptance; real-source and complete
+packaged journeys still require their own evidence.
 
 ### 5.12 Integration with alignment, authority and the TS kernel
 

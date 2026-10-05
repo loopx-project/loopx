@@ -21,12 +21,26 @@ PROJECT_CONVERSATION_OBJECTIVE = (
     "Do not create an implicit Goal or borrow the global manager identity."
 )
 
+PROJECT_WORK_OBJECTIVE = (
+    "Carry out the owner's explicit requests in the selected workspace, preserving "
+    "this Session's context. The explicit workspace write grant permits bounded "
+    "file edits and project workflows. Read and follow the workspace AGENTS.md "
+    "and applicable project skills. Use existing typed owners for durable state; "
+    "do not bypass material authority, intake, ranking or readback gates. The grant "
+    "does not create a LoopX Goal, scheduling, delegation or portfolio access. "
+    "Do not create an implicit Goal or borrow the global manager identity."
+)
+
 
 class ChatProjectContexts:
-    def __init__(self, roots: list[Path]) -> None:
+    def __init__(self, roots: list[Path], *, workspace_grant: str = "workspace_write") -> None:
+        if workspace_grant not in {"workspace_read", "workspace_write"}:
+            raise ValueError("unsupported project workspace grant")
+        self.workspace_grant = workspace_grant
         # Remember the owner's spelling as well as its initial canonical target.
         # A later symlink retarget must not redirect an accepted Session.
         self.roots = [(root.expanduser().absolute(), root.expanduser().resolve()) for root in roots]
+        self.conversation_bindings: Any | None = None
 
     def available(self) -> list[dict[str, str]]:
         contexts = {}
@@ -36,7 +50,7 @@ class ChatProjectContexts:
             ref = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:24]
             contexts[ref] = {"kind": "project_workspace", "project_ref": ref,
                              "workspace_path": str(canonical), "audience": "local_owner",
-                             "grant": "workspace_read"}
+                             "grant": self.workspace_grant}
         return list(contexts.values())
 
     def resolve(self, project_ref: str, *, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -49,12 +63,50 @@ class ChatProjectContexts:
             raise ValueError(str(exc)) from exc
 
     def session_context(self, session: dict[str, Any]) -> dict[str, Any]:
+        steward = session.get("steward_context")
+        if isinstance(steward, dict):
+            if self.conversation_bindings is None:
+                raise ValueError("bound steward authority is unavailable")
+            selected = self.conversation_bindings.session_context(steward)
+            if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
+                raise ValueError("steward audience mismatch")
+            from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+            return {"project": Path(selected["context"]["workspace_path"]), "objective": MANAGER_AGENT_OBJECTIVE,
+                    "title": "Steward"}
         saved = session.get("project_context")
         if not isinstance(saved, dict) or session.get("goal_id") is not None:
             raise ValueError("invalid ordinary project Session")
-        selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
+        if saved.get("audience") == "bound_owner":
+            if self.conversation_bindings is None:
+                raise ValueError("bound project conversation authority is unavailable")
+            selected = self.conversation_bindings.session_context(saved)
+        else:
+            selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
         if session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
         return {"project": Path(selected["context"]["workspace_path"]),
-                "objective": PROJECT_CONVERSATION_OBJECTIVE,
+                "objective": PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE,
                 "title": Path(selected["context"]["workspace_path"]).name}
+
+    def open_bound(self, binding_id: str, source: dict[str, Any], *, executor: str, channel_id: str | None) -> dict[str, Any]:
+        if self.conversation_bindings is None:
+            raise ValueError("bound conversation authority is unavailable")
+        selected = self.conversation_bindings.resolve(binding_id=binding_id, **source)
+        if selected["binding"]["executor_endpoint_id"] != executor:
+            raise ValueError("executor does not match the conversation grant")
+        if channel_id is not None and channel_id != selected["channel_id"]:
+            raise ValueError("bound conversation channel mismatch")
+        steward = selected["binding"]["context_kind"] == "steward"
+        session = {"goal_id": "loopx-manager" if steward else None, "channel_id": selected["channel_id"],
+                   "project_context": None if steward else selected["context"],
+                   "steward_context": selected["context"] if steward else None}
+        return {**session, **self.session_context(session)}
+
+    @staticmethod
+    def initialize_bound_scope(store, session):
+        steward = session.get("steward_context")
+        if not steward:
+            return session
+        from ...chat_manager_context import manager_authorization_scope_id
+        return store.update_session(session["session_id"], manager_authorization_scope_id=manager_authorization_scope_id(
+            steward["goal_ids"], runtime_root=store.root.parent, channel_id=session["channel_id"]))

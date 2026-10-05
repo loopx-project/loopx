@@ -26,7 +26,7 @@ def ordinary(tmp_path, monkeypatch):
     fake = tmp_path / "codex"
     fake.write_text(source)
     fake.chmod(0o700)
-    contexts = ChatProjectContexts([workspace])
+    contexts = ChatProjectContexts([workspace], workspace_grant="workspace_read")
     store = ChatSessionStore(tmp_path / "runtime")
     runtime = ChatRuntimeController(store=store, codex_bin=str(fake), project_contexts=contexts,
                                     registry_path=tmp_path / "no-registry.json")
@@ -120,3 +120,68 @@ def test_retargeted_symlink_does_not_rebind_a_project_grant(tmp_path):
     link.symlink_to(second, target_is_directory=True)
     with pytest.raises(ValueError, match="outside"):
         contexts.resolve(ref)
+
+
+def test_default_project_host_grant_is_write_and_read_only_launch_is_enforced(ordinary):
+    from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
+
+    store, runtime, contexts, request, capture, _, workspace = ordinary
+    # The fixture intentionally launched read-only. The ordinary product default
+    # is write-capable, and both observed settings and actual host must agree.
+    assert ChatProjectContexts([workspace]).available()[0]["grant"] == "workspace_write"
+    contexts.workspace_grant = "workspace_write"
+    status, projects = request("/api/chat/projects")
+    assert status == 200 and projects["projects"][0]["grant"] == "workspace_write"
+    _, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": projects["projects"][0]["project_ref"]})
+    assert opened["goal_id"] is None
+    assert runtime.adapters[opened["session_id"]].session.sandbox == "workspace-write"
+    row = json.loads(capture.read_text().splitlines()[-1])
+    assert row["method"] == "thread/start" and row["params"]["sandbox"] == "workspace-write"
+    proof = {"transport_ref": "notes-app", "provider_ref": "c" * 24, "operator_ref": "d" * 24, "verified": True}
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: proof)
+    contexts.conversation_bindings = bindings
+    binding = bindings.configure(transport_ref="notes-app", project_ref=projects["projects"][0]["project_ref"], executor_endpoint_id="codex")
+    assert binding["grant"] == "workspace_write"
+    contexts.workspace_grant = "workspace_read"
+    assert request(f"/api/chat/sessions/{opened['session_id']}/turns", {"message": "edit", "client_turn_id": "host-downgraded"})[0] == 400
+    with pytest.raises(ValueError, match="write grant"):
+        bindings.resolve(binding_id=binding["binding_id"], source_ref="a" * 24, sender_ref=proof["operator_ref"], private_human_message=True)
+    with pytest.raises(ValueError, match="workspace grant"):
+        bindings.configure(transport_ref="notes-app", project_ref=projects["projects"][0]["project_ref"], executor_endpoint_id="codex", project_grant="workspace_write")
+    assert bindings.read()["bindings"][0] == binding
+    runtime.close()
+
+
+def test_local_scope_opens_new_session_after_host_grant_changes(ordinary):
+    store, runtime, contexts, request, capture, _, _ = ordinary
+    ref = contexts.available()[0]["project_ref"]
+    body = {"context_kind": "project", "project_ref": ref}
+    status, original = request("/api/chat/sessions", body)
+    assert status == 201
+    sessions = [original["session_id"]]
+    try:
+        for grant, sandbox in [("workspace_write", "workspace-write"), ("workspace_read", "read-only")]:
+            contexts.workspace_grant = grant
+            status, opened = request("/api/chat/sessions", body)
+            assert status == 201, opened
+            sid = opened["session_id"]
+            assert sid not in sessions and opened["goal_id"] is None
+            assert runtime.adapters[sid].session.sandbox == sandbox
+            assert store.load_session(sessions[-1])["project_context"]["grant"] != grant
+            status, denied = request(f"/api/chat/sessions/{sessions[-1]}/turns",
+                {"message": "old permission", "client_turn_id": "stale-grant"})
+            assert status == 400 and "grant changed" in denied["error"]
+            assert store.turn_for_client(sessions[-1], "stale-grant") is None
+            assert request("/api/chat/sessions", body)[1]["session_id"] == sid
+            status, accepted = request(f"/api/chat/sessions/{sid}/turns",
+                {"message": "Continue under current permission", "client_turn_id": f"current-{grant}"})
+            assert status == 202, accepted
+            assert runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)["status"] == "completed"
+            sessions.append(sid)
+        requests = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert len([row for row in requests if row.get("method") == "thread/start"]) == 3
+        assert not any(row.get("method") == "thread/resume" for row in requests)
+        assert len(store.list_sessions()) == 3
+        assert store.messages(sessions[1]) and store.messages(sessions[2])
+    finally:
+        runtime.close()

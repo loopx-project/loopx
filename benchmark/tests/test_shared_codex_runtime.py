@@ -419,7 +419,8 @@ def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monke
             git("commit", "-m", "successor")
         return result
 
-    monkeypatch.setattr(harbor.subprocess, "run", moving_head)
+    from benchmark.runtime import source as source_runtime
+    monkeypatch.setattr(source_runtime.subprocess, "run", moving_head)
     uploaded = []
 
     class Environment:
@@ -438,3 +439,20 @@ def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monke
     assert staged == original
     assert marker.read_text() == "successor"
     assert uploaded == [b"original"]
+
+
+@pytest.mark.parametrize("total", [1800, 64800])
+def test_harbor_default_execution_budget_tracks_total_trial(tmp_path, total):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                           scheduler_timeout_sec=total)
+    assert agent.execution.timeout_seconds == total - 160
+    assert agent.scheduler_timeout == total
+
+
+def test_default_execution_has_no_independent_turn_deadline(tmp_path):
+    execution = Execution(mode="turn", validation_command=("true",))
+    env = worker_env(tmp_path) | {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "worker", "LOOPX_REGISTRY": "registry", "LOOPX_RUNTIME_ROOT": "runtime"}
+    assert execution.timeout_seconds is None
+    assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")

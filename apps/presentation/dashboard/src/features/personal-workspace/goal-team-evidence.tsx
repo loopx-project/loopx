@@ -72,6 +72,18 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
         <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/></details>
         : <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>}
       {result.error ? <p role="alert">{result.error}</p> : null}
+      {result.status === "accepted" && !result.error && !result.recovery_required ? <details>
+        <summary>{zh ? "本次验收依据" : "Current validation basis"}</summary>
+        {result.validation ? <>
+          <p>{result.validation.source === "goal_acceptance" ? (zh ? "Goal 验收规则" : "Goal acceptance rules")
+            : (zh ? "任务验收规则" : "Task validation rules")}{" · "}
+            {result.validation.check_count} {zh ? "项检查" : "checks"}{" · "}
+            {result.validation.pinned_file_count} {zh ? "项文件版本固定" : "file pins"}</p>
+          <p>{zh ? "本次读取重跑了当前规则，并核对产物版本。规则标识不证明独立复核者或异议已解决。"
+            : "This read reran the current rules and checked output versions. The rule identity does not attest an independent reviewer or resolve an objection."}</p>
+          <code>{result.validation.basis_sha256}</code>
+        </> : <p>{zh ? "此运行时未提供验收依据标识。" : "This runtime did not provide the validation basis identity."}</p>}
+      </details> : null}
       {result.status === "accepted" && !result.error && !result.recovery_required && result.artifacts?.length ? result.artifacts.map(artifact => <div key={`${artifact.ref}:${artifact.sha256}`}>
         <TeamArtifactReport artifact={artifact} zh={zh}/>
         <details><summary>{zh ? "版本与来源标识" : "Version and source identifiers"}</summary>

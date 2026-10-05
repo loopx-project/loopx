@@ -34,18 +34,41 @@ Use Markdown output for human generator diagnostics or a non-thin JSON mode
 for the richer generator packet; neither is the recurring Agent hot path.
 
 The heartbeat envelope ceiling covers the unbound and representative agent/scope-bound
-Codex App thin fixtures. It includes generator metadata and repeated bound commands,
-not only the execution prompt. On the same scoped fixture, current main uses
-4,791 JSON characters and the language-aware body uses 5,167 while retaining
-static safety, repair routing, work obligation, and settlement instructions.
-The 5,400-character ceiling leaves 233 characters of fixture headroom, without
-relaxing the independent **2,500-character thin task body**,
-4,000-character native Goal body, structural limits, or emitted CLI ceilings.
-It is not a token count, execution quota, or allowance to append more instructions.
-Arbitrary-length caller paths/scopes are not promised to fit this fixed fixture
-envelope; their emitted output is qualified separately by the CLI matrix.
-Do not remove safety or settlement semantics to fit the envelope, and do not copy
-dynamic quota decisions into the static prompt. The brief body allowance rises
+Codex App thin fixtures. Its 5,400-character JSON ceiling remains independent of
+the **3,000-character thin task body**, 4,000-character native Goal body,
+structural limits, and emitted CLI ceilings. These are presentation regression
+budgets, not external host limits, token counts, execution quota, or permission.
+Do not abbreviate admission, continuation, scope, safety or settlement instructions
+solely to fit a historical character count, or copy dynamic quota decisions into
+the static prompt.
+
+The thin body ceiling rises from 2,500 to 3,000 to retain readable peer guidance.
+On the same real CLI fixture with a host scope and three runtime capabilities,
+latest main measured 2,515 normalized body characters, the earlier compressed
+PR measured 2,495, and readable guidance measures 2,632. With the supported
+320-character scope, the same measurements are 2,805, 2,785 and 2,922; the new
+ceiling leaves 78 characters on that bounded case. Single- and two-peer fixtures
+give the same measurements. The normalized metric substitutes Goal/state paths,
+not caller identity, scope or capabilities. This accepts useful text growth and
+keeps overflow reporting and boundary tests; it does not promise arbitrary caller
+paths/scopes fit every JSON or emitted-output envelope. Peer requirements defer
+to current quota admission plus repository rules, without granting cross-agent
+authority. Other mode, envelope and execution budgets remain unchanged.
+
+The emitted CLI differential measures +117 characters on all three thin fixtures
+in JSON and Markdown. The complete readable peer instruction block attributes a
+one-time 160-character/byte/compact-character allowance to thin rows only;
+missing or altered authority wording, other surfaces, and subsequent edits after
+this block is in the base use the ordinary growth budget. Absolute emitted
+ceilings, line limits and semantic anchors remain enforced.
+
+thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
+CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
+2,515／2,495／2,632 字符；320 字符 scope 时为 2,805／2,785／2,922，新预算余量
+78 字符。单 peer 与双 peer 结果相同。计量只替换 Goal 与 state 路径，不缩短身份、
+范围或能力。仍检查超限并保留独立 JSON 和其它模式预算；字符余量不授予执行权限。
+
+The brief body allowance rises
 from 3,500 to 4,300 characters. Translating its fixed Chinese instructions to
 English grows the Codex App brief body from 3,282 to 3,980 characters (3,494 to
 4,192 with two agent-profile scopes) while its `o200k_base` token count falls

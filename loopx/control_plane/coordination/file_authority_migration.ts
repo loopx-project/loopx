@@ -27,22 +27,38 @@ export async function migrateFileAuthorityStore(directory: string, goal: string,
     !/^authority-store-[0-9a-f]{24}\.json$/.test(basename(archivedPath)))) {
     throw new Error("Invalid File rollback document path");
   }
-  // Same lock as ordinary commits: the backup and source are one exact lineage.
-  return await withFileMutationLock(store.path, async () => {
+  const readSource = async () => {
     let source: Buffer;
     try { source = await readFile(sourcePath); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {status: "missing"}; throw error; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
     const identity = await readFile(store.identityPath, "utf8");
     if (!/^file:[0-9a-f]{32}$/.test(identity)) throw new Error("Invalid file store identity");
-    const revisionFor = (previous: string | null, transaction: Parameters<typeof fileAuthorityRevision>[3]) =>
-      fileAuthorityRevision(goal, identity, previous, transaction);
     const value: unknown = JSON.parse(source.toString("utf8"));
     if (!isAuthorityJsonObject(value)) throw new Error("Invalid authority document");
-    if (value.schema_version === FILE_AUTHORITY_JOURNAL_SCHEMA) {
-      const current = await FileAuthorityJournal.decode(value, goal, identity, revisionFor);
-      return {status: "already_current", provider: "file", cursor: current.cursor,
-        provider_revision: current.provider_revision};
-    }
+    return {source, identity, value};
+  };
+  const currentResult = async (value: JsonObject, identity: string): Promise<JsonObject> => {
+    const current = await FileAuthorityJournal.decode(value, goal, identity, (previous, transaction) =>
+      fileAuthorityRevision(goal, identity, previous, transaction));
+    return {status: "already_current", provider: "file", cursor: current.cursor,
+      provider_revision: current.provider_revision};
+  };
+  // Current documents are atomically published snapshots. Verify their complete
+  // journal without entering the ordinary writer lock; this is not migration.
+  const observed = await readSource();
+  if (!observed) return {status: "missing"};
+  if (observed.value.schema_version === FILE_AUTHORITY_JOURNAL_SCHEMA) {
+    return await currentResult(observed.value, observed.identity);
+  }
+  // Old formats re-read under the same lock as ordinary commits: the backup
+  // and publication must share one exact lineage, even after a concurrent retry.
+  return await withFileMutationLock(store.path, async () => {
+    const locked = await readSource();
+    if (!locked) return {status: "missing"};
+    const {source, identity, value} = locked;
+    const revisionFor = (previous: string | null, transaction: Parameters<typeof fileAuthorityRevision>[3]) =>
+      fileAuthorityRevision(goal, identity, previous, transaction);
+    if (value.schema_version === FILE_AUTHORITY_JOURNAL_SCHEMA) return await currentResult(value, identity);
     if (value.schema_version !== FILE_AUTHORITY_LEGACY_SCHEMA || value.goal_id !== goal || value.store_identity !== identity ||
       !hasExactAuthorityKeys(value, ["schema_version", "goal_id", "store_identity", "provider_revision", "cursor", "head", "committed"])) {
       throw new Error("Unsupported file authority format or mismatched lineage; source was not changed");

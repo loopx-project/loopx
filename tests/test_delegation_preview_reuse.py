@@ -426,23 +426,81 @@ def test_backpressured_supervisor_input_uses_original_parent_deadline(tmp_path, 
         transport.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX anonymous-pipe deadline")
+@pytest.mark.parametrize("size", [65536, 524288])
+def test_backpressured_send_cannot_finish_a_frame_after_deadline(tmp_path, size):
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    trigger = tmp_path / "resume"
+    # Resume the actual pipe reader only after _send has reported a timeout.
+    # A surviving writer must not finish the request when capacity returns.
+    reader = f"""import json,os,select,sys,time
+from pathlib import Path
+trigger=Path({str(trigger)!r})
+print('ready',flush=True)
+while not trigger.exists():time.sleep(.005)
+fd=sys.stdin.fileno();os.set_blocking(fd,False);chunks=[]
+while select.select([fd],[],[],.2)[0]:
+    data=os.read(fd,65536)
+    if not data:break
+    chunks.append(data)
+data=b''.join(chunks)
+print(json.dumps({{'bytes':len(data),'complete_frame':data.endswith(b'\\n')}}),flush=True)
+"""
+    process = subprocess.Popen([sys.executable, "-c", reader], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, text=True)
+    transport = DelegationPreviewTransport()
+    transport._process = process
+    value = {"kind": "request", "id": 1, "argv": ["x" * size], "timeout_ms": 100}
+    try:
+        assert process.stdout.readline().strip() == "ready"
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            transport._send(value, started + 0.1, 0.1)
+        assert time.monotonic() - started < 0.4
+        trigger.touch()
+        process.wait(timeout=3)
+        result = json.loads(process.stdout.readline())
+        assert result["bytes"] < len((json.dumps(value) + "\n").encode())
+        assert result["complete_frame"] is False
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+        transport.close()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX retirement cleanup fence")
 @pytest.mark.parametrize("retirement", ["idle", "lifetime", "broken_pipe"])
-def test_unaccepted_request_recovers_only_after_owned_retirement(tmp_path, monkeypatch, retirement):
+@pytest.mark.parametrize("startup_delay", [0, 0.35], ids=["ready", "slow-worker"])
+def test_unaccepted_request_recovers_only_after_owned_retirement(
+    tmp_path, monkeypatch, retirement, startup_delay,
+):
     from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
 
     marker = tmp_path / "retiring"
     worker = (
         "import json,sys,signal\nfrom pathlib import Path\n"
         f"signal.signal(signal.SIGTERM,lambda *_:Path({str(marker)!r}).touch())\n"
+        f"import time;time.sleep({startup_delay!r})\n"
         "for line in sys.stdin:\n"
         " r=json.loads(line);print(json.dumps({'kind':'preview','id':r['id'],"
         "'returncode':0,'value':{'read_only':True}}),flush=True)"
     )
-    # Shorten only the production retirement clock. The real Host's 300ms
-    # cleanup grace, framed IO, request deadline and process group stay intact.
+    # Advance only the chosen production retirement clock after the first
+    # result. A 200ms lifetime from spawn can retire a slow worker before that
+    # result and tests a different path. Keep the real Host's 300ms cleanup
+    # grace, framed IO, request deadline and process group unchanged.
     timer = 300000 if retirement == "lifetime" else 30000
-    preload = "const original=globalThis.setTimeout;globalThis.setTimeout=(f,ms,...a)=>original(f,ms===" + str(timer) + "?200:ms,...a)"
+    preload = (
+        "const schedule=globalThis.setTimeout,cancel=globalThis.clearTimeout;"
+        "const clocks=new Map();"
+        "globalThis.setTimeout=(f,ms,...a)=>{const h=schedule(f,ms,...a);"
+        f"if(ms==={timer})clocks.set(h,()=>f(...a));return h;}};"
+        "globalThis.clearTimeout=h=>{clocks.delete(h);return cancel(h);};"
+        "process.once('SIGUSR2',()=>{const due=[...clocks];clocks.clear();"
+        "for(const [h,fire] of due){cancel(h);fire();}});"
+    )
     environment = {**_pinned_release_environment(), "NODE_OPTIONS": "--import=data:text/javascript," + quote(preload, safe="")}
     transport = DelegationPreviewTransport()
     options = dict(command=[sys.executable, "-c", worker], workspace=tmp_path,
@@ -453,6 +511,7 @@ def test_unaccepted_request_recovers_only_after_owned_retirement(tmp_path, monke
     try:
         assert transport.preview(**options) == {"read_only": True}
         original = transport._process
+        os.kill(original.pid, signal.SIGUSR2)
         until = time.monotonic() + 5
         while not marker.exists():
             assert time.monotonic() < until, "retirement did not start"

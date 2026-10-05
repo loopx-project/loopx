@@ -622,6 +622,7 @@ def handle_support_control_command(
             if bool(getattr(args, "replace_existing_loopx_chat", False)):
                 replace_existing_loopx_chat(args.host, args.port)
             serve_chat(
+                project_workspace_grant=args.project_workspace_grant,
                 registry_path=chat_registry_path,
                 runtime_root_override=args.runtime_root,
                 scan_roots=scan_roots,

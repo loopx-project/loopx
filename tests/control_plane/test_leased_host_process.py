@@ -99,7 +99,7 @@ sys.exit(result.returncode)
             context[field] = [sys.executable, "-c", relay, str(marker), str(trace), phase,
                               str(held_deadline), *context[field]]
     observed = run_host_process([sys.executable, "-c", "import time;time.sleep(35);print('finished')"],
-        project=tmp_path, input_text="", timeout_seconds=45, delegated_lease=context)
+        project=tmp_path, input_text="", timeout_seconds=None, delegated_lease=context)
     evidence = {"original": context["lease"], "observed": observed,
                 "trace": trace.read_text() if fault in {"lost_reply", "late_reply"} and trace.exists() else ""}
     # Keep the first observation in JUnit even if subsequent canonical readback

@@ -170,7 +170,7 @@ def test_extension_and_package_versions_match() -> None:
         (EXTENSION_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
 
-    assert manifest["version"] == package["project"]["version"] == "0.8.1"
+    assert manifest["version"] == package["project"]["version"] == "0.8.3"
 
 
 def test_duplicate_amount_direction_identity_is_rejected() -> None:

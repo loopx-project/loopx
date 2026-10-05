@@ -105,8 +105,8 @@ Both reuse the same Turn host adapters; neither changes the steward default.
 
 A managed host binding names four things: the host adapter, the provider, the
 model, and where the credential comes from. The DSH binding is the DSH Turn host
-with provider `deepseek-official`, model `deepseek-v4-flash` (DeepSeek V4.1
-Flash) at reasoning effort `high`, an endpoint from the operator environment
+with provider `deepseek-official`, model `deepseek-flash` (DeepSeek-V4.1-Flash)
+at reasoning effort `high`, an endpoint from the operator environment
 (`DEEPSEEK_BASE_URL`) and a credential from the operator environment
 (`DEEPSEEK_API_KEY`).
 
@@ -161,17 +161,24 @@ the channel Session on the endpoint the machine now selects.
 
 Both managed surfaces resolve their **execution profile** from one owner
 (`loopx/control_plane/turn_driver/execution_profile.py`): provider
-`deepseek-official`, model `deepseek-v4-flash` (DeepSeek V4.1 Flash) and reasoning
+`deepseek-official`, model `deepseek-flash` (DeepSeek-V4.1-Flash) and reasoning
 effort `high`, overridable by `LOOPX_TURN_PROVIDER` / `LOOPX_TURN_MODEL` /
 `LOOPX_TURN_REASONING_EFFORT` and, at lower precedence, the legacy `DSH_PROVIDER`
 / `DSH_MODEL`. The readback is one line, `execution_profile`, shaped
-`deepseek-v4-flash@high` in the shipped case, with the provider prepended only
+`deepseek-flash@high` in the shipped case, with the provider prepended only
 when it is not the shipped one; it is one line because every plan payload carries
 it and the agent-facing output budget is a contract, and whichever values the
 line names are the values that run, so an owner-set model appears as itself.
 Credentials authenticate the selected profile and never choose it; the one
 thing a credential resolves is the shipped *host* default of a bounded Turn
 nobody selected, and that resolution carries its own readback source.
+
+**Revision (2026-10-04):** the shipped model default moved from the retired
+`deepseek-v4-flash` spelling to the canonical `deepseek-flash` id of the same
+DeepSeek-V4.1-Flash generation. The retired spelling is still accepted by the
+vendor endpoint and remains available as an explicit `LOOPX_TURN_MODEL` /
+`DSH_MODEL` override, so a host that pins it is a configuration change rather
+than a code change.
 
 Evidence for this binding, separated by source:
 

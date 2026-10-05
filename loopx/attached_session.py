@@ -646,7 +646,7 @@ def resume_attached_agent_session(
         )
 
 
-def enqueue_attached_agent_turn(
+def _enqueue_attached_agent_turn_under_grant(
     *,
     store: ChatSessionStore,
     registry_path: Path | None,
@@ -654,6 +654,7 @@ def enqueue_attached_agent_turn(
     client_turn_id: str,
     message: str,
     origin: str,
+    external_agent_target: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Enqueue work while the exact attached Session is current."""
 
@@ -662,12 +663,20 @@ def enqueue_attached_agent_turn(
         registry_path=registry_path,
         session_id=session_id,
     ) as (session, registry, current_ref):
+        if external_agent_target is not None:
+            from .registry import load_registry
+            from .capabilities.native_chat.conversation_bindings import validate_external_agent_turn
+            observed_registry = registry or (load_registry(registry_path) if registry_path else {})
+            validate_external_agent_turn(store=store, session=session,
+                goal=find_registry_goal(observed_registry, session["goal_id"]),
+                turn={"origin": origin, "external_agent_target": external_agent_target})
         if registry is None or current_ref is None:
             return store.create_queued_turn(
                 session_id,
                 client_turn_id=client_turn_id,
                 message=message,
                 origin=origin,
+                external_agent_target=external_agent_target,
             )
         decision = _lifecycle_decision(
             operation="admit",
@@ -684,10 +693,23 @@ def enqueue_attached_agent_turn(
             message=message,
             goal_instance_id=str(goal_ref["goal_instance_id"]),
             origin=origin,
+            external_agent_target=external_agent_target,
         )
 
 
-def _claim_attached_turn_once(
+def enqueue_attached_agent_turn(*, store: ChatSessionStore, registry_path: Path | None,
+                                session_id: str, client_turn_id: str, message: str, origin: str,
+                                external_agent_target: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+    kwargs = dict(store=store, registry_path=registry_path, session_id=session_id,
+                  client_turn_id=client_turn_id, message=message, origin=origin,
+                  external_agent_target=external_agent_target)
+    if external_agent_target is None:
+        return _enqueue_attached_agent_turn_under_grant(**kwargs)
+    with exclusive_file_lock(store.root / "conversation-bindings.json", operation="admit_attached_audience"):
+        return _enqueue_attached_agent_turn_under_grant(**kwargs)
+
+
+def _claim_attached_turn_under_grant(
     *,
     store: ChatSessionStore,
     registry_path: Path | None,
@@ -713,10 +735,17 @@ def _claim_attached_turn_once(
             host_surface=host_surface,
             host_session_id=host_session_id,
         )
+        from .registry import load_registry
+        from .capabilities.native_chat.conversation_bindings import validate_external_agent_turn
+        observed_registry = registry or (load_registry(registry_path) if registry_path and registry_path.exists() else {})
+        goal = find_registry_goal(observed_registry, session["goal_id"])
+        def validate(turn: dict[str, Any]) -> None:
+            validate_external_agent_turn(store=store, session=session, goal=goal, turn=turn)
         if registry is None or current_ref is None:
             return store.claim_next_queued_turn(
                 session_id,
                 host_claim_id=claim_id,
+                admission_validator=validate,
             )
         active_turn_id = str(session.get("active_turn_id") or "")
         active_turn = (
@@ -741,7 +770,16 @@ def _claim_attached_turn_once(
             session_id,
             host_claim_id=claim_id,
             admitted_goal_instance_id=str(goal_ref["goal_instance_id"]),
+            admission_validator=validate,
         )
+
+
+def _claim_attached_turn_once(**kwargs: Any) -> dict[str, Any] | None:
+    # Lock order: audience grants -> source Goal lifetime -> canonical queue.
+    # A revocation cannot race a not-yet-claimed private message into execution.
+    store = kwargs["store"]
+    with exclusive_file_lock(store.root / "conversation-bindings.json", operation="claim_attached_audience"):
+        return _claim_attached_turn_under_grant(**kwargs)
 
 
 def claim_attached_agent_turn(
@@ -796,6 +834,7 @@ def claim_attached_agent_turn(
                 "client_turn_id": str(turn.get("client_turn_id") or ""),
                 "claim_id": str(turn.get("host_claim_id") or ""),
                 "origin": str(turn.get("origin") or "external"),
+                **({"external_audience": turn["external_agent_target"]["context"]} if turn.get("external_agent_target") else {}),
                 "message": str(turn.get("message") or ""),
                 "created_at": turn.get("created_at"),
                 "expires_at": turn.get("expires_at"),

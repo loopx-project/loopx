@@ -1166,17 +1166,19 @@ def refresh_state_run(
                     else None
                 ),
             )
-            workspace_todo_fields = todo_fields
-            if workspace_todo_fields is None:
-                workspace_todo_fields = parse_active_state_todos(
-                    state_text, goal=registry_goal, state_path=resolved_state_file,
-                    preferred_todo_ids={settlement_identity.todo_id or ""},
-                    rollout_events=planning_events, item_limit=None,
-                )
-            selected_contract = next((
-                item for item in workspace_todo_fields.get("agent_todos", {}).get("items", [])
-                if item.get("todo_id") == settlement_identity.todo_id
-            ), {})
+            selected_contract = {}
+            if settlement_identity is not None and settlement_identity.todo_id:
+                workspace_todo_fields = todo_fields
+                if workspace_todo_fields is None:
+                    workspace_todo_fields = parse_active_state_todos(
+                        state_text, goal=registry_goal, state_path=resolved_state_file,
+                        preferred_todo_ids={settlement_identity.todo_id},
+                        rollout_events=planning_events, item_limit=None,
+                    )
+                selected_contract = next((
+                    item for item in workspace_todo_fields.get("agent_todos", {}).get("items", [])
+                    if item.get("todo_id") == settlement_identity.todo_id
+                ), {})
             delivery_workspace, peer_independent_worktree_required = qualify_delivery_workspace_isolation(
                 delivery_workspace, multi_agent_goal=multi_agent_goal,
                 explicit_peer_worktree_requirement=explicit_peer_worktree_requirement,

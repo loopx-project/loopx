@@ -1493,7 +1493,7 @@ def _build_interaction_cli_channel(
             "refresh": (
                 "delivery_workspace; otherwise --delivery-workspace-path"
                 if selected_todo.get("task_repository")
-                else "registered local Goal workspace; Git peer delivery requires an independent worktree"
+                else "registered local Goal workspace; follow the current workspace guard and repository rules"
             ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",

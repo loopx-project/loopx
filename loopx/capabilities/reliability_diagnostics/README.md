@@ -137,6 +137,11 @@ uncertainty are `degraded`; otherwise the receipt is `valid`.
 
 ### Diagnostic projection (`reliability_diagnostic_projection_v0`)
 
+Events are ordered by the instant represented by `observed_at`, then by session
+and sequence for equal instants. Different UTC offsets or fractional-second
+formats do not change chronology. Receipt bounds retain the original timestamp
+text; readback does not rewrite the ledger.
+
 | Field | Meaning |
 | --- | --- |
 | `mode`, `authority`, `write_scope`, `worker_influence` | `read_only`, `none`, `diagnostic_ledger_only`, `none` |

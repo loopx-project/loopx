@@ -22,6 +22,7 @@ ACTION_SIGNATURE_COVERAGE_V1 = "turn_envelope_action_dimensions_v1"
 ACTION_SIGNATURE_COVERAGE_V2 = "turn_envelope_action_dimensions_v2"
 ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3"
 ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4"
+ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5"
 ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0
 PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref"
 
@@ -70,6 +71,7 @@ def build_turn_envelope(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    captured_decision_path: str | None = None,
 ) -> dict[str, Any]:
     """Project one full quota decision through the canonical TS transaction."""
 
@@ -84,4 +86,6 @@ def build_turn_envelope(
         payload=dict(payload),
         protocol_action_fields=_protocol_action_fields(payload),
         scheduler_execution_args=scheduler_execution_args,
+        **({"captured_decision_path": captured_decision_path}
+           if captured_decision_path is not None else {}),
     )

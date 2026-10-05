@@ -8,12 +8,15 @@ from typing import Any
 # against, so it owns both; `repository_snapshot` already imports the schema
 # name from there rather than restating it. `PROJECTION_SCHEMA_VERSION` below is
 # a different document's version that happens to share a name prefix, so it stays.
+# The same rule runs the other way for the snapshot name: `repository_snapshot`
+# builds and stamps those payloads and this file only compares against them, so
+# the value is imported rather than restated here.
 from .metrics_supplement import (
     _SUPPLEMENT_FIELDS,
     SUPPLEMENT_SCHEMA_VERSION,
 )
+from .repository_snapshot import SNAPSHOT_SCHEMA_VERSION
 
-SNAPSHOT_SCHEMA_VERSION = "issue_fix_repository_reporting_snapshot_v0"
 PROJECTION_SCHEMA_VERSION = "issue_fix_metrics_projection_v0"
 
 _FLOW_FIELDS = (

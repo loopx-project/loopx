@@ -17,7 +17,6 @@ from .control_plane.todos.contract import (
     TODO_STATUS_DEFERRED,
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
-    TODO_TASK_CLASS_USER_GATE,
     build_todo_id,
     format_todo_metadata_line,
     metadata_line_for_todo_block,
@@ -149,24 +148,6 @@ from .control_plane.work_items.task_lease import (
 
 
 ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = max(0, MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - 2)
-
-
-def require_registered_todo_excluded_agents(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    excluded_agents: Any,
-    field: str = "excluded_agents",
-) -> list[str]:
-    return sorted(
-        require_registered_agent_id(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            field=field,
-        )
-        for agent_id in require_todo_excluded_agents(excluded_agents, field=field)
-    )
 
 
 def add_todo_to_lines(
@@ -525,24 +506,6 @@ def add_goal_todo(
         blocks_agent=blocks_agent,
         global_gate=True if global_gate else None,
     )
-    if global_gate and not (role == "user" and task_class == TODO_TASK_CLASS_USER_GATE):
-        raise ValueError("global_gate is only valid for `--role user --task-class user_gate`")
-    if role == "agent" and blocks_agent:
-        raise ValueError(
-            "blocks_agent is only valid for user gates; use --excluded-agent for "
-            "agent executor constraints"
-        )
-    if role == "user" and claimed_by:
-        raise ValueError(
-            "claimed_by is execution ownership for agent todos, not a user-todo "
-            "binding; use --bound-agent or --goal-bound"
-        )
-    if task_repository and role != "agent":
-        raise ValueError("task_repository is only valid for agent todos")
-    if task_domain and role != "agent":
-        raise ValueError("task_domain is only valid for agent todos")
-    if capability_binding_ref and role != "agent":
-        raise ValueError("capability_binding_ref is only valid for agent todos")
     replan_obligation_id = require_replan_successor_scope(
         role=role,
         task_class=task_class,
@@ -555,8 +518,6 @@ def add_goal_todo(
     normalized_status = normalize_todo_status(status) if status else TODO_STATUS_OPEN
     if status and not normalized_status:
         raise ValueError("todo status must be one of: open, done, blocked, deferred")
-    if normalized_status == TODO_STATUS_DONE:
-        raise ValueError("todo add cannot create completed work; add it open and use `loopx todo complete`")
     priority_plan = plan_todo_priority({}, {"text": text, **({"priority": priority} if priority is not None else {})})
     todo_text = str(priority_plan["text"])
     if validation_command and validation_command_json:
@@ -594,10 +555,7 @@ def add_goal_todo(
     )
     registered_agents = registered_agent_ids_from_registry(registry_path, goal_id)
     effective_excluded_agents = (
-        require_registered_todo_excluded_agents(
-            registry_path=registry_path, goal_id=goal_id,
-            excluded_agents=excluded_agents,
-        )
+        require_todo_excluded_agents(excluded_agents)
         if excluded_agents is not None
         else None
     )
@@ -1208,9 +1166,8 @@ def update_goal_todo(
             runtime_root=shadow_runtime_root,
         )
         effective_excluded_agents = (
-            [] if clear_excluded_agents else require_registered_todo_excluded_agents(
-                registry_path=registry_path, goal_id=goal_id, excluded_agents=excluded_agents,
-            ) if excluded_agents is not None else None
+            [] if clear_excluded_agents else require_todo_excluded_agents(excluded_agents)
+            if excluded_agents is not None else None
         )
         completion_metadata_updates_override = None
         if completion_validation_gate is not None:

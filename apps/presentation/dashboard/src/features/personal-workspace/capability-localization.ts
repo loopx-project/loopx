@@ -8,7 +8,7 @@ type LocalizedCopy = Readonly<{
   readOnlyReason?: string;
 }>;
 
-type FieldCopy = Record<string, Readonly<{ description?: string; label: string }>>;
+type FieldCopy = Record<string, Readonly<{ description?: string; label: string; options?: Record<string, string> }>>;
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
@@ -36,7 +36,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "Explore Harness",
-      description: "Selects a capability-owned planning and research harness profile for bounded multi-step exploration.",
+      description: "Keeps an evidence graph of exploration, with optional branch planning. Planning includes evidence; worker permissions remain separate.",
     },
     lark_event_inbox: {
       displayName: "Lark event inbox",
@@ -70,7 +70,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     pull_request_review: {
       displayName: "Pull-request review",
-      description: "Ranks the public GitHub PR review queue with a machine-level default; it never grants GitHub, Todo, push, or merge authority.",
+      description: "Sets forward/reverse PR review directions with machine, Goal and Agent settings; it never grants GitHub, Todo, push, or merge authority.",
     },
     reward_memory: {
       displayName: "Reward Memory experiment",
@@ -102,7 +102,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "探索 Harness",
-      description: "为有界的多步探索选择由能力负责的规划与研究 Harness profile。",
+      description: "记录探索证据图谱，可选开启分支规划；规划自动配套证据层，派生 Agent 权限独立。",
     },
     lark_event_inbox: {
       displayName: "飞书事件收件箱",
@@ -166,7 +166,9 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     profile: { label: "Planner profile", description: "Select one registered Explore Harness profile." },
     profile_preset: { label: "Report profile", description: "Capability-owned report profile, such as weekly-progress." },
     wait_for_ci: { label: "Wait for CI", description: "Disable to use local validation without querying or waiting for CI. Merge authority is unchanged." },
-    review_priority: { label: "Review priority", description: "Choose whether other developers' PRs or the authenticated reviewer's own PRs are ranked first." },
+    review_order: { label: "Review direction", description: "Forward visits other authors first and oldest first. Reverse inverts the whole actionable queue." },
+    agent_orders: { label: "Agent review directions", description: "Use the Goal default or choose a direction for each registered Agent." },
+    owner_logins: { label: "Additional owner accounts", description: "One GitHub login per line. These accounts and the signed-in reviewer share the owner queue; review and merge permissions stay unchanged." },
     route_ref: { label: "Goal Channel route", description: "Public route alias only; credentials and provider identifiers stay outside this form." },
     safe_fix: { label: "Allow one bounded safe-fix pass" },
     strict_receipt: { label: "Require an exact-diff receipt" },
@@ -195,7 +197,9 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     profile: { label: "规划 Profile", description: "选择一个已注册的 Explore Harness profile。" },
     profile_preset: { label: "报告 Profile", description: "由该能力管理的报告 profile，例如 weekly-progress。" },
     wait_for_ci: { label: "等待 CI", description: "关闭后使用本地验证，不查询或等待 CI；不改变合并权限。" },
-    review_priority: { label: "审阅优先级", description: "选择先排其他开发者的 PR，还是先排当前已认证审阅者自己的 PR。" },
+    review_order: { label: "审阅方向", description: "正向先审其他作者，同层先审较早就绪的 PR；反向将整个可执行队列倒序。" },
+    agent_orders: { label: "Agent 审阅方向", description: "每个注册 Agent 可继承 Goal，或单独选择正向、反向。" },
+    owner_logins: { label: "额外所有者账号", description: "每行一个 GitHub 登录名，与当前登录的审阅账号一起计入 owner 队列；不改变审阅或合并权限。" },
     route_ref: { label: "Goal Channel 路由", description: "只填写公开 route alias；凭据与 Provider 标识不会进入此表单。" },
     safe_fix: { label: "允许一次有界安全修复" },
     strict_receipt: { label: "要求精确 diff 回执" },
@@ -223,7 +227,14 @@ export function localizeCapability(
   };
 }
 
-export function localizedCapabilityFieldCopy(locale: WorkspaceLocale): FieldCopy {
+export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
+  if (capabilityId === "explore_harness") return {...fieldCopy[locale], mode: locale === "zh-CN" ? {
+    label: "探索模式", description: "规划包含证据图谱；派生 Agent 和执行权限仍单独控制。",
+    options: {off: "关闭", evidence: "仅记录证据", planning: "证据与规划"},
+  } : {
+    label: "Exploration mode", description: "Planning includes the evidence graph; worker and execution permissions remain separate.",
+    options: {off: "Off", evidence: "Evidence only", planning: "Evidence and planning"},
+  }};
   return fieldCopy[locale];
 }
 

@@ -146,20 +146,6 @@ def _apply_transition(
     return materialized_result
 
 
-def bind_next_action_to_todo(lines: list[str], *, todo_id: str) -> bool:
-    """Bind one generated durable Next Action to its stable Todo identity."""
-
-    normalized_todo_id = normalize_todo_id(todo_id)
-    if not normalized_todo_id:
-        raise ValueError("next-action binding requires a valid todo_id")
-    result = _apply_transition(
-        lines,
-        operation="bind",
-        params={"todo_id": normalized_todo_id},
-    )
-    return bool(result["changed"])
-
-
 def reconcile_added_todo_next_action(
     lines: list[str],
     *,

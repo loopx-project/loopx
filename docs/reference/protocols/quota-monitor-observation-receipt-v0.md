@@ -76,9 +76,19 @@ advancement work remains active.
   Turn recomputes them. The automation stays active and quiet between Turns.
   Completing, superseding or archiving the Monitor cannot reopen its committed
   Turn. The settlement reader reports `replay_phase=settled`; CLI replay retains
-  the original identity in `heartbeat_receipt.settlement_identity` and has no
-  executable `selected_todo`. Consumers must use the receipt for historical
-  identity instead of requiring the Monitor to remain in the open frontier.
+  the original identity in `heartbeat_receipt.settlement_identity`, the durable
+  historical identity of the committed Turn, which stays readable after the
+  Monitor is completed, superseded or archived. While the bound Monitor still
+  projects as a current work item, the same identity also appears as
+  `selected_todo` and `agent_lane_next_action` with
+  `receipt_bound_monitor_phase=settled`. Those two work-lane projections are
+  conditional: once the bound Monitor is no longer reconstructible as current
+  work, both are absent and only the receipt retains the identity. Neither form
+  is executable selection: `should_run=false`, `must_attempt_work=false` and
+  `effective_action=heartbeat_settled_skip` remain authoritative. Consumers
+  must read historical identity from the receipt, must not require these fields
+  to be present, must not require the Monitor to remain in the open frontier,
+  and must not infer a new poll, delivery or spend from their presence.
   Uncommitted observation rows and auxiliary polls for another Todo do not
   qualify this closeout.
 
@@ -286,9 +296,15 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   未决 gate 和独立工作保留为诊断事实，由新 Turn 重新计算；自动化保持 active quiet。
   Monitor 完成、被替代或归档都不能重开已提交的 Turn。结算读取返回
   `replay_phase=settled`；CLI 重放通过 `heartbeat_receipt.settlement_identity`
-  保留原身份，不再投影可执行的 `selected_todo`。消费者应从回执读取历史身份，
-  不要求 Monitor 继续出现在未完成列表中。未提交的观察行，以及针对另一个 Todo
-  的辅助 poll，均不能构成该结算依据。
+  保留原身份，该回执是已提交 Turn 的持久历史身份，在 Monitor 完成、被替代或归档
+  后仍可读。当绑定的 Monitor 仍投影为当前工作项时，同一身份同时出现在
+  `selected_todo` 与 `agent_lane_next_action`（`receipt_bound_monitor_phase=settled`）。
+  这两个工作 lane 投影是有条件的：一旦绑定 Monitor 不再可重建为当前工作，二者均
+  不出现，只有回执保留身份。两种形式都不是可执行选择：`should_run=false`、
+  `must_attempt_work=false`、`effective_action=heartbeat_settled_skip` 仍然权威。
+  消费者应从回执读取历史身份，不得要求这些字段存在，也不得因字段存在推断新的
+  poll、delivery 或 spend，或要求 Monitor 继续出现在未完成列表中。未提交的观察行，
+  以及针对另一个 Todo 的辅助 poll，均不能构成该结算依据。
 
 ### 验收
 

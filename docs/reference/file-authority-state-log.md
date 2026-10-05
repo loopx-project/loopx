@@ -62,8 +62,14 @@ Normal readers and writers **do not accept the old File format**. Old parsing
 belongs only to migration. There is no migration-on-read or first-business-write
 conversion. SQLite's existing v1-to-v2 converter follows the same explicit gate.
 
-Default local installation and Windows installation run the candidate's upgrade
-command before launcher activation. `loopx update apply` for pip/pipx runs it
+Default local installation and Windows installation run the candidate's format
+compatibility/upgrade command before launcher activation. This is not a provider
+switch: an already-current store receives its existing read-only validation,
+without acquiring a migration lock or creating a backup. Current File journals
+still receive full history validation; current SQLite stores retain metadata and
+contiguous-lineage checks. Only an old supported format enters the locked
+backup-and-upgrade path, which re-reads the source before publication.
+`loopx update apply` for pip/pipx runs it
 after package installation and before host updates or service restart. Canary
 installation does not migrate stores. Source checkouts and externally managed
 package updates use the same explicit command:

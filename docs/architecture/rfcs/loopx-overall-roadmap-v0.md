@@ -16,6 +16,9 @@ creation path; see the [absorption map](app-conversation-and-async-inbox-v0.md#c
 Its separate workspace/executor is not adopted. This entry improvement does not
 close GQ01 execution/return or R2 small-team acceptance.
 
+**S2/S12 startup diagnostic checkpoint (2026-10-04)** moved to
+[`ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.md`](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.md).
+
 ## 1. Overall Objective and Product Routes
 
 LoopX aims to let people express, revise and accept complex goals through a local frontend or Lark, while a persistent steward coordinates long-running LoopX Agents with independent work commitments across local managed and cloud runtimes. Single-Agent long-horizon reliability is the foundation. Multi-Agent collaboration, handoff, recovery and convergence on shared goals are core capabilities. Hundred-Agent scale is a separate system qualification.
@@ -102,6 +105,8 @@ These directly determine whether a long-running team is usable. A directory or R
 | [Testing/quality](../../development/testing-and-quality.md), [CI impact](../../development/ci-impact-selection.md), [source correctness](../../reference/protocols/local-state-write-correctness-v0.md), [release readiness](../../product/release-readiness.md) | S2/S10/S12 | Independent expected semantics, real backend/install entry, negative/mutation cases; control validation cost without treating skipped checks as passed |
 | [Install](../../guides/installing-loopx.md), [newcomer path](../../guides/newcomer-command-path.md), [design](../../development/design.md), [user guide](../../guides/personal-workspace-user-guide.md) | S1/S5/S12 | First-value path, error recovery, supported platforms, accessibility and bilingual consistency; existing design/first-screen review for UI changes |
 | [Public adoption](../../product/public-adoption-loop.md), [scenario gaps](../../product/scenario-capability-gap-map.md), [SaaS assessment](../../product/roadmaps/saas-opportunity-assessment.md), [licensing](../../project/licensing.md), [governance](../../../.github/GOVERNANCE.md) | S12/S13 | Traceable public outcomes/failure feedback; independently qualify commercial hypotheses; existing license/credit/community-authority policies remain authoritative |
+
+[Lark personal follow-through](../../product/use-cases/office-operations/personal-follow-through.md) applies the [manager RFC](capable-manager-semantic-handoff-v0.md) to S1/S5/S6/S8/S9. Common grants, continuation and return use manager acceptance; the profile retains source interpretation and evaluation. The independent proposal is consolidated; the installed private desktop journey remains unqualified and closes no existing gate.
 
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 
@@ -410,6 +415,14 @@ Chat, session, collaboration and presentation owners as R2/R3 integration work.
 Do not call a candidate catalog, spinner or queued inbox receipt a completed
 worker handoff. This checkpoint does not lower R1–R3 or G1 gates.
 
+The [ordinary workspace write checkpoint](app-conversation-and-async-inbox-v0.md#ordinary-workspace-writes-default-and-revocation-checkpoint)
+adds default project writes under the host grant, explicit read-only launch/App
+settings and actual Codex sandbox enforcement on start/resume. It reuses the typed
+conversation owner and has no hidden Goal or manager permissions. Synthetic
+Core/HTTP cases and a real host note-edit canary do not establish installed Lark
+workflow readiness or activate a project's Material Lifecycle adapter. R3/S5
+still require original-audience write/readback, revoke/recovery and IM qualification.
+
 ### Attention-cost acceptance: create, connect, collaborate, understand
 
 The [public-safe golden-query pack](../../product/use-cases/steward/golden-queries.md)
@@ -522,6 +535,10 @@ simultaneously select a candidate monitor. Owner binding and fresh completion
 validation remain required. This repairs R1/S2/S3 continuity, not R4's general
 intent-preserving amendment or provider promotion. Real File/SQLite CLI
 regressions cover recovery admission and continued refusal of unbound completion.
+Later vision gaps also rearm after an older
+patch ACK; its label cannot waive new evidence. When the new canonical successor
+removes that frontier duty before writeback, exact source reconstruction preserves
+the admitted Turn through refresh/spend without admitting successor execution.
 
 ### R2: Continuous Small-team Execution
 
@@ -704,6 +721,14 @@ Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
 
+**Bound-conversation status presentation.** The shared display renderer leads
+with canonical execution/recovery state, project and queue/permission facts;
+the Lark adapter reserves full commands and diagnostics for help, retaining a
+compact snapshot timestamp for delayed/replayed replies. Unreadable
+observations and completed executions retain their uncertainty/acceptance
+boundary. This is a bounded status-view improvement, not qualification of
+result synthesis, receiver adoption or the full automatic-return journey.
+
 **S1/S5 attention checkpoint.** Local steward/Goal Turns now receive canonical
 blocker and concrete owner-request facts without a Lark connection. The shared
 TS read model coalesces one Todo's blocker/decision; common content adapters and
@@ -804,7 +829,7 @@ TS validation and canonical receipt/display recovery. Real-provider mixed-graph
 counterexamples cover concurrent changes and lost responses. [Scope and remaining
 boundaries](../../reference/canonical-terminal-review.md); this does not settle R5 or D1–D3.
 
-L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maintenance share typed lease facts/rules and provider opening. Exact acquisition retry verifies current execution proof; real CLI completion can recover missing Markdown display. Full-state scope conflicts, process interruption and File/SQLite/PostgreSQL read-only rehearsal are covered. [Remaining executor and integration boundaries](../../reference/canonical-lease-renew.md); R5, D2/D3 and default qualification remain open.
+L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maintenance share typed lease facts/rules and provider opening. Exact acquisition retry verifies current execution proof; real CLI completion can recover missing Markdown display. Full-state scope conflicts, process interruption and File/SQLite/PostgreSQL read-only rehearsal are covered. Verified cooperative code-edit mode treats overlapping files as integration advisories, including unknown legacy workspace grants; known same-checkout collisions, Todo-instance ownership and ordinary exclusive acquisition retain their fences. This bounded coordination change does not qualify a real peer correction/adoption journey. [Remaining executor and integration boundaries](../../reference/canonical-lease-renew.md); R5, D2/D3 and default qualification remain open.
 
 - **Owner:** TS T0–T4 and shared-authority D1–D3; retain their numbering and gates.
 - **Selection:** prioritize an entire hot-path transaction or recovery lifecycle used by R1–R4. Record before/after callers, owners, crossings, actual deletions and performance. Stop adding per-field Python→TS RPCs; do not rebuild the merged Todo update.
@@ -930,3 +955,11 @@ uv run --extra test python -m pytest -q tests/test_turn_managed_executor_binding
 These 177 tests are not a full repository run or live cloud/model, packaged-browser, Lark or PostgreSQL qualification. The #4552 browser fixture and live source-read record in the selection RFC are historical evidence, not rerun here, and do not qualify team execution. F1–F4 reproduction steps are fixed in the findings table; implementation should add the corresponding independent semantic regressions to existing tests, not commit temporary diagnostic scripts or private run logs.
 
 Update the current assessment, card boundaries and qualifying evidence in place. Move long historical ledgers to companions and keep domain RFC status synchronized. If domain state/authority/migration contracts conflict, stop affected implementation and repair the documents rather than overriding accepted authority through this roadmap. Merging this document accepts a discoverable, claimable design route; it does not complete R1–R7 or pass implementation and promotion gates.
+
+## Appendix A: Execution ledger
+
+Dated checkpoints for this RFC are files under
+[`ledger/loopx-overall-roadmap-v0/`](ledger/loopx-overall-roadmap-v0/), one dated
+entry per change, named and paired per [the ledger convention](ledger/README.md).
+An entry states what the change measured, what it changed, and what it did not
+establish; this body keeps only a pointer to it.

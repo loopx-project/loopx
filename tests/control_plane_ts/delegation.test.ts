@@ -90,6 +90,33 @@ test("owner acceptance and ordinary Todo validation remain cumulative", () => {
   }
 });
 
+test("current validation provenance identifies definitions without exporting private commands", () => {
+  const args = {binding, basis: validationBasis, declaration};
+  const plan = delegationValidationPlan(args);
+  const observed = plan.observation as Record<string, unknown>;
+  assert.equal(observed.source, "todo_validation");
+  assert.equal(observed.check_count, 1);
+  assert.equal(observed.pinned_file_count, 0);
+  assert.match(String(observed.basis_sha256), /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(observed).sort(), ["basis_sha256", "check_count", "pinned_file_count", "source"]);
+  assert.deepEqual(delegationValidationPlan({...args,
+    basis: {...validationBasis, provider_revision: "fixture:2"}}).observation, observed);
+  const changed = {...declaration, validation_command_argv: ["node", "other-private-validator.ts"]};
+  const changedPlan = delegationValidationPlan({...args, declaration: changed, basis: {...validationBasis,
+    todo: {...validationTodo, completion_validation_sha256: canonicalAuthoritySha256(changed)}}});
+  assert.notEqual((changedPlan.observation as Record<string, unknown>).basis_sha256, observed.basis_sha256);
+  assert.equal(delegationValidationPlan({...args, declaration: null}).observation, undefined);
+  const criteria = [{id: "review", description: "Private owner rule", validation_argv: ["node", "private-owner.ts"],
+    validation_timeout_seconds: 5, validation_files: [{path: "private-owner.ts", sha256: "a".repeat(64)}]}];
+  const combined = delegationValidationPlan({...args, basis: {...validationBasis,
+    completion_requirements: {todo_id: binding.todo_id, criteria}}}).observation as Record<string, unknown>;
+  assert.equal(combined.source, "goal_acceptance");
+  assert.equal(combined.check_count, 2);
+  assert.equal(combined.pinned_file_count, 1);
+  assert.notEqual(combined.basis_sha256, observed.basis_sha256);
+  assert.doesNotMatch(JSON.stringify(combined), /private|Independent verification|validation_argv/);
+});
+
 test("same explicit grant contract applies to a coordinator and an ordinary member", () => {
   assert.deepEqual(selectDelegationBinding(params), binding);
   assert.deepEqual(selectDelegationBinding({...params, agent_id: "analyst"}), binding);

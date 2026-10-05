@@ -393,6 +393,13 @@ failure leaves the generated files untouched.
 
 ## Operator Experience And Observability
 
+- [Personal Follow-through historical proposal](personal-follow-through-v0.md)
+  ([中文版](personal-follow-through-v0.zh-CN.md))
+  - **Current boundary:** Design ownership and acceptance belong to the
+    [capable manager](capable-manager-semantic-handoff-v0.md). The
+    [Lark personal profile](../../product/use-cases/office-operations/personal-follow-through.md)
+    retains source interpretation and evaluation; the installed journey remains unqualified.
+
 - [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md)
   - **Delivery on `main`:** Core slice implemented.
   - **Current boundary:** Codex usage capture, normalized aggregation, and
