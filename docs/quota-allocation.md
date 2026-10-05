@@ -37,7 +37,9 @@ of that observation, including explicit cache use; the Markdown view shows it.
 
 Host-denied local Effect runtime access fails closed with
 `quota_runtime_permission_denied`. The client preserves the pre-dispatch
-permission failure without retrying it as a transient connection error. Retry
+permission failure without retrying it as a transient connection error. Locator
+discovery and readiness preserve the same diagnostic and recovery guidance; a
+startup whose locator becomes denied stops its newly owned process. Retry
 the same registry, Goal, Agent and Turn through host-approved access; do not
 enable optional capabilities, replace authority or spend before guard success.
 A method such as `capabilities.pr_review.configuration` can be called to

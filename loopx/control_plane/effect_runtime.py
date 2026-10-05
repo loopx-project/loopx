@@ -462,6 +462,8 @@ def _start_lock_holder_pid(path: Path) -> int | None:
 def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except PermissionError as exc:
+        raise EffectRuntimeHostPermissionError() from exc
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
     if not isinstance(payload, dict):
@@ -911,7 +913,12 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                 ) from exc
             ready_deadline = time.monotonic() + STARTUP_READY_TIMEOUT_SECONDS
             while time.monotonic() < ready_deadline:
-                info = _read_info(info_path, fingerprint=fingerprint)
+                try:
+                    info = _read_info(info_path, fingerprint=fingerprint)
+                except EffectRuntimeHostPermissionError:
+                    if process.poll() is None:
+                        process.terminate()
+                    raise
                 if info is not None:
                     return info
                 exit_code = process.poll()
@@ -1068,6 +1075,7 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
     runtime_state = "unavailable"
     runtime_diagnostic_code: str | None = None
     runtime_identity: dict[str, Any] | None = None
+    host_permission_error: EffectRuntimeHostPermissionError | None = None
     if ready:
         try:
             fingerprint = _runtime_fingerprint()
@@ -1077,6 +1085,11 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             )
             runtime_state = "running" if info is not None else "stopped"
             runtime_identity = runtime_identity_from_info(info)
+        except EffectRuntimeHostPermissionError as exc:
+            ready = False
+            status = "probe_failed"
+            runtime_diagnostic_code = exc.diagnostic_code
+            host_permission_error = exc
         except (OSError, EffectRuntimeStartupError) as exc:
             ready = False
             status = "package_invalid"
@@ -1106,7 +1119,9 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
         "semantic_probe": "not_requested" if not deep else "not_run",
         "runtime_lifecycle": runtime_lifecycle,
         "recommended_action": (
-            None
+            host_permission_error.recommended_action
+            if host_permission_error is not None
+            else None
             if ready
             else (
                 f"Install Node.js {MINIMUM_NODE_VERSION_TEXT} or newer, then "
@@ -1147,7 +1162,9 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
                 "diagnostic_code": diagnostic_code,
             },
             "recommended_action": (
-                "Run `loopx doctor --deep` again after any concurrent startup "
+                exc.recommended_action
+                if isinstance(exc, EffectRuntimeHostPermissionError)
+                else "Run `loopx doctor --deep` again after any concurrent startup "
                 "finishes. If the same diagnostic code remains, reinstall LoopX "
                 "and verify Node.js before retrying."
             ),
