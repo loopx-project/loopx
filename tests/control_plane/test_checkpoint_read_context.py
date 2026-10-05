@@ -33,6 +33,19 @@ def _missing(root: Path):
     return project, runtime, registry, binding, delivery, original
 
 
+def test_checkpoint_recovery_is_not_a_fresh_turn_preflight(tmp_path):
+    project, runtime, registry = _write_fixture(tmp_path)
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    rc, admitted = _run_cli(registry, runtime, "quota", "should-run",
+                            "--codex-app", *binding, "--scan-path", str(project), cwd=project)
+    assert rc == 0, admitted
+    rc, recovery = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
+    assert rc == 1, recovery
+    assert recovery["error"] == "checkpoint-context requires the original committed Turn writeback"
+    assert _spend_run_count(runtime) == 0
+
+
 def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(tmp_path):
     project, runtime, registry, binding, delivery, original = _missing(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"

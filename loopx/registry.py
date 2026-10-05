@@ -471,11 +471,7 @@ def inspect_registry(path: Path) -> dict[str, Any]:
                 "operator_question": raw_goal.get("operator_question"),
                 "recommended_action": raw_goal.get("recommended_action"),
                 "next_handoff_condition": raw_goal.get("next_handoff_condition"),
-                "explore_graph": compact_explore_graph_policy(
-                    raw_goal.get("explore_graph")
-                )
-                if isinstance(raw_goal.get("explore_graph"), dict)
-                else None,
+                "explore_graph": compact_explore_graph_policy(raw_goal.get("explore_graph"), spawn_policy.get("explore_harness")) if raw_goal.get("explore_graph") is not None or (raw_goal.get("spawn_policy") or {}).get("explore_harness") else None,
                 "orchestration": orchestration,
                 "orchestration_mode": orchestration.get("mode"),
                 "spawn_allowed": spawn_policy.get("allowed"),

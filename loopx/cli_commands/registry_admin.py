@@ -506,6 +506,7 @@ def handle_registry_admin_command(
                 explore_harness_profile=args.explore_harness_profile,
                 clear_explore_harness_profile=bool(args.clear_explore_harness_profile),
                 explore_graph_enabled=args.explore_graph_enabled,
+                explore_mode=args.explore_mode,
                 lark_kanban_heartbeat_sync=args.lark_kanban_heartbeat_sync,
                 registered_agents=args.registered_agents,
                 clear_registered_agents=bool(args.clear_registered_agents),

@@ -112,10 +112,11 @@ def _peer_task_coordination_options(config: Mapping[str, Any]) -> dict[str, Any]
 
 def _explore_harness_options(config: Mapping[str, Any]) -> dict[str, Any]:
     profile = str(config.get("profile") or "").strip() or None
+    if "mode" in config and "enabled" in config:
+        raise ValueError("Use Explore mode or the legacy enabled flag, not both")
     return {
-        "explore_harness_enabled": _boolean_configuration(
-            "explore_harness", config, "enabled"
-        ),
+        **({"explore_mode": config["mode"]} if "mode" in config else {
+            "explore_harness_enabled": _boolean_configuration("explore_harness", config, "enabled")}),
         "explore_harness_profile": profile,
         "clear_explore_harness_profile": profile is None,
     }
@@ -215,7 +216,7 @@ def _goal_capability_options(
         },
         "peer_task_coordination": {"coordinator_agent_id"},
         "explore_graph": {"enabled"},
-        "explore_harness": {"enabled", "profile"},
+        "explore_harness": {"mode", "enabled", "profile"},
         "pull_request_review": {"wait_for_ci", "review_order", "agent_orders", "review_priority"},
         "change_quality_qualification": {"enabled", "safe_fix", "strict_receipt"},
         "progress_review": {"mode", "signal", "drift_threshold", "contract_revision"},
