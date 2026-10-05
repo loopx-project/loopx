@@ -117,6 +117,23 @@ test("current validation provenance identifies definitions without exporting pri
   assert.doesNotMatch(JSON.stringify(combined), /private|Independent verification|validation_argv/);
 });
 
+test("validation plan isolates progress metadata but fences work and claim/lifecycle", () => {
+  const args = {binding, basis: validationBasis, declaration};
+  const initial = delegationValidationPlan(args);
+  assert.match(String(initial.task_basis_sha256), /^[a-f0-9]{64}$/);
+  for (const delta of [{note: "Peer checked another result"}, {updated_at: "2026-10-05T00:00:00Z"},
+    {priority: "P1"}, {evidence: "Current observation"}]) {
+    assert.deepEqual(delegationValidationPlan({...args, basis: {...validationBasis,
+      provider_revision: "fixture:99", todo: {...validationTodo, ...delta}}}), initial);
+  }
+  for (const delta of [{text: "Changed requested result"}, {future_work_field: "new obligation"},
+    {claimed_by: "other"}, {role: "user"}, {status: "blocked"}, {archive_state: "archived"},
+    {done: true, status: "done"}, {task_repository: "git:example.invalid/other/repository"}]) {
+    assert.notEqual(delegationValidationPlan({...args, basis: {...validationBasis,
+      todo: {...validationTodo, ...delta}}}).task_basis_sha256, initial.task_basis_sha256);
+  }
+});
+
 test("fresh host checks bind stable declared output versions, without attesting independence", () => {
   const plan = delegationValidationPlan({binding, declaration, basis: {...validationBasis,
     todo: {...validationTodo, status: "done", done: true}}});

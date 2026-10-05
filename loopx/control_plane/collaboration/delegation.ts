@@ -4,7 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
+import {acceptanceValidationEffects, goalAcceptanceTodoDigest, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
@@ -63,7 +63,13 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
     check_count: effects.length,
     pinned_file_count: effects.reduce((count, effect) => count
       + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0)};
-  return {todo_id: todo.todo_id, state: "ready", source, observation,
+  // Reuse the acceptance owner's work classification. Scheduling/progress
+  // metadata and unrelated provider commits are not a new task declaration;
+  // current claim/lifecycle still fence this particular validation attempt.
+  const task_basis_sha256 = canonicalAuthoritySha256({work: goalAcceptanceTodoDigest(todo),
+    claimed_by: todo.claimed_by ?? null, role: todo.role ?? null,
+    status: todo.status, done: todo.done, archive_state: todo.archive_state ?? null});
+  return {todo_id: todo.todo_id, state: "ready", source, observation, task_basis_sha256,
     effects, canonical_done: todo.done === true && todo.status === "done"};
 }
 
