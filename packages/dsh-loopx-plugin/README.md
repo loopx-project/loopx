@@ -51,7 +51,7 @@ copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that
 enforce PEP 668; the plugin does not use `--break-system-packages`.
-The source candidate requires LoopX 1.2.4 or newer, the published release that
+This version requires LoopX 1.2.4 or newer, the published release that
 includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
 version floor; an older global or managed CLI is upgraded or rejected before
 business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
@@ -60,13 +60,13 @@ Install the prebuilt release into the web profile:
 
 ```bash
 dsh plugin --profile web add \
-  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.5/dsh-loopx-plugin-0.1.1-beta.5.tgz"
+  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz"
 ```
 
-The prebuilt release above retains its original DSH compatibility. This source
-checkout additionally targets the qualified DSH 0.2.0-rc.2 API; it does not
-publish a new plugin release. The exported legacy RPC registration remains
-available to explicit callers, but plugin startup always uses the shared API.
+The beta.6 package targets the qualified DSH 0.2.0-rc.2 API and retains the
+qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
+RPC registration remains available to explicit callers, but plugin startup
+always uses the shared API.
 
 For a compatible DSH source build, use:
 
@@ -148,11 +148,15 @@ A DSH plugin release needs an immutable prebuilt GitHub asset, a qualified
 marketplace install channel, and an update pull request against the upstream
 [`awesome-dsh-plugin`](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 marketplace. Marketplace maintainers retain merge authority; publishing a
-LoopX release does not grant authority over that catalog. The current DSH Hub
-requires npm discovery to avoid its root-Git fallback. Direct release-package
-support is proposed in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93);
-using that route requires a released Hub version and online catalog readback
-that selects the pinned package, installs it and removes it successfully.
+LoopX release does not grant authority over that catalog. Released DSH Hub
+[v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14) supports
+pinned GitHub release packages, so this route does not require publishing the
+LoopX plugin on npm. Its installed-state matcher still needs
+[Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) to be merged
+and released. Qualification must read the online catalog back, select the
+pinned package, install it, recognize the installed row, update it and remove
+it successfully. The optional npm channel retains its separate account and
+trusted-publisher requirements.
 
 For every DSH plugin release:
 
@@ -197,7 +201,7 @@ For every DSH plugin release:
    rebuilding, and verifies npm bytes and discovery. It neither creates a
    GitHub release nor replaces npm account ownership or the release guide gate.
 5. In a clean fork branch of `awesome-dsh-plugin`, update only
-   `data/plugins/huangruiteng__loopx--packages-dsh-loopx-plugin.yml` to the new
+   `data/plugins/loopx-project__loopx--packages-dsh-loopx-plugin.yml` to the new
    immutable asset URL. Confirm the URL resolves, then run
    `node scripts/generate-readme.mjs --check` and `git diff --check`.
 6. Open an upstream marketplace pull request and link it from the release
@@ -297,7 +301,7 @@ The repair command has no arguments. Extra input returns a usage error before an
 model work or CLI probe. A valid invocation queues a bounded start followup on
 the exact receiving Agent, then probes the current LoopX installation. When the
 CLI is missing or lacks the DSH-native skill contract, it runs exactly one
-fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=0.5.4'`, writes a
+fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=1.2.4'`, writes a
 small managed Python launcher beside that target, then uses that same
 interpreter and launcher to install and read back the skills. Driver and
 GoalBar resolve this same managed runtime, including after an explicit repair.
