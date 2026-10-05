@@ -6,7 +6,6 @@ import contextlib
 import io
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -71,7 +70,7 @@ assert "delivery_result_context" in request
         original = turn_run_once.write_turn_validated_completion
 
         def lose_once(**kwargs):
-            result = original(**kwargs)
+            original(**kwargs)
             monkeypatch.setattr(turn_run_once, "write_turn_validated_completion", original)
             raise OSError("injected response loss after result CAS")
 

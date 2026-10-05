@@ -28,9 +28,11 @@ import {decodeCompletionValidationRevision, planCompletionValidationRevision}
 const goal = "goal-acceptance-test";
 test("documented owner configuration satisfies the canonical acceptance contract", async () => {
   const reference = await readFile(new URL("../../docs/reference/goal-acceptance-observations.md", import.meta.url), "utf8");
-  const example = reference.match(/```json\n([\s\S]*?)\n```/);
-  assert.ok(example, "the operation guide must include a runnable configuration");
-  assert.doesNotThrow(() => normalizeGoalAcceptanceDocument(JSON.parse(example[1])));
+  for (const newline of ["\n", "\r\n"]) {
+    const example = reference.replace(/\r?\n/g, newline).match(/```json\r?\n([\s\S]*?)\r?\n```/);
+    assert.ok(example, "the operation guide must include a runnable configuration");
+    assert.doesNotThrow(() => normalizeGoalAcceptanceDocument(JSON.parse(example[1])));
+  }
 });
 
 function todo(todo_id: string, extra: JsonObject = {}): JsonObject {
