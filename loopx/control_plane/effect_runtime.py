@@ -221,6 +221,23 @@ class EffectRuntimeStartupError(RuntimeError):
         self.diagnostic_code = diagnostic_code
 
 
+class EffectRuntimeHostPermissionError(EffectRuntimeStartupError):
+    """The host denied local runtime access before any request was dispatched."""
+
+    recommended_action = (
+        "retry the same registry, Goal, Agent and Turn through host-approved "
+        "local runtime access; do not enable optional capabilities, replace "
+        "authority or spend until the guard succeeds"
+    )
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Host permission denied access to the local TypeScript Effect runtime "
+            "before request dispatch; no capability operation was executed",
+            diagnostic_code="runtime_host_permission_denied",
+        )
+
+
 class EffectRuntimeResponseAmbiguous(EffectRuntimeStartupError):
     """The request may have executed even though its response was lost."""
 
@@ -640,9 +657,13 @@ def _request_with_info(
             )
         chunks: list[bytes] = []
         size = 0
-        with socket.create_connection(
-            (str(info["host"]), int(info["port"])), timeout=timeout
-        ) as connection:
+        try:
+            connection = socket.create_connection(
+                (str(info["host"]), int(info["port"])), timeout=timeout
+            )
+        except PermissionError as exc:
+            raise EffectRuntimeHostPermissionError() from exc
+        with connection:
             try:
                 connection.settimeout(timeout)
                 # sendall may have delivered a prefix before it raises. From this
@@ -881,6 +902,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     start_new_session=os.name != "nt",
                     close_fds=True,
                 )
+            except PermissionError as exc:
+                raise EffectRuntimeHostPermissionError() from exc
             except OSError as exc:
                 raise EffectRuntimeStartupError(
                     "TypeScript Effect runtime process could not be launched",
@@ -935,9 +958,12 @@ def effect_runtime_request(
     for attempt in range(2 if retry_safe else 1):
         info: dict[str, Any] | None = None
         try:
-            info = _read_info(info_path, fingerprint=fingerprint)
-            if info is None:
-                info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
+            try:
+                info = _read_info(info_path, fingerprint=fingerprint)
+                if info is None:
+                    info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
+            except PermissionError as exc:
+                raise EffectRuntimeHostPermissionError() from exc
             return _request_with_info(
                 info,
                 request_id=request_id,
@@ -946,7 +972,11 @@ def effect_runtime_request(
                 timeout=timeout,
                 large_local_snapshot=large_local_snapshot,
             )
-        except (EffectRuntimeRemoteError, EffectRuntimeResponseAmbiguous):
+        except (
+            EffectRuntimeRemoteError,
+            EffectRuntimeResponseAmbiguous,
+            EffectRuntimeHostPermissionError,
+        ):
             raise
         except EffectRuntimeStartupError as exc:
             last_error = exc
