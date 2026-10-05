@@ -91,3 +91,14 @@ test('forgetting a discovery preference reconnects without installing a runtime'
   assert.equal(calls[0].command,'desktop_update');
   assert.equal(calls[0].args.action,'forget_runtime_selection');
 });
+
+test('an environment pin cannot be cleared by forgetting a preference', async () => {
+  const {context, elements} = page();
+  context.window.__TAURI__ = {core:{invoke:async () => ({
+    state:{phase:'runtime_required',details:{code:'runtime_identity_unavailable'}},
+    app_version:'1.2.4', runtime_selection:{explicit:true,remembered:true,bundled_repair_available:false},
+  })}};
+  await runInNewContext('refresh()', context);
+  assert.equal(elements.get('#forget-selection').hidden, true);
+  assert.equal(elements.get('#repair').disabled, true);
+});

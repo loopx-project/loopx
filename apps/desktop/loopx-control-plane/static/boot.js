@@ -216,7 +216,7 @@ async function refresh() {
       channelInitialized = true;
     }
     rollback.hidden = !result.rollback_available;
-    forgetSelection.hidden = result.runtime_selection?.explicit !== true && result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code);
+    forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
     render(result.state);
     if (result.runtime_selection?.explicit === true || result.runtime_selection?.bundled_repair_available === false) {
