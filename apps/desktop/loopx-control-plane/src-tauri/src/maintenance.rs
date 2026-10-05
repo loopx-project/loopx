@@ -26,6 +26,7 @@ pub struct Maintenance {
     separately_managed_runtime: AtomicBool,
     automatic_update_checked: AtomicBool,
     incomplete_app_installation: AtomicBool,
+    manual_failure_pending: AtomicBool,
 }
 
 #[derive(Default)]
@@ -125,13 +126,15 @@ impl Maintenance {
     ) -> Result<Option<T>, String> {
         if self.busy.load(Ordering::Acquire)
             || self.incomplete_app_installation.load(Ordering::Acquire)
+            || self.manual_failure_pending.load(Ordering::Acquire)
         {
             return Ok(None);
         }
         let Ok(_guard) = self.supervision.try_lock() else {
             return Ok(None);
         };
-        if self.busy.load(Ordering::Acquire) {
+        if self.busy.load(Ordering::Acquire) || self.manual_failure_pending.load(Ordering::Acquire)
+        {
             return Ok(None);
         }
         let phase = self.snapshot.lock().unwrap()["phase"]
@@ -304,13 +307,21 @@ pub async fn desktop_update(
         }
         app.restart();
     }
+    state.manual_failure_pending.store(false, Ordering::Release);
     let outcome = perform(&app, &action, &channel, url).await;
     if let Err(error) = &outcome {
-        state.publish_failure(error, &channel);
+        state.publish_manual_failure(error, &channel);
     }
     outcome
 }
 impl Maintenance {
+    // Keep a failed user operation and its retry controls until the next
+    // explicit action. An automatic feed failure still permits startup.
+    fn publish_manual_failure(&self, code: &str, channel: &str) -> Value {
+        self.manual_failure_pending.store(true, Ordering::Release);
+        self.publish_failure(code, channel)
+    }
+
     // App-install failures discard the stale continuation journal (see
     // perform); surface that in the failure diagnostics exactly once.
     fn publish_failure(&self, code: &str, channel: &str) -> Value {
@@ -1005,13 +1016,57 @@ mod tests {
             );
             assert_eq!(*state.snapshot.lock().unwrap(), available);
         }
-        assert!(state.acquire().is_ok(), "the Apply action remains available");
+        assert!(
+            state.acquire().is_ok(),
+            "the Apply action remains available"
+        );
 
         // Forget/Repair publishes connecting, so a deliberate recovery can
         // still resume the owning service supervisor in this same process.
         state.publish("connecting", json!({}));
         assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
         assert_eq!(state.snapshot.lock().unwrap()["phase"], "ready");
+    }
+
+    #[test]
+    fn manual_recovery_failure_retains_its_diagnostics_until_retry() {
+        let state = Maintenance::default();
+        let failure = state.publish_manual_failure("backup_failed", "stable");
+        for _ in 0..3 {
+            assert_eq!(
+                state
+                    .reconcile_services::<()>(|| panic!("a failed manual action owns recovery"))
+                    .unwrap(),
+                None
+            );
+            assert_eq!(*state.snapshot.lock().unwrap(), failure);
+            assert_eq!(*state.last_failure.lock().unwrap(), failure);
+        }
+        assert!(state.acquire().is_ok(), "same-window retry is available");
+
+        // The accepted next user action releases the failure; a completed
+        // rollback must keep Restart instead of resuming service probes.
+        state.manual_failure_pending.store(false, Ordering::Release);
+        state.publish("restart_required", json!({}));
+        assert_eq!(
+            state
+                .reconcile_services::<()>(|| panic!("rollback awaits restart"))
+                .unwrap(),
+            None
+        );
+        assert_eq!(state.snapshot.lock().unwrap()["phase"], "restart_required");
+    }
+
+    #[test]
+    fn automatic_update_failure_does_not_prevent_installed_app_startup() {
+        let state = Maintenance::default();
+        state.publish_failure("update_feed_unavailable", "stable");
+        assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
+        assert_eq!(state.snapshot.lock().unwrap()["phase"], "ready");
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "update_feed_unavailable"
+        );
     }
 
     #[test]
