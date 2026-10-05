@@ -16,18 +16,19 @@ def test_help_and_empty_steward_status_do_not_open_sessions_or_borrow_scope(ordi
         transport.admit("notes-app", provider.event("notes-app", "help", "/help"))
         assert transport.reconcile() == 1
         message = provider.writes[-1][1]
-        assert "角色：普通项目对话" in message and "只读授权" in message
+        assert "个人助手 · notes" in message and "只读授权" in message
         assert "/new" in message and "设置 → Lark" in message
-        assert "/delegate" not in message and "没有自动选用注册 Agent" in message
+        assert "/delegate" not in message
+        assert transport.core.pending()[0]["status_snapshot"]["grant"] == "workspace_read"
         assert store.list_sessions() == []
         project = runtime.project_contexts.available()[0]
         transport.bindings.configure(transport_ref="steward-app", project_ref=project["project_ref"],
                                      executor_endpoint_id="codex", context_kind="steward")
         transport.admit("steward-app", provider.event("steward-app", "empty", "/status"))
         assert transport.reconcile() == 1
-        assert "角色：长期管家" in provider.writes[-1][1]
-        assert "已授权新委托：0" in provider.writes[-1][1]
-        assert "执行结束不代表委托验收" in provider.writes[-1][1]
+        assert "长期管家 · notes" in provider.writes[-1][1]
+        assert "已授权委托：0" in provider.writes[-1][1]
+        assert "仍需验收" in provider.writes[-1][1]
         assert store.list_sessions() == []
         assert all(row["turn_id"] is None for row in transport.core.pending())
     finally:
@@ -97,7 +98,7 @@ def test_status_and_help_observe_original_session_after_actual_upstream_resume(o
             assert row["session_id"] == sid
             assert row["status_snapshot"]["session_status"] == ("resume_failed" if resume_error else "ready")
             transport.reconcile()
-            assert ("会话恢复失败" if resume_error else "会话可继续") in provider.writes[-1][1]
+            assert ("会话恢复失败" if resume_error else "可以继续对话") in provider.writes[-1][1]
             assert "尚无会话" not in provider.writes[-1][1]
         assert len(store.list_sessions()) == 1
         assert store.load_session(sid)["upstream_thread_id"] == upstream
@@ -148,7 +149,7 @@ def test_busy_status_reads_durable_queue_and_duplicate_retains_original_snapshot
         assert original["status_snapshot"]["queued_count"] == 1
         assert original["status_snapshot"]["active_turn_status"] in {"starting", "running"}
         transport.reconcile()
-        assert any("已持久排队：1 条" in text for _, text in provider.writes)
+        assert any("排队消息：1 条" in text for _, text in provider.writes)
         transport.admit("notes-app", provider.event("notes-app", "stop", "/stop"))
         queued = next(row for row in transport.core.pending() if row["message"] == "follow-up")
         runtime.wait_for_turn(session_id=sid, turn_id=queued["turn_id"], timeout_sec=10)
@@ -160,7 +161,7 @@ def test_busy_status_reads_durable_queue_and_duplicate_retains_original_snapshot
         assert transport.core.read_request(original["request_ref"])["status_snapshot"] == original["status_snapshot"]
         transport.admit("notes-app", provider.event("notes-app", "current", "/status"))
         transport.reconcile()
-        assert "已持久排队：0 条" in provider.writes[-1][1]
+        assert "排队消息：0 条" in provider.writes[-1][1]
         assert len(store.list_sessions()) == 1
         assert store.load_session(sid)["goal_id"] is None
         assert not any("source_ref" in text or "operator_ref" in text for _, text in provider.writes)
@@ -176,4 +177,4 @@ def test_unavailable_execution_evidence_is_not_presented_as_ready(unknown):
         "active_turn_status": "future_state" if unknown == "turn" else None,
         "active_turn_observation_available": unknown != "missing"}
     text = _status_text(snapshot, help_requested=False)
-    assert "暂不可" in text and "会话可继续" not in text
+    assert "暂不可" in text and "可以继续对话" not in text
