@@ -367,6 +367,7 @@ def capability_configuration_editor(
             "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("wait_for_ci", "Wait for CI", "boolean", description="When disabled, use local validation without querying or waiting for CI. This grants no merge authority."),
+                _field("owner_logins", "Additional owner accounts", "string_list", description="One GitHub login per line, in addition to the authenticated reviewer. Controls queue grouping only; does not infer membership or grant review/merge authority."),
                 _field(
                     "review_order",
                     "Review direction",

@@ -11,6 +11,7 @@ from .scheduling import (
     PullRequestReviewPriority,
     build_scheduling_policy,
     classify_scheduling_lane,
+    is_owner_authored,
     normalize_review_priority,
     scheduling_sort_key,
     scheduling_tier,
@@ -98,6 +99,7 @@ def _pr_snapshot(
         "review_ready_age_hours": item.get("review_ready_age_hours"),
         "created_at": item.get("created_at"),
         "author_owned": item.get("author_owned") is True,
+        **({"owner_authored": item["owner_authored"]} if "owner_authored" in item else {}),
         "community_feedback_ready": item.get("community_feedback_ready") is True,
         "review_conclusion_status": str(
             (item.get("review_conclusion") or {}).get("status")
@@ -334,6 +336,7 @@ def build_pull_request_review_queue_observation(
     authenticated_developer_login: str | None = None,
     review_priority: object = DEFAULT_REVIEW_PRIORITY,
     review_order: str | None = None,
+    owner_logins: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build one read-only observation and at most one exact-head candidate."""
 
@@ -439,6 +442,7 @@ def build_pull_request_review_queue_observation(
                 authenticated_developer_login=authenticated_developer_login,
                 review_priority=normalized_priority,
                 review_order=review_order,
+                owner_logins=owner_logins,
             ),
             "write_authority_granted": False,
             "external_write_performed": False,
@@ -540,10 +544,10 @@ def build_pull_request_review_queue_observation(
     for item in ranked_items:
         if review_order is None and ((
             normalized_priority is PullRequestReviewPriority.OWNER_FIRST
-            and item.get("author_owned") is not True
+            and not is_owner_authored(item)
         ) or (
             normalized_priority is PullRequestReviewPriority.OTHER_DEVELOPERS_FIRST
-            and item.get("author_owned") is True
+            and is_owner_authored(item)
         )):
             continue
         exact_head_key = _exact_head_key(item.get("number"), item.get("head_oid"))
@@ -568,7 +572,7 @@ def build_pull_request_review_queue_observation(
                 and _upper(prior.get("review_decision")) != "APPROVED"
             )
             is_author_response = (
-                item.get("author_owned") is not True
+                not is_owner_authored(item)
                 and bool(prior)
                 and _upper(prior.get("review_decision")) == "CHANGES_REQUESTED"
                 and str(prior.get("head_oid") or "").strip().lower()
@@ -652,6 +656,7 @@ def build_pull_request_review_queue_observation(
             authenticated_developer_login=authenticated_developer_login,
             review_priority=normalized_priority,
             review_order=review_order,
+            owner_logins=owner_logins,
         ),
         "write_authority_granted": False,
         "external_write_performed": False,

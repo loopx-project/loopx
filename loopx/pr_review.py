@@ -31,6 +31,7 @@ from .capabilities.pr_review_queue.github_source import (
     attach_pr_review_details_concurrently as _attach_pr_review_details_concurrently,
 )
 from .capabilities.pr_review_queue.check_attempts import latest_check_attempts
+from .capabilities.pr_review_queue.scheduling import is_owner_authored
 from .capabilities.pr_review_queue.review_body import (
     check_review_body,
     english_review_verdict as _english_review_verdict,
@@ -886,6 +887,7 @@ def _review_sequence_entry(item: dict[str, Any], *, rank: int) -> dict[str, Any]
         "review_ready_at": item.get("review_ready_at"),
         "review_ready_age_hours": item.get("review_ready_age_hours"),
         "author_owned": item.get("author_owned") is True,
+        **({"owner_authored": item["owner_authored"]} if "owner_authored" in item else {}),
         "community_feedback_ready": item.get("community_feedback_ready") is True,
         "scheduling_lane": item.get("scheduling_lane"),
         "scheduling_tier": item.get("scheduling_tier"),
@@ -907,6 +909,7 @@ def _normalize_pr(
     wait_for_ci: bool = True,
     readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
     repository: str | None = None,
+    owner_authored: bool | None = None,
 ) -> dict[str, Any]:
     files = _files(pr)
     checks = _checks(pr)
@@ -990,8 +993,10 @@ def _normalize_pr(
             review_threads=_as_dict(pr.get("review_thread_summary")),
         )
     )
+    if owner_authored is not None:
+        item["owner_authored"] = owner_authored
     item["community_feedback_ready"] = bool(
-        not item["author_owned"]
+        not is_owner_authored(item)
         and item["review_action_kind"] == "rereview_pull_request_exact_head"
         and community_feedback_ready(pr, review_ready_at=ready_at)
     )
@@ -1016,6 +1021,7 @@ def build_pr_review_packet(
     target_exact_heads: Sequence[str] = (),
     review_priority: object = DEFAULT_REVIEW_PRIORITY,
     review_order: str | None = None,
+    owner_logins: Sequence[str] = (),
     wait_for_ci: bool = True,
     readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, Any]:
@@ -1025,6 +1031,12 @@ def build_pr_review_packet(
     generated_at = _parse_timestamp(generated_at_text) or datetime.now(timezone.utc)
     requested_fresh_audits = normalize_fresh_audit_exact_heads(fresh_audit_exact_heads)
     requested_targets = normalize_fresh_audit_exact_heads(target_exact_heads)
+    owner_identity = None
+    if owner_logins:
+        from .capabilities.pr_review_queue.order import configuration
+        owner_identity = configuration({"action": "classify_owners", "reviewer_login": reviewer_login,
+            "owner_logins": list(owner_logins), "authors": [
+                str(_as_dict(item.get("author")).get("login") or "") for item in pull_requests]})
     normalized_all = [
         _normalize_pr(
             item,
@@ -1035,8 +1047,9 @@ def build_pr_review_packet(
             wait_for_ci=wait_for_ci,
             readiness_observations=readiness_observations,
             repository=repository,
+            owner_authored=owner_identity["owner_authored"][index] if owner_identity else None,
         )
-        for item in pull_requests
+        for index, item in enumerate(pull_requests)
     ]
     normalized_all = [
         item
@@ -1265,6 +1278,7 @@ def build_pr_review_packet(
             authenticated_developer_login=reviewer_login,
             review_priority=normalized_priority,
             review_order=review_order,
+            owner_logins=owner_identity["owner_logins"] if owner_identity else (),
         ),
         "review_sequence": review_sequence,
         "review_groups": review_groups,
@@ -1311,6 +1325,8 @@ def _review_why_now(item: dict[str, Any]) -> str:
         return "The current exact head already has a complete standalone conclusion."
     if item.get("author_owned"):
         return "Authenticated-developer-owned PR awaits an independent exact-head review."
+    if is_owner_authored(item):
+        return "Configured-owner-authored PR awaits an independent exact-head review."
     if item.get("community_feedback_ready"):
         return "A community contributor pushed a new exact head after an independent request-changes review."
     if (

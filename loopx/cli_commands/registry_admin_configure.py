@@ -82,6 +82,9 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     configure_goal_parser.add_argument("--pr-review-wait-for-ci", action=argparse.BooleanOptionalAction, default=None, help="Whether this Goal waits for CI during PR review; omitted inherits the machine default (true).")
     configure_goal_parser.add_argument("--pr-review-order", choices=("forward", "reverse"), help="Goal default PR review direction; reverse inverts the complete actionable forward queue.")
     configure_goal_parser.add_argument("--pr-review-agent-order", action="append", default=[], metavar="AGENT=forward|reverse|inherit", help="Persist one registered Agent's review direction; inherit removes only its override. Repeat for multiple Agents.")
+    owners = configure_goal_parser.add_mutually_exclusive_group()
+    owners.add_argument("--pr-review-owner-login", action="append", metavar="LOGIN", help="Replace the additional queue-owner logins; repeat for multiple accounts. The authenticated reviewer remains an owner. Grants no authority.")
+    owners.add_argument("--clear-pr-review-owner-logins", action="store_true", help="Use only the authenticated reviewer as queue owner; preserve direction and CI settings.")
     configure_goal_parser.add_argument("--clear-pr-review-configuration", action="store_true", help="Remove Goal PR review overrides and restore machine defaults.")
     configure_goal_parser.add_argument(
         "--change-quality-enabled",
