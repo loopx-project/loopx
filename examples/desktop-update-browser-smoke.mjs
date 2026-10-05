@@ -28,6 +28,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const calls = [];
   let nativeState = null;
+  let nativeRuntimeSelection;
   let startupTiming = null;
   let failUpdate = false;
   let checkFailure = null;
@@ -37,7 +38,7 @@ try {
   await page.exposeFunction("nativeInvoke", async (command, args) => {
     if (command === "desktop_update_status") {
       if (statusFailure) throw new Error("Command desktop_update_status not allowed by ACL");
-      return { state: nativeState, startup: startupTiming, app_version: "0.5.4", rollback_available: true, environment: environmentTelemetry };
+      return { state: nativeState, runtime_selection: nativeRuntimeSelection, startup: startupTiming, app_version: "0.5.4", rollback_available: true, environment: environmentTelemetry };
     }
     calls.push({ command, args });
     if (checkFailure && args.action === "check") return { phase: "error", details: { code: checkFailure } };
@@ -107,6 +108,35 @@ try {
   checkFailure = null;
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
+
+  // The native owner decides whether Repair can maintain this installation.
+  // The workspace consumes that projection rather than inferring from a path.
+  nativeState = { phase: "ready", details: {} };
+  nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: false };
+  await page.reload();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
+  await page.getByText(/当前运行时由其他安装方式或启动参数管理/).waitFor();
+  const beforeForget = calls.length;
+  await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).click();
+  await page.getByText("正在连接更新后的服务…", { exact: true }).waitFor();
+  assert.deepEqual(calls.slice(beforeForget).map((call) => call.args.action), ["forget_runtime_selection"]);
+  await page.waitForFunction(async () => (await window.__TAURI__.core.invoke("desktop_update_status")).state.phase === "connecting");
+  nativeState = { phase: "ready", details: {} };
+  nativeRuntimeSelection = { explicit: true, remembered: true, bundled_repair_available: false };
+  await page.reload();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
+  assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).count(), 0, "forgetting a preference cannot clear an environment pin");
+  nativeRuntimeSelection = undefined;
+  nativeState = { phase: "idle", details: {} };
+  await page.reload();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  await page.getByText(/App 启动时会检查并安装当前通道/).waitFor();
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), true, "legacy native status retains its available repair action");
 
   const missing = await browser.newPage();
   await missing.route("**/assets/*.js", (route) => route.abort());

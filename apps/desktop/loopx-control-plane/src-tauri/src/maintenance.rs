@@ -50,6 +50,22 @@ impl RuntimeRetry {
     }
 }
 impl Maintenance {
+    fn status_snapshot(&self) -> Value {
+        if self.incomplete_app_installation.load(Ordering::Acquire) {
+            json!({"phase":"error", "details":{"code":"app_install_incomplete"}})
+        } else {
+            self.snapshot.lock().unwrap().clone()
+        }
+    }
+
+    // Only a completed native replacement/verified restore can retire this
+    // failure latch. Keep the restart readback coherent with the supervisor.
+    fn complete_app_replacement(&self, details: Value) -> Value {
+        self.incomplete_app_installation
+            .store(false, Ordering::Release);
+        self.publish("restart_required", details)
+    }
+
     fn acquire(&self) -> Result<BusyGuard<'_>, String> {
         self.busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -249,11 +265,7 @@ fn detect_environment() -> Value {
 
 #[tauri::command]
 pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> Value {
-    let snapshot = if state.incomplete_app_installation.load(Ordering::Acquire) {
-        json!({"phase":"error", "details":{"code":"app_install_incomplete"}})
-    } else {
-        state.snapshot.lock().unwrap().clone()
-    };
+    let snapshot = state.status_snapshot();
     let last_failure = state.last_failure.lock().unwrap().clone();
     // Probing spawns bounded sub-processes; the boot page polls every second,
     // so serve the cached block and refresh at most every ENVIRONMENT_TTL.
@@ -414,7 +426,7 @@ async fn perform(
         tauri::async_runtime::spawn_blocking(move || crate::update_backup::restore(&handle))
             .await
             .map_err(|_| "rollback_failed")??;
-        return Ok(state.publish("restart_required", json!({})));
+        return Ok(state.complete_app_replacement(json!({})));
     }
     if action == "repair" || action == "align_runtime" {
         // `repair` reinstalls this App's snapshot for recovery and
@@ -481,7 +493,7 @@ async fn perform(
         .into());
     }
     *state.pending.lock().unwrap() = None;
-    Ok(state.publish("restart_required", json!({"version":target})))
+    Ok(state.complete_app_replacement(json!({"version":target})))
 }
 // A safe-restart promise after a failed app replacement requires the running
 // App's bundle to still be present -- the pinned macOS updater's install_inner
@@ -709,9 +721,7 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     }
     state.separately_managed_runtime.store(
         selection.environment_override
-            || installed
-                .as_ref()
-                .is_some_and(crate::services::is_owned_package_identity),
+            || !is_private_runtime(&selection.executable, &private_executable),
         Ordering::Release,
     );
     Ok(crate::services::SelectedRuntime {
@@ -1055,6 +1065,27 @@ mod tests {
             None
         );
         assert_eq!(state.snapshot.lock().unwrap()["phase"], "restart_required");
+    }
+
+    #[test]
+    fn completed_restore_retires_incomplete_installation_and_exposes_restart() {
+        let state = Maintenance::default();
+        finalize_install_failure(&state, false, || panic!("unverified journal retained"));
+        assert_eq!(
+            state.status_snapshot()["details"]["code"],
+            "app_install_incomplete"
+        );
+        // The successful verified restore uses this same transition. A stale
+        // failure latch must not hide its Restart action from status polling.
+        let restored = state.complete_app_replacement(json!({}));
+        assert_eq!(restored["phase"], "restart_required");
+        assert_eq!(state.status_snapshot(), restored);
+        assert_eq!(
+            state
+                .reconcile_services::<()>(|| panic!("restart owns next action"))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
