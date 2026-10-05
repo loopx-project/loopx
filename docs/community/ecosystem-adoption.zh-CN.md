@@ -36,10 +36,19 @@
   另将完整原生 CLI 和已安装 Python wheel 对真实服务的验收标为尚未资格化。
   历史单节点测试环境的结果不证明这些当前、更广范围的验收成立。
   核对日期：2026-10-04。
-- **GoTry**（Danceiny）——用 LoopX goals、Codex 任务绑定和心跳管理多条开发路线。
-  [issue #18](https://github.com/Danceiny/gotry/issues/18) 记录接入，已合并的
-  [PR #187](https://github.com/Danceiny/gotry/pull/187) 记录交付验证。
-  **状态：项目自述的开发工作流使用**；不代表旅行应用运行时依赖 LoopX。
+- **GoTry**（Danceiny）——2026-08-28 创建的
+  [issue #18](https://github.com/Danceiny/gotry/issues/18) 自述已注册 LoopX goals、绑定
+  Codex 任务并完成首次心跳 ACK；[9 月 19 日后续评论](https://github.com/Danceiny/gotry/issues/18#issuecomment-5740371337)
+  报告继续使用工程自动化及独立 worktree 交付。
+  [PR #187](https://github.com/Danceiny/gotry/pull/187) 于 9 月 7 日合并，其本地检查自述
+  与[精确 head 的成功 CI](https://github.com/Danceiny/gotry/actions/runs/34110550580)
+  对应一项产品交付切片；正文仍列出未完成的真实库存 UAT。合并或 CI 通过不关闭该验收。
+  [10 月 2 日检查点](https://github.com/Danceiny/gotry/issues/18#issuecomment-5950941798)
+  继续保留真实用户证据门槛；复核时 [#20](https://github.com/Danceiny/gotry/issues/20)、
+  [#22](https://github.com/Danceiny/gotry/issues/22)、
+  [#142](https://github.com/Danceiny/gotry/issues/142) 均开放。
+  **状态：有日期的作者自述开发工作流使用**；不证明旅行应用运行时依赖 LoopX、
+  调度器已被独立复现或产品验收完成。核对日期：2026-10-05。
 - **mimofan**（XiaomingX）——通过 LoopX Todo 组织 UI/引擎修复。
   [PR #738](https://github.com/XiaomingX/mimofan/pull/738) 明确提及该工作流并已合并。
   **状态：开发工作流证据**。
@@ -273,6 +282,6 @@
 - 局部更新：**2026-10-04–05**，按当前公开 PR/Issue 状态和固定版本源文件复核
   OpenViking、NoKV、Hufu 和 benjamin-plugins；10 月 5 日对齐 AAOP 历史试点/退役、
   LoopX Console 独立发布与历史 CLI pin、zyra 的默认分支与内嵌源码 pin，
-  以及单独的 OpenBitFun 提案。
+  GoTry 有日期的工作流自述及开放产品验收，以及单独的 OpenBitFun 提案。
   区分提案打包配置、历史工具和试点、插件注册及当前验收限制。
   未独立复现真实集成，其余条目未重新验真。

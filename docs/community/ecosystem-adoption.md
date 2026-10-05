@@ -47,11 +47,21 @@ owner submitting a directory entry.
   against real services as not qualified. The historical single-node stack
   result does not establish those current, broader acceptances.
   Checked October 4, 2026.
-- **GoTry** (Danceiny) — uses LoopX goals, Codex task bindings and heartbeats
-  for multiple development lanes. [Issue #18](https://github.com/Danceiny/gotry/issues/18)
-  records setup; [PR #187](https://github.com/Danceiny/gotry/pull/187), merged,
-  records delivery validation. **Status: reported development-workflow use**;
-  this does not establish a LoopX dependency in the travel application's runtime.
+- **GoTry** (Danceiny) — [issue #18](https://github.com/Danceiny/gotry/issues/18),
+  opened August 28, 2026, reports LoopX goals, Codex task bindings and initial
+  heartbeat acknowledgements. A [September 19 follow-up](https://github.com/Danceiny/gotry/issues/18#issuecomment-5740371337)
+  reports continued engineering automation and independent worktree delivery.
+  [PR #187](https://github.com/Danceiny/gotry/pull/187) merged September 7; its
+  reported local checks and [successful exact-head CI](https://github.com/Danceiny/gotry/actions/runs/34110550580)
+  concern a product delivery slice, whose body still lists real-inventory UAT
+  as open. Merge and CI success do not close that acceptance.
+  The [October 2 checkpoint](https://github.com/Danceiny/gotry/issues/18#issuecomment-5950941798)
+  retains real-user evidence gates; issues [#20](https://github.com/Danceiny/gotry/issues/20),
+  [#22](https://github.com/Danceiny/gotry/issues/22) and
+  [#142](https://github.com/Danceiny/gotry/issues/142) remain open at review.
+  **Status: dated, author-reported development-workflow use**. This does not
+  establish a LoopX dependency in the travel application's runtime, independently
+  reproduce the scheduler, or prove product acceptance. Checked October 5, 2026.
 - **mimofan** (XiaomingX) — organizes UI/engine repairs through LoopX Todos.
   [PR #738](https://github.com/XiaomingX/mimofan/pull/738) explicitly names that
   workflow and is merged. **Status: development-workflow evidence**.
@@ -319,7 +329,8 @@ accepted design documents are distinct from depending on the LoopX runtime.
   benjamin-plugins against current public PR/issue states and pinned source files.
   AAOP's historical pilot/retirement and LoopX Console's independent release,
   historical CLI pin, zyra's default branch and embedded source pin, and the separate
-  OpenBitFun proposal were reconciled on October 5.
+  OpenBitFun proposal were reconciled on October 5. GoTry's dated workflow reports
+  were separated from its open product acceptance.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.
