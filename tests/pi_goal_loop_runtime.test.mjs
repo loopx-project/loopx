@@ -13,6 +13,8 @@ import {
   createGoalLoop,
   createMemoryBindingStore,
   hasAbortedAssistantMessage,
+  piThreadId,
+  soleThreadBindingCandidate,
   runPiTaskLease,
   sanitizedKey,
   sessionKey,
@@ -1578,4 +1580,57 @@ test("host-bound Pi authority rejects agent and capability rebinding before leas
   )
   assert.equal(tamperedResult.error_code, "authority_mismatch")
   assert.equal(calls.length, 0)
+})
+
+test("piThreadId derives a stable identity from the Pi session file", () => {
+  // The Pi adapter must supply a thread id itself because the CLI's
+  // HOST_THREAD_ID_ENV has no "pi" entry and never reads PI_SESSION_ID.
+  assert.equal(
+    piThreadId("/home/example/.pi/agent/sessions/project/2026-10-05T06-37-44-101Z_abc.jsonl"),
+    "2026-10-05T06-37-44-101Z_abc",
+  )
+  // The same session resolves to the same id across calls.
+  const file = "/tmp/sessions/2026-01-02T00-00-00-000Z_deadbeef.jsonl"
+  assert.equal(piThreadId(file), piThreadId(file))
+  // Distinct sessions never collide.
+  assert.notEqual(piThreadId("/tmp/s/one.jsonl"), piThreadId("/tmp/s/two.jsonl"))
+  // Anything outside the accepted character set is replaced, not dropped.
+  assert.equal(piThreadId("/tmp/s/sess name*weird.jsonl"), "sess-name-weird")
+  // A --no-session run has no file and must keep the selection-packet flow.
+  assert.equal(piThreadId(""), null)
+  assert.equal(piThreadId(undefined), null)
+  assert.equal(piThreadId("/tmp/s/"), null)
+})
+
+test("soleThreadBindingCandidate binds only a single unambiguous lane", () => {
+  const packetWith = (choices) => ({
+    goal_id: "smoke-goal",
+    command_pack: {
+      host_loop_activation: {
+        activation_allowed: false,
+        activation_state: "thread_binding_selection_required",
+        identity_selection_gate: { choices },
+      },
+    },
+  })
+
+  assert.deepEqual(
+    soleThreadBindingCandidate(packetWith([{ agent_id: "smoke-agent" }])),
+    { goalId: "smoke-goal", agentId: "smoke-agent" },
+  )
+  // The top-level activation block is read as well as the command_pack one.
+  assert.deepEqual(
+    soleThreadBindingCandidate({
+      goal_id: "smoke-goal",
+      host_loop_activation: { identity_contract: { choices: [{ agent_id: "a" }] } },
+    }),
+    { goalId: "smoke-goal", agentId: "a" },
+  )
+  // No candidates, several lanes, or a missing goal stay a user decision.
+  assert.equal(soleThreadBindingCandidate(packetWith([])), null)
+  assert.equal(soleThreadBindingCandidate(packetWith([{ agent_id: "a" }, { agent_id: "b" }])), null)
+  assert.equal(soleThreadBindingCandidate({ command_pack: {} }), null)
+  assert.equal(soleThreadBindingCandidate(packetWith([{ agent_id: "   " }])), null)
+  // A single candidate with no resolvable goal id is not actionable either.
+  assert.equal(soleThreadBindingCandidate({ command_pack: { goal_id: "" } }), null)
 })
