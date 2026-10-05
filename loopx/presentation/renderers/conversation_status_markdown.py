@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import PurePath
 from typing import Any
 
@@ -52,4 +53,11 @@ def render_conversation_status(snapshot: Mapping[str, Any]) -> str:
             "workspace_write": "当前工作区可读写。",
             "workspace_read": "当前工作区仅有只读授权。",
         }.get(snapshot.get("grant"), "工作区权限暂不可判定，请在本机检查授权。"))
+    # Delivery may be delayed or replayed. Keep the snapshot's time visible;
+    # formatting it must never substitute the renderer's current clock.
+    try:
+        observed = datetime.fromisoformat(str(snapshot["observed_at"]).replace("Z", "+00:00"))
+        lines.append(f"观察于 {observed.astimezone():%Y-%m-%d %H:%M %z}")
+    except (KeyError, ValueError):
+        lines.append("观察时间暂不可读。")
     return "\n".join(lines)

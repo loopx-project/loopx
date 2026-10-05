@@ -87,10 +87,14 @@ def test_native_private_admission_queue_other_app_stop_and_verified_delivery(ord
         # Status uses the canonical running Turn/queue, without another model call.
         status_event = provider.event("notes-app", "current-status", "/status")
         assert transport.admit("notes-app", status_event)["status"] == "command_recorded"
+        status_snapshot = next(row["status_snapshot"] for row in transport.core.pending()
+                               if row["command"] == "status")
+        assert status_snapshot["active_turn_status"] in {"starting", "running"}
         transport.reconcile()
         status_reply = next(text for profile, text in provider.writes
                             if profile == "notes-app" and "排队消息：1 条" in text)
-        assert "正在执行" in status_reply and "个人助手 · notes" in status_reply
+        phase = "正在启动" if status_snapshot["active_turn_status"] == "starting" else "正在执行"
+        assert phase in status_reply and "个人助手 · notes" in status_reply
         assert str(ordinary[-1]) not in status_reply and "/help" in status_reply
         assert len(store.queued_turns(sid)) == 1
         assert transport.admit("notes-app", {**queued, "event_id": "redelivery"})["status"] == "durably_accepted"

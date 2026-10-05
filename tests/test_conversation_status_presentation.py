@@ -21,7 +21,8 @@ def test_short_status_keeps_facts_and_moves_diagnostics_to_help():
     assert rendered.startswith("🟢 可以继续对话。")
     assert "个人助手 · example-notes" in rendered
     assert "排队消息：3 条" in rendered and "只读授权" in rendered
-    assert "/help" in rendered and "/workspace" not in rendered and "2026-" not in rendered
+    assert "/help" in rendered and "/workspace" not in rendered
+    assert "观察于 " in rendered and facts["observed_at"] not in rendered
     help_text = _status_text(facts, help_requested=True)
     for exact_fact in [facts["workspace_path"], facts["executor_endpoint_id"], facts["observed_at"]]:
         assert exact_fact in help_text
@@ -71,3 +72,10 @@ def test_timeout_is_actionable_and_does_not_recommend_blind_retry():
     rendered = render_conversation_status(snapshot(active_turn_status="timed_out"))
     assert "检查原会话后再决定是否重试" in rendered
     assert "可以继续对话" not in rendered
+
+
+def test_delayed_status_preserves_the_original_observation_time():
+    rendered = render_conversation_status(snapshot(observed_at="2001-07-01T12:00:00Z"))
+    assert "观察于 2001-" in rendered
+    unknown = render_conversation_status(snapshot(observed_at="not-an-observation"))
+    assert "观察时间暂不可读" in unknown and "观察于 " not in unknown

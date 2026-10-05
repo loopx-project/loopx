@@ -711,7 +711,8 @@ Current status is design proposal; no G1 or default-screen promotion.
 
 **Bound-conversation status presentation.** The shared display renderer leads
 with canonical execution/recovery state, project and queue/permission facts;
-the Lark adapter reserves full commands and diagnostics for help. Unreadable
+the Lark adapter reserves full commands and diagnostics for help, retaining a
+compact snapshot timestamp for delayed/replayed replies. Unreadable
 observations and completed executions retain their uncertainty/acceptance
 boundary. This is a bounded status-view improvement, not qualification of
 result synthesis, receiver adoption or the full automatic-return journey.
