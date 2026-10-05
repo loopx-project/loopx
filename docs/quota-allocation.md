@@ -35,6 +35,16 @@ of that observation, including explicit cache use; the Markdown view shows it.
 
 ## Product Scope
 
+Host-denied local Effect runtime access fails closed with
+`quota_runtime_permission_denied`. The client preserves the pre-dispatch
+permission failure without retrying it as a transient connection error. Retry
+the same registry, Goal, Agent and Turn through host-approved access; do not
+enable optional capabilities, replace authority or spend before guard success.
+A method such as `capabilities.pr_review.configuration` can be called to
+normalize stored configuration during generic collection; its name is not
+evidence that PR review ran. Failures after dispatch retain the existing
+ambiguous-response fence and require receipt recovery before replay.
+
 In v0.1, quota means **compute quota only**.
 
 It does not decide human reward, write approval, production permission, or
