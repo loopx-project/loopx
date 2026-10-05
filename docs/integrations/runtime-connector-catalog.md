@@ -75,6 +75,22 @@ final quota/replan recheck triggered by the third unchanged poll; it is guarded
 by `tests/test_host_loop_runtime_parity.py` and the Pi runtime tests in
 `tests/pi_goal_loop_runtime.test.mjs`.
 
+After a successful synchronous `--wake-cmd`, the worker now immediately checks
+quota again, without an active-work sleep or a minimum delay. This changes the
+external worker's post-success timing. A successful exit is not continuation
+authority: every next wake still requires a fresh quota decision. No task,
+external waits and quota waits retain the producer's waiting progression;
+observe-only polls retain their interval, and failed wakes retain error backoff.
+Commands that finish without more useful work may opt into
+`--wake-stop-exit-code <1..255>`: that explicit child exit ends the worker
+normally, without Todo completion or quota spend. Omit the option to preserve
+ordinary nonzero-exit failure/backoff behavior. Timeout and output-limit
+failures cannot be converted into a normal stop by this option. The caller owns
+the meaning of its chosen code; the generic worker does not parse provider
+receipts or infer work completion from stdout.
+Stop signals and subprocess cleanup keep their existing behavior. This adapter
+does not override admission or reinterpret task eligibility.
+
 ## External Tool Extension Candidates
 
 An MCP server can play two different roles around LoopX:

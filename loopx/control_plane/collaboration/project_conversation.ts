@@ -4,7 +4,7 @@ import { requireNonEmptyString } from "../runtime_decode.ts";
 import {normalizeProjectContext} from "./conversation_scope.ts";
 
 /** A workspace observation is supplied by the host, never by a model or transport.
- * Its read grant does not enroll a Goal, discover a portfolio or authorize work.
+ * Its workspace grant does not enroll a Goal, discover a portfolio or authorize peer work.
  */
 function normalized(value: unknown): JsonObject {
   try {return normalizeProjectContext(value);}

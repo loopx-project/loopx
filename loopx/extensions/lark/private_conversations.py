@@ -13,6 +13,8 @@ from typing import Any
 from ...capabilities.native_chat.external_conversations import ChatExternalConversations
 from ...chat_store import _atomic_write_json, _read_json
 from ...file_lock import exclusive_file_lock
+from ...presentation.markdown import markdown_scalar
+from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .goal_channel_transport import call, json_payload, lark_args
@@ -307,35 +309,24 @@ def _command_text(code: str) -> str:
 
 
 def _status_text(snapshot: dict[str, Any], *, help_requested: bool) -> str:
-    """Localize Core facts; never infer an Agent, grant or model completion."""
+    """Render Core facts with provider-specific commands and help."""
     steward = snapshot["context_kind"] == "steward"
-    phases = {"queued": "已受理等待执行", "starting": "正在启动", "running": "正在执行",
-        "completing": "正在收尾", "interrupting": "正在停止", "completed": "原生执行结束",
-        "interrupted": "已停止", "timed_out": "执行超时", "failed": "执行失败"}
-    if snapshot["session_status"] is None:
-        state = "尚无会话；发送文字即可开始。"
-    elif not snapshot["active_turn_observation_available"]:
-        state = "执行证据暂不可读；请在本机检查原会话。"
-    elif snapshot["active_turn_status"]:
-        state = phases.get(snapshot["active_turn_status"], "执行状态暂不可判定；请在本机检查原会话。")
-    else:
-        state = {"failed": "会话恢复失败；请在本机检查原会话。",
-            "resume_failed": "会话恢复失败；请在本机检查原会话。", "stale": "会话需要恢复。",
-            "starting": "会话正在启动。", "resuming": "会话正在恢复。",
-            "ready": "会话可继续。", "closed": "会话已关闭。"}.get(
-                snapshot["session_status"], "会话状态暂不可判定；请在本机检查原会话。")
-    text = (f"状态快照（{snapshot['observed_at']}）\n角色：{'长期管家' if steward else '普通项目对话'}"
-        f"\n工作区：{snapshot['workspace_path']}\n执行器：{snapshot['executor_endpoint_id']}"
-        f"\n{state}\n已持久排队：{snapshot['queued_count']} 条。")
-    if snapshot.get("recipient_agent_id"):
-        return text + f"\n已选择 Agent：{snapshot['recipient_agent_id']} · {snapshot['recipient_goal_id']}。等待原宿主领取队列；/agents 查看授权，/project 返回普通项目对话。实时停止或新建请在原宿主处理。"
-    text += (f"\n已授权新委托：{snapshot['authorized_commission_count']}；执行结束不代表委托验收。" if steward else
-        "\n当前仅有工作区只读授权；没有自动选用注册 Agent 或创建 Goal。")
-    text += "\n/status 查看状态；/stop 停止当前聊天执行；/new 关闭当前聊天并开启下次新会话；/help 查看用法。"
-    if not steward:
-        text += "\n/agents 查看本 App 已授权的 Agent；使用列表中的完整 /agent 命令选择，/project 返回此项目会话。"
+    attached = bool(snapshot.get("recipient_agent_id"))
+    text = render_conversation_status(snapshot)
+    text += ("\n\n/agents 授权 Agent · /project 返回项目 · /help 用法" if attached else
+             "\n\n/stop 停止当前聊天 · /new 新会话 · /help 用法")
     if help_requested:
-        text += "\n工作区、执行器与解绑：本机 Chat → 设置 → Lark。变更或解绑会重新核验授权；已受理工作不会迁移到新会话。图片/文件目前未交给模型，请改用文字。"
+        if not steward and not attached and snapshot.get("grant") == "workspace_write":
+            text += "\n按项目规则和 skills 执行当前指令；读写授权不会创建 Goal 或提高原宿主权限。"
+        text += ("\n\n/status 查看当前状态；/help 查看用法。"
+                 "\n/agents 查看本 App 已授权的 Agent；使用列表中的完整 /agent 命令选择，/project 返回项目对话。")
+        if not attached:
+            text += "\n/stop 停止当前聊天执行；/new 关闭当前聊天，下条消息开启新会话。"
+        text += (f"\n\n工作区：{markdown_scalar(snapshot['workspace_path'])}"
+                 f"\n执行器：{markdown_scalar(snapshot['executor_endpoint_id'])}"
+                 f"\n观察时间：{markdown_scalar(snapshot['observed_at'])}"
+                 "\n工作区、执行器与解绑：本机 Chat → 设置 → Lark。变更或解绑会重新核验授权；已受理工作不会迁移到新会话。"
+                 "\n图片/文件目前未交给模型，请改用文字。")
         if steward:
             text += "\n新委托：/delegate --tokens N 具体目标；读完预览后从原私聊发送完整 /confirm。/cancel 取消预览；/stop-commission 和 /resume-commission 使用原回执中的完整命令。"
     return text

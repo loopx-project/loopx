@@ -8,8 +8,43 @@ payload.
 Preview it explicitly:
 
 ```bash
-loopx quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
+loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
 ```
+
+For a tool with bounded output, optionally capture the full decided payload before
+its display projection. Choose a **new directory for each invocation**, even when
+reentering the same Turn:
+
+```bash
+loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-instance-id <turn-id> --turn-envelope --decision-output-dir ./guard-001
+cat ./guard-001/decision.json
+```
+
+`--decision-output-dir` is valid only with `quota should-run` and an explicit
+`--turn-instance-id`. Its parent must exist. LoopX creates the directory privately
+(0700 on POSIX) before running the guard, rejects existing paths including
+symlinks, and atomically publishes `decision.json` (0600 on POSIX) before printing
+the result. The file contains the unprojected decision and its original receipt;
+it excludes display-only host poll metadata. It can contain private Goal context:
+keep it out of public artifacts. No capture is created without this option.
+
+If a tool truncates the displayed JSON, read this file instead of rerunning the
+guard merely to recover the observation. The file is **not fresh authority**:
+Todo selection, lease changes, cancellation, quota changes or other required
+revalidation still use a fresh guard invocation and a new capture directory.
+Check the saved Goal/Agent/Turn identity before use; a cache filename does not
+prove identity. Nothing here bypasses the owning mutation-time validation.
+Capture also preserves decided rejection/diagnostic payloads; inspect `ok` before
+acting. A late disk failure can happen after the guard has committed its receipt;
+the CLI reports that boundary rather than claiming rollback. An empty capture
+directory is not a usable decision. Omit the option to disable capture; remove
+unneeded local captures through ordinary file management.
+
+This is a CLI transport primitive under the existing quota/context owner, not a
+new capability or Python decision rule. It does not automatically switch workers
+to compact packets, select replan history, or qualify model efficiency. The
+frontend and Lark do not consume these local files; their entrypoints are unchanged.
 
 The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the
@@ -43,12 +78,48 @@ Action-signature coverage is versioned independently from the envelope schema.
 `turn_envelope_action_dimensions_v1` additionally covers a blocking user
 gate's `response_plan`; `turn_envelope_action_dimensions_v2` additionally signs
 `action.action_portfolio`; `turn_envelope_action_dimensions_v3` additionally
-signs `action.planning_horizon`. Base/head qualification accepts a declared
+signs `action.planning_horizon`; v4 additionally signs capability `agent_context`;
+`turn_envelope_action_dimensions_v5` additionally preserves the canonical
+`writeback.settlement_plan`. Base/head qualification accepts a declared
 coverage migration as a review signal. The bounded, JSON-only v2 and v3
 migration budgets apply only to their named schema transitions; ordinary
 growth limits resume once the new version is the baseline. A digest change
 without a supported coverage migration, or a projection above its one-version
 budget, still fails closed.
+
+For a decision carrying a settlement plan, the opt-in envelope now transports
+that plan intact: effect identity, ordered steps, command conditions, expected
+receipts and the host-owned handoff. It also keeps the corresponding next CLI
+commands untruncated. This repairs the earlier preview that could report matching
+action hashes while omitting the settlement plan. The plan remains owned by the
+shared settlement algebra; the envelope neither rebuilds it nor grants authority
+to execute an unadmitted step. Packets without a plan keep their previous coverage
+and do not acquire one from a historical heartbeat receipt. Stored v0–v4 signatures
+are not rewritten. The v5 migration is an explicit semantic review signal and
+has **no additional size allowance**; overflow still requires the existing budget
+analysis. Default full quota output and settlement rules are unchanged.
+
+The shared CLI plan also explains delivery classification before writeback.
+Validated evidence that excludes a route and informs the next decision can be
+`outcome_progress` even when the attempted candidate does not improve the target
+metric. A failed attempt, an unchanged metric, or a new Todo alone does not prove
+progress. Record the validated evidence and its consequence. `outcome_gap` is the
+existing blocked-settlement path: it requires `--progress-result-class blocked`,
+blocker/evidence IDs, and the existing continuation checks. These authoring hints
+neither judge evidence nor relax validation, completion, lease, or spend rules;
+an invalid `outcome_gap` plus `advanced` still fails before writeback. The same
+plan reaches full CLI output and the opt-in envelope. This changes agent-facing
+guidance in both views. Full, compact, brief and thin heartbeat prompts scope
+no-refresh/spend closeout to exact monitor settlement; auxiliary polling leaves
+the original work settlement due. Admitted work follows its settlement plan;
+an unchanged artifact alone does not imply no progress. The shared heartbeat
+renderer supplies this wording, while the TypeScript settlement owner retains
+classification semantics. This adds no capability, automatic classification, or
+frontend/Lark operation. Model error-rate reduction remains unqualified.
+
+中文：短包现在完整保留已有结算计划及执行命令，签名 v5 覆盖结算身份、步骤顺序、
+条件和宿主边界；没有计划的输入不会凭空获得结算权限。旧签名保留，默认完整输出
+不变，大小预算不放宽。此修复是短上下文实验的前置条件，尚不证明模型收益。
 
 `quota_planning_horizon_v0` remains advisory even when carried by the envelope.
 Its `selection_contract` points back to `selected_todo` and `action_portfolio`,
@@ -126,6 +197,12 @@ the selected Todo, `effective_action=agent_workspace_repair`, and the typed
 worktree recovery instruction. Moving to an independent worktree and rerunning
 the guard with the same Turn id resumes the selected Todo; the wrapper must not
 rewrite this recoverable state as a settlement-identity conflict.
+
+For admitted local delivery, the workspace hint points to the registered Goal
+workspace and defers isolation requirements to the current workspace guard and
+repository rules. A peer identity alone does not require moving to another
+worktree. This corrects the previous unconditional Git-peer hint in both full
+quota output and TurnEnvelope; admission and settlement enforcement are unchanged.
 
 An executed, turn-scoped `quota monitor-poll` is a no-spend closeout only when
 its observed Todo exactly matches the Turn's `settlement_todo_id`. That response

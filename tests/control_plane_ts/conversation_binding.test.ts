@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {planConversationBinding, resolveBoundConversation, planBoundConversationRequest,
   stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
-import {resolveConversationScope} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
   audience: "local_owner", grant: "workspace_read"};
@@ -15,6 +15,36 @@ const observation = {transport_ref: row.transport_ref, provider_ref: row.provide
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
+
+test("explicit project writes remain App-bound and cannot exceed the host grant, another executor or an existing Session", () => {
+  const original = planConversationBinding(request).state as typeof current;
+  const use = {current: original, binding_id: row.binding_id, source_ref: "e".repeat(24),
+    sender_ref: row.operator_ref, private_human_message: true, observation, available_projects: [project]};
+  const read = resolveBoundConversation(use);
+  assert.equal(projectConversationIdentity({context: read.context}).sandbox, "read-only");
+  assert.equal(projectConversationIdentity({context: {...project, grant: "workspace_write"}}).sandbox, "workspace-write");
+  const writable = [{...project, grant: "workspace_write"}];
+  assert.throws(() => planConversationBinding({...request, current: original, expected_revision: 1,
+    binding: {...row, grant: "workspace_write"}, available_projects: writable}), /new binding identity/);
+  const write = {...row, binding_id: "f".repeat(24), grant: "workspace_write"};
+  const next = planConversationBinding({...request, current: original, expected_revision: 1, binding: write, available_projects: writable}).state;
+  assert.throws(() => planConversationBinding({...request, binding: write}), /workspace/);
+  assert.throws(() => resolveBoundConversation({...use, current: next, binding_id: write.binding_id}), /write grant/);
+  use.available_projects = writable;
+  const selected = resolveBoundConversation({...use, current: next, binding_id: write.binding_id});
+  assert.equal(projectConversationIdentity({context: selected.context}).sandbox, "workspace-write");
+  assert.deepEqual(resolveConversationScope({goal_id: null, channel_id: selected.channel_id,
+    project_context: selected.context, origin: "lark"}), {kind: "project_workspace", goal_ids: [], private_conversation: false});
+  assert.throws(() => resolveBoundConversation({...use, current: next}), /no longer authorized/);
+  assert.throws(() => resolveBoundConversation({...use, current: next, binding_id: write.binding_id,
+    session_context: read.context}), /context changed/);
+  for (const bad of [{...write, executor_endpoint_id: "claude-code"},
+    {...write, context_kind: "steward", goal_ids: []}, {...write, grant: "danger-full-access"}]) {
+    assert.throws(() => planConversationBinding({...request, binding: bad}), /unsupported/);
+  }
+  assert.throws(() => resolveBoundConversation({...use, current: next, binding_id: write.binding_id,
+    sender_ref: "c".repeat(24)}), /audience/);
+});
 
 test("binding independently verifies the owner and does not create a Goal", () => {
   const result = planConversationBinding(request);

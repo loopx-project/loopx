@@ -794,6 +794,9 @@ it does not grant execution quota, spending, or provider authority.
    sample window, workload and distribution; acknowledge noise. Keep the
    failing scenario and original result; do not shrink fixture populations,
    scan roots or sampling depth to obtain a pass.
+   CI comparisons must use the event's immutable base and candidate revisions,
+   including merge-queue bases. Do not resolve a moving branch after queueing:
+   unrelated changes on that branch are not regressions in the tested commit.
 2. **Inspect information value and redundancy.** Name the current consumer and
    decision each changed field supports. Remove derivable or unused copies when
    the consumer contract permits it. Similar rows in different lanes may serve
@@ -815,6 +818,8 @@ it does not grant execution quota, spending, or provider authority.
 1. **同口径测量。** 记录 base/head、负载、指标和测量边界。紧凑 JSON 字符、UTF-8
    字节、嵌套键数、真实 stdout 和 token 不可互换。延迟要保留样本窗口、负载和
    分布，并承认噪声。保留失败场景与原结果，不缩小 fixture、扫描范围或采样深度。
+   CI 对照必须固定事件的 base 和 candidate 提交，包括合并队列的 base；不能在排队
+   后重新解析移动分支，把其他提交的变化当作被测提交的回归。
 2. **分析信息价值与真实冗余。** 说明变化字段服务哪个消费者、哪个决策。合同允许时
    删除可推导或无人使用的副本；不同 lane 中相同的数据可能服务不同消费者，去重
    需要调用方迁移和语义等价验证。详情优先使用有界摘要和可达冷路径。不能删身份、

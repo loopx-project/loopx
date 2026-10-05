@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import stat
 import subprocess
@@ -16,18 +17,114 @@ from typing import Any
 
 from .selectors import FAST_MODELS, MODEL_FAMILIES, ROUTES, SLOTS, VISIBLE_SELECTORS
 
-SELECTORS = {slug: route["display_name"] for (slug, route) in ROUTES.items()}
-SELECTORS.update(
+ROUTE_SELECTORS = {slug: route["display_name"] for (slug, route) in ROUTES.items()}
+ROUTE_SELECTORS.update(
     {model: f"{label} · Auto (legacy id)" for model, label in MODEL_FAMILIES.items()}
 )
-SELECTORS.update(
-    {
-        "ark/deepseek-v4-flash": "Ark · DeepSeek V4 Flash",
-        "deepseek-v4-flash": "Ark · DeepSeek V4 Flash (legacy id)",
-        "deepseek-v4-flash-ga-260731": "Ark · DeepSeek V4 Flash (260731)",
-        "deepseek-v4-pro-ga-260813": "Ark · DeepSeek V4 Pro (260813)",
-    }
+ARK_FLASH_ALIAS = "ark/deepseek-v4-flash"
+ARK_LEGACY_FLASH_ALIAS = "deepseek-v4-flash"
+# The ids a stock operator configuration names. They are only the default view
+# of the Ark rows: an operator who configures a newer upstream generation --
+# DeepSeek-V4.1-Flash under its own endpoint id -- gets that id's row instead,
+# because the configured id is the model a request has to name.
+SHIPPED_ARK_MODEL = "deepseek-v4-flash-ga-260731"
+SHIPPED_ARK_PRO_MODEL = "deepseek-v4-pro-ga-260813"
+# Generations this package can name without guessing. ``deepseek-flash`` is the
+# vendor's canonical DeepSeek-V4.1-Flash id (DeepSeek API changelog), and Ark
+# names DeepSeek-V4.1-Flash under its own upstream id (Ark release notes).
+VALIDATED_ARK_GENERATIONS = {
+    "deepseek-flash": "V4.1",
+    "deepseek-v4-1-flash-260910": "V4.1",
+}
+# An Ark id spells the generation it serves: ``...-v4-1-flash-...`` is V4.1 and
+# ``...-v4-flash-...`` is V4. One digit per position keeps a custom id such as
+# ``v41`` from being read as a generation instead of as an unknown spelling.
+_ARK_GENERATION_SPELLING = re.compile(
+    r"(?:^|[-_.])v(?P<major>\d)(?:[._-](?P<minor>\d))?(?=$|[-_.])"
 )
+
+
+def release_suffix(model: str) -> str:
+    """Return the release an upstream id pins, so two generations read apart."""
+
+    tail = model.rsplit("-", 1)[-1]
+    return tail if len(tail) == 6 and tail.isdigit() else model
+
+
+def ark_generation(model: str) -> str | None:
+    """Return the generation the configured id itself proves, or ``None``.
+
+    The operator's own configuration is the witness: a validated Ark id that
+    spells ``v4-1`` serves DeepSeek-V4.1-Flash and one that spells ``v4`` serves
+    DeepSeek-V4-Flash. An id that spells neither -- a custom endpoint name, or
+    one of the ids the vendor renamed globally -- keeps no generation claim
+    rather than borrowing the newest one.
+    """
+
+    if model in VALIDATED_ARK_GENERATIONS:
+        return VALIDATED_ARK_GENERATIONS[model]
+    match = _ARK_GENERATION_SPELLING.search(model)
+    if match is None:
+        return None
+    major, minor = match.group("major"), match.group("minor")
+    return f"V{major}.{minor}" if minor else f"V{major}"
+
+
+def _ark_label(model: str, kind: str) -> str:
+    generation = ark_generation(model)
+    # No generation is named when the configured id does not prove one.
+    return f"Ark · {model}" if generation is None else f"Ark · DeepSeek {generation} {kind}"
+
+
+def _ark_endpoint_label(model: str, kind: str) -> str:
+    base = _ark_label(model, kind)
+    suffix = release_suffix(model)
+    return f"{base} ({suffix})" if suffix != model else f"{base} (endpoint id)"
+
+
+def ark_labels(flash_model: str, pro_model: str) -> dict[str, str]:
+    """Return the truthful labels for the two configured upstream ids.
+
+    One owner for both consumers: the App catalog rows and the CPA runtime
+    config render the same generation for the same configured id, so one row
+    cannot read as V4 in one surface and V4.1 in the other.
+    """
+
+    flash = _ark_label(flash_model, "Flash")
+    return {
+        "flash": flash,
+        "flash_legacy": f"{flash} (legacy id)",
+        "flash_endpoint": _ark_endpoint_label(flash_model, "Flash"),
+        "pro": _ark_endpoint_label(pro_model, "Pro"),
+    }
+
+
+def ark_selectors(flash_model: str, pro_model: str) -> dict[str, str]:
+    """Return the Ark-backed catalog rows for the configured upstream ids.
+
+    The two ids come from the operator's own configuration, so moving to a
+    newer upstream generation is a configuration change rather than a source
+    change. The two historical aliases stay, so a selector pinned to either
+    spelling keeps resolving to whatever the endpoint now serves, labelled by
+    the generation that configured id proves.
+    """
+
+    labels = ark_labels(flash_model, pro_model)
+    return {
+        ARK_FLASH_ALIAS: labels["flash"],
+        ARK_LEGACY_FLASH_ALIAS: labels["flash_legacy"],
+        flash_model: labels["flash_endpoint"],
+        pro_model: labels["pro"],
+    }
+
+
+# The rows a stock configuration publishes. Kept as the module-level view for
+# readers that predate the configurable Ark ids; one operator's projection is
+# the AppCatalog instance's own, built from the ids that operator configured.
+SELECTORS = {
+    **ROUTE_SELECTORS,
+    **ark_selectors(SHIPPED_ARK_MODEL, SHIPPED_ARK_PRO_MODEL),
+}
 FAST_SELECTORS = set(FAST_MODELS)
 ROUTE_FALLBACK_TAILS = {slug: route["tail"] for (slug, route) in ROUTES.items()}
 EXPECTED_ROUTE_ORDERS = {
@@ -123,6 +220,15 @@ class AppCatalog:
         self.AUTH_DIR = runtime.AUTH_DIR
         self.SLOTS_FILE = runtime.SLOTS_FILE
         self.PORT = runtime.PORT
+        # The Ark rows follow the ids this operator configured, so a newer
+        # upstream generation is adopted from the private configuration
+        # instead of from a literal in this module.
+        self.ARK_MODEL = runtime.ARK_MODEL
+        self.ARK_PRO_MODEL = runtime.ARK_PRO_MODEL
+        self.SELECTORS = {
+            **ROUTE_SELECTORS,
+            **ark_selectors(self.ARK_MODEL, self.ARK_PRO_MODEL),
+        }
 
     def ark_source(self, slug: str) -> dict[str, Any]:
         for path in (self.ARK_CATALOG, self.ARK_PROFILE_CATALOG, self.OUTPUT):
@@ -140,7 +246,7 @@ class AppCatalog:
             for model in (*MODEL_FAMILIES, "gpt-5.6-luna")
         }
         entries = []
-        for slug, label in SELECTORS.items():
+        for slug, label in self.SELECTORS.items():
             route = ROUTES.get(slug, ROUTES.get(f"auto/{slug}"))
             if route:
                 source = deepcopy(sources[route["model"]])
@@ -153,7 +259,7 @@ class AppCatalog:
                     ]
             else:
                 source = self.ark_source(
-                    slug if slug.endswith("260813") else "deepseek-v4-flash-ga-260731"
+                    self.ARK_PRO_MODEL if slug == self.ARK_PRO_MODEL else self.ARK_MODEL
                 )
             entry = make_entry(source, slug, label, len(entries) + 1)
             entry["visibility"] = "list" if slug in VISIBLE_SELECTORS else "hide"
@@ -331,7 +437,7 @@ class AppCatalog:
             for row in data
             if isinstance(row, dict)
             and not row.get("hidden")
-            and row.get("id") not in SELECTORS
+            and row.get("id") not in self.SELECTORS
         )
         rows = {
             str(row.get("id")): {
@@ -348,9 +454,9 @@ class AppCatalog:
                 ],
             }
             for row in data
-            if isinstance(row, dict) and row.get("id") in SELECTORS
+            if isinstance(row, dict) and row.get("id") in self.SELECTORS
         }
-        missing = sorted(set(SELECTORS) - set(rows))
+        missing = sorted(set(self.SELECTORS) - set(rows))
         hidden = sorted(
             key
             for key, row in rows.items()
@@ -358,7 +464,7 @@ class AppCatalog:
         )
         wrong_display_names = sorted(
             key
-            for (key, display_name) in SELECTORS.items()
+            for (key, display_name) in self.SELECTORS.items()
             if rows.get(key, {}).get("displayName") != display_name
         )
         wrong_default_service_tiers = sorted(
@@ -372,7 +478,7 @@ class AppCatalog:
         )
         missing_auto_efforts = sorted(set(AUTO_REASONING_EFFORTS) - set(auto_efforts))
         live_models = self.cpa_models()
-        cpa_missing = sorted(set(SELECTORS) - live_models)
+        cpa_missing = sorted(set(self.SELECTORS) - live_models)
         route_traversal = self.route_traversal_readback()
         route_mismatches = sorted(
             route
@@ -393,7 +499,7 @@ class AppCatalog:
             "schema_version": "cpa_codex_app_model_probe_v1",
             "codex_binary": str(self.CODEX_BINARY),
             "catalog_path": str(self.OUTPUT),
-            "expected_selectors": sorted(SELECTORS),
+            "expected_selectors": sorted(self.SELECTORS),
             "projected_selectors": rows,
             "visible_selectors": sorted(
                 key for key, row in rows.items() if not row.get("hidden")

@@ -96,7 +96,7 @@ loopx turn run-once \
   --host generic-cli \
   --execution-mode isolated-headless \
   --project "$PWD" \
-  --host-adapter-command-json '["python3", "-m", "loopx.dsh_goal_mode", "--dsh-home", "/path/to/dsh-home", "--cordis", "/path/to/cordis.yml", "--model", "deepseek-v4-flash"]' \
+  --host-adapter-command-json '["python3", "-m", "loopx.dsh_goal_mode", "--dsh-home", "/path/to/dsh-home", "--cordis", "/path/to/cordis.yml", "--model", "deepseek-flash"]' \
   --validation-command-json '["python3", "/path/to/verify-postcondition.py"]' \
   --execute
 ```
@@ -159,7 +159,7 @@ loopx turn run-once \
   --project "$PWD" \
   --dsh-home /path/to/dsh-home \
   --dsh-cordis /path/to/cordis.yml \
-  --dsh-model deepseek-v4-flash \
+  --dsh-model deepseek-flash \
   --validation-command-json '["python3", "/path/to/verify-postcondition.py"]' \
   --execute
 ```
@@ -183,7 +183,8 @@ credential authenticates it, and `codex-cli` is the default when no credential i
 configured, because an unauthenticated managed host would refuse to run.
 
 What runs on that host is a separate resolution. The managed execution profile
-defaults to `deepseek-official` / `deepseek-v4-flash` / `high`, overridden by
+defaults to `deepseek-official` / `deepseek-flash` / `high`, the canonical
+DeepSeek-V4.1-Flash id, overridden by
 `LOOPX_TURN_PROVIDER` / `LOOPX_TURN_MODEL` / `LOOPX_TURN_REASONING_EFFORT` and, at
 lower precedence, by the legacy `DSH_PROVIDER` / `DSH_MODEL`; an explicit
 `--dsh-provider` / `--dsh-model` / `--dsh-reasoning-effort` wins over both. The
@@ -211,7 +212,7 @@ host id:
   "credential_env": "DEEPSEEK_API_KEY",
   "endpoint_env": "DEEPSEEK_BASE_URL",
   "operator_credential_bound": true,
-  "execution_profile": "deepseek-v4-flash@high",
+  "execution_profile": "deepseek-flash@high",
   "output_token_budget": {
     "schema_version": "dsh_output_token_budget_v0",
     "scope": "per_model_request",
@@ -235,7 +236,7 @@ configured. `available` is `false` only when LoopX can prove the planned host
 cannot launch here, and `null` for executors this projection does not probe
 rather than an unproven claim. Only the credential variable *name* is reported;
 the value is never read back. `execution_profile` is the resolved profile as one
-line, `deepseek-v4-flash@high` in the shipped shape, with the provider prepended
+line, `deepseek-flash@high` in the shipped shape, with the provider prepended
 only when it is not the shipped one -- it is one line because every plan carries
 it, and the agent-facing output budget is a contract.
 

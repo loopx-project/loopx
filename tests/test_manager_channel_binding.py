@@ -181,11 +181,11 @@ def test_selecting_the_managed_host_runs_the_managed_execution_profile(monkeypat
     assert selected["available"] is True
     # The model follows the executor: the managed host runs the same execution
     # profile a governed Turn runs, so the channel and its workers agree.
-    assert selected["model"] == "deepseek-v4-flash"
+    assert selected["model"] == "deepseek-flash"
     assert selected["model_source"] == MANAGER_MODEL_SOURCE_MANAGED_PROFILE
     # One line, the same shape the governed Turn readback publishes, so the
     # channel and its workers cannot report two different managed profiles.
-    assert selected["execution_profile"] == "deepseek-v4-flash@high"
+    assert selected["execution_profile"] == "deepseek-flash@high"
     assert selected["credential_env_var"] == "DEEPSEEK_API_KEY"
     assert "fixture" not in json.dumps(selected)
 
@@ -284,7 +284,7 @@ def test_a_machine_that_selects_only_an_executor_keeps_the_lower_layers(monkeypa
     assert binding["executor_endpoint"] == "dsh"
     # The model and the effort still resolve from the managed execution profile
     # the selected host runs, not from the last value some other reader saw.
-    assert binding["model"] == "deepseek-v4-flash"
+    assert binding["model"] == "deepseek-flash"
     assert binding["model_source"] == MANAGER_MODEL_SOURCE_MANAGED_PROFILE
     assert manager_model_config(
         {"LOOPX_MANAGER_REASONING_EFFORT": "low"},
@@ -387,7 +387,7 @@ def test_explicit_model_override_wins_on_either_endpoint():
             "DEEPSEEK_API_KEY": "fixture",
             "LOOPX_TURN_REASONING_EFFORT": "max",
         }
-    ) == {"model": "deepseek-v4-flash", "reasoning_effort": "max"}
+    ) == {"model": "deepseek-flash", "reasoning_effort": "max"}
     # Selection is what moves the pair: the same credential without it leaves
     # the interactive endpoint on its own vendor model and effort.
     assert manager_model_config(

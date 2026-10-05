@@ -25,11 +25,22 @@ const written = spawnSync(python, ["-c", [
 ].join("\n"), codex], { cwd: repoRoot, encoding: "utf8" });
 assert.equal(written.status, 0, written.stderr);
 
-const server = spawn(python, ["-c", "import sys; from loopx.entrypoint import main; sys.exit(main())",
-  "chat", "--no-open", "--port", String(port), "--codex-bin", codex, "--scan-root", workspace, "--global-registry"],
-{ cwd: root, env: { ...process.env, HOME: join(root, "home"), PYTHONPATH: repoRoot }, stdio: ["ignore", "pipe", "pipe"] });
 let serverError = "";
-for (const stream of [server.stdout, server.stderr]) stream.on("data", (chunk) => { serverError += String(chunk); });
+function startServer(grant) {
+  const child = spawn(python, ["-c", "import sys; from loopx.entrypoint import main; sys.exit(main())",
+    "chat", "--no-open", "--port", String(port), "--codex-bin", codex, "--scan-root", workspace,
+    "--global-registry", "--project-workspace-grant", grant],
+  { cwd: root, env: { ...process.env, HOME: join(root, "home"), PYTHONPATH: repoRoot, LOOPX_USAGE_PING: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { serverError += String(chunk); });
+  return child;
+}
+let server = startServer("workspace_read");
+async function stopServer() {
+  if (server.exitCode !== null) return;
+  const exited = new Promise((resolveExit) => server.once("exit", resolveExit));
+  server.kill();
+  await exited;
+}
 // The first-run usage notice is unrelated to this journey; keep evidence focused.
 async function capture(target, name) {
   if (!screenshots) return;
@@ -61,6 +72,16 @@ try {
   await page.getByLabel("发送消息").fill(question);
   await page.keyboard.press("Enter");
   await page.getByText("Runtime response.").first().waitFor({ timeout: 15_000 });
+  // Upgrade a persisted read-only workspace through the same ordinary Scope entry.
+  await stopServer();
+  server = startServer("workspace_write");
+  await waitForHttp(url).catch((error) => { throw new Error(`${error.message}\n${serverError}`); });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText("工作区对话 · 读写").waitFor({ timeout: 15_000 });
+  await page.getByText(question).first().waitFor({ timeout: 15_000 });
+  await page.getByLabel("发送消息").fill("继续整理素材");
+  await page.keyboard.press("Enter");
+  await page.getByText("Runtime response.").nth(1).waitFor({ timeout: 15_000 });
   await capture(page, "ordinary-workspace-conversation.png");
 
   const projectRequests = sessionRequests.filter((body) => body.context_kind === "project");
@@ -98,6 +119,6 @@ try {
   console.log("workspace scope browser smoke ok");
 } finally {
   await browser?.close();
-  server.kill();
+  await stopServer();
   await rm(root, { force: true, recursive: true });
 }

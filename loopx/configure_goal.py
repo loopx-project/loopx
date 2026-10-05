@@ -66,7 +66,7 @@ from .execution_profile import (
     apply_goal_execution_profile_change,
     compact_execution_profile,
 )
-from .explore_graph import compact_explore_graph_policy
+from .explore_graph import compact_explore_graph_policy, explore_configuration, plan_explore_configuration
 from .orchestration import (
     EXPLORE_HARNESS_PROFILES,
     MULTI_SUBAGENT_ORCHESTRATION_MODE,
@@ -263,7 +263,7 @@ def _settings_summary(goal: dict[str, Any]) -> dict[str, Any]:
         "change_quality_qualification": change_quality_goal_policy_summary(goal),
         "progress_review": progress_review_config.configuration_summary(goal),
         "goal_capability_organization": improvement_config.configuration_summary(goal),
-        "explore_graph": compact_explore_graph_policy(goal.get("explore_graph")),
+        "explore_graph": compact_explore_graph_policy(goal.get("explore_graph"), orchestration.get("explore_harness")),
         "orchestration": orchestration,
         "waiting_on": goal.get("waiting_on"),
         "write_scope": normalize_goal_write_scope(coordination.get("write_scope") or [])
@@ -471,6 +471,7 @@ def configure_goal(
     explore_harness_profile: str | None = None,
     clear_explore_harness_profile: bool = False,
     explore_graph_enabled: bool | None = None,
+    explore_mode: str | None = None,
     registered_agents: list[str] | None = None,
     clear_registered_agents: bool = False,
     peer_task_coordinator: str | None = None,
@@ -963,7 +964,16 @@ def configure_goal(
 
     apply_reward_memory_goal_configuration(goal, reward_memory_plan)
 
-    if explore_graph_enabled is not None:
+    if any(value is not None for value in (explore_mode, explore_graph_enabled, explore_harness_enabled)):
+        existing_harness = (goal.get("spawn_policy") or {}).get("explore_harness")
+        explore_plan = plan_explore_configuration(
+            explore_configuration(goal.get("explore_graph"), existing_harness),
+            {"mode": explore_mode, "evidence_enabled": explore_graph_enabled,
+             "planning_enabled": explore_harness_enabled},
+        )
+        explore_graph_enabled = explore_plan["evidence_enabled"]
+        if explore_mode is not None or explore_harness_enabled is not None or existing_harness:
+            explore_harness_enabled = explore_plan["planning_enabled"]
         goal["explore_graph"] = {"enabled": explore_graph_enabled}
 
     if (

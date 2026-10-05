@@ -73,6 +73,11 @@ cooperative code-edit coordination, not a filesystem access-control mechanism.
 It does not authorize changing shared runtime data, Git administration, remote
 branches, or merging. Use ordinary exclusive leases for those operations.
 
+Accepted origin URLs use the same repository identity rules as Todo declarations:
+explicit default transport ports (including SSH `:22` and Git `:9418`) do not
+create another repository, while nondefault ports remain distinct. Origins with
+passwords or unsafe path segments are rejected before lease acquisition.
+
 Same-worktree aliases, the same Todo, other machines or clones, and grants
 without a verified workspace retain existing exclusion. Repository mismatch,
 redirected paths and a non-worktree root fail closed. Verified machine discovery
@@ -102,6 +107,10 @@ explicitly. No automatic migration or grant expansion occurs.
 JSON 与 Markdown 读回同一仓库字段或未知状态。这只是 Goal 内逻辑仓库互斥，
 不识别物理目录、软链接别名，也不是跨 Goal 锁；不新增配置、promotion 或自动
 委派。CLI 与 native provider 检查已覆盖该边界，完整前端/Lark 协作旅程仍需单独交付。
+
+独立 worktree 的 origin URL 与 Todo 声明使用同一仓库身份规则：显式默认端口
+（包括 SSH `:22` 和 Git `:9418`）不产生另一个仓库身份，非默认端口仍须匹配。
+带密码或不安全路径段的 origin 在获取租约前被拒绝。
 
 ## Operate the current lease
 

@@ -344,6 +344,7 @@ def run_worker(
             continue
 
         retry_after_error = False
+        wake_completed = False
         while True:
             if decision.reset_token and decision.reset_token != previous_token:
                 unchanged_count = 0
@@ -380,6 +381,14 @@ def run_worker(
                     )
                     wake_rc = wake_result.returncode
                     wake_failure_kind = wake_result.failure_kind
+                    stop_code = getattr(args, "wake_stop_exit_code", None)
+                    if (stop_code is not None and wake_failure_kind is None
+                            and wake_rc == stop_code):
+                        _log(f"status=wake_requested_stop wake_rc={wake_rc}")
+                        _save_state(state_path, {
+                            "reset_token": decision.reset_token, "unchanged_count": 0,
+                        })
+                        return 0
                     wake_failed = wake_failure_kind is not None or wake_rc != 0
                     wake_status = "wake_failed" if wake_failed else "wake_ok"
                 _log(
@@ -415,6 +424,7 @@ def run_worker(
                     retry_after_error = True
                 else:
                     unchanged_count = 0
+                    wake_completed = bool(args.wake_cmd)
                 break
 
             _log(
@@ -499,7 +509,12 @@ def run_worker(
 
         if once:
             return 0
-        sleep(max(5, interval_minutes * 60))
+        # A completed synchronous wake is an event to recheck admission now,
+        # not a reason to add an idle polling interval. The fresh quota decision
+        # still owns continuation; waiting/observe-only ticks retain their
+        # cadence and failures use the independent backoff path above.
+        if not wake_completed:
+            sleep(max(5, interval_minutes * 60))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -531,6 +546,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Without it the worker is observe-only.",
     )
     parser.add_argument(
+        "--wake-stop-exit-code",
+        type=int,
+        help="Opt-in nonzero wake exit code that ends this worker normally. "
+        "Does not complete a Todo or spend quota; transport failures still fail.",
+    )
+    parser.add_argument(
         "--once",
         action="store_true",
         help="Run a single tick and exit instead of sleeping and looping.",
@@ -554,6 +575,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Optional wake execution deadline; default waits for completion or cancellation.",
     )
     args = parser.parse_args(argv)
+    if args.wake_stop_exit_code is not None and not 1 <= args.wake_stop_exit_code <= 255:
+        parser.error("--wake-stop-exit-code must be between 1 and 255")
     if args.registry is None:
         try:
             args.registry = str(global_registry_path())

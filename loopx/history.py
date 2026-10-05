@@ -430,9 +430,7 @@ def collect_history(
             "adapter_kind": adapter.get("kind"),
             "adapter_status": adapter.get("status"),
             "coordination": meta.get("coordination") if isinstance(meta.get("coordination"), dict) else None,
-            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"))
-            if isinstance(meta.get("explore_graph"), dict)
-            else None,
+            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"), (meta.get("spawn_policy") or {}).get("explore_harness")) if meta.get("explore_graph") is not None or (meta.get("spawn_policy") or {}).get("explore_harness") else None,
             "spawn_policy": meta.get("spawn_policy") if isinstance(meta.get("spawn_policy"), dict) else None,
             "execution_profile": compact_execution_profile(meta.get("execution_profile")) if registry_member else None,
             "control_plane": compact_control_plane_policy(meta.get("control_plane")) if registry_member else None,

@@ -4,6 +4,7 @@ import {
   settlementIdentity, type JsonObject, type SettlementIdentityInput,
   type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
+import {VISION_MATERIAL_CLOSEOUT_HINT} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
@@ -45,7 +46,12 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const steps: SettlementStep[] = [
     validation,
     {
-      kind: "durable_writeback", owner: "agent", precondition: "validation succeeded",
+      kind: "durable_writeback", owner: "agent",
+      precondition: (inFlight || identity.binding_kind !== "todo" ? "validation succeeded"
+        : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
+          " Pass a new packet with --agent-vision-json.") +
+        " Route elimination needs evidence; failure alone is not progress. " +
+        "outcome_gap: blocked + blocker/evidence IDs; continuation checks.",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
     },
