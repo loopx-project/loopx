@@ -49,14 +49,17 @@ def render_conversation_status(snapshot: Mapping[str, Any]) -> str:
     elif steward:
         lines.append(f"已授权委托：{snapshot['authorized_commission_count']} 个；执行结束后仍需验收。")
     else:
+        grant = snapshot.get("grant")
         lines.append({
             "workspace_write": "当前工作区可读写。",
             "workspace_read": "当前工作区仅有只读授权。",
-        }.get(snapshot.get("grant"), "工作区权限暂不可判定，请在本机检查授权。"))
+        }.get(grant if isinstance(grant, str) else "", "工作区权限暂不可判定，请在本机检查授权。"))
     # Delivery may be delayed or replayed. Keep the snapshot's time visible;
     # formatting it must never substitute the renderer's current clock.
     try:
         observed = datetime.fromisoformat(str(snapshot["observed_at"]).replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            raise ValueError("observation timezone unavailable")
         lines.append(f"观察于 {observed.astimezone():%Y-%m-%d %H:%M %z}")
     except (KeyError, ValueError):
         lines.append("观察时间暂不可读。")

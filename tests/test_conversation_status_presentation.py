@@ -79,3 +79,5 @@ def test_delayed_status_preserves_the_original_observation_time():
     assert "观察于 2001-" in rendered
     unknown = render_conversation_status(snapshot(observed_at="not-an-observation"))
     assert "观察时间暂不可读" in unknown and "观察于 " not in unknown
+    ambiguous = render_conversation_status(snapshot(observed_at="2001-07-01T12:00:00"))
+    assert "观察时间暂不可读" in ambiguous and "观察于 " not in ambiguous
