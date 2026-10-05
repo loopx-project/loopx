@@ -86,6 +86,9 @@ and runnable/blocked state. A fabricated id, changed input, wrong owner, failed
 planning process or missing result fails the entry; it never falls back to a
 generic Todo. A blocked entry retains the referenced blockers and starts no
 execution driver. Readback proves state and ownership, not semantic plan quality.
+It makes no claim about a future execution session. For heartbeat and Turn,
+compare the native IDs in the planning and execution wake receipts' `session`
+fields to verify continuity; the context policy alone is not observation evidence.
 
 Planning follows the chosen context policy for heartbeat and Turn. With
 `resume`, planning and execution share the same conversation, including later

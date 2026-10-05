@@ -109,11 +109,22 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
     }
 
 
-def test_planning_writes_real_todo_then_reuses_it_without_executing_task(planning_env):
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
+    planning_env, context
+):
+    planning_env["LOOPX_ITERATION_CONTEXT"] = context
     ids = []
-    for _ in range(2):
+    for invocation in range(2):
         receipt = run_once(planning_env)
         assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
+        # Planning cannot attest to an execution that has not happened yet.
+        assert "planning_session_reused_for_execution" not in receipt["planning"]
+        persisted = json.loads(Path(planning_env["LOOPX_PLANNING_RESULT"]).read_text())
+        assert persisted == receipt["planning"]
+        expected_action = "resume" if context == "resume" and invocation else "start_new"
+        assert receipt["session"]["action"] == expected_action
+        assert receipt["session"]["session_id"] == "planning-fixture-session"
         ids.append(receipt["planning"]["todo_ids"])
     state = Path(planning_env["LOOPX_REGISTRY"]).with_name("state.md").read_text()
     assert ids[0] == ids[1] and len(ids[0]) == 1
@@ -122,7 +133,8 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(plannin
     argv = json.loads(
         (Path(planning_env["LOOPX_CODEX_HOME"]) / "seen-argv.json").read_text()
     )
-    assert "features.goals=false" in argv and "resume" not in argv
+    assert "features.goals=false" in argv
+    assert ("resume" in argv) == (context == "resume")
     assert not list(
         Path(planning_env["LOOPX_RUNTIME_ROOT"]).rglob("benchmark-pending-turn.json")
     )
