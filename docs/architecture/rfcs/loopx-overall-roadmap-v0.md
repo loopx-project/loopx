@@ -709,6 +709,13 @@ Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
 
+**Bound-conversation status presentation.** The shared display renderer leads
+with canonical execution/recovery state, project and queue/permission facts;
+the Lark adapter reserves full commands and diagnostics for help. Unreadable
+observations and completed executions retain their uncertainty/acceptance
+boundary. This is a bounded status-view improvement, not qualification of
+result synthesis, receiver adoption or the full automatic-return journey.
+
 **S1/S5 attention checkpoint.** Local steward/Goal Turns now receive canonical
 blocker and concrete owner-request facts without a Lark connection. The shared
 TS read model coalesces one Todo's blocker/decision; common content adapters and
