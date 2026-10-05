@@ -249,3 +249,13 @@ def test_heartbeat_recommendation_mirrors_execution_obligation_in_replan() -> No
     assert heartbeat["agent_must_attempt"] is bool(
         obligation.get("must_attempt_work")
     )
+
+
+def test_scheduler_guidance_does_not_freeze_bootstrap_cadence() -> None:
+    from loopx.control_plane.heartbeat.rules import (
+        SCHEDULER_HINT_APPLICATION_RULE, SCHEDULER_HINT_COMPACT_RULE, SCHEDULER_HINT_THIN_RULE,
+    )
+
+    for rule in (SCHEDULER_HINT_APPLICATION_RULE, SCHEDULER_HINT_COMPACT_RULE, SCHEDULER_HINT_THIN_RULE):
+        assert "floor" in rule and "backoff" in rule
+        assert "automation_update" in rule and "ack" in rule

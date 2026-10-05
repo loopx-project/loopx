@@ -587,7 +587,11 @@ scheduling policy, not delivery permission. Codex CLI TUI and Claude Code loops
 should run the final quota/replan check from `scheduler_hint` before applying
 their `after_limit`; if the guard changes or returns `run_now`, follow the new
 quota contract instead of stopping. App-hosted heartbeat workers should
-search/use `automation_update` when available. If
+search/use `automation_update` when available. A bootstrap RRULE is the initial
+host cadence; `min_interval_minutes` is a floor, not a fixed recurring interval.
+Keep ACTIVE while applying the current wait/backoff recommendation. Only an
+explicit current fixed-cadence instruction overrides that recommendation; record
+the conflict rather than silently treating a bootstrap preference as an override. If
 `scheduler_hint.action=stop_until_explicit_resume` and
 `scheduler_hint.app_automation.host_action=pause_or_delete_current_heartbeat`, call
 `automation_update` once to pause the current heartbeat (delete only when the
