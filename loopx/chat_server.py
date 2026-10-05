@@ -91,6 +91,7 @@ from .extensions.runtime import (
 )
 from .history import load_registry
 from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
+from .chat_todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
@@ -446,6 +447,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
 class ChatRequestHandler(
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
+    TodoDetailRequestMixin,
     AttachedSessionRequestMixin,
     SshSourceRequestMixin,
     GoalSubagentConfigurationRequestMixin,
@@ -1418,6 +1420,7 @@ class ChatRequestHandler(
                 }
             )
         get_dispatch = {
+            "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/goal-results": self._goal_results,
             CHAT_SESSIONS_PATH: self._list_sessions,

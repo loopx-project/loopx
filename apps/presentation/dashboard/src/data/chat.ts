@@ -628,6 +628,16 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return parsedPayload as T;
 }
 
+export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal) {
+  const query = new URLSearchParams({goal_id: goalId, todo_id: todoId});
+  const result = z.object({
+    ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
+    status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+  }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
+  if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  return result;
+}
+
 export async function fetchChatStatus() {
   return chatStatusSchema.parse(await requestJson<unknown>("/status.json"));
 }

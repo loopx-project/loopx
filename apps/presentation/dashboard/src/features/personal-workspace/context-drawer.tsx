@@ -43,6 +43,7 @@ import type { LarkGoalConnection } from "../../data/chat";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
+import { TaskRequest } from "./task-request";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
@@ -654,7 +655,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
-              <h3>{selection.item.requestText ?? selection.item.text}</h3>
+              <TaskRequest todo={selection.item} local={!readOnly} />
             </section>
             <section aria-label={t("drawer.taskInfo")} className="personal-task-inspector-fields">
               <h4>{t("drawer.taskInfo")}</h4>
