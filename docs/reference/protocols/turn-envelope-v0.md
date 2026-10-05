@@ -180,6 +180,12 @@ worktree recovery instruction. Moving to an independent worktree and rerunning
 the guard with the same Turn id resumes the selected Todo; the wrapper must not
 rewrite this recoverable state as a settlement-identity conflict.
 
+For admitted local delivery, the workspace hint points to the registered Goal
+workspace and defers isolation requirements to the current workspace guard and
+repository rules. A peer identity alone does not require moving to another
+worktree. This corrects the previous unconditional Git-peer hint in both full
+quota output and TurnEnvelope; admission and settlement enforcement are unchanged.
+
 An executed, turn-scoped `quota monitor-poll` is a no-spend closeout only when
 its observed Todo exactly matches the Turn's `settlement_todo_id`. That response
 includes `turn_continuation.next_turn_required=true` and requires a fresh Turn

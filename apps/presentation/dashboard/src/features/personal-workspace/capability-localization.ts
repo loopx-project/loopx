@@ -8,7 +8,7 @@ type LocalizedCopy = Readonly<{
   readOnlyReason?: string;
 }>;
 
-type FieldCopy = Record<string, Readonly<{ description?: string; label: string }>>;
+type FieldCopy = Record<string, Readonly<{ description?: string; label: string; options?: Record<string, string> }>>;
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
@@ -36,7 +36,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "Explore Harness",
-      description: "Selects a capability-owned planning and research harness profile for bounded multi-step exploration.",
+      description: "Keeps an evidence graph of exploration, with optional branch planning. Planning includes evidence; worker permissions remain separate.",
     },
     lark_event_inbox: {
       displayName: "Lark event inbox",
@@ -102,7 +102,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "探索 Harness",
-      description: "为有界的多步探索选择由能力负责的规划与研究 Harness profile。",
+      description: "记录探索证据图谱，可选开启分支规划；规划自动配套证据层，派生 Agent 权限独立。",
     },
     lark_event_inbox: {
       displayName: "飞书事件收件箱",
@@ -225,7 +225,14 @@ export function localizeCapability(
   };
 }
 
-export function localizedCapabilityFieldCopy(locale: WorkspaceLocale): FieldCopy {
+export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
+  if (capabilityId === "explore_harness") return {...fieldCopy[locale], mode: locale === "zh-CN" ? {
+    label: "探索模式", description: "规划包含证据图谱；派生 Agent 和执行权限仍单独控制。",
+    options: {off: "关闭", evidence: "仅记录证据", planning: "证据与规划"},
+  } : {
+    label: "Exploration mode", description: "Planning includes the evidence graph; worker and execution permissions remain separate.",
+    options: {off: "Off", evidence: "Evidence only", planning: "Evidence and planning"},
+  }};
   return fieldCopy[locale];
 }
 

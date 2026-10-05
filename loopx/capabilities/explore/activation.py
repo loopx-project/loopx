@@ -82,14 +82,14 @@ def sync_explore_graph_after_material_refresh(
 ) -> dict[str, Any]:
     """Flush an enabled graph after the goal-level refresh transaction.
 
-    Explore Graph activation is independent from Explore Harness planning.  A
+    Explore Harness planning includes its evidence graph. A
     configured graph reuses the existing idempotent projection/sink adapter;
     disabled or absent policy performs no graph reads or writes.
     """
 
     goal = load_goal_from_registry(registry_path, goal_id)
     policy = compact_explore_graph_policy(
-        goal.get("explore_graph") if isinstance(goal, dict) else None
+        (goal or {}).get("explore_graph"), ((goal or {}).get("spawn_policy") or {}).get("explore_harness")
     )
     base = {
         "ok": True,
@@ -124,6 +124,14 @@ def sync_explore_graph_after_material_refresh(
                 external_sink_delivery_authorized=external_sink_delivery_authorized,
             ),
         }
+
+    # Disabled activation preserves the caller's authorization observation without
+    # reading or publishing anything. An enabled legacy Harness does not grant a
+    # sink permission merely by supplying its local evidence graph.
+    external_sink_delivery_authorized = external_sink_delivery_authorized and (
+        ((goal or {}).get("explore_graph") or {}).get("enabled") is True
+    )
+    base["external_sink_delivery_authorized"] = external_sink_delivery_authorized
 
     if syncer is None:
         status = "projection_sink_provider_unavailable"
