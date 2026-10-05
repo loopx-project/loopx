@@ -398,7 +398,12 @@ selected the monorepo root instead of this plugin package. Installing
 `git+https://github.com/loopx-project/loopx.git` cannot select the nested, built
 plugin. The marketplace's npm route requires a published `dsh-loopx-plugin`
 whose repository points here and whose keywords include `dsh-plugin`; otherwise
-it falls back to that invalid Git target. After the release operator completes
+older Hubs fall back to that invalid Git target.
+[Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14)
+also installs the catalog’s fixed GitHub release package without an npm
+publication. Upgrade the Hub with `dsh plugin --profile web add dsh-plugin`;
+the catalog still selects beta.5, and release-URL installed-state readback
+needs a further upstream repair. After the release operator completes
 the registry readback above, the platform-independent install command is
 `dsh plugin --profile web add dsh-loopx-plugin`. Replace `web` with `desktop`
 when that is your selected profile. Until publication is verified, use a

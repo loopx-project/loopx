@@ -335,10 +335,13 @@ The npm distribution channel requires the exact GitHub release artifact,
 the qualified `latest` tag, and repository search selecting `dsh-loopx-plugin`
 instead of the monorepo root. The registry smoke qualifies package-name
 installation and removal locally; CI covers Linux and Windows. Direct release
-installation is proposed in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93),
-using the existing authoritative catalog command. It needs a released Hub and
-verified online-catalog adoption before it replaces the npm requirement for
-that route. Public distribution, marketplace adoption, and browser-mounted
+installation reported in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93)
+was shipped independently in [Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14).
+It uses the authoritative catalog command and does not require publishing this
+provider to npm. The live catalog still selects beta.5; beta.6 publication and
+selection remain open. Released-Hub installation passed, but its Client
+installed-state identity does not yet recognize the release URL, leaving the
+marketplace update/removal journey incomplete. Public distribution, marketplace adoption, and browser-mounted
 Start/Pause remain independent release evidence. The L1 observer still consumes only
 `session/created`, `session/event`, and `session/disposed`; this compatibility
 repair does not close its separately budgeted C0/C1 or overhead qualification.

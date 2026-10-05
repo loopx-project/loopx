@@ -267,8 +267,11 @@ renderer 提供，共享 `/api` 保留 `<namespace>/<method>` 和 `args` 契约�
 npm 分发通道要求包与 GitHub release artifact 完全一致，`latest` 指向已验证版本，
 仓库搜索选中 `dsh-loopx-plugin` 而不是 monorepo 根目录。registry smoke 在本地验证
 包名安装与卸载，CI 覆盖 Linux 和 Windows。
-[Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93) 提议按现有权威目录命令
-直接安装 release 包；该通道须待 Hub 发布并验证在线目录采用后，才能替代对 npm 的要求。
+[Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93) 报告的直接 release 安装已由
+上游独立实现并发布到 [Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14)，
+按现有权威目录命令安装，不要求本 provider 先发布 npm。在线目录仍选择 beta.5；beta.6
+发布与目录采用仍未完成。发布版 Hub 的安装已通过，但其 Client 的已安装状态仍不能
+识别 release URL，因此市场升级、卸载交互尚未闭环。
 公开分发、市场目录采用，以及浏览器挂载后的 Start/Pause 仍各自需要发布证据。L1 observer 仍只消费 `session/created`、
 `session/event`、`session/disposed`；兼容性修复不关闭另行预算的 C0/C1 或开销验收。
 
