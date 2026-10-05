@@ -186,3 +186,28 @@ def test_execution_exclusion_owner_unavailable_does_not_write(execution_exclusio
                       claimed_by="agent-a", excluded_agents=["agent-b"])
     assert state.read_bytes() == before
     assert cli("list")[1]["todo_count"] == 0
+
+
+@pytest.mark.parametrize("role, task_class, flags, field", [
+    ("agent", "advancement_task", ("--global-gate",), "global_gate"),
+    ("agent", "advancement_task", ("--blocks-agent", "agent-b"), "blocks_agent"),
+    ("user", "user_action", ("--claimed-by", "agent-a"), "claimed_by"),
+    ("user", "user_action", ("--task-repository", "git:github.com/example/project"), "task_repository"),
+    ("user", "user_action", ("--task-domain", "scope-test"), "task_domain"),
+    ("user", "user_action", ("--capability-binding-ref", "binding-a"), "capability_binding_ref"),
+    ("agent", "advancement_task", ("--status", "done"), "todo add cannot create completed work"),
+])
+def test_create_role_restrictions_refuse_before_source_write(
+    execution_exclusion_goal, role, task_class, flags, field,
+):
+    _, state, cli = execution_exclusion_goal
+    before = state.read_bytes()
+    scope = ("--bound-agent", "agent-a") if role == "user" else ()
+    code, rejected = cli("add", "--role", role, "--task-class", task_class,
+                         "--text", "Review the current change", *scope, *flags)
+    assert code != 0, rejected
+    assert field in rejected["error"], rejected
+    assert state.read_bytes() == before
+    code, listed = cli("list")
+    assert code == 0, listed
+    assert listed["todo_count"] == 0
