@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
+from .selected_todo_projection import selected_todo_projection
 from ..work_items.work_lane import work_lane_contract_is_receipt_bound_monitor_settled
 
 from typing import Any
@@ -129,10 +130,24 @@ def apply_settled_monitor_precedence(payload: dict[str, Any]) -> None:
     recorded_action = payload.get("agent_lane_next_action")
     clear_quota_action_projections(payload)
     payload.update(settled_replay_fields())
-    if (
-        isinstance(recorded_action, dict)
-        and recorded_action.get("selection_binding") == "heartbeat_receipt"
-        and isinstance(lane, dict)
-        and recorded_action.get("todo_id") == lane.get("selected_todo_id")
-    ):
-        payload["agent_lane_next_action"] = recorded_action
+    bound_action = next(
+        (
+            candidate
+            for candidate in (
+                recorded_action,
+                lane.get("receipt_bound_monitor_item"),
+            )
+            if isinstance(candidate, dict)
+            and candidate.get("selection_binding") == "heartbeat_receipt"
+            and candidate.get("todo_id") == lane.get("selected_todo_id")
+        ),
+        None,
+    )
+    if bound_action is not None:
+        payload["agent_lane_next_action"] = bound_action
+    selected_todo = selected_todo_projection(
+        agent_lane_next_action=bound_action,
+        work_lane_contract=lane,
+    )
+    if selected_todo is not None:
+        payload["selected_todo"] = selected_todo

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { resolve } from "node:path";
 
 import {
@@ -890,7 +891,10 @@ export const typedActionsScenario = {
       await page.getByRole("heading", { name: "Progress Projection" }).waitFor({ state: "visible" });
       await page.locator(".personal-task-card").getByText("Current Todo", {exact: true}).waitFor();
       const unclaimedCard = page.locator(".personal-task-card", {hasText: "Current Todo"});
-      await unclaimedCard.getByText("未分配", {exact: true}).waitFor();
+      // The owner is visible text alongside status badges, not necessarily
+      // a separate element. Check the displayed fact without requiring a span.
+      assert.match(await unclaimedCard.locator(":scope > button small").innerText(), /未分配/,
+        "An unclaimed task must remain unassigned on its card");
       await unclaimedCard.getByText("Current Todo", {exact: true}).click();
       const unclaimedOwner = page.getByRole("dialog", {name: "Todo 详情"}).locator("dl > div", {has: page.getByText("Owner", {exact: true})});
       await unclaimedOwner.getByText("未分配", {exact: true}).waitFor();

@@ -99,6 +99,24 @@ are not rewritten. The v5 migration is an explicit semantic review signal and
 has **no additional size allowance**; overflow still requires the existing budget
 analysis. Default full quota output and settlement rules are unchanged.
 
+The shared CLI plan also explains delivery classification before writeback.
+Validated evidence that excludes a route and informs the next decision can be
+`outcome_progress` even when the attempted candidate does not improve the target
+metric. A failed attempt, an unchanged metric, or a new Todo alone does not prove
+progress. Record the validated evidence and its consequence. `outcome_gap` is the
+existing blocked-settlement path: it requires `--progress-result-class blocked`,
+blocker/evidence IDs, and the existing continuation checks. These authoring hints
+neither judge evidence nor relax validation, completion, lease, or spend rules;
+an invalid `outcome_gap` plus `advanced` still fails before writeback. The same
+plan reaches full CLI output and the opt-in envelope. This changes agent-facing
+guidance in both views. Full, compact, brief and thin heartbeat prompts scope
+no-refresh/spend closeout to exact monitor settlement; auxiliary polling leaves
+the original work settlement due. Admitted work follows its settlement plan;
+an unchanged artifact alone does not imply no progress. The shared heartbeat
+renderer supplies this wording, while the TypeScript settlement owner retains
+classification semantics. This adds no capability, automatic classification, or
+frontend/Lark operation. Model error-rate reduction remains unqualified.
+
 中文：短包现在完整保留已有结算计划及执行命令，签名 v5 覆盖结算身份、步骤顺序、
 条件和宿主边界；没有计划的输入不会凭空获得结算权限。旧签名保留，默认完整输出
 不变，大小预算不放宽。此修复是短上下文实验的前置条件，尚不证明模型收益。

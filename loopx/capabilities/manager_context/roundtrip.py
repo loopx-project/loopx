@@ -12,7 +12,7 @@ from contextlib import ExitStack
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
-from . import _root, _read, _write, _hash, authority
+from . import _root, _read, _write, _hash, authority, target_authority
 from .tracking import _entry, _now
 from ...file_lock import (
     LockAcquisitionPolicy,
@@ -380,7 +380,7 @@ def _exact_return_scope(registry, reply):
     return collaboration_goal_scope(
         registry,
         goal_id=reply["goal_id"],
-        agents=(),
+        agents=(reply["agent_id"],),
         caller_goal_ref=reply["goal_ref"],
     )
 
@@ -418,8 +418,13 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             or not turn
         ):
             raise ValueError("original_conversation_unavailable")
-        grant = authority(root, registry, session, turn)
         target = {key: row[key] for key in ("goal_id", "agent_id")}
+        grant = target_authority(
+            root,
+            session=session,
+            turn=turn,
+            target=target,
+        )
         if (
             target not in grant["targets"]
             or grant.get("source_id") != row["source_id"]

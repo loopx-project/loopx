@@ -88,7 +88,7 @@ def main() -> None:
         )
         if planned.get("available") is not True:
             fail(f"a stored credential must make the managed host launchable: {planned}")
-        if planned.get("execution_profile") != "deepseek-v4-flash@high":
+        if planned.get("execution_profile") != "deepseek-flash@high":
             fail(f"the planned profile must be projected: {planned}")
 
         channel = manager_channel_binding(

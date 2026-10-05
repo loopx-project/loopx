@@ -1729,8 +1729,8 @@ def test_run_once_recoverable_failed_turn_rejects_session_identity_drift(
         "session_binding_resolver": lambda _turn_envelope: {
             "schema_version": "loopx_turn_session_binding_v0",
             "goal_id": "fixture-goal",
-            "agent_id": "codex-fixture",
-            "todo_id": "todo_from_another_turn",
+            "agent_id": "codex-from-another-agent",
+            "todo_id": "todo_fixture0001",
         },
         "project": tmp_path,
         "runtime_root": tmp_path / "runtime",

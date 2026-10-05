@@ -28,7 +28,10 @@ MANAGED_EXECUTION_PROFILE_SCHEMA_VERSION = "managed_execution_profile_v0"
 # decision recorded once; the environment can override a field, but nothing is
 # discovered and no credential participates in the choice.
 MANAGED_PROVIDER_DEFAULT = "deepseek-official"
-MANAGED_MODEL_DEFAULT = "deepseek-v4-flash"
+# The canonical id of DeepSeek-V4.1-Flash. The retired ``deepseek-v4-flash``
+# spelling is still accepted by the vendor endpoint and remains available as an
+# explicit override, but no shipped surface may name a retired id by default.
+MANAGED_MODEL_DEFAULT = "deepseek-flash"
 MANAGED_REASONING_EFFORT_DEFAULT = "high"
 
 PROVIDER_ENV_VAR = "LOOPX_TURN_PROVIDER"

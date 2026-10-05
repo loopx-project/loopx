@@ -9,6 +9,7 @@ import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository} from "./task_lease_repository.ts";
 
 export interface LeaseWorkspace extends JsonObject {
@@ -84,10 +85,11 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   const remote = await git("remote", "get-url", "origin");
   const scp = /^[^@/:]+@([^/:]+):(.+)$/u.exec(remote);
   const url = scp ? new URL(`ssh://${scp[1]}/${scp[2]}`) : new URL(remote);
-  if (!["ssh:", "https:", "http:"].includes(url.protocol) || !url.hostname || url.search || url.hash) {
+  if (!["git:", "ssh:", "https:", "http:"].includes(url.protocol) || !url.hostname || url.search || url.hash) {
     throw new EffectRuntimeRequestError("worktree origin must identify a Git repository");
   }
-  const repository = leaseWriteRepository(`git:${url.host.toLowerCase()}/${url.pathname.replace(/^\/+|\/+$/gu, "").replace(/\.git$/u, "")}`)!;
+  // Validate the transport above, but share the Todo's raw-remote identity codec.
+  const repository = leaseWriteRepository(normalizeTodoRepository(remote))!;
   // Private local paths are not persisted. Filesystem inode identity collapses
   // symlink/case aliases; a recreated directory gets a new identity.
   const key = async (p: string) => {const s = await stat(p); return digest(`${s.dev}:${s.ino}`);};
