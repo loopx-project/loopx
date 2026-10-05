@@ -62,9 +62,15 @@ owner submitting a directory entry.
   **Status: dated, author-reported development-workflow use**. This does not
   establish a LoopX dependency in the travel application's runtime, independently
   reproduce the scheduler, or prove product acceptance. Checked October 5, 2026.
-- **mimofan** (XiaomingX) — organizes UI/engine repairs through LoopX Todos.
-  [PR #738](https://github.com/XiaomingX/mimofan/pull/738) explicitly names that
-  workflow and is merged. **Status: development-workflow evidence**.
+- **mimofan** (XiaomingX) — [PR #738](https://github.com/XiaomingX/mimofan/pull/738),
+  merged August 10, 2026, attributes UI/engine repairs to LoopX Todos. The changes
+  fix `/monitor` persistence, `/balance` readback and `/freeze` false success;
+  the PR's build/test results are author-reported. The checked main
+  [monitor implementation](https://github.com/XiaomingX/mimofan/blob/000c0417ee5db8ce43eeb476b22aa83fae17780b/crates/tui/src/commands/groups/core/issue_monitor.rs)
+  retains the application's own `MonitorStore` path. **Status: dated, author-reported
+  development workflow; UI fixes merged**. This does not establish a LoopX
+  dependency in mimofan's runtime; ongoing LoopX use, scheduler behavior and
+  current-version compatibility were not independently verified. Checked October 5, 2026.
 - **Meta-RLR** (hk20013106) — [PR #17](https://github.com/hk20013106/RLR/pull/17),
   merged August 13, 2026, adds the external CLI/JSON maintenance boundary;
   scientific state remains owned by `research_loop`. Closed, unmerged
@@ -343,6 +349,7 @@ accepted design documents are distinct from depending on the LoopX runtime.
   OpenBitFun proposal were reconciled on October 5. GoTry's dated workflow reports
   were separated from its open product acceptance. Meta-RLR's merged auto-wake
   successor and current source wiring were reconciled with its historical PRs.
+  mimofan's dated workflow attribution was separated from its application runtime.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.

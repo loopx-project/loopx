@@ -49,9 +49,14 @@
   [#142](https://github.com/Danceiny/gotry/issues/142) 均开放。
   **状态：有日期的作者自述开发工作流使用**；不证明旅行应用运行时依赖 LoopX、
   调度器已被独立复现或产品验收完成。核对日期：2026-10-05。
-- **mimofan**（XiaomingX）——通过 LoopX Todo 组织 UI/引擎修复。
-  [PR #738](https://github.com/XiaomingX/mimofan/pull/738) 明确提及该工作流并已合并。
-  **状态：开发工作流证据**。
+- **mimofan**（XiaomingX）——于 2026-08-10 合并的
+  [PR #738](https://github.com/XiaomingX/mimofan/pull/738) 将 UI/引擎修复归于 LoopX
+  Todo 工作流，具体修复 `/monitor` 持久化、`/balance` 读回与 `/freeze` 假成功。
+  PR 的构建和测试结果属于作者报告；核对的 main
+  [monitor 实现](https://github.com/XiaomingX/mimofan/blob/000c0417ee5db8ce43eeb476b22aa83fae17780b/crates/tui/src/commands/groups/core/issue_monitor.rs)
+  保留应用自己的 `MonitorStore` 路径。**状态：有日期的作者工作流自述，UI 修复已合并**。
+  这不构成 mimofan 运行时依赖 LoopX 的证明；持续使用、调度行为和当前版本兼容
+  未独立验证。核对日期：2026-10-05。
 - **Meta-RLR**（hk20013106）——已合并的
   [PR #17](https://github.com/hk20013106/RLR/pull/17) 于 2026-08-13 增加外部
   CLI/JSON 维护边界，科研状态仍由 `research_loop` 所有。已关闭未合并的
@@ -293,5 +298,6 @@
   LoopX Console 独立发布与历史 CLI pin、zyra 的默认分支与内嵌源码 pin，
   GoTry 有日期的工作流自述及开放产品验收，以及单独的 OpenBitFun 提案；
   对齐 Meta-RLR 已合并的自动唤醒替代方案、当前代码接线与历史 PR。
+  区分 mimofan 有日期的工作流归因与应用运行时。
   区分提案打包配置、历史工具和试点、插件注册及当前验收限制。
   未独立复现真实集成，其余条目未重新验真。
