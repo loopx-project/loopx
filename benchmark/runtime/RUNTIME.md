@@ -214,3 +214,21 @@ task output. Unit tests establish no score or model-uplift claim. Validate small
 jobs through each benchmark's native configuration before launching a study.
 
 By default, worker calls have no independent turn deadline. Harbor derives their available time from the remaining total phase budget, reserving cleanup and settlement time. An explicit `turn_timeout_sec` remains supported as an operator override.
+
+### Native SForge task entry
+
+The EdgeBench runner accepts `--task-entry seeded-todo|loopx-planned` for
+`heartbeat-resume` and `heartbeat-explore`; the default remains `seeded-todo`.
+Official, single and native-Goal profiles reject planned entry before creating
+an attempt. Select only this flag for a task-entry ablation and keep all other
+inputs fixed. Runtime/profile receipts record the selected entry.
+
+Planned entry uses the existing public planning worker inside SForge's timed,
+network-isolated execution process, so it inherits the same API-only proxy and
+counts toward the persisted phase deadline. Setup hooks do not invoke a model.
+A verified initial planning receipt is reused after an abnormal process resume;
+its task identity and Todo lineage are checked again. A failed, missing, stale
+or blocked plan cannot start execution. Reusing the receipt does not bypass the
+ordinary scheduler's quota, claim, blocker or settlement checks. Retain receipts
+and native sessions when comparing planning cost; no active attempt is changed
+by selecting this option for a new run.

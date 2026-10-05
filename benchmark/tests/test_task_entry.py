@@ -439,3 +439,51 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
             assert "task-phase-001.md" in todos[original]["text"]
 
     asyncio.run(scenario())
+
+
+def test_sforge_planning_entry_runs_inside_native_process_and_reuses_receipt(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)}
+    assert prepare_entry(env)
+    initial = list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(initial) == 1
+    assert prepare_entry(env)
+    assert list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json")) == initial
+    # Real process boundary retains the native transport environment and deadline.
+    marker = Path(env["LOOPX_PROJECT"]) / "handoff.json"
+    target = "import os,json,pathlib; pathlib.Path(%r).write_text(json.dumps({k:os.environ[k] for k in ['HTTPS_PROXY','LOOPX_PHASE_DEADLINE_EPOCH','LOOPX_TASK_STAGE']}))" % str(marker)
+    proxy = "http://api-only.invalid:9090"
+    result = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_entry",
+                             sys.executable, "-c", target], env=env | {"HTTPS_PROXY": proxy},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(marker.read_text()) == {"HTTPS_PROXY": proxy,
+        "LOOPX_PHASE_DEADLINE_EPOCH": env["LOOPX_PHASE_DEADLINE_EPOCH"],
+        "LOOPX_TASK_STAGE": "execute"}
+    saved = Path(env["LOOPX_PLANNING_RESULT"])
+    valid = json.loads(saved.read_text())
+    for mutation in ({"state_readback_verified": False}, {"todo_ids": ["missing"]},
+                     {"status": "blocked"}, {"todo_ids": valid["todo_ids"] * 2}):
+        saved.write_text(json.dumps(valid | mutation))
+        with pytest.raises(ValueError):
+            prepare_entry(env)
+    changed = valid | {"input_digest": "stale"}
+    saved.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="current task"):
+        prepare_entry(env)
+
+
+def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 150)}
+    assert not prepare_entry(env)
+    assert not Path(env["LOOPX_PLANNING_RESULT"]).exists()
+    assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
+
+
+def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    Path(planning_env["CODEX_BIN"]).write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+    with pytest.raises(RuntimeError):
+        prepare_entry(planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)})
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()

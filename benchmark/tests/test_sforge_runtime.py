@@ -286,3 +286,39 @@ def test_native_failed_run_does_not_publish_completed_result(tmp_path, status):
     _write_native_final_result(tmp_path, RunResult(), status=status, agent="codex",
                               task="case", run_id="run", model="model", effort="xhigh")
     assert not (tmp_path / "final_result.json").exists()
+
+
+@pytest.mark.parametrize("profile", ["official", "single", "native-goal"])
+def test_planned_sforge_entry_rejects_unsupported_profiles(profile, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    with pytest.raises(ValueError, match="heartbeat profile"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                     profile=profile, cwd="/task", task_entry="loopx-planned")
+
+
+@pytest.mark.parametrize("entry", ["seeded-todo", "loopx-planned"])
+def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, monkeypatch, entry):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                          profile="heartbeat-explore", cwd="/task", task_entry=entry)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.runtime.execution.task_entry == entry
+    worker.prepared = True  # Bootstrap is separately covered through real CLI fixtures.
+    first = worker.format_run_cmd("/task.md")
+    resumed = worker.format_run_cmd("/task.md", resume=True)
+    assert first == resumed
+    assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
+    assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
+    assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("exec timeout")
+    assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry

@@ -18,6 +18,7 @@ from sforge.harness.config import SForgeConfig
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
+from benchmark.runtime.codex import TASK_ENTRIES
 from benchmark.runtime.sforge import DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
@@ -78,11 +79,14 @@ def main(argv=None):
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--task-entry", choices=TASK_ENTRIES, default="seeded-todo")
     parser.add_argument("--eval-interval", type=int, default=300)
     parser.add_argument("--submission-cooldown", type=int, default=120)
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
     args = parser.parse_args(argv)
+    if args.task_entry != "seeded-todo" and not args.worker.startswith("heartbeat-"):
+        parser.error("--task-entry loopx-planned requires a heartbeat worker")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
@@ -117,7 +121,8 @@ def main(argv=None):
             "NO_PROXY": f"localhost,127.0.0.1,{urlsplit(args.judge_url).hostname}",
         }
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
-                         timeout_seconds=args.timeout, blind_prompt=blind_prompt)
+                         timeout_seconds=args.timeout, blind_prompt=blind_prompt,
+                         task_entry=args.task_entry)
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
@@ -129,6 +134,7 @@ def main(argv=None):
             raise RuntimeError(f"Missing native image: {image}")
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
+        "task_entry": args.task_entry,
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
