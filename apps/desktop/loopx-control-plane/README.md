@@ -26,8 +26,11 @@ Startup automatically uses the newest qualified local runtime it can establish.
 It compares package versions; equal versions with source revisions use ancestry
 from the fixed official GitHub repository. Installation time and lexical SHA
 order never determine freshness. If the bounded check is offline, rate limited
-or revisions diverge, an already usable runtime keeps working without a version
-selection screen or downgrade. Both local HTTP services must expose the selected
+or revisions diverge, an independently installed CLI keeps working without a
+version selection screen or downgrade. An App-owned snapshot with the same
+release base can follow the current App's bundled snapshot when ancestry is
+unknown; this is maintenance of the App's own installation, not proof that one
+source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
 If the bundle is newer, or no selected CLI qualifies, the App prepares its
@@ -45,8 +48,10 @@ preferences fall back to discovery. Runtime selection does not grant Goal,
 Todo, capability or account authority.
 
 Terminal failures stop the wait counter and expose recovery immediately.
-**Repair this version** prepares the App-owned runtime and reconnects the same
-window; separately managed or explicitly pinned CLIs remain with their owner.
+**Repair this version** prepares the App-owned runtime, saves the qualified
+promoted executable and reconnects the same window. Restart uses that completed
+promotion rather than an older cached release path; separately managed or
+explicitly pinned CLIs remain with their owner.
 **Forget runtime choice** removes the saved discovery candidate, not a current
 `LOOPX_BIN` value. Channels, rollback and copyable diagnostics remain in Recovery
 & updates and the workspace's existing update panel. Browser callers supply only

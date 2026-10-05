@@ -918,6 +918,18 @@ An attached descriptor or managed session reference cannot grant new Goal
 authority. A stale or mismatched Goal, Agent, workspace, runtime, provider, or
 trust binding fails closed.
 
+The Desktop shell's own CLI/HTTP artifact selection is separate from an Agent's
+working-session or provider binding. Startup compares qualified package versions
+and official source ancestry; a launch-time developer override remains explicit.
+A remembered App-owned release path is only a discovery cache. When same-base
+snapshots cannot be ordered, the current App may maintain its own installation
+from its bundled artifact, while retaining a provably newer runtime or an
+independently managed CLI. Repair must retain its qualified promotion before
+reconnecting, and both HTTP services must read back that selected identity.
+Qualify ordinary packaged restart and same-window recovery alongside failure
+fallbacks; installation success or a temporary override does not close this
+bootstrap acceptance, Agent execution acceptance, or signed-release readiness.
+
 ## Safety and privacy
 
 - Keep opaque session handles, credentials, environment values, process
