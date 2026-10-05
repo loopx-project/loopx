@@ -239,6 +239,47 @@ closed.
 
 ## Compatibility
 
+### Producer-declared numeric accuracy (extension 0.8.2)
+
+The Python API `assess_numeric_accuracy(value, declaration)` is an additive,
+Finance-owned interpretation of ordinary numeric `decimals`/`precision`
+attributes. It returns `finance_numeric_accuracy_assessment_v1`. Source
+adapters retain the original QName, context, unit, scale, label roles, source
+version and clocks; they pass the already decoded numeric string and only the
+accuracy attributes to this function. Raw value/attribute strings are retained.
+
+Missing declarations and `precision="0"` remain unknown. Positive precision
+infers decimals without floating-point arithmetic; zero with positive precision
+infers `INF`. Both accuracy attributes, malformed attributes and non-finite
+values fail closed. Displayed decimal places never supply missing accuracy.
+`INF` means producer-declared exactness for that lexical fact, not independently
+verified financial truth. These rules follow [XBRL 2.1 §4.6.3–6](https://www.xbrl.org/Specification/XBRL-2.1/REC-2003-12-31/XBRL-2.1-REC-2003-12-31%2Bcorrected-errata-2013-02-20.html).
+Nil and fraction facts are outside this ordinary numeric API.
+
+The assessment does not invent a rounding interval or certify an economic
+ratio, calculation-linkbase consistency, global concept aliases, first
+availability or PIT eligibility. Calculation consistency requires its own
+relationship, context/unit and coverage evidence. Source labels cannot replace
+fact contexts. `independent_truth_verified`, `arithmetic_identity_verified` and
+`trading_allowed` remain false.
+
+```python
+from loopx_finance_value_discovery import assess_numeric_accuracy
+
+assessment = assess_numeric_accuracy("14.5000", {"decimals": "INF"})
+assert assessment["state"] == "producer_declared_exact"
+assert not assessment["independent_truth_verified"]
+```
+
+This helper does not change prior evaluation/replay bytes or install another
+provider. Consumers opt in through their owning input version and must report
+missing Finance support on that path rather than silently drop the declaration.
+Existing consumers that do not call it retain their previous behavior. Rollback
+uses the original consumer/input and Finance version, without rewriting stored
+evidence. The paired source consumer and actual wheel qualification remain
+separate delivery steps; no new CLI operation, App view or Lark renderer is
+claimed by this Python prerequisite.
+
 ### Contract exit liquidity / 合约退出流动性 (extension 0.8.0)
 
 `finance_contract_liquidity_input_v0` is an additive Finance-owned contract.

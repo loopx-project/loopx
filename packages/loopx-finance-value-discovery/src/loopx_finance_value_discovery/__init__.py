@@ -35,6 +35,10 @@ from .operation_request import (
     FINANCE_TRANSACTION_APPROVAL_PACKET_SCHEMA_VERSION,
     build_finance_transaction_approval_packet,
 )
+from .numeric_accuracy import (
+    FINANCE_NUMERIC_ACCURACY_SCHEMA_VERSION,
+    assess_numeric_accuracy,
+)
 from .reducer import (
     EVIDENCE_AXES,
     FINANCE_VALUE_DISCOVERY_CARD_SCHEMA_VERSION,
@@ -65,6 +69,7 @@ __all__ = [
     "FINANCE_METRIC_PACK_EVALUATION_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_INPUT_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_REPLAY_SCHEMA_VERSION",
+    "FINANCE_NUMERIC_ACCURACY_SCHEMA_VERSION",
     "FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION",
     "FINANCE_RESEARCH_DASHBOARD_PACKET_SCHEMA_VERSION",
     "FINANCE_TRANSACTION_APPROVAL_INPUT_SCHEMA_VERSION",
@@ -79,6 +84,7 @@ __all__ = [
     "build_finance_research_dashboard_packet",
     "build_finance_transaction_approval_packet",
     "build_finance_value_discovery_packet",
+    "assess_numeric_accuracy",
     "evaluate_finance_case_gates",
     "evaluate_finance_contract_liquidity",
     "list_finance_metric_packs",
