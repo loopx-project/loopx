@@ -27,6 +27,37 @@ vision drift or missing closeout satisfy, block, or wake another role.
 `goal_frontier_projection`. It should not grow per-agent vision storage,
 budgeting, dreaming, or product-specific replan logic.
 
+## Replan ACK freshness
+
+An accepted ACK with a legal vision outcome covers gaps at or before its
+enclosing durable run's timestamp. A vision patch label cannot acknowledge a later gap. The atomic
+writeback's vision and ACK share that run timestamp, so reading the same run
+does not rearm planning. Completed-chain gaps use their canonical `completed_at`
+source instead. Missing or invalid source timestamps cannot establish coverage.
+Comparison preserves microseconds and validates calendar dates; equivalent
+timezone offsets denote the same instant, while timestamps without a timezone
+cannot establish coverage.
+Exact Goal Acceptance hold checkpoints retain their additional revision checks.
+
+This changes quota/status re-entry for later vision gaps, including lanes that
+otherwise wait on a future monitor. Replanning still requires an evidence-linked
+path or a concrete, scoped successor; it neither grants a lease nor proves Goal
+completion. If a successor makes the vision frontier runnable before refresh,
+the original Turn reconstructs the same source obligation and revalidates its
+exact canonical successor receipt. A wrong owner, deferred/closed successor or
+changed source cannot settle that Turn. Refresh/spend remain required and retain
+the original binding; the successor executes only under a later admission.
+
+Coverage-backed terminal outcomes remain legal under their existing evidence
+and lifecycle gates. A terminal frontier must still allow the original Turn's
+outstanding debit exactly once, then refuse new work. Replan settlement does not
+declare the Goal achieved, remove unfinished Todos or waive independent Goal
+Acceptance checks. Complete source evidence and explicit closure intent remain
+necessary for terminal convergence.
+
+Bootstrap heartbeat cadence supplies an initial interval. Current
+backoff may lengthen it above the configured minimum while retaining ACTIVE.
+
 ## Accepted successor recommendations
 
 After a replan records an accepted `new_runnable_successor`, fresh quota planning

@@ -6,6 +6,15 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 export type PrReviewOrder = "forward" | "reverse";
 type PrReviewOrderSource = "agent_override" | "goal_override" | "machine_default" | "capability_default";
 function fail(message: string): never {throw new EffectRuntimeRequestError(message);}
+function ownerLogins(value: unknown): string[] {
+  if (!Array.isArray(value)) return fail("owner_logins must be an array of GitHub logins");
+  return [...new Set(value.map(login => {
+    if (typeof login !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?(?:\[bot\])?$/i.test(login)) {
+      return fail("owner_logins requires GitHub logins, not URLs or organization membership");
+    }
+    return login.toLowerCase();
+  }))];
+}
 export function prReviewOrder(value: unknown): PrReviewOrder {
   if (value === "forward" || value === "reverse") return value;
   return fail("review_order must be forward or reverse");
@@ -13,9 +22,10 @@ export function prReviewOrder(value: unknown): PrReviewOrder {
 /** v0 persisted preferences remain readable; new writes use only review_order. */
 export function normalizePrReviewConfiguration(value: unknown, allowAgents: boolean): JsonObject {
   const raw = requireJsonObject(value, "PR review configuration");
-  const allowed = new Set(["wait_for_ci", "review_order", "review_priority", ...(allowAgents ? ["agent_orders"] : [])]);
+  const allowed = new Set(["wait_for_ci", "review_order", "review_priority", "owner_logins", ...(allowAgents ? ["agent_orders"] : [])]);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) fail(`unsupported pull_request_review field: ${key}`);
   const result: JsonObject = {};
+  if (Object.hasOwn(raw, "owner_logins")) result.owner_logins = ownerLogins(raw.owner_logins);
   if (Object.hasOwn(raw, "wait_for_ci")) {
     if (typeof raw.wait_for_ci !== "boolean") throw new EffectRuntimeRequestError("wait_for_ci must be a boolean", "pr_review_configuration_type");
     result.wait_for_ci = raw.wait_for_ci;
@@ -36,6 +46,14 @@ export function normalizePrReviewConfiguration(value: unknown, allowAgents: bool
 }
 
 export function prReviewConfiguration(request: JsonObject): JsonObject {
+  if (request.action === "classify_owners") {
+    const configured = ownerLogins(request.owner_logins ?? []);
+    const reviewer = request.reviewer_login;
+    if (reviewer != null && typeof reviewer !== "string") return fail("reviewer_login must be a string or null");
+    const logins = [...new Set([...(reviewer ? [reviewer.toLowerCase()] : []), ...configured])];
+    if (!Array.isArray(request.authors) || request.authors.some(author => typeof author !== "string")) return fail("authors must be an array of GitHub logins");
+    return {owner_logins: logins, owner_authored: request.authors.map(author => logins.includes((author as string).toLowerCase()))};
+  }
   if (request.action === "normalize") return normalizePrReviewConfiguration(request.configuration, request.allow_agents === true);
   if (request.action === "patch") {
     const current = request.current == null ? {} : normalizePrReviewConfiguration(request.current, true);
@@ -67,6 +85,11 @@ export function prReviewConfiguration(request: JsonObject): JsonObject {
   // patch must not freeze or change the live machine direction/CI policy.
   const globalOverride = goal !== null && (Object.hasOwn(goal, "wait_for_ci") || Object.hasOwn(goal, "review_order"));
   const config = globalOverride ? {...defaults, ...goal} : {...machine, ...(goal ?? {})};
+  // Owner identity is independent of legacy complete direction/CI overrides.
+  // An omitted owner list continues to inherit the live machine list.
+  if (Object.hasOwn(goal ?? {}, "owner_logins") || Object.hasOwn(machine, "owner_logins")) {
+    config.owner_logins = goal?.owner_logins ?? machine.owner_logins;
+  }
   const orders = requireJsonObject(config.agent_orders ?? {}, "agent_orders");
   if (!Array.isArray(request.registered_agents) || request.registered_agents.some(id => typeof id !== "string")) return fail("complete registered_agents required");
   const registered = new Set(request.registered_agents as string[]);

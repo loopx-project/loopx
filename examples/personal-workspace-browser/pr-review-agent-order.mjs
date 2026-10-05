@@ -18,7 +18,7 @@ r=pathlib.Path(sys.argv[1]); runtime=r/'runtime'; registry=r/'.loopx/registry.js
 registry.parent.mkdir()
 registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'product-release','repo':str(r),'coordination':{'registered_agents':['a','b','code','docs','recovery','research','delivery','constructor']},'control_plane':{'pull_request_review':{'schema_version':'pull_request_review_goal_configuration_v0','agent_orders':{'a':'forward'}}}}]}))
 p=runtime/'machine/configuration.json';p.parent.mkdir(parents=True)
-p.write_text(json.dumps({'schema_version':'loopx_machine_configuration_v0','namespaces':{'pull_request_review':{'schema_version':'pull_request_review_machine_defaults_v0','wait_for_ci':False,'review_order':'forward'}}}))
+p.write_text(json.dumps({'schema_version':'loopx_machine_configuration_v0','namespaces':{'pull_request_review':{'schema_version':'pull_request_review_machine_defaults_v0','wait_for_ci':False,'review_order':'forward','owner_logins':['machine-owner']}}}))
 s=ChatHTTPServer(('127.0.0.1',0),ChatRequestHandler);s.registry_path=registry;s.runtime_root=runtime;s.runtime_root_override=str(runtime);s.verbose=False
 print(json.dumps({'port':s.server_address[1]}),flush=True);s.serve_forever()
 `;
@@ -56,6 +56,9 @@ export const prReviewAgentOrderScenario = {
       await page.getByRole("combobox", {name: "目标 Goal", exact: true}).selectOption("product-release");
       await page.getByRole("navigation", {name: "Goal 能力目录"}).getByRole("button", {name: /Pull-request Review/}).click();
       const detail = page.locator(".personal-capability-detail");
+      await page.waitForFunction(id => document.getElementById(id)?.value === "machine-owner",
+        await detail.getByLabel(/额外所有者账号/).getAttribute("id"));
+      assert.equal(await detail.getByLabel(/额外所有者账号/).inputValue(), "machine-owner");
       for (const agent of ["a", "b", "code", "docs", "recovery", "research", "delivery", "constructor"]) {
         try { await detail.getByLabel(agent, {exact: true}).waitFor({timeout: 5000}); }
         catch (error) { throw new Error(`${error.message}; detail=${await detail.innerText()}; errors=${context.errors.join(" | ")}`); }
@@ -76,9 +79,11 @@ export const prReviewAgentOrderScenario = {
       const readback = async () => JSON.parse(await readFile(join(root, ".loopx/registry.json"), "utf8")).goals[0].control_plane.pull_request_review;
       assert.deepEqual((await readback()).agent_orders, {a: "forward", b: "reverse", constructor: "reverse"});
       assert.equal(Object.hasOwn(await readback(), "wait_for_ci"), false, "Agent save must retain live machine CI inheritance");
+      assert.equal(Object.hasOwn(await readback(), "owner_logins"), false, "Agent save must retain live machine owner inheritance");
       await detail.evaluate(element => {element.scrollTop = 0;});
       await page.screenshot({path: resolve(outputDir, "pr-review-agent-directions.png"), animations: "disabled"});
       await detail.getByLabel("b", {exact: true}).selectOption("inherit");
+      await detail.getByLabel(/额外所有者账号/).fill("maintainer\nautomation-account");
       for (const agent of ["constructor"]) await detail.getByLabel(agent, {exact: true}).selectOption("inherit");
       await detail.getByRole("button", {name: "预览变更", exact: true}).click();
       await detail.getByText("锁定 revision 的变更预览", {exact: true}).waitFor();
@@ -89,6 +94,10 @@ export const prReviewAgentOrderScenario = {
       await (await inheritedReadback).finished();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.deepEqual((await readback()).agent_orders, {a: "forward"});
+      assert.deepEqual((await readback()).owner_logins, ["maintainer", "automation-account"]);
+      assert.equal(await detail.getByLabel(/额外所有者账号/).inputValue(), "maintainer\nautomation-account");
+      await detail.evaluate(element => {element.scrollTop = 0;});
+      await page.screenshot({path: resolve(outputDir, "pr-review-owner-accounts.png"), animations: "disabled"});
       // An invalid Agent is a native preview error, recoverable in the same form.
       await detail.getByRole("button", {name: "编辑 JSON", exact: true}).click();
       const json = page.locator("#goal-configuration-json");
@@ -100,17 +109,35 @@ export const prReviewAgentOrderScenario = {
       assert.equal((await rejection.json()).error_code, "invalid_goal_configuration");
       await detail.getByRole("alert").waitFor();
       assert.deepEqual((await readback()).agent_orders, {a: "forward"});
-      await json.fill(JSON.stringify({review_order: "forward", wait_for_ci: false, agent_orders: {a: "forward", b: "reverse"}}));
+      await json.fill(JSON.stringify({owner_logins: ["https://github.com/owner"]}));
+      const invalidOwner = page.waitForResponse(response => response.url().endsWith("goal-configuration/preview"));
+      await detail.getByRole("button", {name: "预览变更", exact: true}).click();
+      assert.equal((await invalidOwner).status(), 400);
+      assert.deepEqual((await readback()).owner_logins, ["maintainer", "automation-account"]);
+      await json.fill(JSON.stringify({owner_logins: [], agent_orders: {a: "forward", b: "reverse"}}));
       await detail.getByRole("button", {name: "返回表单", exact: true}).click();
       await detail.getByRole("button", {name: "预览变更", exact: true}).click();
       await detail.getByText("锁定 revision 的变更预览", {exact: true}).waitFor();
+      const cleared = page.waitForResponse(response => response.url().endsWith("goal-configuration/apply"));
+      const clearedReadback = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/goal-configuration" && response.request().method() === "GET");
+      await detail.getByRole("button", {name: "应用此预览", exact: true}).click();
+      assert.equal((await cleared).status(), 200);
+      await (await clearedReadback).finished();
+      assert.deepEqual((await readback()).owner_logins, []);
       await page.setViewportSize({width: 390, height: 844});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       assert.deepEqual(context.errors.filter(error => error !== "Failed to load resource: the server responded with a status of 400 (Bad Request)"), []);
-      assert.ok(context.errors.length <= 1, "Only the explicitly asserted invalid-Agent response may log an HTTP error");
-      return {coverageEntries: context.coverageEntries, note: "Packaged Goal editor: eight Agents including an object-property name, real revisioned writer/readback, peer-preserving inherit, unknown-Agent error/recovery and narrow viewport; no live external calls."};
+      assert.ok(context.errors.length <= 2, "Only explicitly asserted invalid-Agent and invalid-owner responses may log HTTP errors");
+      return {coverageEntries: context.coverageEntries, note: "Packaged Goal editor: eight Agents, inherited owners, two-account save/readback, invalid-owner error and clear recovery through the real revisioned writer, peer-preserving inherit and narrow viewport; no live external calls."};
+    } catch (error) {
+      if (context) {
+        await context.page.screenshot({path: resolve(outputDir, "pr-review-owner-failure.png"), animations: "disabled"});
+        throw new Error(`${error.message}; detail=${await context.page.locator(".personal-capability-detail").innerText()}; errors=${context.errors.join(" | ")}`);
+      }
+      throw error;
     } finally {
       clearTimeout(timer); lines.close();
+      await context?.page.unrouteAll({behavior: "wait"});
       await context?.close();
       server.kill("SIGTERM");
       const kill = setTimeout(() => server.kill("SIGKILL"), 5000);

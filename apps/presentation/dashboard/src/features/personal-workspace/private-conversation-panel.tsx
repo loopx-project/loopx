@@ -17,6 +17,7 @@ export function PrivateConversationPanel() {
   const [project, setProject] = useState("");
   const [executor, setExecutor] = useState("");
   const [role, setRole] = useState<"project" | "steward">("project");
+  const [projectGrant, setProjectGrant] = useState<"workspace_read" | "workspace_write">("workspace_write");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -42,6 +43,9 @@ export function PrivateConversationPanel() {
     return () => {active = false; clearInterval(timer);};
   }, []);
 
+  const effectiveProjectGrant = executor === "codex" && projects.find(item => item.project_ref === project)?.grant === "workspace_write"
+    ? projectGrant : "workspace_read";
+
   function listenerLabel(state: string) {
     const labels: Record<string, [string, string]> = {starting: ["启动中", "Starting"], listening: ["实时连接就绪", "Live connection ready"],
       standby: ["等待已有监听服务", "Waiting for the existing listener"], retrying: ["重连中", "Reconnecting"],
@@ -54,12 +58,20 @@ export function PrivateConversationPanel() {
     try {await operation(); await refresh();} catch (error) {setError(String(error));}
     finally {setBusy(false);}
   }
+  function selectApp(appRef: string) {
+    setApp(appRef);
+    const saved = rows.find(row => row.app_ref === appRef);
+    if (saved) {
+      setProject(saved.project_ref); setExecutor(saved.executor_endpoint_id); setRole(saved.context_kind);
+      setProjectGrant(saved.grant === "workspace_write" ? "workspace_write" : "workspace_read");
+    } else setProjectGrant("workspace_write");
+  }
   return <section className="personal-detail-card personal-private-conversation" aria-label={zh ? "本人飞书私聊" : "Owner private Chat"}>
     <h3>{zh ? "本人私聊 · 项目助手与管家" : "Owner private Chat · Project assistant and steward"}</h3>
-    <p>{zh ? "每个 App 单独核验本人。项目助手只读讨论工作区，不创建隐藏 Goal。管家从空 portfolio 开始，只管理在此入口明确确认的新委托。" : "Verify the owner independently for each App. Project Chat discusses the workspace without hidden Goals. A steward starts with an empty portfolio and manages only new commissions explicitly confirmed here."}</p>
+    <p>{zh ? "每个 App 单独核验本人。项目助手默认支持工作区读写，按项目规则与 skills 执行编辑；可选只读。普通聊天不创建隐藏 Goal。管家从空 portfolio 开始，只管理在此入口明确确认的新委托。" : "Verify the owner independently for each App. Project Chat defaults to workspace writes under project rules and skills; read-only remains available without hidden Goals. A steward starts with an empty portfolio and manages only new commissions explicitly confirmed here."}</p>
     {rows.map(row => <article key={row.binding_id}>
       <strong>{row.app_ref} · {row.context_available ? row.project_title : (zh ? "工作区不可用" : "Workspace unavailable")}</strong>
-      <p>{row.context_kind === "steward" ? (zh ? `LoopX 管家 · ${row.goal_count === 0 ? "暂无已授权的新委托；没有继承旧目标。" : `${row.goal_count} 个已确认的新委托`}` : `LoopX steward · ${row.goal_count} new confirmed commissions; no inherited Goals.`) : (zh ? "普通项目助手 · 只读对话" : "Project assistant · Read-only Chat")}</p>
+      <p>{row.context_kind === "steward" ? (zh ? `LoopX 管家 · ${row.goal_count === 0 ? "暂无已授权的新委托；没有继承旧目标。" : `${row.goal_count} 个已确认的新委托`}` : `LoopX steward · ${row.goal_count} new confirmed commissions; no inherited Goals.`) : (row.grant === "workspace_write" ? (zh ? "普通项目助手 · 已授权工作区读写" : "Project assistant · Workspace writes authorized") : (zh ? "普通项目助手 · 只读对话" : "Project assistant · Read-only Chat"))}</p>
       <p>{row.executor_endpoint_id} · {zh ? "监听状态" : "Listener"}: {listenerLabel(row.listener_status)}</p>
       <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p>
       {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
@@ -68,7 +80,7 @@ export function PrivateConversationPanel() {
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "解绑" : "Disconnect"}</button>
     </article>)}
     {rows.length === 0 ? <p>{zh ? "尚未连接本人私聊。" : "No owner private Chat connected."}</p> : null}
-    <label>App<select aria-label={zh ? "私聊 App" : "Private Chat App"} value={app} disabled={busy} onChange={event => setApp(event.target.value)}>
+    <label>App<select aria-label={zh ? "私聊 App" : "Private Chat App"} value={app} disabled={busy} onChange={event => selectApp(event.target.value)}>
       <option value="">{zh ? "选择已验证 App" : "Select a verified App"}</option>
       {apps.map(app => <option key={app.app_ref} value={app.app_ref}>{app.label} · {app.app_ref}</option>)}
     </select></label>
@@ -82,7 +94,12 @@ export function PrivateConversationPanel() {
     <label>{zh ? "执行器" : "Executor"}<select aria-label={zh ? "私聊执行器" : "Private Chat executor"} value={executor} disabled={busy} onChange={event => setExecutor(event.target.value)}>
       {executors.map(executor => <option key={executor} value={executor}>{executor}</option>)}
     </select></label>
-    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role))} type="button">
+    {role === "project" ? <label>{zh ? "工作区权限" : "Workspace access"}<select aria-label={zh ? "私聊工作区权限" : "Private Chat workspace access"} value={effectiveProjectGrant} disabled={busy || executor !== "codex"} onChange={event => setProjectGrant(event.target.value as "workspace_read" | "workspace_write")}>
+      <option value="workspace_read">{zh ? "只读" : "Read-only"}</option>
+      <option value="workspace_write" disabled={projects.find(item => item.project_ref === project)?.grant === "workspace_read"}>{zh ? "工作区读写（默认）" : "Workspace writes (default)"}</option>
+    </select></label> : null}
+    {role === "project" && effectiveProjectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
+    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read"))} type="button">
       {busy ? (zh ? "正在核验" : "Verifying") : (zh ? "连接本人私聊" : "Connect owner private Chat")}</button>
       <button disabled={busy} onClick={() => void act(refresh)} type="button">{zh ? "刷新状态" : "Refresh status"}</button></div>
     <p>{zh ? "从手机发送文字开始；后续消息进入原会话队列。/status 查看工作区、角色与持久排队状态，/help 查看用法与解绑入口，/stop 停止当前聊天执行，/new 开启新会话。图片、文件会明确提示暂不支持。" : "Send text from your phone to begin; follow-ups queue in the same Session. /status shows the workspace, role and durable queue, /help explains commands and where to unbind, /stop stops the current Chat Turn, /new starts a new conversation. Images and files receive an explicit unsupported response."}</p>

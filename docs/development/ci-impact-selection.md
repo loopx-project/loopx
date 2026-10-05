@@ -8,7 +8,7 @@ author description cannot claim that runtime changes are “just UI”.
 
 | Whole PR | Common TS/lint/contracts | Full Python / Windows | Stage2c | Packaged Dashboard |
 | --- | --- | --- | --- | --- |
-| Existing Markdown-only documentation exemption | Skip | Skip | Skip | Existing Frontstage workflow |
+| Existing Markdown-only documentation exemption | Skip | Skip | Skip | Not published by Frontstage Pages |
 | Client Dashboard source/assets only, optionally with docs | Run | Skip | Skip | Required build, freshness and browser smoke |
 | Backend, prompt, tests, dependency, build, CI policy, mixed or unknown | Run | Run | Run | Also run for CI-policy rehearsal or forced-full UI |
 | main push / manual run | Run | Run | Run | Existing surface workflows; CI-policy rehearsal when applicable |
@@ -23,6 +23,29 @@ The new exemption is available only when the selector, gate and workflow blobs
 match the already-reviewed target branch. Changing CI policy cannot exempt its
 own PR. Missing policy or uncertain ownership runs full; missing Git revisions
 fail classification. The pre-existing documentation exemption remains supported.
+
+Frontstage Pages qualifies its own public artifact: homepage and projection-demo
+builds, bilingual Blog catalog, public-safe bundle, docs, analytics, search and
+browser checks. It does not build or upload the private `/chat/` workspace.
+Python Tests retains the source-verified packaged workspace and browser checks;
+their failures remain product qualification failures, rather than blocking an
+unrelated Blog publication. An active production publication completes while
+new pushes replace its pending successor; superseded validation for the same PR
+still cancels. No runtime capability or permission default changes.
+
+The exporter retains its conservative organization-name probe, with an exact
+allowlist for verified public source `href` citations. The exception applies
+only to that probe: adjacent prose, unlisted repositories, URL suffixes and
+queries still fail, and path, internal-host and credential checks always inspect
+the original content. This local publisher policy is not a general classification
+of whether an organization or arbitrary GitHub repository is public. The bundle
+smoke exercises the exporter guard directly instead of maintaining a second
+copy of its policy.
+
+Frontstage Pages 只验收并发布公共网站和 projection demo，保留构建、双语博客、
+文档、公开安全边界、分析、搜索及浏览器检查。私有 `/chat/` 的打包与浏览器验收
+仍由 Python Tests 承担。新合并不会中断正在运行的正式发布，只替换等待中的下一次
+发布；同一 PR 的旧验证仍会取消。
 
 本方案不是为每类 PR 维护一套测试清单，而是明确重型 job 的职责。纯前端变化不需要
 重跑后端持久化与崩溃恢复矩阵，但前端自己的实际构建与浏览器验收成为必需项。

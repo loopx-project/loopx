@@ -832,6 +832,7 @@ def _prepare_quota_should_run_item(
         registered_agent_ids=registered_agent_ids,
         goal_status=str(registry_goal.get("status") or ""),
         agent_profile=_quota_agent_profile(agent_identity),
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
     )
     replan_obligation = (
         None

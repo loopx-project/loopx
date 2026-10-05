@@ -109,6 +109,9 @@ const idleMs = parseIdleMs(process.env.LOOPX_EFFECT_RUNTIME_IDLE_MS);
 let idleTimer: NodeJS.Timeout;
 let pendingRequests = 0;
 let resolveDrain: (() => void) | undefined;
+let publicationComplete = false;
+let resolvePublication: () => void;
+const publicationReady = new Promise<void>((resolve) => { resolvePublication = resolve; });
 const handlers = createEffectRuntimeHandlers({
   fingerprint,
   requestShutdown: () => {
@@ -119,7 +122,7 @@ const handlers = createEffectRuntimeHandlers({
 function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   clearTimeout(idleTimer);
   // Idleness starts after effects finish, not when their sockets connect.
-  if (pendingRequests > 0 || shutdownRequested || !server.listening) return;
+  if (!publicationComplete || pendingRequests > 0 || shutdownRequested || !server.listening) return;
   idleTimer = setTimeout(() => server.close(), idleMs);
   idleTimer.unref();
 }
@@ -178,6 +181,10 @@ const server = createServer((socket) => {
       let sink: FileHandle | null = null;
       let dispatched = false;
       try {
+        // The locator becomes visible inside the publication lock. A first
+        // response must wait for its release: otherwise an immediate process
+        // death can strand an incomplete cleanup claim before the next write.
+        await publicationReady;
         let parsed: unknown;
         try {
           parsed = JSON.parse(
@@ -300,6 +307,8 @@ server.listen(0, "127.0.0.1", async () => {
       });
       await chmod(infoPath, 0o600);
     });
+    publicationComplete = true;
+    resolvePublication();
     resetIdleTimer(server);
   } catch (error) {
     // Reuse the shared error owner's safe codes, never the raw Node error,

@@ -197,3 +197,101 @@ def test_retiring_registered_agent_removes_only_its_direction(tmp_path):
     after = json.loads(registry.read_text())["goals"][0]
     assert after["control_plane"]["pull_request_review"]["agent_orders"] == {"a": "forward"}
     assert resolve_configuration(after, agent_id="a")["review_order"] == "forward"
+
+
+def test_two_owner_accounts_change_queue_membership_not_self_review(monkeypatch):
+    monkeypatch.setattr("loopx.pr_review._now_iso", lambda: "2026-10-05T05:40:00Z")
+    rows = _queue()
+    rows[2]["author"] = {"login": "Maintainer"}
+    def packet(order, owners=()):
+        return build_pr_review_packet(pull_requests=rows, repository="owner/repo",
+            reviewer_login="reviewer", source="fixture", review_order=order,
+            owner_logins=owners, limit=100)
+    baseline = packet("forward")
+    assert _sequence(baseline) == [1, 2, 3, 4, 5]
+    forward = packet("forward", ["MAINTAINER", "maintainer", "reviewer"])
+    reverse = packet("reverse", ["maintainer"])
+    assert _sequence(forward) == [1, 2, 4, 3, 5]
+    assert _sequence(reverse) == [5, 3, 4, 2, 1]
+    assert forward["scheduling_policy"]["owner_logins"] == ["reviewer", "maintainer"]
+    for number in range(1, 7):
+        old = next(p for p in baseline["pull_requests"] if p["number"] == number)
+        current = next(p for p in forward["pull_requests"] if p["number"] == number)
+        assert current["owner_authored"] is (number in {3, 4, 5})
+        assert current["author_owned"] == old["author_owned"] == (number in {4, 5})
+        assert current["review_conclusion"] == old["review_conclusion"]
+        assert current["review_plan"] == old["review_plan"]
+    assert packet("forward", []) == baseline  # opt-out parity, including emitted fields
+    previous = build_pull_request_review_queue_observation(repository="owner/repo",
+        pull_requests=baseline["pull_requests"], result_completeness={"complete": True}, review_order="reverse")
+    observation = build_pull_request_review_queue_observation(repository="owner/repo",
+        pull_requests=reverse["pull_requests"], result_completeness={"complete": True}, review_order="reverse",
+        previous_observation=previous, handled_exact_heads=[f"5@{5:040x}"])
+    assert observation["observation_state"] == "material_transition"
+    assert observation["candidate"]["number"] == 3
+
+
+def test_owner_list_scoped_inheritance_validation_and_clear():
+    goal = {"coordination": {"registered_agents": ["a"]}}
+    machine = {"namespaces": {"pull_request_review": {
+        "schema_version": "pull_request_review_machine_defaults_v0", "review_order": "reverse",
+        "wait_for_ci": False, "owner_logins": ["machine-owner"]}}}
+    apply_change(goal, {"owner_logins": ["MAINTAINER", "maintainer"]}, clear=False)
+    assert resolve_configuration(goal, machine, "a")["owner_logins"] == ["maintainer"]
+    assert resolve_configuration(goal, machine, "a")["review_order"] == "reverse"
+    assert resolve_configuration(goal, machine, "a")["wait_for_ci"] is False
+    before = deepcopy(goal)
+    for invalid in ["maintainer", None, [""], ["https://github.com/owner"], [0], ["owner name"]]:
+        with pytest.raises(ValueError, match="owner_logins"):
+            apply_change(goal, {"owner_logins": invalid}, clear=False)
+        assert goal == before
+    apply_change(goal, {"owner_logins": []}, clear=False)
+    assert resolve_configuration(goal, machine, "a")["owner_logins"] == []
+    apply_change(goal, None, clear=True)
+    apply_change(goal, {"wait_for_ci": True}, clear=False)
+    assert resolve_configuration(goal, machine, "a")["owner_logins"] == ["machine-owner"]
+    machine["namespaces"]["pull_request_review"]["owner_logins"] = ["next-owner"]
+    assert resolve_configuration(goal, machine, "a")["owner_logins"] == ["next-owner"]
+
+
+def test_public_cli_owner_save_restart_cross_goal_and_clear(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(tmp_path / "runtime"), "goals": [
+        {"id": id, "repo": str(tmp_path), "coordination": {"registered_agents": ["a", "b"]}}
+        for id in ["first", "second"]]}))
+    common = ["--registry", str(registry), "--format", "json"]
+    assert main([*common, "configure-goal", "--goal-id", "first", "--pr-review-owner-login", "other",
+        "--pr-review-agent-order", "a=forward", "--pr-review-agent-order", "b=reverse", "--execute"]) == 0
+    capsys.readouterr()
+    # Re-read from the durable writer rather than reuse an in-memory configuration.
+    assert json.loads(registry.read_text())["goals"][0]["control_plane"]["pull_request_review"]["owner_logins"] == ["other"]
+    fixture = tmp_path / "prs.json"
+    fixture.write_text(json.dumps({"repository": "owner/repo", "reviewer_login": "reviewer", "pull_requests": _queue()}))
+    for goal, agent, expected in [("first", "a", 1), ("first", "b", 5), ("second", "a", 1)]:
+        assert main([*common, "pr-review", "--fixture", str(fixture), "--goal-id", goal, "--agent-id", agent,
+                     "--autonomous-observation"]) == 0
+        packet = json.loads(capsys.readouterr().out)
+        assert packet["autonomous_review"]["candidate"]["number"] == expected
+        if goal == "first":
+            assert packet["autonomous_review"]["scheduling_policy"]["owner_logins"] == ["reviewer", "other"]
+            assert all(row["owner_authored"] for row in packet["pull_requests"])
+        else:
+            assert "owner_logins" not in packet["scheduling_policy"]
+    # New PRs after activation use the same scoped account rule; title text
+    # cannot move an unrelated author into the owner group.
+    future = [deepcopy(_queue()[2]) for _ in range(2)]
+    for number, author, pr in [(7, "new-community", future[0]), (8, "other", future[1])]:
+        pr.update(number=number, author={"login": author}, headRefOid=f"{number:040x}",
+                  createdAt="2026-09-04T00:00:00Z", updatedAt="2026-09-04T00:00:00Z", title="other reviewer")
+    fixture.write_text(json.dumps({"repository": "owner/repo", "reviewer_login": "reviewer", "pull_requests": [*_queue(), *future]}))
+    for agent, expected in [("a", 7), ("b", 8)]:
+        assert main([*common, "pr-review", "--fixture", str(fixture), "--goal-id", "first", "--agent-id", agent]) == 0
+        packet = json.loads(capsys.readouterr().out)
+        assert _sequence(packet)[0] == expected
+        assert next(row for row in packet["pull_requests"] if row["number"] == 7)["owner_authored"] is False
+    assert main([*common, "configure-goal", "--goal-id", "first", "--clear-pr-review-owner-logins", "--execute"]) == 0
+    capsys.readouterr()
+    saved = json.loads(registry.read_text())["goals"][0]["control_plane"]["pull_request_review"]
+    assert saved["owner_logins"] == []
+    assert saved["agent_orders"] == {"a": "forward", "b": "reverse"}

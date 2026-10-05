@@ -1389,6 +1389,15 @@ If an authority daemon owns a registry/workspace, a CLI process must connect
 to it instead of opening a second direct writer. Runtime discovery and startup
 are automatic; users do not configure ports or supervise processes.
 
+For the managed loopback runtime, a visible locator is discovery evidence;
+request dispatch and successful replies wait until locator publication and its
+awaited lock cleanup finish. Otherwise an immediate exit after the first reply
+can leave an incomplete cleanup claim and prevent the next retry-safe write
+from restarting within the existing lock budget. The real-Node publication
+regression covers first ping and typed write, then abrupt exit and receipt
+replay. This repair preserves lock reclaim ages, startup deadlines and retry
+classification; broader process/storage recovery remains separately qualified.
+
 ### 2.3 TypeScript owns migrated effects
 
 The target is not “TypeScript decides, Python always executes”. TypeScript may

@@ -52,6 +52,39 @@ These settings change scheduling only. They grant no GitHub review/comment,
 Todo, push, merge, cross-Agent write or scheduler authority, and do not alter
 review depth or the configured CI policy.
 
+### Queue owner accounts / 队列所有者账号
+
+By default, only the authenticated `request.reviewer_login` is an owner. Configure
+additional explicit GitHub logins in the same Capability Center (device defaults
+or a single Goal), under **Additional owner accounts / 额外所有者账号**:
+
+```sh
+loopx configure-goal --goal-id GOAL --pr-review-owner-login maintainer \
+  --pr-review-owner-login automation-account --execute
+loopx configure-goal --goal-id GOAL
+loopx pr-review --goal-id GOAL --agent-id reviewer-a --repo owner/repo --format json
+```
+
+`owner_logins` replaces the additional list, matches case-insensitively, and
+deduplicates account names. An omitted Goal list inherits live device defaults;
+an explicit empty list uses only the authenticated reviewer. Clear just the
+additional accounts with `--clear-pr-review-owner-logins --execute`; clear the
+complete Goal override to inherit device defaults. Remove `owner_logins` from
+Goal and device configuration before downgrading to a version without this field.
+The scheduling policy reads back the effective union. `owner_authored` is derived
+queue membership; the legacy `authenticated_developer_owned` lane id is retained.
+`author_owned` still means the author is the actual signed-in reviewer, including
+GitHub's formal self-review restriction. Neither list membership nor the repository
+namespace infers organization membership, trust, authentication or merge authority.
+Forward visits non-owners first; reverse inverts that same whole actionable queue.
+
+默认仅当前登录的审阅账号计入 owner。可在能力中心的设备默认值或单个 Goal 中填写
+额外所有者账号，也可重复使用上面的 CLI 参数；配置一次即可，无须每轮传参。
+Goal 未配置时沿用设备列表，空列表恢复仅登录账号，清除全部 Goal 配置恢复设备继承。
+账号匹配忽略大小写并去重；排序回读显示实际账号集合。owner 分组不改变 GitHub
+身份、自审限制或审阅/合并权限，也不从仓库命名空间推断成员。降级前从 Goal 与
+设备配置移除 `owner_logins`。正向先审非 owner，反向将同一完整可执行队列倒序。
+
 The capability also owns the review-depth contract. The shared
 `agent_response_contract.review_execution_contract` defines required evidence,
 completion, freshness, finding, and verdict rules. Each actionable PR carries a

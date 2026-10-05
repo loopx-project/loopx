@@ -164,6 +164,15 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         poll["after"]["interaction_contract"]["cli_channel"]["spend_after_validation"]
         is True
     )
+    # Pair the shipped instructions with the real auxiliary continuation above.
+    for mode in ("full", "compact", "brief", "thin"):
+        rc, prompt = _run_cli(
+            registry_path, runtime, "heartbeat-prompt", f"--{mode}",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--codex-app",
+        )
+        assert rc == 0, prompt
+        assert "auxiliary poll: continue work" in prompt["task_body"]
+        assert "Exact monitor settlement=no refresh/spend" in prompt["task_body"]
     assert poll_replay_rc == 0, poll_replay
     assert poll_replay["replayed"] is True
     assert _classification_count(runtime, "quota_monitor_poll") == 1

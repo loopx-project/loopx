@@ -25,11 +25,11 @@ grant 授权 peer delegation。
 store，TypeScript 负责上下文身份及范围。原生 Codex 恢复保留原 upstream thread
 和工作区；HTTP/协议 fixture 验证连续性与拒绝行为，不证明真实模型采用了上下文。
 
-App grant 仅面向本机 owner 的工作区读取。App 范围入口本身不证明 Lark 私聊
-admission、安装或手机旅程已通过，也不授权修改文件；grant 撤销后历史仍可读，
+App grant 仅面向本机 owner 明确授权的工作区操作。App 范围入口本身不证明 Lark 私聊
+admission、安装或手机旅程已通过；grant 撤销后历史仍可读，
 新消息在宿主重新授权前被阻止。下方独立检查点说明 Lark 的源码实现资格。
 
-本机 owner 的只读工作区入口现已接入独立核验的 Lark App 私聊绑定。既有设置 →
+本机 owner 的工作区入口现已接入独立核验的 Lark App 私聊绑定。既有设置 →
 Lark 页面选择一个非默认 App、当前可用工作区和宿主 executor，读回监听状态、待回复
 数量及恢复缺口；重新绑定不会把旧 Session 移到其它工作区。
 
@@ -42,7 +42,7 @@ provider 读回确认回复；发生没有 receipt 的不确定写入时不盲�
 后续消息持久排队、exact stop，以及重启后原会话恢复和已确认回复不重复发送。
 这些是合成 provider/协议验收；真实原生 Codex 另行验证独立线程与上下文隔离。
 真实 Lark 收发、安装候选、手机旅程、注册 Agent 选择、媒体/增量/权限回调，以及
-更广的长期协调仍未验收。这一普通项目绑定保持只读，新增管家入口见下一检查点。
+更广的长期协调仍未验收。普通项目权限以当前 workspace grant 为准，新增管家入口保持独立授权。
 
 私聊配置复用设置 → Lark；App 范围仍是本机普通对话的唯一入口。未存储 App 身份
 的旧群聊 profile 保留原 profile-hash 监听锁键。没有私聊绑定时不增加鉴权；有绑定
@@ -52,6 +52,31 @@ extension，typed binding owner 继续保持 provider-neutral。
 ![合成私聊工作区设置](../../assets/personal-workspace/private-project-conversations.png)
 ![窄屏私聊设置](../../assets/personal-workspace/private-project-conversations-narrow.png)
 ![工作区撤权读回](../../assets/personal-workspace/private-project-workspace-revoked.png)
+
+## 普通工作区读写：默认值与撤权检查点
+
+普通项目 Chat 对宿主声明的工作区默认使用 `workspace_write`。Core context owner
+在启动和原线程恢复时导出真实 Codex `workspace-write` 沙箱；仍是普通对话，不借
+Task/Goal 模式或 manager 权限。项目 prompt 要求读取工作区 AGENTS.md 与适用 skills，
+执行明确请求所需的有界编辑；持久状态继续走既有 owner。读写 grant 本身不激活
+Material Lifecycle，也不证明项目 adapter 的 intake/ranking 已接通。
+
+`loopx chat --project-workspace-grant workspace_read` 将宿主及 Lark 项目绑定限制为
+只读。设置 → Lark 的 Codex 项目 App 默认读写，并保留只读选项；其它 executor 在
+宿主策略完成验收前保持只读。设置读回、/status 和 /help 显示实际 grant，重新选择
+已配置 App 会恢复持久配置。改变 grant 会创建新绑定及 Session，拒绝旧会话的新工作，
+直连 Agent 必须重新授权；不能偷偷提高 attached 宿主或另一 App 的权限。宿主撤权或
+降为只读后，入站受理及恢复重新核验授权。本机 Scope 只复用相同 typed 项目上下文；
+宿主授权变化时创建新会话，保留旧历史，拒绝在旧会话上执行新工作。
+
+typed Core、HTTP 与原生宿主回归覆盖默认读写、明确只读、工作区身份、App 独立授权、
+旧会话拒绝和原线程恢复。既有源码证据记录了 Codex canary 编辑并读回合成笔记、
+保留原文且不创建 Goal；这项历史宿主/文件系统证据与本次合成协议回归分开，
+不代表真实 Lark 写入、素材 intake 或发布完成。
+同 claim 已领取回执恢复与新任务准入分开：响应丢失后撤权，原宿主可读回已提交回执；
+新领取及外部结果发送仍拒绝。验证使用真实 Core HTTP、文件存储、领取 broker 与
+合成 Codex/provider；不声称本次运行真实模型编辑或手机旅程。安装与真实 Lark 旅程、
+更多 IM 交互仍未关闭。
 
 ## 本人私聊管家：明确的新委托
 

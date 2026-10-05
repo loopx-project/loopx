@@ -593,6 +593,7 @@ def handle_pr_review_command(
             target_exact_heads=target_exact_heads,
             review_priority=resolved_review_priority,
             review_order=selected_order,
+            owner_logins=review_configuration.get("owner_logins", []),
             wait_for_ci=wait_for_ci,
             readiness_observations=readiness_observations,
         )
@@ -618,6 +619,7 @@ def handle_pr_review_command(
                 authenticated_developer_login=reviewer_login,
                 review_priority=resolved_review_priority,
                 review_order=selected_order,
+                owner_logins=payload["scheduling_policy"].get("owner_logins", []),
             )
             payload["autonomous_review"] = autonomous_review
             payload["request"]["autonomous_observation"] = True

@@ -460,6 +460,8 @@ def handle_registry_admin_command(
                 pull_request_review_configuration=({
                     **({"wait_for_ci": args.pr_review_wait_for_ci} if args.pr_review_wait_for_ci is not None else {}),
                     **({"review_order": getattr(args, "pr_review_order", None)} if getattr(args, "pr_review_order", None) is not None else {}),
+                    **({"owner_logins": getattr(args, "pr_review_owner_login", None)} if getattr(args, "pr_review_owner_login", None) is not None else
+                       {"owner_logins": []} if getattr(args, "clear_pr_review_owner_logins", False) else {}),
                 } or None),
                 pull_request_review_agent_orders=(dict(_pr_review_agent_order_pair(value) for value in getattr(args, "pr_review_agent_order", [])) or None),
                 clear_pull_request_review_configuration=args.clear_pr_review_configuration,

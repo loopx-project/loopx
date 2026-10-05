@@ -47,9 +47,11 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     validation,
     {
       kind: "durable_writeback", owner: "agent",
-      precondition: inFlight || identity.binding_kind !== "todo" ? "validation succeeded"
+      precondition: (inFlight || identity.binding_kind !== "todo" ? "validation succeeded"
         : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
-          " Pass a new packet with --agent-vision-json.",
+          " Pass a new packet with --agent-vision-json.") +
+        " Route elimination needs evidence; failure alone is not progress. " +
+        "outcome_gap: blocked + blocker/evidence IDs; continuation checks.",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
     },

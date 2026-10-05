@@ -133,6 +133,12 @@ A pending outbox still blocks promotion; use the existing bounded
 `authority-shadow drain --goal-id example-goal --budget-seconds 60` operation
 and inspect its result before retrying preview.
 
+History replay retains each transaction's validated released Todo field
+manifest. An additive field in a newer release must not invalidate an older
+transaction or rewrite its receipt. Only recognized historical manifests are
+accepted; record digests, counts, unavailable fields and the remaining composed
+projection are still checked. New captures use the current field manifest.
+
 ## Product and rollout boundary
 
 This is an operator CLI administration journey. It adds no dashboard, Lark or

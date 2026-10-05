@@ -84,10 +84,12 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
 
 def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     body = normalized(task_body)
-    assert "no-change=surface_only/no spend" in body, mode
-    assert "material=outcome+vision" in body, mode
-    assert "same-turn checkpoint-context recheck" in body, mode
-    assert "add only evidenced vision; stale->reread" in body, mode
+    assert "no-change=surface_only/no spend" not in body, mode
+    assert "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work." in body, mode
+    assert "Admitted work: settlement_plan even if artifacts unchanged." in body, mode
+    assert "Writeback=outcome+vision" in body, mode
+    assert "After committed writeback: same-turn checkpoint-context" in body, mode
+    assert "add evidence; stale->reread" in body, mode
     assert "unchanged->truthful --vision-unchanged-reason" in body, mode
 
     if mode == "full":
@@ -583,9 +585,9 @@ def main() -> int:
         "Agent-facing CLI output budgets, deterministic control-plane qualification, "
         "model-behavior shadow evaluation, and release outcome baseline correctness",
         "current quota claim/lease and workspace contract plus repository rules",
-        "continue todos",
-        "no cross-agent authority",
-        "no scope in todo metadata",
+        "Within authority/budget, deliver verifiable results",
+        "Task-scoped coordination grants no authority over other agents",
+        "Keep scope in the heartbeat prompt, not todo metadata",
         "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
         "use selection_command when required",
@@ -600,7 +602,8 @@ def main() -> int:
         "Observed capabilities -> `--available-capability`; never user gates",
         "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend)",
         "else RRULE/projected-fallback_hint/ack/fail",
-        "no-change=surface_only/no spend",
+        "Exact monitor settlement=no refresh/spend",
+        "Admitted work: settlement_plan even if artifacts unchanged",
         "unchanged->truthful --vision-unchanged-reason",
         "guard; 2 stalls->replan",
         "`agent_read_required`",
@@ -702,7 +705,8 @@ def main() -> int:
         "user Todo unprojected",
         "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend)",
         "else RRULE/projected-fallback_hint/ack/fail",
-        "no-change=surface_only/no spend",
+        "Exact monitor settlement=no refresh/spend",
+        "Admitted work: settlement_plan even if artifacts unchanged",
         "unchanged->truthful --vision-unchanged-reason",
         "guard; 2 stalls->replan",
         "P0 blocked: safe P1/P2",
@@ -717,9 +721,11 @@ def main() -> int:
         ("brief", brief_task),
         ("thin", thin_task),
     ):
-        assert "no-change=surface_only/no spend" in task, label
+        assert "no-change=surface_only/no spend" not in task, label
+        assert "Exact monitor settlement=no refresh/spend" in task, label
+        assert "Admitted work: settlement_plan even if artifacts unchanged" in task, label
         assert "--vision-unchanged-reason" in task, label
-        assert "material=outcome+vision" in task, label
+        assert "Writeback=outcome+vision" in task, label
     assert "if absent say" not in thin_task, thin_task
     assert "If false/0: quiet/no-user-todo" not in thin_task, thin_task
 

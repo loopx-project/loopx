@@ -33,7 +33,7 @@ class PrivateConversationRequestMixin:
         from ...chat_lark_api import build_lark_goal_topic_runtime_snapshot
         try:
             body = self._read_json()
-            if set(body) - {"context_kind"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
+            if set(body) - {"context_kind", "project_grant"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
                 raise ValueError("select an App, authorized workspace and executor")
             profile = str(body["app_ref"])
             existing = _active_profile_configs(build_lark_goal_topic_runtime_snapshot(
@@ -51,7 +51,8 @@ class PrivateConversationRequestMixin:
                 raise ValueError("the selected executor is unavailable")
             self.server.runtime_controller.project_contexts.conversation_bindings.configure(
                 transport_ref=profile, project_ref=str(body["project_ref"]), executor_endpoint_id=endpoint,
-                context_kind=str(body.get("context_kind", "project")))
+                context_kind=str(body.get("context_kind", "project")),
+                project_grant=str(body["project_grant"]) if "project_grant" in body else None)
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)

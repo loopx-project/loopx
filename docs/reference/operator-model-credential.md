@@ -171,7 +171,7 @@ Every entry point publishes the same readback, so a reader never has to infer
 the host from the name it resolved: `/api/chat/capabilities` reports the
 steward's `executor_endpoint`, its `executor_endpoint_source`
 (`machine_configuration`, `explicit_config` or `product_default`), the
-`execution_profile` (`deepseek-v4-flash@high` on the shipped managed profile),
+`execution_profile` (`deepseek-flash@high` on the shipped managed profile),
 `available`, the selection policy and allocation reason, and the bound
 Session's `session_mode` and `session_status`. The Session persists its chosen
 endpoint, model, effort, policy, pool and source revision, so later configuration

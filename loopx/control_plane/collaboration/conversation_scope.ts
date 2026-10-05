@@ -6,12 +6,13 @@ export function normalizeProjectContext(value: unknown): Record<string, string> 
   const ref = context.project_ref, workspace = context.workspace_path;
   if (typeof ref !== "string" || !/^[a-f0-9]{24}$/.test(ref)
       || typeof workspace !== "string" || !workspace || context.kind !== "project_workspace"
-      || !["local_owner", "bound_owner"].includes(String(context.audience)) || context.grant !== "workspace_read"
+      || !["local_owner", "bound_owner"].includes(String(context.audience))
+      || !["workspace_read", "workspace_write"].includes(String(context.grant))
       || (workspace[0] !== "/" && !/^[A-Za-z]:[\\/]/.test(workspace))) {
     throw new Error("invalid project conversation context");
   }
   const normalized: Record<string, string> = {kind: "project_workspace", project_ref: ref, workspace_path: workspace,
-    audience: String(context.audience), grant: "workspace_read"};
+    audience: String(context.audience), grant: String(context.grant)};
   if (context.audience === "bound_owner") {
     for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref"]) {
       const value = context[field];
@@ -24,7 +25,8 @@ export function normalizeProjectContext(value: unknown): Record<string, string> 
 
 export function projectConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeProjectContext(input.context);
-  return {context, channel_id: context.audience === "local_owner"
+  return {context, sandbox: context.grant === "workspace_write" ? "workspace-write" : "read-only",
+    channel_id: context.audience === "local_owner"
     ? `project.${context.project_ref}` : `project.external.${context.binding_id}.${context.source_ref}`};
 }
 

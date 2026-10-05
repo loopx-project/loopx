@@ -121,6 +121,7 @@ class CodexAppServerAdapter:
         execution_mode: bool = False,
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
+        project_context: dict[str, str] | None = None,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -138,6 +139,7 @@ class CodexAppServerAdapter:
                 execution_mode=execution_mode,
                 runtime_profile=runtime_profile,
                 sandbox=sandbox,
+                project_context=project_context,
                 resume_thread_id=resume_thread_id,
                 codex_home=codex_home,
                 model=model,
@@ -410,7 +412,10 @@ class ChatRuntimeController:
         project_coordination: bool = False,
         loopx_tools: bool = False,
         executor_model: Mapping[str, str | None] | None = None,
+        project_context: dict[str, str] | None = None,
     ) -> ChatRuntimeAdapter:
+        if project_context is not None and project_context.get("grant") == "workspace_write" and agent_id != "codex":
+            raise ValueError("the selected executor cannot enforce workspace write authorization")
         if (
             manager_runtime is not None
             and manager_runtime.get("runtime_profile") == "trusted_owner"
@@ -474,6 +479,7 @@ class ChatRuntimeController:
                     if manager_profile is not None
                     else None
                 ),
+                project_context=project_context,
                 model=model_config.get("model"),
                 reasoning_effort=model_config.get("reasoning_effort"),
                 dynamic_tools=(
@@ -641,6 +647,10 @@ class ChatRuntimeController:
                     agent_id=agent_id,
                     channel_id=selected_channel,
                 )
+                # Reuse only the same typed project identity. A changed host grant
+                # starts a new Session while the old context and history remain intact.
+                if latest is not None and project_context is not None and latest.get("project_context") != project_context:
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
@@ -661,6 +671,7 @@ class ChatRuntimeController:
                 execution_mode=selected_channel.startswith("task."),
                 project_coordination=conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal",
                 manager_runtime=manager_runtime,
+                project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
             )
             persisted = self.store.create_session(
@@ -912,6 +923,7 @@ class ChatRuntimeController:
                 executor_model=(alloc.manager_executor_model(model_allocation)
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
+                project_context=session.get("project_context"),
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
