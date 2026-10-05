@@ -4454,8 +4454,9 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     assert all(not event["details"].get("settlement_effect_id") for event in events)
 
 
+@pytest.mark.parametrize("capture", [False, True])
 def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
-    tmp_path: Path,
+    tmp_path: Path, capture: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -4488,6 +4489,7 @@ def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
         *guard_args,
         "--todo-id",
         ALTERNATIVE_TODO_ID,
+        *(["--decision-output-dir", str(tmp_path / "capture")] if capture else []),
     )
 
     assert selected_rc == 0, selected
@@ -4501,6 +4503,11 @@ def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
     assert "todo_id" not in identity
     assert selected["rollout_event"]["appended"] is True
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+
+    if capture:
+        saved = json.loads((tmp_path / "capture" / "decision.json").read_text())
+        assert saved["decision"] == "autonomous_replan_required"
+        assert saved["heartbeat_receipt"] == selected["heartbeat_receipt"]
 
 
 def test_due_monitor_auxiliary_context_has_typed_selection_rejection(
