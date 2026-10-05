@@ -28,6 +28,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const calls = [];
   let nativeState = null;
+  let nativeActionSettled = Promise.resolve();
   let nativeRuntimeSelection;
   let startupTiming = null;
   let failUpdate = false;
@@ -47,12 +48,14 @@ try {
       return nativeState;
     }
     if (failUpdate) throw new Error("private diagnostic must not be displayed");
-    await new Promise((done) => setTimeout(done, 150));
-    nativeState = {
-      phase: args.action === "check" ? "available" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : "restart_required",
-      details: { version: "0.5.5", channel: args.channel },
-    };
-    return nativeState;
+    nativeActionSettled = new Promise((done) => setTimeout(done, 150)).then(() => {
+      nativeState = {
+        phase: args.action === "check" ? "available" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : "restart_required",
+        details: { version: "0.5.5", channel: args.channel },
+      };
+      return nativeState;
+    });
+    return await nativeActionSettled;
   });
   await page.addInitScript(() => {
     localStorage.setItem("loopx-pw-locale", "zh-CN");
@@ -109,6 +112,7 @@ try {
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
 
+  await nativeActionSettled;
   // The native owner decides whether Repair can maintain this installation.
   // The workspace consumes that projection rather than inferring from a path.
   nativeState = { phase: "ready", details: {} };
@@ -122,7 +126,7 @@ try {
   await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).click();
   await page.getByText("正在连接更新后的服务…", { exact: true }).waitFor();
   assert.deepEqual(calls.slice(beforeForget).map((call) => call.args.action), ["forget_runtime_selection"]);
-  await page.waitForFunction(async () => (await window.__TAURI__.core.invoke("desktop_update_status")).state.phase === "connecting");
+  await nativeActionSettled;
   nativeState = { phase: "ready", details: {} };
   nativeRuntimeSelection = { explicit: true, remembered: true, bundled_repair_available: false };
   await page.reload();
