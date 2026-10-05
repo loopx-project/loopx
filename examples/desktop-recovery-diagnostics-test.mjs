@@ -101,5 +101,7 @@ test('an environment pin cannot be cleared by forgetting a preference', async ()
   await runInNewContext('refresh()', context);
   assert.equal(elements.get('#forget-selection').hidden, true);
   assert.match(elements.get('#update-status').textContent, /移除、修正 LOOPX_BIN 后重新打开 App/);
+  runInNewContext('render({phase:"error",details:{code:"update_network_failed"}})', context);
+  assert.equal(elements.get('#repair').disabled, true, 'an action response cannot discard known runtime ownership');
   assert.equal(elements.get('#repair').disabled, true);
 });

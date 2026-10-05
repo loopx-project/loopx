@@ -69,6 +69,7 @@ let nextAction = "check";
 let working = false;
 let channelInitialized = false;
 let runtimeExplicit = false;
+let bundledRepairAvailable = true;
 document.querySelector("#retry").onclick = () => location.reload();
 channel.onchange = () => { channelInitialized = true; render({phase:"idle"}); };
 const labels = {
@@ -134,7 +135,7 @@ function render(state) {
   if (state.phase === "available" && state.details?.channel !== channel.value) state = {phase:"idle"};
   working = ["checking","downloading","installing_app","installing_runtime","connecting"].includes(state.phase);
   update.disabled = working;
-  repair.disabled = working || state.phase === "restart_required";
+  repair.disabled = working || state.phase === "restart_required" || runtimeExplicit || !bundledRepairAvailable;
   if (state.details?.bundled_repair_available === false) repair.disabled = true;
   forgetSelection.disabled = working || state.phase === "restart_required";
   rollback.disabled = working || state.phase === "restart_required";
@@ -220,13 +221,11 @@ async function refresh() {
       channelInitialized = true;
     }
     runtimeExplicit = result.runtime_selection?.explicit === true;
+    bundledRepairAvailable = result.runtime_selection?.bundled_repair_available !== false;
     rollback.hidden = !result.rollback_available;
     forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
     render(result.state);
-    if (result.runtime_selection?.explicit === true || result.runtime_selection?.bundled_repair_available === false) {
-      repair.disabled = true;
-    }
     renderStartup(result);
     escalateFromSnapshot(result.state);
   } catch { renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}}); }
