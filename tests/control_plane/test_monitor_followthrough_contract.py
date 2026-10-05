@@ -799,6 +799,16 @@ def test_same_turn_unchanged_monitor_poll_is_already_settled(tmp_path: Path) -> 
         runtime_root=runtime,
     )
     assert poll["material_change"] is False
+    assert poll["turn_continuation"]["settlement_binding_matches_observation"] is True
+    assert poll["turn_continuation"]["current_turn_settled"] is True
+    for mode in ("full", "compact", "brief", "thin"):
+        prompt = run_json_cli(
+            "heartbeat-prompt", f"--{mode}", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--runtime-profile", "generic_cli",
+            registry_path=registry, runtime_root=runtime,
+        )
+        assert "Exact monitor settlement=no refresh/spend" in prompt["task_body"]
+        assert "auxiliary poll: continue work" in prompt["task_body"]
 
     replay = run_json_cli(
         *guard_args,

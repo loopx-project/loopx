@@ -109,8 +109,31 @@ def test_real_cli_envelope_settles_original_turn_once(tmp_path):
     assert rc != 0, premature
     assert _spend_run_count(runtime) == 0
     writeback = plan["ordered_steps"][1]["command_template"].replace("loopx ", "loopx --format json ", 1)
-    writeback = writeback.replace("<validated_progress>", "validated_progress").replace(
+    # A validated exclusion advances research without claiming the objective is met.
+    # The same negative result is not a blocker merely because a candidate failed.
+    guidance = plan["ordered_steps"][1]["precondition"]
+    assert "Route elimination needs evidence" in guidance
+    assert "failure alone is not progress" in guidance
+    observation_only = writeback.replace("<validated_progress>", "validated_exclusion").replace(
+        "<scale>", "single_surface").replace("<outcome>", "surface_only")
+    rc, rejected_observation = _run_generated_cli(
+        observation_only + " --progress-result-class unchanged"
+        " --no-global-sync --suppress-external-sinks", registry_path=registry,
+    )
+    assert rc != 0, rejected_observation
+    assert _spend_run_count(runtime) == 0
+    invalid = writeback.replace("<validated_progress>", "validated_exclusion").replace(
+        "<scale>", "single_surface").replace("<outcome>", "outcome_gap")
+    rc, rejected = _run_generated_cli(
+        invalid + " --progress-result-class advanced --progress-evidence-id exclusion-proof"
+        " --no-global-sync --suppress-external-sinks", registry_path=registry,
+    )
+    assert rc != 0, rejected
+    assert "requires --progress-result-class blocked" in rejected["error"]
+    assert _spend_run_count(runtime) == 0
+    writeback = writeback.replace("<validated_progress>", "validated_exclusion").replace(
         "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    writeback += " --progress-result-class advanced --progress-evidence-id exclusion-proof"
     rc, refreshed = _run_generated_cli(
         writeback + " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks",
         registry_path=registry,

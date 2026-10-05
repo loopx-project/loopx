@@ -30,10 +30,11 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     "DONT_NOTIFY repair internally."
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
-    "Exact monitor-poll settlement->no refresh/spend; else "
-    "no-change=surface_only/no spend; writeback material=outcome+vision. "
-    "Only after committed writeback: same-turn checkpoint-context for missing vision, add evidenced "
-    "vision; stale->reread; unchanged->truthful --vision-unchanged-reason."
+    "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work. "
+    "Admitted work: settlement_plan even if artifacts unchanged. "
+    "Writeback=outcome+vision. "
+    "After committed writeback: same-turn checkpoint-context for missing vision, add "
+    "evidence; stale->reread; unchanged->truthful --vision-unchanged-reason."
 )
 REWARD_MEMORY_OUTCOME_RULE = (
     "`reward_memory_recall.experiment.automatic_ingest=true`: reusable Todo outcomes "
