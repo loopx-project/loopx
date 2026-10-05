@@ -5,11 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 
+# Presentation regression budgets, not external transport or execution limits.
+# Keep useful admission and authority instructions readable; do not abbreviate
+# them solely to fit a historical character ceiling.
 INTERFACE_BUDGET_CHARS = {
     "full": 12_000,
     "compact": 6_500,
     "brief": 4_300,
-    "thin": 2_500,
+    "thin": 3_000,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]

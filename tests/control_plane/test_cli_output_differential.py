@@ -81,6 +81,36 @@ def test_thin_bilingual_byte_allowance_does_not_relax_character_or_quota_limits(
     assert _compare_row(base, candidate)["failures"]
 
 
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_readable_peer_admission_growth_is_one_time_and_thin_only(output_format):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import (
+        heartbeat_peer_admission_prompt_revision,
+    )
+
+    block = (
+        "Follow the current quota claim/lease and workspace contract plus repository rules. "
+        "Follow todo continuation policy. Task-scoped coordination grants no authority over "
+        "other agents. Keep scope in the heartbeat prompt, not todo metadata."
+    )
+    marker = heartbeat_peer_admission_prompt_revision(block)
+    assert marker == "heartbeat_peer_admission_v1"
+    assert heartbeat_peer_admission_prompt_revision(block.replace("no authority", "authority")) is None
+    base = _row(
+        row_id=f"surface/heartbeat_prompt_thin/small/{output_format}",
+        format=output_format, chars=1_000, utf8_bytes=1_000, compact_payload_chars=1_000,
+    )
+    candidate = {**base, "chars": 1_160, "compact_payload_chars": 1_160,
+                 "heartbeat_peer_admission_prompt_revision": marker}
+    assert not _compare_row(base, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "chars": 1_161})["failures"]
+    assert _compare_row(candidate, {**candidate, "chars": 1_250})["failures"]
+    assert _compare_row(base, {**candidate, "heartbeat_peer_admission_prompt_revision": None})["failures"]
+    for surface in ("quota_should_run", "heartbeat_prompt_brief"):
+        other = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
+        assert _compare_row(other, {**candidate, "row_id": other["row_id"]})["failures"]
+
+
 def test_sync_commit_uses_main_as_cli_output_base() -> None:
     ancestors = {
         ("origin/main", "HEAD"),
@@ -701,7 +731,7 @@ def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
 def test_unknown_action_signature_coverage_migration_fails_closed() -> None:
     candidate = _row(
         action_signature_sha256="unknown-semantic-signature",
-        action_signature_coverages=["turn_envelope_action_dimensions_v5"],
+        action_signature_coverages=["turn_envelope_action_dimensions_v999"],
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
@@ -1212,3 +1242,19 @@ def test_only_retired_evidence_command_with_real_replacement_is_allowed():
     assert not compare_cli_output_receipts(_receipt(base), _receipt())['ok']
     assert not compare_cli_output_receipts(_receipt(base), _receipt({**replacement, 'json_shape_paths': []}))['ok']
     assert not compare_cli_output_receipts(_receipt({**base, 'row_id': 'surface/status/small/json'}), _receipt(replacement))['ok']
+
+
+@pytest.mark.parametrize("previous", range(5))
+def test_settlement_v5_migration_does_not_waive_output_growth(previous):
+    base = _row(action_signature_coverages=[f"turn_envelope_action_dimensions_v{previous}"])
+    candidate = {**base, "action_signature_sha256": "settlement-signature",
+                 "action_signature_coverages": ["turn_envelope_action_dimensions_v5"]}
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result["ok"] and result["review_required"]
+    assert not compare_cli_output_receipts(
+        _receipt(base), _receipt({**candidate, "chars": 50_000}),
+    )["ok"]
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(base))["ok"]
+    assert not compare_cli_output_receipts(
+        _receipt(candidate), _receipt({**candidate, "action_signature_sha256": "lost-identity"}),
+    )["ok"]

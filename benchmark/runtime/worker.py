@@ -394,6 +394,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, cancelled)
     receipt = run_once(dict(os.environ))
     print(json.dumps(receipt))
+    if receipt.get("budget_exhausted") and receipt["mode"] in {"heartbeat", "turn"}:
+        from benchmark.runtime.scheduler import BUDGET_EXHAUSTED_EXIT_CODE
+
+        return BUDGET_EXHAUSTED_EXIT_CODE
     return 124 if receipt["timed_out"] else (0 if receipt["ok"] else 1)
 
 

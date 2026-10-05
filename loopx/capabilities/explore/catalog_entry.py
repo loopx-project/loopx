@@ -13,7 +13,7 @@ EXPLORE_CATALOG_ENTRY: dict[str, Any] = {
         "site_root": "capabilities/explore",
         "canonical": "README.md",
     },
-    "title": "Explore evidence topology",
+    "title": "Explore Harness",
     "status": "active-preview",
     "real_world_anchor": (
         "goal-scoped questions, hypotheses, experiments, findings, and result projections"
@@ -24,6 +24,16 @@ EXPLORE_CATALOG_ENTRY: dict[str, Any] = {
     ),
     "entry_command": "loopx explore summary --goal-id <goal-id> --format json",
     "commands": [
+        {
+            "command": "loopx configure-goal --goal-id <goal-id> --explore-mode planning",
+            "purpose": "Preview evidence-and-planning mode; use evidence for graph only or off to disable.",
+            "write_boundary": "preview only; --execute applies configuration without granting spawn authority",
+        },
+        {
+            "command": "loopx explore turn-context --goal-id <goal-id> --agent-id <agent-id> --format json",
+            "purpose": "Read the bounded context requested by the enabled turn-start hook.",
+            "write_boundary": "read-only; no evidence, claim, lease, worker or quota writes",
+        },
         {
             "command": "loopx explore finding --goal-id <goal-id> --title <finding> --evidence-ref <ref> --format json",
             "purpose": "Append one public-safe, attributable finding to the canonical result log.",

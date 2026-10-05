@@ -72,6 +72,16 @@ def test_status_endpoint_defers_repository_boundary_scan(
     assert calls[0]["include_goal_subagent_configuration"] is False
 
 
+def test_status_keeps_its_startup_identity_after_package_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    current = {"schema_version": "loopx_runtime_identity_v1", "package_fingerprint": "sha256:original"}
+    monkeypatch.setattr("loopx.status_server.release_runtime_identity", lambda: dict(current))
+    with _status_server(tmp_path) as base_url:
+        current["package_fingerprint"] = "sha256:replacement"
+        with urllib.request.urlopen(f"{base_url}/?readiness=1", timeout=5) as response:
+            payload = json.load(response)
+        assert payload["runtime_identity"]["package_fingerprint"] == "sha256:original"
+
+
 def test_status_endpoint_forwards_goal_activation_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -3571,6 +3571,69 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     )
 
 
+@pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
+def test_host_owned_turn_executes_projected_selection_and_replays_identity(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    guard_args = (
+        "quota", "should-run", "--runtime-profile", profile,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", TURN_ID, "--scan-path", str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["agent_channel"]["selection_required"] is True
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    command = selection["route_prefix"] + " " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+    selected_rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert selected_rc == 0, selected
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert identity["turn_instance_id"] == TURN_ID
+    cli_channel = selected["interaction_contract"]["cli_channel"]
+    if profile == "outer_controller":
+        # Settlement stays with the controller, not the inner agent.
+        assert "settlement_plan" not in cli_channel
+    else:
+        assert cli_channel["settlement_plan"]["identity"] == identity
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args)
+    assert replay_rc == 0, replay
+    assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    conflict_rc, conflict = _run_cli(
+        registry_path, runtime, *guard_args, "--todo-id", TODO_ID,
+    )
+    assert conflict_rc != 0, conflict
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+    if profile == "outer_controller":
+        return
+
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", ALTERNATIVE_TODO_ID,
+        "--turn-instance-id", TURN_ID, "--classification", "validated_progress",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    spend_command = refresh["settlement_owed"]["command"]
+    spend_rc, spend = _run_cli(registry_path, runtime, *shlex.split(spend_command)[1:])
+    assert spend_rc == 0, spend
+    assert spend["settlement_identity"] == identity
+    retry_rc, retry = _run_cli(registry_path, runtime, *shlex.split(spend_command)[1:])
+    assert retry_rc == 0, retry
+    assert retry["appended"] is False
+    assert _spend_run_count(runtime) == 1
+
+
 def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
     tmp_path: Path,
 ) -> None:
@@ -3757,14 +3820,15 @@ def test_same_turn_can_select_eligible_todo_created_after_unbound_receipt(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
-def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+def test_agent_selection_rejects_unprojected_todo(tmp_path: Path, profile: str) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     turn_instance_id = "turn-agent-selection-unprojected"
     guard_args = (
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -3802,8 +3866,9 @@ def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
 def test_unsuggested_selection_revalidates_current_capability_readiness(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -3821,7 +3886,7 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
     guard_args = (
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -3851,8 +3916,9 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
 def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     turn_instance_id = "turn-agent-selection-first-call-rejected"
@@ -3862,7 +3928,7 @@ def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
         runtime,
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -3888,8 +3954,9 @@ def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 0
 
 
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
 def test_first_call_agent_selection_is_qualified_before_receipt_commit(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -3900,7 +3967,7 @@ def test_first_call_agent_selection_is_qualified_before_receipt_commit(
         runtime,
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -4454,8 +4521,9 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     assert all(not event["details"].get("settlement_effect_id") for event in events)
 
 
+@pytest.mark.parametrize("capture", [False, True])
 def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
-    tmp_path: Path,
+    tmp_path: Path, capture: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -4488,6 +4556,7 @@ def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
         *guard_args,
         "--todo-id",
         ALTERNATIVE_TODO_ID,
+        *(["--decision-output-dir", str(tmp_path / "capture")] if capture else []),
     )
 
     assert selected_rc == 0, selected
@@ -4501,6 +4570,11 @@ def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
     assert "todo_id" not in identity
     assert selected["rollout_event"]["appended"] is True
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+
+    if capture:
+        saved = json.loads((tmp_path / "capture" / "decision.json").read_text())
+        assert saved["decision"] == "autonomous_replan_required"
+        assert saved["heartbeat_receipt"] == selected["heartbeat_receipt"]
 
 
 def test_due_monitor_auxiliary_context_has_typed_selection_rejection(

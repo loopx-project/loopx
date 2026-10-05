@@ -4,7 +4,7 @@ import type { CapabilityConfigurationEditor } from "../../data/chat";
 import { PeriodicReportScheduleField } from "./periodic-report-schedule-field";
 import { useWorkspaceI18n } from "./i18n";
 
-type FieldCopy = Record<string, { description?: string; label?: string }>;
+type FieldCopy = Record<string, { description?: string; label?: string; options?: Record<string, string> }>;
 type ConfigurationField = CapabilityConfigurationEditor["fields"][number];
 type FieldValue = boolean | number | string | string[] | Record<string, unknown> | null;
 type FieldChange = (key: string, value: FieldValue) => void;
@@ -67,7 +67,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
         <span>{label}</span>
         <select disabled={readOnly} id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
           <option value="" />
-          {(field.options ?? []).map((option) => <option key={option} value={option}>{field.key === "review_order" ? directionLabel(option) : option}</option>)}
+          {(field.options ?? []).map((option) => <option key={option} value={option}>{copy[field.key]?.options?.[option] ?? (field.key === "review_order" ? directionLabel(option) : option)}</option>)}
         </select>
       </label>
     );
