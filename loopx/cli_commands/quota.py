@@ -386,6 +386,8 @@ def _project_quota_cli_payload(
     args: argparse.Namespace,
     detail_sections: frozenset[str],
     scheduler_context: object,
+    *,
+    captured_decision_path: str | None = None,
 ) -> dict[str, object]:
     """Project already-decided facts; preserve typed failures on envelope rejection.
 
@@ -414,6 +416,7 @@ def _project_quota_cli_payload(
         return build_turn_envelope(
             payload,
             scheduler_execution_context=scheduler_context,
+            captured_decision_path=captured_decision_path,
         )
     except EffectRuntimeRejected as envelope_error:
         degraded = dict(payload)
@@ -901,6 +904,9 @@ def handle_quota_command(
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
         context.scheduler_context if context is not None else None,
+        captured_decision_path=(
+            str(capture_directory / "decision.json") if capture_directory is not None else None
+        ),
     )
     if args.quota_command == "should-run" and context is not None:
         attach_host_poll_receipt(

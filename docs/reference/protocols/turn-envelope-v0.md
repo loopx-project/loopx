@@ -41,6 +41,23 @@ the CLI reports that boundary rather than claiming rollback. An empty capture
 directory is not a usable decision. Omit the option to disable capture; remove
 unneeded local captures through ordinary file management.
 
+When both capture and `--turn-envelope` are requested, `detail_ref.full_decision`
+points to the saved file using a quoted POSIX `cat --` command. A file-capable host
+can read `detail_ref.captured_decision.path` directly instead. The typed projector
+includes the expected Goal/Agent/Turn and a reference to the existing canonical
+source-decision hash (a hash of the JSON value, not the formatted file bytes).
+Verify those against the read observation, including `ok`; the link itself does
+not verify file integrity or make saved admission current. Missing, malformed,
+or mismatched files require recovery, never automatic guard replay. Consumers already referring to `full_decision`, such as compacted capability
+context and peer diagnostics, now read this same observation. Scheduler-specific
+legacy detail requests are unchanged. Replan obligations and fresh selection/lease/quota checks retain their existing owners.
+Without capture, the historical full-decision route and all default outputs are
+unchanged. This opt-in detail link does not change action-signature coverage.
+
+中文：同时开启短包和完整 decision 保存时，详情入口读取本次保存的文件，不再
+为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
+文件损坏或丢失不能自动重跑，选 Todo、lease 变化等仍需按原契约重新准入。
+
 This is a CLI transport primitive under the existing quota/context owner, not a
 new capability or Python decision rule. It does not automatically switch workers
 to compact packets, select replan history, or qualify model efficiency. The

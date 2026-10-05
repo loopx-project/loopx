@@ -71,6 +71,7 @@ def build_turn_envelope(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    captured_decision_path: str | None = None,
 ) -> dict[str, Any]:
     """Project one full quota decision through the canonical TS transaction."""
 
@@ -85,4 +86,6 @@ def build_turn_envelope(
         payload=dict(payload),
         protocol_action_fields=_protocol_action_fields(payload),
         scheduler_execution_args=scheduler_execution_args,
+        **({"captured_decision_path": captured_decision_path}
+           if captured_decision_path is not None else {}),
     )

@@ -827,14 +827,27 @@ function coldPath(
   payload: JsonObject,
   agentId: string | null,
   schedulerExecutionArgs: string,
+  capturedDecisionPath?: string,
 ): JsonObject {
   const goalId = scalarString(payload.goal_id, "quota payload goal_id", "<goal-id>");
   const agentArg = agentId ? ` --agent-id ${agentId}` : "";
   const prefix = commandPrefix(payload.runtime_root);
   return {
-    full_decision: schedulerExecutionArgs
+    full_decision: capturedDecisionPath ? `cat -- ${shellQuote(capturedDecisionPath)}` : schedulerExecutionArgs
       ? `${prefix} --format json quota should-run --goal-id ${goalId}${agentArg}${schedulerExecutionArgs}`
       : "rerun the typed quota_guard from the current host packet",
+    ...(capturedDecisionPath ? {
+      captured_decision: {
+        path: capturedDecisionPath,
+        goal_id: payload.goal_id ?? null,
+        agent_id: agentId,
+        turn_instance_id: object(payload.heartbeat_receipt).turn_instance_id ?? null,
+        source_hash_ref: "$.action_signature.source_decision_hash",
+        instruction: "Read this saved observation for omitted context. Check ok, Goal/Agent/Turn and source hash before use. " +
+          "It grants no fresh authority: selection, lease/workspace changes, cancellation or quota revalidation require " +
+          "the current host guard and a new capture directory. Missing or invalid capture requires recovery, not blind guard replay.",
+      },
+    } : {}),
     todo_detail: `${prefix} --format json todo list --goal-id ${goalId}`,
     status_detail: `${prefix} --format json status --goal-id ${goalId}`,
   };
@@ -853,6 +866,12 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     );
   }
   const schedulerExecutionArgs = request.scheduler_execution_args;
+  const capturedDecisionPath = request.captured_decision_path;
+  if (capturedDecisionPath !== undefined && (
+    typeof capturedDecisionPath !== "string" || !capturedDecisionPath.trim() || capturedDecisionPath.includes("\0")
+  )) {
+    throw new EffectRuntimeRequestError("turn envelope captured_decision_path must be a non-empty file path");
+  }
   const agentId = scalarString(
     object(payload.agent_identity).agent_id,
     "quota payload agent_identity.agent_id",
@@ -869,7 +888,7 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     action_required: Boolean(payload.action_required),
     open_count: Number(payload.open_count || 0),
     ...actionProjectionValue,
-    detail_ref: coldPath(payload, agentId, schedulerExecutionArgs),
+    detail_ref: coldPath(payload, agentId, schedulerExecutionArgs, capturedDecisionPath),
   };
   const sourceSignature = turnEnvelopeActionSignatureDocument(actionProjectionValue);
   const envelopeSignature = turnEnvelopeActionSignatureDocument(envelope);

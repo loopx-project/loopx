@@ -604,3 +604,27 @@ test("unavailable hook context is signed without suppressing independent work", 
     assert.notDeepEqual(turnEnvelopeActionSignatureDocument(result), quotaActionSignatureDocument(source, protocolActionFields));
   }
 });
+
+
+test("captured details reuse one observation without changing action or default projection", () => {
+  const source = payload();
+  source.heartbeat_receipt = { turn_instance_id: "turn-observed" };
+  const request = { payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" };
+  const before = JSON.stringify(source);
+  const original = buildTurnEnvelope(request);
+  const captured = buildTurnEnvelope({ ...request, captured_decision_path: "/tmp/capture/decision.json" });
+  assert.deepEqual(captured.action_signature, original.action_signature);
+  assert.deepEqual(captured.writeback, original.writeback);
+  assert.deepEqual(captured.action, original.action);
+  const detail = captured.detail_ref as JsonObject;
+  assert.equal(detail.full_decision, "cat -- /tmp/capture/decision.json");
+  assert.equal((detail.captured_decision as JsonObject).turn_instance_id, "turn-observed");
+  assert.match(String((detail.captured_decision as JsonObject).instruction), /no fresh authority/);
+  assert.equal(detail.todo_detail, (original.detail_ref as JsonObject).todo_detail);
+  assert.equal(JSON.stringify(source), before);
+  assert.deepEqual(buildTurnEnvelope({ ...request, captured_decision_path: undefined }), original);
+  assert.equal((original.detail_ref as JsonObject).captured_decision, undefined);
+  for (const invalid of [null, false, 4, {}, [], "", " ", "\0bad"]) {
+    assert.throws(() => buildTurnEnvelope({ ...request, captured_decision_path: invalid }), EffectRuntimeRequestError);
+  }
+});
