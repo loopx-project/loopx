@@ -338,11 +338,30 @@ installation and removal locally; CI covers Linux and Windows. Direct release
 installation reported in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93)
 was shipped independently in [Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14).
 It uses the authoritative catalog command and does not require publishing this
-provider to npm. The live catalog still selects beta.5; beta.6 publication and
-selection remain open. Released-Hub installation passed, but its Client
-installed-state identity does not yet recognize the release URL, leaving the
-marketplace update/removal journey incomplete. Public distribution, marketplace adoption, and browser-mounted
-Start/Pause remain independent release evidence. The L1 observer still consumes only
+provider to npm. [The beta.6 GitHub package](https://github.com/loopx-project/loopx/releases/tag/dsh-loopx-plugin-v0.1.1-beta.6)
+is published from merged commit `5eee730c2`; downloaded bytes match the built
+artifact. Its [personal illustrated upgrade guide](https://my.feishu.cn/docx/Q8pOdO1jco0y10xBDCkce87Xngc)
+was read back with three real DSH screenshots. The live catalog still selects
+beta.5; [catalog PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+and [Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) remain upstream
+merge/release gates. Released Hub 1.4.14 plus #98's candidate Client logic passed
+beta.6 install, identity, pinned update and removal through native DSH 0.2;
+that candidate is not an installed-marketplace publication claim.
+
+The published package passed native URL installation, beta.5-on-compatible-0.1.5
+to beta.6-on-0.2 upgrade/removal, and offline plugin-tarball installation/removal.
+A clean Linux container used the released LoopX 1.2.4 wheel to verify PEP 668
+private bootstrap, skills, authentication and GoalBar readback. The original
+source-wheel Docker script did not pass unchanged because its Chat bundle was
+unbuilt; the independent release-wheel harness used artifact copying instead
+of host bind mounts. A real macOS DSH 0.2 browser with a synthetic Goal and
+preconfigured unique binding passed Start/Pause through the published CLI:
+`active` and `stopped` were read back, and an unactivated Session queued no new
+model turn. This does not qualify Windows desktop market installation,
+initialization, control, upgrade/removal or model-driven continuation. Network
+recovery still depends on external connectivity; an offline plugin archive
+requires compatible host/CLI dependencies or their caches. The L1 observer still
+consumes only
 `session/created`, `session/event`, and `session/disposed`; this compatibility
 repair does not close its separately budgeted C0/C1 or overhead qualification.
 
