@@ -1,10 +1,10 @@
 # RFC：强能力 Agent 管家与语义工作交接（v0）
 
 - **RFC 状态：** 已接受
-- **替代 / 关闭：** 无
+- **替代 / 关闭：** [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md)
 - **交付成熟度：** Partial；私人运行 profile、团队计划确认与 Todo 物化已交付，完整 M1–M4 未验收。
 - **作者 / 责任人：** LoopX 维护者、管家工程负责人
-- **创建 / 最近规范修订：** 2026-09-13 / 2026-09-15
+- **创建 / 最近规范修订：** 2026-09-13 / 2026-10-04
 - **实现基线：** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **语言镜像：** [English](capable-manager-semantic-handoff-v0.md)
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[管家连续性](../../reference/protocols/manager-evidence-and-continuity-v0.md)、[Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md)、[桌面入口](desktop-execution-frontends-v0.zh-CN.md)、[共享权威](shared-goal-authority-state-provider-v0.zh-CN.md)、[共享目标对齐/修订](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md)、[TS 迁移](typescript-control-plane-migration-v0.zh-CN.md)
@@ -470,6 +470,17 @@ Lark adapter 经不可变收件箱传递观察，Chat 和接收方交办使用�
 复用现有 capability 指令、context hook、memory 和调度 owner。可复用方法可带来源/版本参与规划与交接；记忆中的教训不替代被接受的任务状态和当前核验。稳定重复工作在任务与重放行为明确后走已有 schedule/event 路径。本 RFC 不新增 routine 引擎、强制方法学习、新 hook 家族或业务特化 automation。
 
 并行工作不意味着执行资源隔离。共享浏览器屏幕或可变工作区，复用 runtime 的串行化/lease；它与 Core 工作归属分开。不同屏幕、Agent 名称和会话页签不是权限边界。runtime 缺乏所需协调时，串行执行受影响操作并显示等待；无关取证仍可推进。M1 汇报真实资源行为，不预设共享云电脑架构。
+
+### 5.11.1 飞书个人事项跟进 profile
+
+[飞书个人事项跟进](../../product/use-cases/office-operations/personal-follow-through.zh-CN.md)
+是本管家契约的有界应用。个人承诺识别、来源覆盖、截止时间依据与注意力成本评测
+保留在场景文档；通用生命周期、持续授权、准备、恢复与返回由本 RFC 及其引用的
+类型化 owner 负责。该 profile 明确映射到 A3/A5–A10/A13–A15/A20 和既有
+M1–M4，取代原独立个人 M1–M3。复用规范 User/Agent Todo、既有提议与产物引用，
+不新增平行状态、调度或审批层。主动触发沿用已有 schedule/event 路径和真实授权。
+profile 的 TypeScript/Node 要求保持有界，不要求无关全仓迁移。场景 CLI、模拟
+测试或本次文档归并不关闭任何验收；真实来源及安装版完整流程仍需单独证明。
 
 ### 5.12 与目标对齐、共享权威、TS 内核衔接
 

@@ -283,21 +283,29 @@ server.on("close", () => {
 });
 
 server.listen(0, "127.0.0.1", async () => {
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("invalid address");
-  await withFileMutationLock(infoPath, async () => {
-    await atomicWriteJson(infoPath, {
-      schema_version: INFO_SCHEMA,
-      fingerprint,
-      pid: process.pid,
-      host: "127.0.0.1",
-      port: address.port,
-      token,
-      // A managed runtime is reused per source revision, so the Node/SQLite pair
-      // serving a goal is not necessarily the one the caller resolves from PATH.
-      runtime_identity: sqliteRuntimeIdentity(),
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("invalid address");
+    await withFileMutationLock(infoPath, async () => {
+      await atomicWriteJson(infoPath, {
+        schema_version: INFO_SCHEMA,
+        fingerprint,
+        pid: process.pid,
+        host: "127.0.0.1",
+        port: address.port,
+        token,
+        // A managed runtime is reused per source revision, so the Node/SQLite pair
+        // serving a goal is not necessarily the one the caller resolves from PATH.
+        runtime_identity: sqliteRuntimeIdentity(),
+      });
+      await chmod(infoPath, 0o600);
     });
-    await chmod(infoPath, 0o600);
-  });
-  resetIdleTimer(server);
+    resetIdleTimer(server);
+  } catch (error) {
+    // Reuse the shared error owner's safe codes, never the raw Node error,
+    // locator path, token or stack. The launcher already consumes this startup
+    // envelope; publication failure must not collapse into a bare exit code.
+    const { code } = effectRuntimeErrorPayload(error);
+    failStartup(code, `TypeScript Effect runtime could not publish its startup locator (${code})`);
+  }
 });

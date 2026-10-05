@@ -55,6 +55,7 @@ from .extensions.lark.private_conversations import LarkPrivateConversations
 from .chat_loopx_mode import handle_loopx_request
 from .capabilities.manager_context.roundtrip import project_chat_session_snapshot
 from .control_plane.goals.active_state_metadata import active_state_section_text
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .control_plane.status.ssh_host_catalog import (
     SSH_HOST_CATALOG_PATH,
     ssh_host_catalog_payload,
@@ -1152,6 +1153,16 @@ class ChatRequestHandler(
             return
         except ActionConflictError as exc:
             self._send_error(str(exc), status=409, error_code="action_conflict")
+            return
+        except LocalCoordinationAuthorityUnavailable as exc:
+            # The canonical owner already decided this refusal. Adapt its
+            # diagnostic without publishing the source snapshot or granting
+            # an actor/lease on the caller's behalf.
+            self._send_error(
+                redact_local_paths(str(exc)) + ". Resolve the canonical authority requirement and retry.",
+                status=400,
+                error_code=exc.code,
+            )
             return
         except (KeyError, ValueError) as exc:
             self._send_error(str(exc), status=400, error_code="invalid_action_preview")

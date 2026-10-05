@@ -89,6 +89,8 @@ def test_rendered_task_bodies_keep_execution_obligation_authority() -> None:
         assert "under DONT_NOTIFY repair internally" in body
         # A bare "DONT_NOTIFY=quiet" no-op mapping must never appear in the prompt.
         assert "DONT_NOTIFY=quiet." not in body
+        assert "Only after committed writeback: same-turn checkpoint-context" in body
+        assert "Missing vision: same-turn checkpoint-context" not in body
 
 
 def test_generic_task_bodies_follow_user_language_without_forcing_chinese() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
@@ -248,6 +249,15 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        if payload.get("error_code") == "todo_claim_invalid_arguments":
+            recovery = payload["recovery"]
+            lines.extend([
+                f"- recovery: {recovery['reason']}",
+                f"- requires_flags: `{', '.join(recovery['requires_flags']) or 'none'}`",
+                f"- remove_flags: `{', '.join(recovery['remove_flags']) or 'none'}`",
+                "- cli_args (append required values before running):",
+                "```json", json.dumps(recovery["cli_args"]), "```",
+            ])
         lines.extend(_render_lease_recovery(payload))
         lines.extend(_render_settlement_plan(payload.get("settlement_plan")))
         if payload.get("operator_action"):

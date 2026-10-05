@@ -9,5 +9,5 @@ agents:
       task_entry: seeded-todo  # Use loopx-planned for the product planning checkpoint.
       iteration_context: fresh
       reasoning_effort: high
-      turn_timeout_sec: 4700
+      turn_timeout_sec: null
       scheduler_timeout_sec: 5080

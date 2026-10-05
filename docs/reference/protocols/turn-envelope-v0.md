@@ -8,7 +8,7 @@ payload.
 Preview it explicitly:
 
 ```bash
-loopx quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
+loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
 ```
 
 The envelope flag selects a projection of the full decision. The original v0
@@ -43,12 +43,30 @@ Action-signature coverage is versioned independently from the envelope schema.
 `turn_envelope_action_dimensions_v1` additionally covers a blocking user
 gate's `response_plan`; `turn_envelope_action_dimensions_v2` additionally signs
 `action.action_portfolio`; `turn_envelope_action_dimensions_v3` additionally
-signs `action.planning_horizon`. Base/head qualification accepts a declared
+signs `action.planning_horizon`; v4 additionally signs capability `agent_context`;
+`turn_envelope_action_dimensions_v5` additionally preserves the canonical
+`writeback.settlement_plan`. Base/head qualification accepts a declared
 coverage migration as a review signal. The bounded, JSON-only v2 and v3
 migration budgets apply only to their named schema transitions; ordinary
 growth limits resume once the new version is the baseline. A digest change
 without a supported coverage migration, or a projection above its one-version
 budget, still fails closed.
+
+For a decision carrying a settlement plan, the opt-in envelope now transports
+that plan intact: effect identity, ordered steps, command conditions, expected
+receipts and the host-owned handoff. It also keeps the corresponding next CLI
+commands untruncated. This repairs the earlier preview that could report matching
+action hashes while omitting the settlement plan. The plan remains owned by the
+shared settlement algebra; the envelope neither rebuilds it nor grants authority
+to execute an unadmitted step. Packets without a plan keep their previous coverage
+and do not acquire one from a historical heartbeat receipt. Stored v0–v4 signatures
+are not rewritten. The v5 migration is an explicit semantic review signal and
+has **no additional size allowance**; overflow still requires the existing budget
+analysis. Default full quota output and settlement rules are unchanged.
+
+中文：短包现在完整保留已有结算计划及执行命令，签名 v5 覆盖结算身份、步骤顺序、
+条件和宿主边界；没有计划的输入不会凭空获得结算权限。旧签名保留，默认完整输出
+不变，大小预算不放宽。此修复是短上下文实验的前置条件，尚不证明模型收益。
 
 `quota_planning_horizon_v0` remains advisory even when carried by the envelope.
 Its `selection_contract` points back to `selected_todo` and `action_portfolio`,
@@ -87,8 +105,22 @@ or settlement authority: it preserves the explicit choice only so a no-argument
 same-Turn reentry cannot replace it with the current recommendation. An
 ineligible/rejected choice still replays the receipt without mutation; a
 first-call rejection reports
-`heartbeat_receipt.status=not_committed` and writes no receipt event. The agent
-receives `recovery_action=reenter_guard_without_selection` and one executable
+`heartbeat_receipt.status=not_committed` and writes no receipt event.
+
+For an eligible explicit choice deferred solely by runnable autonomous replan,
+the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
+that choice, the CLI now executes one same-Turn guard reentry and returns its
+fresh result directly, including in TurnEnvelope mode. This changes the previous
+default of returning a failed selection before asking the caller to reenter.
+It grants no delivery or spend authority: the fresh guard and receipt owner
+still decide the Todo/replan binding, and may return a newly changed gate. It
+does not retry other hard lanes, missing candidates, or a first-call refusal
+without a durable choice receipt. The reentry has no explicit selection, so it
+cannot recursively retry. Hosts that do not execute this CLI path can continue
+to use the existing recovery command.
+
+For other refusals, the agent receives
+`recovery_action=reenter_guard_without_selection` and one executable
 same-Turn guard in the full decision's `cli_channel.next_cli_actions`; the compact
 envelope preserves the recovery in its action and writeback preview. The failed
 selection exposes no settlement plan, spend command, or unadmitted replan action

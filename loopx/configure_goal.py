@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .agent_registry import normalize_registered_agents
+from .agent_registry import normalize_registered_agents, registered_agent_ids_for_goal
 from .boundary_authority import (
     build_checkpointed_boundary_authority_entry,
     checkpointed_boundary_authority_summary,
@@ -246,9 +246,7 @@ def _settings_summary(goal: dict[str, Any]) -> dict[str, Any]:
         goal.get("coordination") if isinstance(goal.get("coordination"), dict) else {}
     )
     agent_model = agent_runtime_model_for_goal(goal)
-    registered_agents = normalize_registered_agents(
-        coordination.get("registered_agents")
-    )
+    registered_agents = registered_agent_ids_for_goal(goal)
     summary = {
         "execution_profile": compact_execution_profile(goal.get("execution_profile")),
         "quota": {
@@ -445,6 +443,7 @@ def configure_goal(
     self_repair_waiting_projection: bool | None = None,
     periodic_report_configuration: Mapping[str, Any] | None = None, clear_periodic_report_configuration: bool = False,
     pull_request_review_configuration: Mapping[str, Any] | None = None,
+    pull_request_review_agent_orders: Mapping[str, str | None] | None = None,
     clear_pull_request_review_configuration: bool = False,
     change_quality_enabled: bool | None = None,
     change_quality_safe_fix: bool | None = None,
@@ -895,7 +894,6 @@ def configure_goal(
             )
         control_plane["self_repair"] = self_repair
     periodic_report_config.apply_change(goal, periodic_report_change)
-    pr_review_config.apply_change(goal, pull_request_review_configuration, clear=clear_pull_request_review_configuration)
     change_quality_config.apply_change(goal, change_quality_change)
     progress_review_config.apply_change(goal, progress_review_change)
     improvement_config.apply_change(goal, capability_improvement_configuration, clear=clear_capability_improvement_configuration)
@@ -1252,6 +1250,9 @@ def configure_goal(
 
     shadow.apply_coordination_shadow_changes(
         goal, local_authority_shadow_file, clear_local_authority_shadow, coordination_runtime_shadow_file, clear_coordination_runtime_shadow)
+    pr_review_config.apply_change(goal, pull_request_review_configuration, clear=clear_pull_request_review_configuration,
+                                 agent_order_updates=pull_request_review_agent_orders,
+                                 reconcile_registered_agents=registered_agents is not None or clear_registered_agents)
     after = _settings_summary(goal)
     changed_fields = _changed_fields(before, after)
     if goal != before_goal and not changed_fields:

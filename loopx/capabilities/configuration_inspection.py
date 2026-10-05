@@ -112,6 +112,39 @@ def project_goal_configuration(
     ]
     if not all(capability_ids) or len(set(capability_ids)) != len(capability_ids):
         raise ValueError("capability catalog contains an invalid identity")
+    # Agent settings share the Goal writer and its revision fence. Machine
+    # settings cannot carry Goal identities.
+    after = _mapping(payload.get("after", {}), "Goal configuration readback")
+    agents = after.get("registered_agents", [])
+    if not isinstance(agents, list) or any(not isinstance(agent, str) for agent in agents):
+        raise ValueError("registered Agent inventory is invalid")
+    capabilities = [dict(item) for item in capabilities]
+    for capability in capabilities:
+        if capability["capability_id"] == "pull_request_review":
+            from .pr_review_queue.order import configuration
+            from ..configuration_transaction import configuration_payload_revision
+            machine = capability.get("machine_current")
+            resolved = configuration({
+                "action": "resolve", "goal": capability.get("current") or None,
+                "machine": {key: value for key, value in machine.items() if key != "schema_version"} if isinstance(machine, Mapping) else None,
+                "registered_agents": agents,
+            })
+            effective = {key: value for key, value in resolved.items() if key not in {"order_source", "agent_id"}}
+            capability["effective_configuration"] = {
+                **capability["effective_configuration"],
+                "configuration": effective, "source": resolved["order_source"],
+                "inherited": resolved["order_source"] == "machine_default",
+                "effective_revision": configuration_payload_revision({"capability_id": "pull_request_review", "source": resolved["order_source"], "configuration": effective}),
+            }
+            editor = dict(capability["configuration_editor"])
+            editor["fields"] = [*editor["fields"], {
+                "key": "agent_orders", "label": "Agent review directions",
+                "description": "Each registered Agent inherits the Goal direction unless overridden.",
+                "input_kind": "pr_review_agent_orders", "required": False,
+                "agents": agents,
+            }]
+            capability["configuration_editor"] = editor
+    capability_catalog = {**capability_catalog, "capabilities": capabilities}
     return {
         "ok": True,
         "schema_version": GOAL_CONFIGURATION_INSPECTION_SCHEMA,

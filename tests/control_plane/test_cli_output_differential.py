@@ -701,7 +701,7 @@ def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
 def test_unknown_action_signature_coverage_migration_fails_closed() -> None:
     candidate = _row(
         action_signature_sha256="unknown-semantic-signature",
-        action_signature_coverages=["turn_envelope_action_dimensions_v5"],
+        action_signature_coverages=["turn_envelope_action_dimensions_v999"],
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
@@ -1212,3 +1212,19 @@ def test_only_retired_evidence_command_with_real_replacement_is_allowed():
     assert not compare_cli_output_receipts(_receipt(base), _receipt())['ok']
     assert not compare_cli_output_receipts(_receipt(base), _receipt({**replacement, 'json_shape_paths': []}))['ok']
     assert not compare_cli_output_receipts(_receipt({**base, 'row_id': 'surface/status/small/json'}), _receipt(replacement))['ok']
+
+
+@pytest.mark.parametrize("previous", range(5))
+def test_settlement_v5_migration_does_not_waive_output_growth(previous):
+    base = _row(action_signature_coverages=[f"turn_envelope_action_dimensions_v{previous}"])
+    candidate = {**base, "action_signature_sha256": "settlement-signature",
+                 "action_signature_coverages": ["turn_envelope_action_dimensions_v5"]}
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result["ok"] and result["review_required"]
+    assert not compare_cli_output_receipts(
+        _receipt(base), _receipt({**candidate, "chars": 50_000}),
+    )["ok"]
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(base))["ok"]
+    assert not compare_cli_output_receipts(
+        _receipt(candidate), _receipt({**candidate, "action_signature_sha256": "lost-identity"}),
+    )["ok"]

@@ -286,6 +286,35 @@ def reconcile_requested_quota_action_selection(
     )
 
 
+def inline_action_selection_reentry_args(
+    payload: Mapping[str, object],
+    args: argparse.Namespace,
+    *,
+    selection: RequestedQuotaActionSelection,
+    preflight: ActionSelectionPreflightResult,
+    turn_instance_id: str | None,
+) -> argparse.Namespace | None:
+    """Adapt one typed reentry instruction after the exact choice is durable."""
+    qualification = payload.get("action_selection_qualification")
+    if (
+        not isinstance(qualification, Mapping)
+        or qualification.get("inline_reentry_allowed") is not True
+        or preflight.receipt is None
+        or selection.requested_todo_id is None
+        or turn_instance_id is None
+        or heartbeat_receipt_pending_action_todo_id(preflight.receipt)
+        != selection.requested_todo_id
+    ):
+        return None
+    # Re-enter the real guard; changed quota, gates, leases and capabilities
+    # must be read again. No explicit selection on this hop means no recursion.
+    reentry = argparse.Namespace(**vars(args))
+    reentry.todo_id = None
+    reentry.begin_turn = False
+    reentry.turn_instance_id = turn_instance_id
+    return reentry
+
+
 def commit_requested_action_selection(
     payload: Mapping[str, object],
     *,

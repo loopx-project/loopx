@@ -611,9 +611,13 @@ def _bind_selected_replan_guard(
         "--turn-instance-id", turn_instance_id, "--scan-path", str(project),
         "--todo-id", SELECTED_REPLAN_TODO_ID,
     )
-    assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
-    [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    rc, bound = _run_generated_cli(command, registry_path=registry)
+    if rc == 0:
+        bound = deferred
+    else:
+        # Without a prior receipt, first-call refusal remains caller-owned.
+        assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
+        [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, bound = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, bound
     assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == SELECTED_REPLAN_TODO_ID
     return bound
@@ -4450,7 +4454,7 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     assert all(not event["details"].get("settlement_effect_id") for event in events)
 
 
-def test_pending_action_selection_reports_autonomous_replan_preemption(
+def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -4486,23 +4490,17 @@ def test_pending_action_selection_reports_autonomous_replan_preemption(
         ALTERNATIVE_TODO_ID,
     )
 
-    assert selected_rc == 1, selected
-    assert selected["error_code"] == "quota_action_selection_deferred"
-    assert selected["action_selection_qualification"] == {
-        "schema_version": "action_selection_qualification_v0",
-        "state": "deferred",
-        "recovery_action": "reenter_guard_without_selection",
-        "requested_todo_id": ALTERNATIVE_TODO_ID,
-        "reason": "autonomous_replan",
-        "delivery_preemptions": ["autonomous_replan", "delivery_not_allowed"],
-    }
-    _assert_action_selection_recovery_projections(selected)
-    assert selected["heartbeat_receipt"]["status"] == "selection_retained"
-    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
-        ALTERNATIVE_TODO_ID
-    )
+    assert selected_rc == 0, selected
+    assert selected["decision"] == "autonomous_replan_required"
+    assert selected["normal_delivery_allowed"] is False
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["settlement_bound"] is False
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert "todo_id" not in identity
     assert selected["rollout_event"]["appended"] is True
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
 
 
 def test_due_monitor_auxiliary_context_has_typed_selection_rejection(

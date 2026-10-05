@@ -20,6 +20,7 @@ export const ACTION_SIGNATURE_COVERAGE_V1 = "turn_envelope_action_dimensions_v1"
 export const ACTION_SIGNATURE_COVERAGE_V2 = "turn_envelope_action_dimensions_v2";
 export const ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3";
 export const ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4";
+export const ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5";
 export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;
 
 const EXECUTABLE_CLI_ARGS_MAX_ITEMS = 64;
@@ -640,6 +641,8 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   if (nextCliActions.length === 0 && Array.isArray(cliChannel.next_cli_actions)) {
     nextCliActions = [...cliChannel.next_cli_actions].map(pythonString);
   }
+  const settlementPlan = object(cliChannel.settlement_plan);
+  const hasSettlementPlan = Object.keys(settlementPlan).length > 0;
   let preserveBoundReplanCommands = replanSettlementOnly;
   if (replanPacket && !replanSettlementOnly) {
     const writebackContract = object(object(payload.replan_action_packet).writeback_contract);
@@ -675,10 +678,15 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   } else {
     // Original-Turn identities often follow an absolute runtime path. Cutting
     // a closeout command into display text can erase its binding or execute flag.
-    writeback.next_cli_actions = preserveBoundReplanCommands
+    writeback.next_cli_actions = hasSettlementPlan
+      ? nextCliActions.map(command => scalarString(command, "settlement command"))
+      : preserveBoundReplanCommands
       ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
       : textList(nextCliActions, 5, 420);
   }
+  // Transport the canonical plan intact. Reconstructing it from command previews
+  // loses the effect identity, conditional closeout and host/agent boundary.
+  if (hasSettlementPlan) writeback.settlement_plan = settlementPlan;
   for (const field of ["replan_settlement_contract", "delivery_workspace_causality"]) {
     const value = object(cliChannel[field]);
     if (Object.keys(value).length > 0) writeback[field] = value;
@@ -763,6 +771,7 @@ function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObj
 }
 
 function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): string {
+  if (Object.keys(object(object(envelope.writeback).settlement_plan)).length > 0) return ACTION_SIGNATURE_COVERAGE_V5;
   if (Object.keys(object(envelope.agent_context)).length > 0) return ACTION_SIGNATURE_COVERAGE_V4;
   const action = object(envelope.action);
   if (Object.keys(object(action.planning_horizon)).length > 0) return ACTION_SIGNATURE_COVERAGE_V3;

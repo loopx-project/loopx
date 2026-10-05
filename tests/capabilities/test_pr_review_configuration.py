@@ -36,8 +36,7 @@ def test_ci_configuration_defaults_overrides_and_clear() -> None:
     assert resolve_configuration(goal, machine)["wait_for_ci"] is True
     # An override is atomic, matching the generic capability editor contract.
     assert (
-        resolve_configuration(goal, machine)["review_priority"]
-        == "other-developers-first"
+        resolve_configuration(goal, machine)["review_order"] == "forward"
     )
     apply_change(goal, None, clear=True)
     assert resolve_configuration(goal, machine)["wait_for_ci"] is False

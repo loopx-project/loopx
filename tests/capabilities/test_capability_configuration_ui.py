@@ -73,15 +73,15 @@ def test_pull_request_review_editor_supports_machine_and_goal_ci_policy() -> Non
     assert editor["fields"][0]["input_kind"] == "boolean"
     assert editor["fields"][1:] == [
         {
-            "key": "review_priority",
-            "label": "Review priority",
+            "key": "review_order",
+            "label": "Review direction",
             "description": (
-                "Default ranks actionable PRs whose author differs from the "
-                "authenticated reviewer before the reviewer's own PRs."
+                "Forward ranks other authors first, oldest first within tiers. "
+                "Reverse inverts the whole actionable queue before the batch limit."
             ),
             "input_kind": "select",
             "required": True,
-            "options": ["other-developers-first", "owner-first"],
+            "options": ["forward", "reverse"],
         }
     ]
 
