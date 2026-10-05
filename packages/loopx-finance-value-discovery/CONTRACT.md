@@ -296,13 +296,22 @@ Digest equality or a reference alone authenticates nothing: the output fixes
 
 A processed ineligible assessment exits 0; inspect eligibility and reasons.
 Malformed input exits 1 with an error packet. Existing reducers/replays and
-numeric accuracy keep their original bytes and behavior. This is an optional
-direct CLI/API prerequisite; managed protocol dispatch, Lusen immutable input
-version/pin integration, App/Lark and financial utility remain separate stages.
+numeric accuracy keep their original bytes and behavior. Extension 0.8.4 routes
+the same input version through the no-argument stdin provider entrypoint used
+by `loopx extension run`. Direct and managed assessment use the same reducer;
+ineligible results remain processed results rather than transport failures.
+Lusen immutable input version/pin integration, App/Lark and financial utility
+remain separate stages.
 No catalog entry, Core authority, default installation or source call is added.
 Consumers must qualify the exact new API/schema/version pair; restore their
 original inputs, pins and binary pair to opt out or roll back, rather than
-deleting declarations from frozen evidence. Old binaries do not supply this API.
+deleting declarations from frozen evidence. Binaries before 0.8.3 do not supply
+this API.
+
+The 0.8.3 API/direct CLI already supplies this assessment, but its managed
+entrypoint does not route period inputs. Keep the original binary, manifest
+and input pins together when reverting to that version; a successful doctor
+alone does not qualify managed period dispatch.
 
 中文：新增期间 API/CLI 分开编码边界与父审经济期间声明，原字面值和时区缺证
 保持。事件到收益 duration 的映射必须显式提供，日期相等或精度已知不能填补。

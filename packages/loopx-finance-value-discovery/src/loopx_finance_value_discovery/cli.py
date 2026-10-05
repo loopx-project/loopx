@@ -39,7 +39,10 @@ from .operation_request import (
 )
 from .position_guard import REQUEST_SCHEMA as POSITION_GUARD_INPUT_SCHEMA
 from .position_guard import evaluate_finance_position_guard
-from .period_semantics import assess_period_comparison
+from .period_semantics import (
+    FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
+    assess_period_comparison,
+)
 
 
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
@@ -198,6 +201,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                 packet = build_finance_transaction_approval_packet(payload)
             elif schema_version == FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION:
                 packet = evaluate_finance_contract_liquidity(payload)
+            elif schema_version == FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION:
+                packet = assess_period_comparison(payload)
             else:
                 packet = build_finance_value_discovery_packet(payload)
         except Exception as exc:
