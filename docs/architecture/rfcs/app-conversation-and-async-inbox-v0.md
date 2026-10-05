@@ -91,7 +91,10 @@ The readback, `/status` and `/help` show the effective grant. Selecting an exist
 App restores its persisted setting. Changing a binding's grant requires a new
 identity and Session, invalidates the old Session for new work, and requires new
 Agent target grants; it cannot silently elevate an attached host or another App.
-Host grant removal or downgrade is rechecked before admission and resume.
+Host grant removal or downgrade is rechecked before admission and resume. Ordinary
+local Scope reuses only the same typed project context; a host grant change opens
+a new Session while retaining old history and rejecting new work on the old
+Session.
 
 Typed Core/HTTP/native-host regressions qualify default writes, explicit read-only,
 workspace identity, independent App grants, old-Session rejection and exact-thread

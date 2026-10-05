@@ -66,7 +66,8 @@ Material Lifecycle，也不证明项目 adapter 的 intake/ranking 已接通。
 宿主策略完成验收前保持只读。设置读回、/status 和 /help 显示实际 grant，重新选择
 已配置 App 会恢复持久配置。改变 grant 会创建新绑定及 Session，拒绝旧会话的新工作，
 直连 Agent 必须重新授权；不能偷偷提高 attached 宿主或另一 App 的权限。宿主撤权或
-降为只读后，入站受理及恢复重新核验授权。
+降为只读后，入站受理及恢复重新核验授权。本机 Scope 只复用相同 typed 项目上下文；
+宿主授权变化时创建新会话，保留旧历史，拒绝在旧会话上执行新工作。
 
 typed Core、HTTP 与原生宿主回归覆盖默认读写、明确只读、工作区身份、App 独立授权、
 旧会话拒绝和原线程恢复。既有源码证据记录了 Codex canary 编辑并读回合成笔记、

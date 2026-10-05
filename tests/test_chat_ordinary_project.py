@@ -150,3 +150,38 @@ def test_default_project_host_grant_is_write_and_read_only_launch_is_enforced(or
         bindings.configure(transport_ref="notes-app", project_ref=projects["projects"][0]["project_ref"], executor_endpoint_id="codex", project_grant="workspace_write")
     assert bindings.read()["bindings"][0] == binding
     runtime.close()
+
+
+def test_local_scope_opens_new_session_after_host_grant_changes(ordinary):
+    store, runtime, contexts, request, capture, _, _ = ordinary
+    ref = contexts.available()[0]["project_ref"]
+    body = {"context_kind": "project", "project_ref": ref}
+    status, original = request("/api/chat/sessions", body)
+    assert status == 201
+    sessions = [original["session_id"]]
+    try:
+        for grant, sandbox in [("workspace_write", "workspace-write"), ("workspace_read", "read-only")]:
+            contexts.workspace_grant = grant
+            status, opened = request("/api/chat/sessions", body)
+            assert status == 201, opened
+            sid = opened["session_id"]
+            assert sid not in sessions and opened["goal_id"] is None
+            assert runtime.adapters[sid].session.sandbox == sandbox
+            assert store.load_session(sessions[-1])["project_context"]["grant"] != grant
+            status, denied = request(f"/api/chat/sessions/{sessions[-1]}/turns",
+                {"message": "old permission", "client_turn_id": "stale-grant"})
+            assert status == 400 and "grant changed" in denied["error"]
+            assert store.turn_for_client(sessions[-1], "stale-grant") is None
+            assert request("/api/chat/sessions", body)[1]["session_id"] == sid
+            status, accepted = request(f"/api/chat/sessions/{sid}/turns",
+                {"message": "Continue under current permission", "client_turn_id": f"current-{grant}"})
+            assert status == 202, accepted
+            assert runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)["status"] == "completed"
+            sessions.append(sid)
+        requests = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert len([row for row in requests if row.get("method") == "thread/start"]) == 3
+        assert not any(row.get("method") == "thread/resume" for row in requests)
+        assert len(store.list_sessions()) == 3
+        assert store.messages(sessions[1]) and store.messages(sessions[2])
+    finally:
+        runtime.close()
