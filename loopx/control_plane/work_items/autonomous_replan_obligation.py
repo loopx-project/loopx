@@ -40,7 +40,7 @@ def build_replan_novelty_policy() -> dict[str, str]:
 
     return {
         "schema_version": REPLAN_NOVELTY_POLICY_SCHEMA_VERSION,
-        "evidence_source": "agent_scoped_evidence_log",
+        "evidence_source": "compact_run_history",
         "delivery": "host_projected",
         "writeback": "typed_semantic_delta",
     }

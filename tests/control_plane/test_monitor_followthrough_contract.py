@@ -23,7 +23,12 @@ from loopx.control_plane.work_items.work_lane import (
 )
 from loopx.quota import build_quota_should_run, record_quota_monitor_poll
 from loopx.status import collect_status
-from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
+from loopx.todos import (
+    add_goal_todo,
+    complete_goal_todo,
+    list_goal_todos,
+    update_goal_todo,
+)
 
 
 GOAL_ID = "monitor-followthrough-fixture"
@@ -634,7 +639,8 @@ def test_same_turn_material_monitor_poll_is_no_spend_closeout_before_successor(
         runtime_root=runtime,
     )
     assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == admitted["todo_id"]
-    assert replay.get("selected_todo") is None
+    assert replay["selected_todo"]["todo_id"] == admitted["todo_id"]
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
     assert replay["should_run"] is False
     assert replay["effective_action"] == "heartbeat_settled_skip"
     assert replay["execution_obligation"]["must_attempt_work"] is False
@@ -800,10 +806,126 @@ def test_same_turn_unchanged_monitor_poll_is_already_settled(tmp_path: Path) -> 
         runtime_root=runtime,
     )
     assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == monitor["todo_id"]
-    assert replay.get("selected_todo") is None
+    assert replay["selected_todo"]["todo_id"] == monitor["todo_id"]
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
     assert replay["effective_action"] == "heartbeat_settled_skip"
     assert replay["execution_obligation"]["must_attempt_work"] is False
     assert replay["heartbeat_recommendation"]["agent_must_attempt"] is False
+
+
+def test_completing_bound_monitor_keeps_receipt_identity_without_work_projection(
+    tmp_path: Path,
+) -> None:
+    """The receipt is durable; the two work-lane projections are conditional.
+
+    Completing the bound Monitor makes the receipt-bound settled lane
+    unreconstructible. The committed receipt must still carry the historical
+    identity, while `selected_todo` and `agent_lane_next_action` legitimately
+    disappear instead of promising a current work item that no longer exists.
+    """
+
+    registry, runtime, _state = _write_fixture(tmp_path)
+    monitor = _add_monitor(
+        registry,
+        text="[P1] Poll a public release target, then complete it.",
+        target_key="public-release:completed-readback",
+        next_due_at="2000-01-01T00:00:00+00:00",
+    )
+    turn_id = "2026-08-21T10:49:02.405Z"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    admitted = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert admitted["selected_todo"]["todo_id"] == monitor["todo_id"]
+    settlement_identity = admitted["heartbeat_receipt"]["settlement_identity"]
+
+    poll = run_json_cli(
+        "quota",
+        "monitor-poll",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--todo-id",
+        monitor["todo_id"],
+        "--target-key",
+        "public-release:completed-readback",
+        "--result-hash",
+        "completed-readback",
+        "--execute",
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert poll["turn_continuation"]["current_turn_settled"] is True
+
+    before = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert before["selected_todo"]["todo_id"] == monitor["todo_id"]
+    assert before["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
+
+    completed = complete_goal_todo(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        todo_id=monitor["todo_id"],
+        agent_id=AGENT_ID,
+        role="agent",
+        no_followup=True,
+    )
+    assert completed["changed"] is True
+
+    replay = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    # Durable historical identity survives through the committed receipt.
+    assert replay["heartbeat_receipt"]["settlement_identity"] == settlement_identity
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    # Work-lane projections are conditional on the lane being reconstructible.
+    assert replay.get("selected_todo") is None
+    assert replay.get("agent_lane_next_action") is None
+    # No re-open, no new execution and no second spend from completion.
+    assert replay["should_run"] is False
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay["heartbeat_recommendation"]["agent_must_attempt"] is False
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    classifications = [
+        json.loads(line)["classification"]
+        for line in index.read_text(encoding="utf-8").splitlines()
+    ]
+    assert classifications.count("quota_monitor_poll") == 1
+    assert "state_refreshed" not in classifications
+    assert "quota_slot_spent" not in classifications
 
 
 def test_turn_scoped_monitor_poll_requires_committed_receipt(tmp_path: Path) -> None:

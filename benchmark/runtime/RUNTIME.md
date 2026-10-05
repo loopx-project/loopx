@@ -21,7 +21,7 @@ agents:
       iteration_context: fresh
       reasoning_effort: max
       codex_sandbox: danger-full-access
-      turn_timeout_sec: 4700
+      turn_timeout_sec: null
       scheduler_timeout_sec: 5080
       replan_after_todos: 3
 ```
@@ -99,7 +99,11 @@ another phase can replace its task input. These wait/recovery rules apply to
 both entry policies; they correct the earlier unconditional phase reset.
 Every scheduler wake caps its host timeout against the remaining phase budget
 before opening an execution. If only startup and settlement reserve remains,
-it records a budget-exhausted no-op without creating a pending Turn.
+it records a budget-exhausted no-op without creating a pending Turn. In the
+heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
+configured shell worker stops normally. It does not re-admit empty wakes, mark
+the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
+for normal budget exhaustion.
 The deadline uses the task environment's clock, including remote Harbor backends.
 
 To compare entry policies, hold the execution mode, session policy, model,
@@ -111,7 +115,7 @@ kwargs:
   task_entry: loopx-planned
   planning_timeout_sec: 300
   iteration_context: fresh
-  turn_timeout_sec: 4700
+  turn_timeout_sec: null
   scheduler_timeout_sec: 5080
 ```
 
@@ -201,3 +205,5 @@ Install the intended Harbor version for the adapter tests. Real qualification
 also needs installed Codex, the native Harbor backend and independently checked
 task output. Unit tests establish no score or model-uplift claim. Validate small
 jobs through each benchmark's native configuration before launching a study.
+
+By default, worker calls have no independent turn deadline. Harbor derives their available time from the remaining total phase budget, reserving cleanup and settlement time. An explicit `turn_timeout_sec` remains supported as an operator override.

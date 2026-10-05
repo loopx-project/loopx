@@ -329,6 +329,7 @@ def qualify_replan_writeback(
         obligation=obligation,
         progress_observation=progress_observation,
         agent_vision=agent_vision,
+        history_runs=newest_first_runs,
     )
     if (
         "coverage_backed_no_followup"

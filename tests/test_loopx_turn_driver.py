@@ -1940,7 +1940,7 @@ def test_turn_cli_requires_complete_resume_identity(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("checkpoint_fault", [None, "writeback", "quota_spend"])
-def test_turn_run_once_cli_commits_validated_result_and_one_quota_slot(
+def test_turn_run_once_cli_commits_distinct_host_guidance_without_task_step_edit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     checkpoint_fault: str | None,
@@ -1984,7 +1984,7 @@ def test_turn_run_once_cli_commits_validated_result_and_one_quota_slot(
             ]
         )
     assert policy_code == 0, policy_output.getvalue()
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script = """
 import json
@@ -2096,13 +2096,23 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
         / "loopx-turn-fixture"
         / "ACTIVE_GOAL_STATE.md"
     )
-    assert "Run the next public fixture check" in state_path.read_text(encoding="utf-8")
+    assert "Run the next public fixture check" not in state_path.read_text(encoding="utf-8")
+    journal_path = runtime / "goals" / "loopx-turn-fixture" / "turns" / (
+        payload["resume_turn_key"].removeprefix("sha256:") + ".json"
+    )
+    # The host texts have distinct meanings and survive replay without becoming
+    # an implicit task-step write or replacing shared compatibility prose.
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert journal["host_result"]["recommended_action"] == "Continue the public fixture"
+    assert journal["host_result"]["next_action"] == "Run the next public fixture check"
     index_path = runtime / "goals" / "loopx-turn-fixture" / "runs" / "index.jsonl"
     rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()]
     assert [row["classification"] for row in rows] == [
         "fixture_progress",
         "quota_slot_spent",
     ]
+    assert rows[0]["recommended_action"] == "Continue the public fixture"
+    assert not rows[0]["recommended_action_resolution"].get("step_revision")
 
     resumed_output = io.StringIO()
     with contextlib.redirect_stdout(resumed_output):
@@ -2277,7 +2287,7 @@ def test_turn_run_once_cli_completes_selected_todo_after_validation(
     next_action: str,
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script = """
 import json
@@ -2458,7 +2468,7 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
     _promote_turn_fixture(project, runtime)
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     argv = _turn_run_once_completion_argv(
@@ -2622,7 +2632,7 @@ def test_turn_run_once_cli_repairs_committed_quota_spend_after_receipt_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     argv = _turn_run_once_completion_argv(
@@ -2729,7 +2739,7 @@ def test_turn_run_once_cli_projects_declared_successor_continuation(
             "task_class=advancement_task priority=P2 -->",
         ),
     )
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     output = io.StringIO()
@@ -2761,7 +2771,7 @@ def test_turn_run_once_cli_projects_durable_no_followup_continuation(
         tmp_path,
         todo_metadata_extra="no_followup=true",
     )
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     output = io.StringIO()
@@ -2798,7 +2808,7 @@ def test_turn_run_once_cli_terminal_recovery_rejects_unowned_completion(
         tmp_path,
         todo_metadata_extra="no_followup=true",
     )
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     argv = _turn_run_once_completion_argv(
@@ -2921,7 +2931,7 @@ def test_turn_run_once_cli_fails_closed_on_dangling_declared_successor(
         tmp_path,
         todo_metadata_extra="successor_todo_ids=todo_missing999",
     )
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     output = io.StringIO()
@@ -2963,7 +2973,7 @@ def test_turn_run_once_cli_replays_declared_successor_after_interruption(
             "task_class=advancement_task priority=P2 -->",
         ),
     )
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
     argv = _turn_run_once_completion_argv(
@@ -3183,7 +3193,7 @@ def test_turn_run_once_cli_rejects_unproven_host_claim_before_writeback(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
-    host_project = tmp_path / "isolated-host-workspace"
+    host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script = """
 import json
@@ -3436,7 +3446,13 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         / "loopx-turn-fixture"
         / "ACTIVE_GOAL_STATE.md"
     ).read_text(encoding="utf-8")
-    assert "Run one revised public fixture check" in state
+    journal_path = runtime / "goals" / "loopx-turn-fixture" / "turns" / (
+        payload["resume_turn_key"].removeprefix("sha256:") + ".json"
+    )
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert journal["host_result"]["next_action"] == "Run one revised public fixture check"
+    assert journal["host_result"]["recommended_action"] != journal["host_result"]["next_action"]
+    assert "Run one revised public fixture check" not in state
     if result_kind != "validated_progress":
         assert f"LoopX%20Turn%20{result_kind}" in state
 

@@ -8,6 +8,7 @@ import { GoalCapabilitySettings } from "./goal-capability-settings";
 import { GoalOwnershipSettings } from "./goal-ownership-settings";
 import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
+import { ConfigurationBackupSettings } from "./configuration-backup-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
@@ -221,6 +222,7 @@ export function WorkspaceSettingsPage({
           />
         ) : null}
         {tab === "ownership" && selectedGoal ? <GoalOwnershipSettings key={selectedGoal.goalId} goalId={selectedGoal.goalId} onChanged={onChanged} /> : null}
+        {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
 
         {tab === "appearance" ? (

@@ -250,7 +250,7 @@ def main() -> int:
         assert closed["written"] is True, closed
         assert goal(registry)["spawn_policy"]["explore_harness"] == {"enabled": False}
 
-        graph_closed_harness_open = run_cli(
+        rejected_graphless_planning = run_cli(
             registry,
             runtime_root,
             "configure-goal",
@@ -259,9 +259,16 @@ def main() -> int:
             "--no-explore-graph-enabled",
             "--explore-harness-enabled",
             "--execute",
+            check=False,
         )
-        assert graph_closed_harness_open["written"] is True, graph_closed_harness_open
-        assert goal(registry)["explore_graph"] == {"enabled": False}
+        assert rejected_graphless_planning["ok"] is False, rejected_graphless_planning
+        assert "planning requires its evidence graph" in rejected_graphless_planning["error"]
+        assert goal(registry)["explore_graph"] == {"enabled": True}
+        assert goal(registry)["spawn_policy"]["explore_harness"] == {"enabled": False}
+        unified = run_cli(registry, runtime_root, "configure-goal", "--goal-id", GOAL_ID,
+                          "--explore-mode", "planning", "--execute")
+        assert unified["ok"]
+        assert goal(registry)["explore_graph"] == {"enabled": True}
         assert goal(registry)["spawn_policy"]["explore_harness"] == {"enabled": True}
 
         conflict = run_cli(

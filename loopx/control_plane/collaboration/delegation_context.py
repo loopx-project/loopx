@@ -152,6 +152,7 @@ def project_delegation_context(
                         "turn_returned",
                         "accepted",
                         "rejected",
+                        "stopped",
                         "unavailable",
                     )
                     if statuses[key]

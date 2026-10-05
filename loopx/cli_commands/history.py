@@ -52,6 +52,8 @@ def register_history_command(subparsers: argparse._SubParsersAction) -> None:
     )
     history_parser.add_argument("--goal-id", help="Only show one goal.")
     history_parser.add_argument("--limit", type=int, default=10)
+    history_parser.add_argument("--agent-id", help="Scope compact history to one Agent.")
+    history_parser.add_argument("--evidence-ref", help="Read the exact public-safe evidence reference supplied by replan_context.")
     history_parser.add_argument(
         "--review-plan-json",
         help=(
@@ -78,6 +80,32 @@ def handle_history_command(
     runtime_root_arg: str | None,
     print_payload: PrintPayload,
 ) -> int:
+    if args.agent_id and (not args.goal_id or args.history_action):
+        print_payload({"ok": False, "error": "--agent-id requires --goal-id without a history action"},
+                      args.format, render_history_markdown)
+        return 1
+    if args.evidence_ref:
+        from ..control_plane.work_items.replan_context_codec import project_replan_context
+
+        try:
+            if not args.goal_id or not args.agent_id or args.history_action:
+                raise ValueError("--evidence-ref requires --goal-id and --agent-id without a history action")
+            registry = load_registry(registry_path)
+            runtime_root = resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path)
+            history = collect_history(
+                registry_path=registry_path, runtime_root=runtime_root, goal_id=args.goal_id,
+                agent_lane_id=args.agent_id, limit=max(0, args.limit),
+            )
+            payload = project_replan_context(
+                goal_id=args.goal_id, agent_id=args.agent_id,
+                runs=(), evidence_ref=args.evidence_ref,
+                source_status={"run_history": history, "registry": str(registry_path),
+                               "runtime_root": str(runtime_root)},
+            )
+        except Exception as exc:
+            payload = {"ok": False, "error": str(exc)}
+        print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+        return 0 if payload.get("ok") else 1
     if args.history_action == "trajectory-hygiene":
         try:
             if not args.goal_id:
@@ -216,7 +244,27 @@ def handle_history_command(
             runtime_root=runtime_root,
             goal_id=args.goal_id,
             limit=max(0, args.limit),
+            agent_lane_id=args.agent_id,
+            scoped_agent_id=args.agent_id,
         )
+        if args.agent_id:
+            # Scope every row-bearing history surface, including retained
+            # semantic references. The global quota metadata stays goal-wide.
+            def scoped(rows):
+                return [row for row in rows if row.get("agent_id") == args.agent_id][:max(0, args.limit)]
+
+            payload["runs"] = scoped(payload["runs"])
+            for goal in payload["goals"]:
+                goal["latest_runs"] = scoped(goal["latest_runs"])
+                latest = goal.get("latest_status_run")
+                if latest and latest.get("agent_id") != args.agent_id:
+                    goal["latest_status_run"] = None
+                semantic = goal["semantic_history"]
+                semantic["agents"] = scoped(semantic["agents"])
+                semantic["active_blocked_retry_runs"] = scoped(semantic["active_blocked_retry_runs"])
+                correction = semantic.get("latest_owner_correction_run")
+                if correction and correction.get("agent_id") != args.agent_id:
+                    del semantic["latest_owner_correction_run"]
     except Exception as exc:
         payload = {
             "ok": False,

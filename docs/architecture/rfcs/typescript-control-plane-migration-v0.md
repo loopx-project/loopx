@@ -419,6 +419,19 @@ or passing accelerated volume tests is not ten-day continuity evidence.
 Local promotion waits for both volume and elapsed-time qualification; it does
 not wait for a PostgreSQL service and never expires receipts at day ten.
 
+Bounded caller recovery now has [claim argument guidance](../../reference/source-cli-entrypoint.md#claim-argument-recovery--claim-参数恢复):
+one rejected invocation exposes missing/unsupported flags and preserves the
+original argv bindings, without inferring executors or changing source/lease
+admission. This stays in the existing CLI grammar/formatting adapter; TypeScript
+retains claim authority. Real Legacy/File/SQLite retry and negative cases qualify
+that boundary. Larger errors versus avoided help, actual model token/retry costs,
+source-mode repair and short normal/full replan context remain separate evidence
+questions; this does not close long-goal or provider-performance acceptance.
+Material-closeout guidance now enters the existing settlement step before writing;
+the shared [authoring example](../../reference/protocols/goal-vision-replan-contract-v0.md)
+carries a complete evidence-linked continuation. Real CLI write/read negatives
+qualify that guidance seam; avoided model retries and sustained cost remain open.
+
 ### Delivery semantics: correctness before migration
 
 The replan obligation outcome policy now lives in
@@ -439,6 +452,19 @@ identity reuse; the TypeScript outcome owner rejects that claim for every
 replan source while retaining independently evidenced vision paths. This
 corrects false advancement admission; it does not add a blocked-wait settlement
 route or certify Goal completion.
+
+Replan decision context now follows the same boundary: `work_items/replan_context.ts`
+owns scoping, chronology, repetition reduction, result/route diversity and bounded
+coverage projection. Its Python codec reads the existing Goal and compact index,
+normalizes historical observations and reuses the private snapshot transport.
+The core Goal, scoped acceptance contract, evidence and uncovered frontier enter
+one context; the standalone evidence command is retired. Selection reads beyond
+the status display window. The readable view retains up to 24 distinct
+observations, while writeback novelty checks retain complete available history.
+Real CLI references, file/SQLite receipt reentry, wrong-scope/stale reads and
+omitted-old-blocker rejection qualify this S3/S6 slice. Ordinary guard output
+remains unchanged; the required-replan information budget increases explicitly.
+This does not complete T3, qualify ten-day costs or establish S11 score gains.
 
 The delivery-history boundary now treats `classification`, `health_check`, and
 `recommended_action` as narrative. They cannot create or discharge a
@@ -1216,6 +1242,15 @@ the receipt must still hash the complete relevant Todo/dependency, User Todo,
 Goal prose, acceptance and vision basis. A display limit must never become a
 settlement limit. Retain the current complete read until that parity and stale-
 head recovery are qualified on legacy, File and SQLite backends.
+
+**Checkpoint repair authoring.** The existing TS vision owner must project only
+repair choices the validator accepts: without a persisted vision, a missing
+checkpoint requires a vision patch; unchanged reasoning is available only with
+that baseline. The authoring contract shares the validator's `todo_delta`
+limits: retain the first eight entries, with at most 80 characters per retained
+entry. Isolated real CLI recovery must preserve the original settlement identity
+and replay fences. This closes a recovery-guidance correctness gap; it does not
+qualify lower context, IO or latency costs.
 
 **Recovery boundary (2026-09-22).** The
 [authority archive command](../../reference/authority-archive.md) places retained

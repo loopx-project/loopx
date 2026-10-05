@@ -39,7 +39,7 @@ def protocol_first_candidate_action(payload: dict[str, Any]) -> str | None:
         if isinstance(payload.get("agent_lane_next_action"), dict)
         else {}
     )
-    lane_text = protocol_action_label(agent_lane_next_action.get("text"))
+    lane_text = protocol_action_label(agent_lane_next_action.get("next_step") or agent_lane_next_action.get("text"))
     if lane_text:
         todo_id = str(agent_lane_next_action.get("todo_id") or "").strip()
         return f"{todo_id}: {lane_text}" if todo_id else lane_text

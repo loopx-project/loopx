@@ -27,8 +27,15 @@
   检查通过；工具明确不证明生产可用性、故障转移或多 owner 运行。
   独立的 metadata-runtime 升级验收门禁
   [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) 仍开放。
+  其中 seed routing helper [PR #4724](https://github.com/loopx-project/loopx/pull/4724)
+  已合并，配套 ladder [PR #4726](https://github.com/loopx-project/loopx/pull/4726)
+  仍开放；helper 合并本身不关闭该升级门禁。
   **状态：资格验证工具已合并，独立验收尚未关闭**。这比下文 README 中的合作声明
-  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。核对日期：2026-09-30。
+  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。NoKV 的
+  [当前 README 证据边界](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md#evidence-and-qualification)
+  另将完整原生 CLI 和已安装 Python wheel 对真实服务的验收标为尚未资格化。
+  历史单节点测试环境的结果不证明这些当前、更广范围的验收成立。
+  核对日期：2026-10-04。
 - **GoTry**（Danceiny）——用 LoopX goals、Codex 任务绑定和心跳管理多条开发路线。
   [issue #18](https://github.com/Danceiny/gotry/issues/18) 记录接入，已合并的
   [PR #187](https://github.com/Danceiny/gotry/pull/187) 记录交付验证。
@@ -41,30 +48,57 @@
   LoopX 管理维护目标、待办、证据、监视和重规划，科研状态仍由 `research_loop` 所有。
   **状态：维护集成已合并**；后续自动唤醒
   [PR #26](https://github.com/hk20013106/RLR/pull/26) 已关闭、未合并。
-- **LoopX Console**（xielixing）——第三方 BitFun MiniApp，通过本机 LoopX CLI、
-  `quota should-run` 和宿主 Agent 修复 GitHub Issue。
-  [源码与安装说明](https://github.com/xielixing/loopx-console)及
-  [发行版本](https://github.com/xielixing/loopx-console/releases)已公开。
-  **状态：独立发布**；是否进入 OpenBitFun 上游是下文的另一项提案。
+- **LoopX Console**（xielixing）——用于修复 GitHub Issue 的第三方 BitFun MiniApp。
+  独立版本 [v3.9.29](https://github.com/xielixing/loopx-console/releases/tag/v3.9.29)
+  于 2026-08-18 发布，附有 MiniApp ZIP。
+  [核对的 main worker](https://github.com/xielixing/loopx-console/blob/dca7883ea5d4e2a0d48c0af5a1764c51a5023b53/source/worker.js)
+  调用本机 LoopX CLI，以 `outer_controller` profile 执行 `quota should-run`；
+  回退的源码安装固定为 LoopX **v0.2.13**。
+  [同一快照的 README](https://github.com/xielixing/loopx-console/blob/dca7883ea5d4e2a0d48c0af5a1764c51a5023b53/README.md)
+  将调度和执行归于 MiniApp/BitFun 宿主，并描述发布 PR 前需人工批准。
+  **状态：独立发布，已观察到历史 CLI 集成**。发布元数据与当前源码是不同证据；
+  ZIP、真实宿主执行、当前 LoopX 兼容和持续使用未独立验证。是否进入 OpenBitFun
+  上游仍是下文的另一项提案。核对日期：2026-10-05。
 - **zyra**（BingruL）——[打包配置](https://github.com/BingruL/zyra/blob/fix/execution-timeouts-and-diagnostics/pyproject.toml)
   内嵌 LoopX runtime 并注册 CLI 入口。
   **状态：已观察到源码与打包集成**；未验证部署和持续运行。
 - **Hufu**（Blicae8917）——已合并的
-  [PR #70](https://github.com/Blicae8917/hufu/pull/70) 增加显式启用的 LoopX v0.5.2
-  RunOnce Consumer。真实 transport 和 Host 调用由部署 Provider 提供；状态投影
-  [issue #76](https://github.com/Blicae8917/hufu/issues/76) 仍开放。
-  **状态：限定范围的集成已合并，配套工作尚未完成**。
+  [PR #70](https://github.com/Blicae8917/hufu/pull/70) 于 2026-08-23 增加显式启用的
+  LoopX v0.5.2 RunOnce Consumer。核对的 main 快照已
+  [导出 Consumer 及其 ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts)；
+  [兼容记录](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/docs/COMPATIBILITY.md)
+  保留 v0.5.2 精确基线，不内置 LoopX 依赖。真实 transport 和 Host 调用由部署
+  Provider 提供。[issue #76](https://github.com/Blicae8917/hufu/issues/76) 报告了
+  owner-local 试点的 RunOnce committed/replay 回执，但通用状态投影仍不完整，
+  issue 仍开放。**状态：限定范围集成已合并、本地试点由作者报告、配套投影开放**。
+  本清单未独立复现该试点，不据此声明当前版本兼容或持续部署。
+  核对日期：2026-10-04。
 - **benjamin-plugins**（Yidada）——已合并的
-  [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1) 增加调用官方 LoopX 内核的
-  Codex 插件。作者报告源码 checkout 上的 CLI 契约 smoke 通过；PyPI 安装未验证，
-  后台调度仍归宿主。**状态：插件已合并**。
+  [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1) 于 2026-09-05 增加调用
+  官方 LoopX 内核的 Codex 插件。核对的 main
+  [marketplace 条目](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/.agents/plugins/marketplace.json)
+  仍注册该插件；[来源记录](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/SOURCE.md)
+  将 CLI 资格固定到 LoopX 0.5.4 源码 checkout。PR 报告一个独立模型 status 场景，
+  其余场景仅通过结构校验。
+  [preflight 实现](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/skills/loopx/scripts/preflight.py)
+  只查找可执行文件和读取 registry 形状，不执行 LoopX，明确保留 runtime 和 driver
+  未验证。**状态：插件已合并，源码 checkout 验证由作者报告**。PyPI 安装、真实后台
+  执行和当前版本兼容未验证，调度仍归宿主。核对日期：2026-10-04。
 - **Adaptive-Agent-Orchestration-Protocol**（YuemingHub）——已合并的
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41)
-  将 LoopX 注册为可选执行连续性 Provider。
-  [issue #42 的试点报告](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5249833699)
-  记录了限定范围的 Linux CLI 恢复与门禁测试；
-  [后续回读](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
-  未证明持续采用。**状态：协议集成与非生产试点**，不代表默认生产采用。
+  于 2026-08-11 将 LoopX 注册为可选执行连续性 Provider。
+  [固定版本的试点报告](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/docs/LOOPX_PILOT_EVIDENCE.md)
+  记录了针对 LoopX v0.4.3 的 Linux direct-CLI/custom-runner 测试：新进程恢复、
+  验证与人工门禁、有界交接、记账及回滚。
+  [消费者 Actions](https://github.com/YuemingHub/mingos-foundation/actions/runs/31465474613)
+  在报告所记的消费者 head 上成功，但不构成对全部报告断言的独立复现。
+  [8 月 14 日后续回读](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
+  明确保留 LoopX 未采用，未将试点提升为持续采用。AAOP 仓库现已归档；
+  [退役记录](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/RETIREMENT.md)
+  自 2026-09-25 生效，保留冻结的研究和历史发布，不承诺持续兼容或支持。
+  **状态：已退役项目中的历史可选集成与有界试点**。当前 LoopX 兼容、Windows/WSL
+  和生产宿主/会话重启仍未资格化；AAOP 退役不构成 LoopX 失败的实证。
+  核对日期：2026-10-05。
 
 ## 2. 机制借鉴
 
@@ -94,12 +128,26 @@
 
 ## 3. 提案与暂缓采用
 
+- **MilkSU**——[issue #189](https://github.com/MilkSU-Official/milksu/issues/189)
+  评估接入 LoopX、借鉴持久 Goal/状态/重试机制，或保留现有 ACP 方案。
+  **状态：开放设计评估**，尚非已接受或已实现的集成。核对于 2026 年 10 月 3 日。
+- **ai-skills**——[issue #468](https://github.com/MichaelHeaton/ai-skills/issues/468)
+  提议借鉴 LoopX 的 quota 门控、冷却与自唤醒检查，不引入 LoopX 运行时依赖。
+  [9 月 23 日后续评论](https://github.com/MichaelHeaton/ai-skills/issues/468#issuecomment-5796952500)
+  因 `/loop` 是内置命令，将 hook 或上游支持留作后续设计。
+  **状态：历史开放提案**，不是已交付的 Skill 或运行时采用。
+  核对于 2026 年 10 月 3 日。
 - **OpenViking / VikingBot**——开放的
   [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) 提议增加可选、
   默认关闭的 LoopX 后台长任务。LoopX 管 Goal/Todo 状态与执行门禁，Bot 提供
   worker、模型与工具。作者报告以模型替身完成真实 CLI 测试；真实模型端到端
-  验收和 Docker 构建仍未完成。**状态：运行时集成提案，尚未合并或发布**。
-  核对日期：2026-09-30。
+  验收和 Docker 构建仍未完成。
+  提案的[固定版本打包配置](https://github.com/volcengine/OpenViking/blob/406827d73594fda9def251912be64bf06b013773/pyproject.toml)
+  将 `loopx==1.0.5` 放在可选 `longtask` extra 中；
+  [当前 main 打包配置](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/pyproject.toml)
+  未声明该 extra。这是提案与 main 的快照对照，不是安装未发布 extra 的指引。
+  **状态：运行时集成提案，尚未合并或发布**。
+  核对日期：2026-10-04。
 - **Opensiro VSM harness index**——已合并的
   [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) 记录固定
   LoopX 对比实验的可辨识性阻塞；后续
@@ -113,6 +161,7 @@
   [PR #2836](https://github.com/GCWing/OpenBitFun/pull/2836) 仍开放，替代已关闭未合并的
   #2382。维护者[表示优先保障 beta 稳定性，之后再评估大特性](https://github.com/GCWing/OpenBitFun/pull/2836#issuecomment-5613986161)。
   **状态：上游集成提案**，与已独立发布的第三方 LoopX Console 分开记录。
+  独立发布和作者报告的本地检查均不构成上游合并或发布。核对日期：2026-10-05。
 - **codexia**——上游 [PR #71](https://github.com/milisp/codexia/pull/71) 已关闭未合并，
   作者解释为误投仓库；下游
   [PR #1](https://github.com/connorodea/codexia-task-management/pull/1) 仍开放。
@@ -147,15 +196,26 @@
 
 ## 4. 学习、传播与合作
 
+- **General Loop**——[固定版本的 README 对比](https://github.com/CosmosShadow/general-loop/blob/0bd8fb3b5b5c2e8e02b35e627ad715cade23bba0/README.md)
+  将 LoopX 控制面协议与现有 Agent 宿主上的 Markdown 协调方式并列。
+  **状态：比较引用**；提及本身不证明 LoopX 依赖或机制采用。
+  核对于 2026 年 10 月 3 日。
+- **GitHub-Michelin**——已合并的
+  [PR #128](https://github.com/ZhenningLang/GitHub-Michelin/pull/128) 增加双语
+  [LoopX 编辑条目](https://github.com/ZhenningLang/GitHub-Michelin/blob/a75520b79cff3d9818ab6b60100677b93beaef81/categories/agent-tooling/work-state/loopx.md)。
+  **状态：编辑内容收录**，不是运行时采用。条目中 9 月 27 日的评述和快照属于
+  编辑当时的观察，不是对 LoopX 当前行为的实时资格验证。
+  核对于 2026 年 10 月 3 日。
 - **《深入理解 AI Agent》/ ai-agent-book**（bojieli）——已合并的
   [PR #614](https://github.com/bojieli/ai-agent-book/pull/614) 将 LoopX 引入为具体的
   Loop Engineering 框架；[第 10 章](https://github.com/bojieli/ai-agent-book/blob/main/book/chapter10.md)
   引用固定版本并保留实验性证据边界。**状态：教学材料**，不是读者采用统计。
 - **NAVER fe-news**——[2026 年 9 月通讯](https://github.com/naver/fe-news/blob/master/issues/2026-09.md)
   用韩文介绍 LoopX 及安装路径。**状态：编辑内容收录**，不代表 NAVER 部署声明。
-- **OpenViking / NoKV**——[OpenViking README](https://github.com/volcengine/OpenViking/blob/main/README.md)
-  列出 LoopX；[NoKV README](https://github.com/NoKV-Lab/NoKV/blob/main/README.md)
+- **OpenViking / NoKV**——[OpenViking README](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/README.md)
+  列出 LoopX；[NoKV README](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md)
   将其列为活跃开源合作。**状态：公开项目关系**；这些条目本身不证明运行时依赖。
+  核对日期：2026-10-04。
 - **loopx-book / loopx-book-labs**（cocolord）——双语、协议优先的
   [开发者书](https://github.com/cocolord/loopx-book)与
   [可运行实验](https://github.com/cocolord/loopx-book-labs)，覆盖项目接入、Issue 到 PR
@@ -163,6 +223,14 @@
 
 ## 5. 衍生实现
 
+- **michaelx1993/loopx → foolzzz/loopx**——同一相关 fork 家族，不计为两个独立采用者。
+  [下游 Changelog](https://github.com/foolzzz/loopx/blob/6c16e4a06797f2b0a81a53827e7fd8082913b36d/CHANGELOG.md)
+  记录了与上游分叉及角色式编排。已合并的
+  [michaelx1993 PR #27](https://github.com/michaelx1993/loopx/pull/27)
+  引入确定性的记账与有界编排摘要；已合并的
+  [foolzzz PR #18](https://github.com/foolzzz/loopx/pull/18) 为该 fork 准备 2.0.0 版本。
+  **状态：下游代码已合并**；这些是 fork 的变更，不是上游 LoopX 发布或独立验证的
+  性能增益。核对于 2026 年 10 月 3 日。
 - **loopx-HPC**（Sande33p）——独立 fork 内的
   [PR #1](https://github.com/Sande33p/loopx-HPC/pull/1) 已合并，增加可选 scientific
   campaign、PBS/Slurm 和 MLflow 集成。**状态：下游代码已合并**；作者明确说明
@@ -192,3 +260,11 @@
   9 月 19 日刷新。
 - 局部更新：**2026-09-30**，覆盖上述 CGC 2046、NoKV 资格验证工具、VikingBot
   提案及已停止的 Opensiro 研究。其余条目沿用此前的核对边界，不代表全表重新验真。
+- 局部更新：**2026-10-03**，覆盖 MilkSU、ai-skills、General Loop、GitHub-Michelin
+  及 michaelx1993/foolzzz fork 家族。核对了当前 Issue/PR 状态、后续评论和固定版本
+  的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。
+- 局部更新：**2026-10-04–05**，按当前公开 PR/Issue 状态和固定版本源文件复核
+  OpenViking、NoKV、Hufu 和 benjamin-plugins；10 月 5 日对齐 AAOP 历史试点/退役、
+  LoopX Console 独立发布与历史 CLI pin，以及单独的 OpenBitFun 提案。
+  区分提案打包配置、历史工具和试点、插件注册及当前验收限制。
+  未独立复现真实集成，其余条目未重新验真。

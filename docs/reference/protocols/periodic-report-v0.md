@@ -536,11 +536,20 @@ The optional automatic path uses the provider-neutral TypeScript
 `post_writeback` capability-hook contract. The CLI composition root registers
 `periodic_report.runtime_trigger` only when the Goal's local control-plane
 configuration explicitly enables a periodic-report profile. Core dispatches
-only after the primary `refresh-state` durable writeback and exact settlement
+only after the primary `refresh-state` or `todo complete` durable writeback and exact settlement
 readback have succeeded with complete Goal, Agent, Turn, and effect identity.
 Todo-bound settlements carry a non-empty Todo id; Todo-less autonomous replans
 carry an explicit `null` Todo id rather than inventing a Todo identity. The
 best-effort rollout-event log is not dispatch authority.
+
+New Todo completions checkpoint a TypeScript-owned `completion_receipt_id` in
+the primary transaction. Ordinary completion and same-Turn terminal closeout
+have distinct ids even when their timestamps are equal. Hook dispatch and
+composition recovery use that committed id, so a later timestamp change cannot
+create a duplicate intent. Existing completions without the field retain their
+original timestamp-derived identity; replay does not migrate or rewrite them.
+Canonical receipt replay also recovers the optional hook after primary commit
+if its sidecar was not checkpointed. These ids grant no additional authority.
 
 The hook input contains only the committed receipt identity, stable state
 revision, and derived `periodic_report_stage_completion_receipt_v0`. Its result

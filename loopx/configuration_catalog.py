@@ -6,6 +6,7 @@ from typing import Any
 
 from .capabilities.configuration_ui import build_capability_configuration_catalog
 from .control_plane.agent_context import agent_context_descriptor
+from .explore_graph import explore_configuration
 from .control_plane.goals.goal_vision_policy import completed_todo_replan_threshold
 
 DEFAULT_MULTI_SUBAGENT_MAX_CHILDREN = 2
@@ -116,9 +117,9 @@ def build_goal_configuration_catalog(
         if isinstance(feature_summary.get("coordination_runtime_shadow"), Mapping)
         else {}
     )
-    graph_enable_args = ("--explore-graph-enabled",)
+    explore = explore_configuration(graph, harness)
     harness_enable_args = (
-        "--explore-harness-enabled",
+        "--explore-mode", "planning",
         "--explore-harness-profile",
         "generic",
     )
@@ -477,61 +478,12 @@ def build_goal_configuration_catalog(
                 },
             },
             {
-                "feature_id": "explore_graph",
-                "display_name": "Explore Graph",
-                "availability": "supported_opt_in",
-                "default": {"enabled": False},
-                "current": {"enabled": graph.get("enabled") is True},
-                "consider_when": (
-                    "The goal needs a durable topology of hypotheses, evidence, decisions, "
-                    "or an already configured operator-facing graph sink."
-                ),
-                "effect": "Projects durable Explore evidence after material refreshes.",
-                "does_not": [
-                    "enable Explore Harness",
-                    "spawn workers, claim todos, or spend quota by itself",
-                ],
-                "commands": {
-                    "preview_enable": _configure_command(goal_id, *graph_enable_args),
-                    "apply_enable": _configure_command(
-                        goal_id, *graph_enable_args, execute=True
-                    ),
-                    "preview_disable": _configure_command(
-                        goal_id, "--no-explore-graph-enabled"
-                    ),
-                    "apply_disable": _configure_command(
-                        goal_id, "--no-explore-graph-enabled", execute=True
-                    ),
-                    "verify": [
-                        inspect_command,
-                        shlex.join(
-                            [
-                                "loopx",
-                                "explore",
-                                "graph",
-                                "--goal-id",
-                                goal_id,
-                                "--graph-format",
-                                "mermaid",
-                            ]
-                        ),
-                    ],
-                },
-                "documentation": {
-                    "path": "loopx/capabilities/explore/README.md",
-                    "url": (
-                        "https://github.com/loopx-project/loopx/blob/main/"
-                        "loopx/capabilities/explore/README.md"
-                    ),
-                },
-            },
-            {
                 "feature_id": "explore_harness",
                 "display_name": "Explore Harness",
                 "availability": "supported_opt_in",
-                "default": {"enabled": False, "profile": "generic"},
+                "default": {"mode": "off", "profile": "generic"},
                 "current": {
-                    "enabled": harness.get("enabled") is True,
+                    "mode": explore["mode"],
                     "profile": harness.get("profile"),
                 },
                 "profiles": list(explore_harness_profiles),
@@ -539,21 +491,22 @@ def build_goal_configuration_catalog(
                     "The goal benefits from comparing alternative branches with explicit "
                     "evaluation criteria and guardrails."
                 ),
-                "effect": "Enables read-only Explore branch and worker-lane planning.",
+                "effect": "Records durable exploration evidence, with optional read-only branch planning. Planning includes the evidence graph.",
                 "does_not": [
-                    "enable Explore Graph",
-                    "launch workers, claim todos, acquire leases, mutate state, or spend quota",
+                    "grant permission to launch workers, claim todos, acquire leases or spend quota",
                 ],
                 "commands": {
+                    "preview_evidence_only": _configure_command(goal_id, "--explore-mode", "evidence"),
+                    "apply_evidence_only": _configure_command(goal_id, "--explore-mode", "evidence", execute=True),
                     "preview_enable": _configure_command(goal_id, *harness_enable_args),
                     "apply_enable": _configure_command(
                         goal_id, *harness_enable_args, execute=True
                     ),
                     "preview_disable": _configure_command(
-                        goal_id, "--no-explore-harness-enabled"
+                        goal_id, "--explore-mode", "off"
                     ),
                     "apply_disable": _configure_command(
-                        goal_id, "--no-explore-harness-enabled", execute=True
+                        goal_id, "--explore-mode", "off", execute=True
                     ),
                     "verify": [
                         inspect_command,
@@ -582,9 +535,9 @@ def build_goal_configuration_catalog(
                 "feature_id": "pull_request_review",
                 "display_name": "Pull-request review",
                 "availability": "supported",
-                "default": {"wait_for_ci": True, "review_priority": "other-developers-first"},
+                "default": {"wait_for_ci": True, "review_order": "forward"},
                 "current": feature_summary.get("pull_request_review") or {},
-                "effect": "Choose CI waiting and review priority for this Goal; clear the complete override to restore machine defaults.",
+                "effect": "Choose Goal and registered-Agent review directions and CI waiting; clear the complete override to restore machine defaults.",
                 "documentation": {"path": "loopx/capabilities/pr_review_queue/README.md"},
             },
             {

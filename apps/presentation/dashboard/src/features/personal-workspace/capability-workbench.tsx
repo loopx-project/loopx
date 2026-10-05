@@ -156,7 +156,7 @@ export function CapabilityDetailHeader({ capability, locale, source }: Readonly<
           <summary>{locale === "zh-CN" ? "配置说明" : "Configuration help"}</summary>
           <p>{localized.description}</p>
           <dl>{capability.configuration_editor.fields.map((field) => {
-            const copy = localizedCapabilityFieldCopy(locale)[field.key];
+            const copy = localizedCapabilityFieldCopy(locale, capability.capability_id)[field.key];
             const description = copy?.description ?? field.description;
             return description ? <div key={field.key}><dt>{copy?.label ?? field.label}</dt><dd>{description}</dd></div> : null;
           })}</dl>

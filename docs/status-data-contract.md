@@ -199,10 +199,12 @@ For replan, the guard carries a host-built `replan_context_v0` and the compact
 `replan_action_packet_v0`. The context projects a bounded coverage ledger from
 the agent-scoped evidence history, an uncovered frontier, and a delivery
 receipt. The acting model therefore chooses a direction from delivered context;
-it does not have to discover and execute an evidence-log command as a protocol
-preflight. `loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin`
-remains the cold-path diagnostic chronology, and its read receipt remains useful
-for observability, but a read or legacy ACK cannot close a replan obligation.
+it does not have to discover or execute an evidence command as a protocol
+preflight. The standalone evidence command is removed. Each projected evidence
+row carries an exact Goal/Agent-bound history read action. Missing fields,
+unsupported versions and unavailable references fail explicitly; valid empty
+arrays alone mean no matching evidence. Historical read receipts remain
+observable, but a read or legacy ACK cannot close a replan obligation.
 Closure requires a typed semantic delta accepted against the current obligation:
 a new surface, hypothesis, probe family, state-grounded runnable successor,
 fresh evidence-linked vision path, concrete new blocker, or coverage-backed

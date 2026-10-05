@@ -80,6 +80,11 @@ def register_explore_commands(
     )
     sub = parser.add_subparsers(dest="explore_command", required=True)
 
+    context = sub.add_parser("turn-context", help="Read bounded enabled Explore evidence and planning guidance for an agent turn.")
+    add_subcommand_format(context)
+    context.add_argument("--goal-id", required=True)
+    context.add_argument("--agent-id", required=True)
+
     schema = sub.add_parser("schema", help="Print the result-board schema and LoopX mapping.")
     add_subcommand_format(schema)
 
@@ -306,6 +311,8 @@ def _tree_lines(tree: object, *, indent: int = 0) -> list[str]:
 
 
 def render_explore_markdown(payload: dict[str, object]) -> str:
+    if "graph_enabled" in payload and "harness_enabled" in payload:
+        return "# Explore Harness turn context\n\n```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```\n"
     lines = ["# LoopX Explore", ""]
     if not payload.get("ok"):
         lines.extend([f"- ok: `{payload.get('ok')}`", f"- error: `{payload.get('error')}`", ""])
@@ -494,6 +501,10 @@ def handle_explore_command(
         )
         if args.explore_command == "schema":
             payload = lark_explore_schema_payload()
+        elif args.explore_command == "turn-context":
+            from ..capabilities.explore.turn_context import explore_turn_context
+            payload = explore_turn_context(registry_path=Path(str(source_runtime_route["source_registry"])), runtime_root=runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id)
         elif args.explore_command == "node":
             event = build_explore_node_event(
                 goal_id=args.goal_id,

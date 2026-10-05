@@ -382,7 +382,7 @@ Replan 是当前目标图或覆盖账本上的机器可见语义变化：
 
 Dreaming 是探索未来可能性，可以产生 proposal，但不能替代当前 runnable frontier。
 
-quota 会把 evidence-log 压成 host-projected coverage ledger，并给出当前
+quota 会把当前 Agent 的 compact run history 压成 host-projected coverage ledger，并给出当前
 `obligation_id`。新 surface / hypothesis / probe 用 typed observation 写回；如果
 replan 的结果是下一条 runnable direction，则 Todo 本身就是原子语义 receipt：
 
@@ -857,7 +857,7 @@ CLI/status/quota 并补 smoke；只更新文档不会改变机器的下一次决
 
 - `examples/state-projection-gap-smoke.py`
 - `examples/project/goal-vision-replan-contract-smoke.py`
-- `examples/control_plane/agent-scoped-evidence-log-smoke.py`
+- `tests/control_plane/test_replan_context_evidence.py`
 - `examples/outcome-followthrough-policy-smoke.py`
 - `tests/control_plane_ts/quota_monitor_poll_commit.test.ts`
 

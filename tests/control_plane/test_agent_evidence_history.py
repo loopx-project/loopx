@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from loopx.control_plane.runtime.agent_scoped_evidence_log import (
+from loopx.control_plane.runtime.agent_evidence_history import (
     build_agent_scoped_evidence_log,
     project_evidence_log_read_receipts,
 )

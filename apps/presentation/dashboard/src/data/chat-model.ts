@@ -1,5 +1,7 @@
 import type { GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 export type LoopXModeSettings = { agent_id: string; token_budget: number };
+/** A host-granted workspace an ordinary conversation may be scoped to. */
+export type ChatProject = { project_ref: string; title: string; grant: "workspace_read" };
 
 export type ChatTodo = {
   todo_id: string | null;

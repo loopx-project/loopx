@@ -24,3 +24,5 @@ High-traffic read paths:
   read-only Goal acceptance gaps, pending gates, and historical progress
   read from `run_history.goals[].acceptance_observation`, and the Dashboard entry
   that renders them. Partial observations never certify acceptance.
+
+- [Configuration backup and recovery](configuration-backup.md): exact source-owned Goal and machine snapshots, isolated recovery and separate live adoption.

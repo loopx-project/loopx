@@ -28,7 +28,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [App conversations and reusable asynchronous work delivery](app-conversation-and-async-inbox-v0.md) | Accepted | none | — |
 | [RFC: Automatic Execution Admission (v0)](automatic-execution-admission-v0.md) | Accepted | none | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | Accepted | none | — |
-| [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | none | [1 entry](ledger/capable-manager-semantic-handoff-v0/) |
+| [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | [Personal Follow-through independent proposal](personal-follow-through-v0.md) | [2 entries](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
@@ -49,7 +49,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Live Team Workspace v0](live-team-workspace-v0.md) | Accepted | none | — |
 | [RFC: Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md) | Accepted | none | — |
 | [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |
-| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | — |
+| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | [1 entry](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0](manager-runtime-profile-v0.md) | Accepted | none | — |
 | [RFC: Monorepo Distribution Split (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
 | [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Accepted | none | — |
@@ -65,9 +65,11 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
 | [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [14 entries](ledger/typescript-control-plane-migration-v0/) |
 
-## Superseded (0)
+## Superseded (1)
 
-_none_
+| RFC | Header status | Supersedes / closes | Ledger |
+| --- | --- | --- | --- |
+| [RFC: Personal Follow-through (v0)](personal-follow-through-v0.md) | Superseded | none; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 entry](ledger/personal-follow-through-v0/) |
 
 ## Retired (0)
 

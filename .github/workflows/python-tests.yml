@@ -197,7 +197,10 @@ jobs:
 
       - name: Qualify agent-facing CLI output
         env:
-          LOOPX_CLI_OUTPUT_BASE_REF: origin/${{ github.event.pull_request.base.ref || 'main' }}
+          # Compare the tested revision to its event base, even after main moves
+          # while this run is queued. Pin the selector's main ref as well.
+          LOOPX_CLI_OUTPUT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          LOOPX_CLI_OUTPUT_MAIN_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
         run: python examples/control_plane/cli-output-budget-regression-smoke.py
 
   typescript-core:

@@ -325,7 +325,9 @@ def _reconcile_writeback_evidence(
     todo_id = str(state.get("todo_id") or "")
     goal_admission.require_current()
     payload = control.evidence_since(since, todo_id=todo_id)
-    ledger = payload.get("ledger") if isinstance(payload.get("ledger"), list) else []
+    if payload.get("schema_version") != "agent_scoped_evidence_log_v0" or not isinstance(payload.get("ledger"), list):
+        raise KunlunNativeGoalRuntimeError("invalid internal writeback evidence schema")
+    ledger = payload["ledger"]
     writeback = state["writeback"]
     classification = VERIFIED_CLASSIFICATIONS[str(native.get("mode") or "goal-pro")]
     for event in ledger:

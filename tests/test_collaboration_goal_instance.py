@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import sys
@@ -95,7 +96,7 @@ def _http_snapshot(root, registry, session_id):
         server.server_close()
 
 
-def _recreate(registry: Path) -> None:
+def _recreate(registry: Path, *, repo: Path | None = None) -> None:
     with exclusive_cross_runtime_file_lock(
         guard_path(registry, "delivery"),
         operation="test_recreate_goal",
@@ -106,6 +107,8 @@ def _recreate(registry: Path) -> None:
         ) as transaction:
             payload = transaction.payload_copy()
             payload["goals"][0]["goal_instance_id"] = INSTANCE_B
+            if repo is not None:
+                payload["goals"][0]["repo"] = str(repo)
             transaction.commit(payload)
 
 
@@ -291,6 +294,140 @@ def test_recreated_goal_cannot_observe_or_mutate_prior_instance_requests(
             "B must not mutate A.",
             registry=registry,
         )
+
+
+def test_inbox_read_rejects_recreation_before_response_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.collaboration import links
+
+    registry = _create_source_registry(tmp_path)
+    input_path = tmp_path / "input.txt"
+    input_path.write_text("instance A", encoding="utf-8")
+    brief = {
+        **_brief("Read only the originating instance"),
+        "inputs": [
+            {
+                "ref": input_path.name,
+                "description": "Instance-bound input",
+                "sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+            }
+        ],
+    }
+    receipt = request(
+        tmp_path,
+        registry,
+        "delivery",
+        "builder",
+        "reviewer",
+        "read-before-recreation",
+        brief,
+    )
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / input_path.name).write_text("instance B", encoding="utf-8")
+    render_followthrough = links.receiver_followthrough
+
+    def recreate_before_input_read(root, registry_path, items):
+        rendered = render_followthrough(root, registry_path, items)
+        _recreate(registry, repo=replacement)
+        return rendered
+
+    monkeypatch.setattr(links, "receiver_followthrough", recreate_before_input_read)
+
+    with pytest.raises(ValueError, match="historical_mutation_forbidden"):
+        read_inbox(
+            tmp_path,
+            registry,
+            "delivery",
+            "reviewer",
+            caller_goal_ref={
+                "goal_id": "delivery",
+                "goal_instance_id": INSTANCE_A,
+            },
+        )
+
+    assert not (_root(tmp_path) / "reads" / f"{receipt['request_id']}.json").exists()
+
+
+@pytest.mark.parametrize("interruption", ["enrichment_failure", "goal_recreation"])
+def test_inbox_read_does_not_commit_peer_return_before_response_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: str,
+) -> None:
+    from loopx.control_plane.collaboration import links
+    from loopx.control_plane.collaboration.peers import return_result
+
+    registry = _create_source_registry(tmp_path)
+    receipt = request(
+        tmp_path,
+        registry,
+        "delivery",
+        "builder",
+        "reviewer",
+        "return-before-response",
+        _brief("Return only after a successful read"),
+    )
+    goal_ref = {
+        "goal_id": "delivery",
+        "goal_instance_id": INSTANCE_A,
+    }
+    read_inbox(
+        tmp_path,
+        registry,
+        "delivery",
+        "reviewer",
+        caller_goal_ref=goal_ref,
+    )
+    acknowledge(
+        tmp_path,
+        "delivery",
+        "reviewer",
+        receipt["request_id"],
+        "adopt",
+        "Review the current instance.",
+        registry=registry,
+        caller_goal_ref=goal_ref,
+    )
+    return_result(
+        tmp_path,
+        "delivery",
+        "reviewer",
+        receipt["request_id"],
+        "Review complete.",
+        registry=registry,
+        caller_goal_ref=goal_ref,
+    )
+
+    def interrupt_response(*_args):
+        if interruption == "goal_recreation":
+            _recreate(registry)
+            return None
+        raise RuntimeError("response enrichment failed")
+
+    monkeypatch.setattr(links, "receiver_followthrough", interrupt_response)
+
+    expected_error = ValueError if interruption == "goal_recreation" else RuntimeError
+    expected_message = (
+        "historical_mutation_forbidden"
+        if interruption == "goal_recreation"
+        else "response enrichment failed"
+    )
+    with pytest.raises(expected_error, match=expected_message):
+        read_inbox(
+            tmp_path,
+            registry,
+            "delivery",
+            "builder",
+            caller_goal_ref=goal_ref,
+        )
+
+    delivery = (
+        _root(tmp_path) / "replies" / receipt["request_id"] / "conclusion.delivery.json"
+    )
+    assert not delivery.exists()
 
 
 def test_historical_request_does_not_borrow_work_from_recreated_goal(tmp_path, monkeypatch):
@@ -1040,17 +1177,29 @@ def test_lost_response_recovery_requires_the_same_committed_request(tmp_path, da
     assert not any(m.get("origin") == "manager_followup" for m in store.messages(session["session_id"]))
 
 
-@pytest.mark.parametrize("revoke", [False, True])
-def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_path, revoke):
+@pytest.mark.parametrize("revocation", [
+    "none", "selected_empty", "blocked_target", "sender_removed",
+])
+def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_path, revocation):
     registry = _create_source_registry(tmp_path)
     store, session, receipt = _external_manager_request(tmp_path, registry)
     turn = store.turn_for_client(session["session_id"], "owner-request")
     store.update_turn(session["session_id"], turn["turn_id"], status="timed_out", response=None)
-    if revoke:
-        policy_path = _root(tmp_path) / "policy.json"
-        policy = json.loads(policy_path.read_text())
-        policy["sources"][session["channel_id"]]["targets"] = []
-        _write(policy_path, policy)
+    policy_path = _root(tmp_path) / "policy.json"
+    original_policy = policy_path.read_text()
+    policy = json.loads(original_policy)
+    source = policy["sources"][session["channel_id"]]
+    # Empty targets retain access under the default all_registered scope.
+    # Revocation must change an actual grant, not just its optional target list.
+    source["targets"] = []
+    if revocation == "selected_empty":
+        source["local_delivery_scope"] = "selected"
+    elif revocation == "blocked_target":
+        source["blocked_targets"] = [{"goal_id": "delivery", "agent_id": "builder"}]
+    elif revocation == "sender_removed":
+        source["sender_ids"] = []
+    _write(policy_path, policy)
+    revoke = revocation != "none"
     calls = []
 
     def sender(route, current_session, current_turn, text):
@@ -1059,6 +1208,10 @@ def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_
 
     assert drain(tmp_path, registry, ChatSessionStore(tmp_path), sender) == (0 if revoke else 1)
     assert len(calls) == (0 if revoke else 1)
+    if revoke:
+        policy_path.write_text(original_policy)
+        assert drain(tmp_path, registry, ChatSessionStore(tmp_path), sender) == 1
+        assert len(calls) == 1
     if calls:
         route, current_session, current_turn, text = calls[0]
         assert route["source_id"] == "lark:source"

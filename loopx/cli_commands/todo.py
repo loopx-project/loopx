@@ -291,6 +291,8 @@ def handle_todo_command(
                 "`loopx todo claim`, `loopx todo update`, or another command shown "
                 "by `loopx todo --help`"
             )
+        if args.todo_command == "claim":
+            validate_todo_claim_options(args)
         validate_shared_todo_options(args)
         validate_capability_gap_options(args)
         if getattr(args, "turn_instance_id", None):
@@ -437,7 +439,6 @@ def handle_todo_command(
                 if not payload.get("dry_run"):
                     payload["host_action"] = "end_current_heartbeat"
         elif args.todo_command == "claim":
-            validate_todo_claim_options(args)
             payload = update_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -715,7 +716,9 @@ def handle_todo_command(
     except Exception as exc:
         from ..usage_ping import capture_failure
         capture_failure(exc)
-        payload = todo_error_payload(args, exc)
+        payload = todo_error_payload(
+            args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+        )
     append_todo_rollout_event(
         payload,
         args=args,
@@ -767,6 +770,7 @@ def handle_todo_command(
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()
+        receipt_id = payload.get("completion_receipt_id")
         if committed_at:
             # Capability evidence comes only from a Turn journal the TS
             # journal owner validated against this completion's full
@@ -789,7 +793,8 @@ def handle_todo_command(
                     goal_id=args.goal_id,
                     event_kind="todo_complete",
                     identity=identity,
-                    state_version=committed_at,
+                    state_version=receipt_id or committed_at,
+                    receipt_id=receipt_id,
                     committed_at=committed_at,
                     hooks=post_writeback_hooks,
                     projection_builder=post_writeback_projection_builder,

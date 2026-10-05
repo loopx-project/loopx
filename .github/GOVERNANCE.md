@@ -23,26 +23,50 @@ repository-wide maintainer authority.
 
 This is the public list of everyone who can satisfy a review requirement on
 `main`, and the paths they answer for. It is a snapshot audited on
-**2026-09-26**; the matching routes live in [`CODEOWNERS`](CODEOWNERS) and a
+**2026-10-04**; the matching routes live in [`CODEOWNERS`](CODEOWNERS) and a
 change to either file changes both in one pull request.
 
 | Account | Role | Scope | `CODEOWNERS` route | Since |
 | --- | --- | --- | --- | --- |
-| [`@huangruiteng`](https://github.com/huangruiteng) | Lead maintainer | Whole repository; governance, CI, releases, security handling, cross-subsystem decisions | Every path, and sole owner of `.github/`, `scripts/ci/`, release policy and technical directions | 2026-05-31 |
+| [`@huangruiteng`](https://github.com/huangruiteng) | Lead maintainer | Whole repository; governance, CI, releases, security handling, cross-subsystem decisions | Every path, including `.github/`, `scripts/ci/`, release policy and technical directions | 2026-05-31 |
 | [`@steven-kid`](https://github.com/steven-kid) | Subsystem maintainer | [Lark integration](#lark-integration) | Lark extension, its CLI delegates, Lark docs and focused tests | 2026-08-16 ([#3236](https://github.com/loopx-project/loopx/pull/3236)) |
 | [`@maxliux5`](https://github.com/maxliux5) | Code owner | Frontend source under `apps/presentation/dashboard/` and chat bundle delivery | Dashboard source, `loopx/presentation/chat_bundle.py`, `scripts/chat_bundle*` | 2026-09-08 ([#4071](https://github.com/loopx-project/loopx/pull/4071)) |
+| [`@loopx-agent`](https://github.com/loopx-agent) | Automated technical code owner | Whole repository; evidence-backed technical review, including governance, CI and release changes | Every route, including the `*` fallback and later subsystem overrides | 2026-10-04 |
 
-Every other module is owned by the lead maintainer: `CODEOWNERS` gives each
-top-level module an explicit line so that gap stays visible rather than hidden
-behind the `*` fallback. First-review contacts in the
-[table below](#first-review-responsibilities) route the first technical
-response but do not satisfy code-owner review.
+`@loopx-agent` shares code ownership on every path with the existing owners.
+This includes paths introduced later through the `*` fallback; every narrower
+route retains the account so GitHub's last-match rule cannot erase it.
+Subsystem maintainers and the lead maintainer retain their responsibilities.
+Code ownership qualifies a technical approval for the protected-branch review
+requirement; it does not grant release, appointment, security-handling or
+admin-bypass merge authority. First-review contacts in the
+[table below](#first-review-responsibilities) still do not satisfy code-owner
+review.
+
+The automated account accepts this repository-wide technical review scope
+through the pull request adding this appointment. Its recent cross-author,
+exact-head reviews include [#5533](https://github.com/loopx-project/loopx/pull/5533#pullrequestreview-5406199196),
+[#5538](https://github.com/loopx-project/loopx/pull/5538#pullrequestreview-5405727853),
+[#5540](https://github.com/loopx-project/loopx/pull/5540#pullrequestreview-5405732798)
+and [#5541](https://github.com/loopx-project/loopx/pull/5541#pullrequestreview-5406093154).
+These records name the reviewed head, contract, validation and remaining gaps.
+They count as one account's reviews; multiple agent sessions do not create
+independent GitHub reviewers. Author-owned pull requests still need another
+eligible reviewer because GitHub does not accept self-approval.
+
+An `APPROVED` review and GitHub's aggregate review decision are separate facts.
+Required code-owner approval uses `CODEOWNERS` on the pull request's base
+branch. An account's repository admin permission alone does not satisfy that
+requirement when the account is absent from the matching route. After an
+appointment reaches `main`, read back the target pull request's review decision;
+do not report it as approved solely from the submitted review. See
+[GitHub's code-owner rules](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 
 ### Code Owner Eligibility
 
 GitHub only honours code owners with repository write access, and a code-owner
-approval can merge a change on its paths. A route is therefore added only when
-all of the following hold, and the pull request adding it links the evidence:
+approval satisfies the code-owner review requirement on its paths. A route is
+therefore added only when all of the following hold, and the pull request adding it links the evidence:
 
 1. the account has repository write access;
 2. the account has publicly accepted a cohesive path scope, in
@@ -76,8 +100,11 @@ left draft.
 A "response" means a review, comment or merge by an account on the
 [roster](#maintainer-and-review-roster) above — the accounts that can satisfy a
 review requirement. Comments from anyone else are real conversation, but they
-do not satisfy this target, and neither do bot accounts. Both facts come from
-GitHub's typed actor data rather than from login names.
+do not satisfy this target, and neither do GitHub `Bot` actors. `@loopx-agent`
+is an automated account represented by GitHub as a `User`; its qualifying
+responses count in the current roster, without treating its sessions as separate
+reviewers. These facts come from GitHub's typed actor data rather than from
+login names.
 
 | Event | Target | Observed 2026-06-28 → 2026-09-26 |
 | --- | --- | --- |

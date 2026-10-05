@@ -15,7 +15,7 @@ from loopx.control_plane.handoff.review_packet_context import (  # noqa: E402
     agent_member_from_item,
     agent_member_summary,
     agent_todo_texts_for_handoff,
-    project_agent_required_reads,
+    project_agent_replan_context,
     project_asset_source,
     project_asset_source_line,
     todo_text_from_project_asset,
@@ -102,16 +102,13 @@ def assert_agent_member_contract(item: dict) -> None:
     assert "worktree_policy=clean-worktree" in summary, summary
     assert "claims=rp-context,canary" in summary, summary
 
-    reads = project_agent_required_reads(GOAL_ID, item)
-    assert len(reads) == 1, reads
-    read = reads[0]
-    assert read["kind"] == "agent_scoped_evidence_log", read
-    assert read["goal_id"] == GOAL_ID, read
-    assert read["agent_id"] == AGENT_ID, read
-    assert read["other_agent_policy"] == "frontier_only", read
-    assert "evidence-log" in read["command"], read
-    assert f"--goal-id {GOAL_ID}" in read["command"], read
-    assert f"--agent-id {AGENT_ID}" in read["command"], read
+    context = project_agent_replan_context(
+        GOAL_ID, item, {"run_history": {"goals": [{"id": GOAL_ID, "latest_runs": []}]}},
+    )
+    assert context["schema_version"] == "replan_context_v0", context
+    assert context["goal_id"] == GOAL_ID, context
+    assert context["agent_id"] == AGENT_ID, context
+    assert context["evidence"] == [], context
 
 
 def main() -> None:

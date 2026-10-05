@@ -299,12 +299,13 @@ The repository includes four validation paths. The first three do not require th
 DeepSeek Harness SDK or a real dsh runtime:
 
 ```bash
-python3 examples/dsh-turn-host-adapter-smoke.py
+uv run --extra test python -m pytest tests/test_dsh_goal_mode.py
 python3 examples/loopx-turn-dsh-e2e-smoke.py
 python3 examples/loopx-turn-dsh-builtin-host-e2e-smoke.py
 ```
 
-The first guards adapter translation and result shaping. The second drives the
+The first guards adapter translation, result shaping, and acceptance by the real
+host-result validator. The second drives the
 full `loopx turn run-once -> adapter -> fake dsh -> validator -> writeback ->
 quota spend -> idempotent replay` chain. The third proves the built-in host's
 success path plus three bounded provider-capacity attempts, retry-budget

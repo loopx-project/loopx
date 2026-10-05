@@ -282,6 +282,7 @@ def _deliver_lark_inbox_outbound(
     execute: bool = False,
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
+    source_membership_verifier: Callable[[], bool] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -399,21 +400,24 @@ def _deliver_lark_inbox_outbound(
             format_preflight_passed=True,
         )
 
-    membership = _call(
-        runner,
-        base
-        + [
-            "im",
-            "chats",
-            "get",
-            "--chat-id",
-            chat_id,
-            "--as",
-            "bot",
-            "--format",
-            "json",
-        ],
-    )
+    if source_membership_verifier is not None:
+        membership = {"returncode": 0 if source_membership_verifier() else 1}
+    else:
+        membership = _call(
+            runner,
+            base
+            + [
+                "im",
+                "chats",
+                "get",
+                "--chat-id",
+                chat_id,
+                "--as",
+                "bot",
+                "--format",
+                "json",
+            ],
+        )
     if membership.get("returncode") != 0:
         return _result(
             status="gate_required",
@@ -514,6 +518,7 @@ def _deliver_lark_inbox_outbound(
                     project=project, config_path=config_path, message_id=message_id,
                     text=text, content_format="text", execute=execute,
                     provider_preflight=provider_preflight, runner=runner, before_send=before_send,
+                    source_membership_verifier=source_membership_verifier,
                     delivery_attempt_recorder=delivery_attempt_recorder,
                 )
                 result.update(content_format="text", format_fallback="post_size_limit")
@@ -738,6 +743,7 @@ def reply_lark_event_inbox(
     execute: bool = False,
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
+    source_membership_verifier: Callable[[], bool] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -758,6 +764,7 @@ def reply_lark_event_inbox(
         execute=execute,
         provider_preflight=provider_preflight,
         runner=runner,
+        source_membership_verifier=source_membership_verifier,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,
@@ -776,6 +783,7 @@ def verify_lark_inbox_reply(
     text: str,
     attempt: Mapping[str, Any],
     runner: CommandRunner = _default_runner,
+    source_membership_verifier: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Read back one prior Lark reply without sending another message."""
 
@@ -839,21 +847,24 @@ def verify_lark_inbox_reply(
             "reply_verified": False,
             "blocker": "provider_verification_unavailable",
         }
-    membership = _call(
-        runner,
-        [
-            *base,
-            "im",
-            "chats",
-            "get",
-            "--chat-id",
-            chat_id,
-            "--as",
-            "bot",
-            "--format",
-            "json",
-        ],
-    )
+    if source_membership_verifier is not None:
+        membership = {"returncode": 0 if source_membership_verifier() else 1}
+    else:
+        membership = _call(
+            runner,
+            [
+                *base,
+                "im",
+                "chats",
+                "get",
+                "--chat-id",
+                chat_id,
+                "--as",
+                "bot",
+                "--format",
+                "json",
+            ],
+        )
     if membership.get("returncode") != 0:
         return {
             "ok": False,

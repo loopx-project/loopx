@@ -43,7 +43,7 @@ def build_dsh_host_runner(
                 "dsh_home": Path(args.dsh_home) if args.dsh_home else None,
                 "cordis": Path(args.dsh_cordis) if args.dsh_cordis else None,
                 "runtime_bin": args.dsh_runtime_bin,
-                "request_timeout_seconds": max(1.0, args.timeout_seconds - 5.0),
+                "request_timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
                 "dsh_runner": Path(args.dsh_runner) if args.dsh_runner else None,
             }.items()
             if value is not None

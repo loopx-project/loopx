@@ -80,6 +80,8 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Enable or disable waiting-projection repair for this goal.",
     )
     configure_goal_parser.add_argument("--pr-review-wait-for-ci", action=argparse.BooleanOptionalAction, default=None, help="Whether this Goal waits for CI during PR review; omitted inherits the machine default (true).")
+    configure_goal_parser.add_argument("--pr-review-order", choices=("forward", "reverse"), help="Goal default PR review direction; reverse inverts the complete actionable forward queue.")
+    configure_goal_parser.add_argument("--pr-review-agent-order", action="append", default=[], metavar="AGENT=forward|reverse|inherit", help="Persist one registered Agent's review direction; inherit removes only its override. Repeat for multiple Agents.")
     configure_goal_parser.add_argument("--clear-pr-review-configuration", action="store_true", help="Remove Goal PR review overrides and restore machine defaults.")
     configure_goal_parser.add_argument(
         "--change-quality-enabled",
@@ -213,12 +215,16 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Clear allowed child-agent domains.",
     )
     configure_goal_parser.add_argument(
+        "--explore-mode", choices=("off", "evidence", "planning"),
+        help="Explore Harness: off, evidence only, or evidence with read-only planning. Does not grant spawn authority.",
+    )
+    configure_goal_parser.add_argument(
         "--explore-graph-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
             "Enable or disable automatic Explore Graph projection at material "
-            "refresh boundaries. This is independent from Explore Harness planning."
+            "refresh boundaries. Legacy alias for the Explore Harness evidence layer."
         ),
     )
     configure_goal_parser.add_argument(

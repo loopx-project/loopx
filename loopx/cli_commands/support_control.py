@@ -81,6 +81,7 @@ FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
 SUPPORT_CONTROL_COMMANDS = {
+    "configuration-backup",
     "automation-prompts",
     "backup-state",
     "chat",
@@ -106,6 +107,8 @@ def register_support_control_commands(
     from .automation_prompts import register_automation_prompts
     register_automation_prompts(subparsers, add_subcommand_format)
     register_backup_state_command(subparsers, add_subcommand_format)
+    from .configuration_backup import register_configuration_backup
+    register_configuration_backup(subparsers, add_subcommand_format)
     register_heartbeat_control_commands(subparsers, add_subcommand_format)
 
     register_supervisor_control_commands(subparsers, add_subcommand_format)
@@ -235,6 +238,11 @@ def handle_support_control_command(
             registry_path=registry_path,
             print_payload=print_payload,
         )
+
+    if args.command == "configuration-backup":
+        from .configuration_backup import handle_configuration_backup
+        return handle_configuration_backup(args, registry_path=registry_path,
+            print_payload=print_payload, output_format=output_format)
 
     if args.command == "backup-state":
         return handle_backup_state_command(

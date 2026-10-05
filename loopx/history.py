@@ -330,6 +330,7 @@ def collect_history(
     include_runtime_goals: bool = True,
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
+    scoped_agent_id: str | None = None,
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
@@ -395,6 +396,12 @@ def collect_history(
         ]
         for run in runs:
             run["goal_id"] = str(run.get("goal_id") or current_goal_id)
+        # Explicit history drill-down scopes the complete source before its
+        # requested cap. Status/quota retain their separate Goal-wide source
+        # and bounded lane decision window; quota accounting is always Goal-wide.
+        goal_runs = runs
+        if scoped_agent_id:
+            runs = [run for run in goal_runs if run.get("agent_id") == scoped_agent_id]
         run_count += len(runs)
         recent_runs = list(
             islice(
@@ -409,7 +416,7 @@ def collect_history(
         )
 
         adapter = meta.get("adapter") if isinstance(meta.get("adapter"), dict) else {}
-        quota = goal_quota_with_spend_ledger(meta, runs) if registry_member else None
+        quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
         goal_record = {
             "id": current_goal_id,
             "activation_state": activation_state.value,
@@ -423,9 +430,7 @@ def collect_history(
             "adapter_kind": adapter.get("kind"),
             "adapter_status": adapter.get("status"),
             "coordination": meta.get("coordination") if isinstance(meta.get("coordination"), dict) else None,
-            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"))
-            if isinstance(meta.get("explore_graph"), dict)
-            else None,
+            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"), (meta.get("spawn_policy") or {}).get("explore_harness")) if meta.get("explore_graph") is not None or (meta.get("spawn_policy") or {}).get("explore_harness") else None,
             "spawn_policy": meta.get("spawn_policy") if isinstance(meta.get("spawn_policy"), dict) else None,
             "execution_profile": compact_execution_profile(meta.get("execution_profile")) if registry_member else None,
             "control_plane": compact_control_plane_policy(meta.get("control_plane")) if registry_member else None,
@@ -442,7 +447,7 @@ def collect_history(
             "latest_runs": latest_runs_with_agent_context(
                 runs,
                 limit=limit,
-                agent_lane_id=agent_lane_id,
+                agent_lane_id=None if scoped_agent_id else agent_lane_id,
             ),
             "semantic_history": goal_semantic_history_from_runs(runs),
         }

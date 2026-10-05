@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {execFileSync} from "node:child_process";
+import {mkdtemp, rm} from "node:fs/promises";
+import {platform, tmpdir} from "node:os";
+import {join} from "node:path";
 import {evaluateTaskLeaseAcquireDecision} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
 import {leaseWorkspace, independentLeaseWorktrees, observeLeaseWorktree} from "../../loopx/control_plane/work_items/task_lease_workspace.ts";
 
@@ -7,6 +11,51 @@ const repo = "git:github.com/example/project";
 const workspace = {host: "1".repeat(64), common_directory: "2".repeat(64), worktree: "3".repeat(64), repository: repo};
 test("native observation never interprets a caller path relative to the worker", async () => {
   await assert.rejects(observeLeaseWorktree(".", () => false), /absolute/);
+});
+
+test("observed Git origins use the Todo repository identity contract", {
+  skip: !["darwin", "linux"].includes(platform()),
+}, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "loopx-lease-origin-"));
+  t.after(() => rm(temporary, {recursive: true, force: true}));
+  const main = join(temporary, "main"), worktree = join(temporary, "worktree");
+  const git = (...args: string[]) => execFileSync("git", args, {stdio: "pipe"});
+  git("init", main);
+  git("-C", main, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+    "commit", "--allow-empty", "-m", "fixture");
+  git("-C", main, "worktree", "add", "-b", "fixture", worktree);
+  for (const [origin, expected] of [
+    ["https://GITHUB.com:443/example/project.git", repo],
+    ["ssh://git@github.com:22/example/project.git", repo],
+    ["git://github.com:9418/example/project.git", repo],
+    ["git@github.com:example/project.git", repo],
+    ["ssh://git@github.com/example//project.git", repo],
+    ["ssh://git@github.com:2222/example/project.git", "git:github.com:2222/example/project"],
+  ]) {
+    await t.test(origin, async () => {
+      git("-C", main, "config", "remote.origin.url", origin);
+      const observed = await observeLeaseWorktree(worktree, () => false);
+      assert.equal(observed.repository, expected);
+      const input = request();
+      const decision = evaluateTaskLeaseAcquireDecision({...input, other_leases: [],
+        todo: {...input.todo, task_repository: expected}, command: {...input.command, write_workspace: observed}});
+      assert.equal(decision.outcome, "apply");
+    });
+  }
+  for (const origin of [
+    "https://fixture:fixture@github.com/example/project.git",
+    "https://github.com/example/../project.git",
+    "https://github.com/example\\project.git",
+    "https://github.com/example/project.git?query=fixture",
+    "https://github.com/example/project.git#fragment",
+    "file:///example/project.git",
+    "git:github.com/example/project.git",
+  ]) {
+    await t.test(`reject ${origin}`, async () => {
+      git("-C", main, "config", "remote.origin.url", origin);
+      await assert.rejects(observeLeaseWorktree(worktree, () => false));
+    });
+  }
 });
 
 function request(other: unknown = {...workspace, worktree: "4".repeat(64)}) {

@@ -489,6 +489,18 @@ projection 与 proposal contract 交付；把 commit 映射进 provider-neutral 
 `Next Action` 继续是 compatibility prose 与 read projection。它永远不是 claim、
 lease、Goal amendment、replan settlement 或 authority decision。
 
+融合 recommendation checkpoint：`refresh-state --next-action` 演进现有
+recommendation receipt，记录绑定当前 agent/Todo 的任务内步骤，不再覆盖兼容文本。
+单 peer 和多 peer 使用同一规则：先由现有 lane selector 选任务，再由 TS
+recommendation owner 附加仍有效的步骤，保留任务原文及 claim/lease 前置条件。
+各 peer 的汇总复用这些派生路线，不增加独立计划库。来源、任务和当前 agent 步骤
+的读取依据检查拒绝过期写入，并在读时丢弃过期步骤。详见
+[写回合同](../../quota-allocation.md)。
+
+这推进 advisory continuity，不代表 Stage 3 amendment commit 已交付。来源事实
+摘要不是 canonical intent revision；run history 不是共享 Todo/claim/lease 事务库。
+普通任务修改、受保护意图、验收、Vision 和 replan settlement 继续由原 owner 负责。
+
 ### 9.1 语义交接与执行路线衔接
 
 用既有 alignment 投影给接收方提供真实工作基线。意图内的路线重规划仍走接收方

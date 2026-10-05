@@ -432,7 +432,7 @@ class CodexChatAgentSession:
     reasoning_effort: str | None = None
     response_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
-    hard_timeout_sec: float = 900.0
+    hard_timeout_sec: float | None = 900.0
     next_request_id: int = 5
     current_turn_id: str = ""
     model_catalog_compatibility_applied: bool = False
@@ -464,11 +464,11 @@ class CodexChatAgentSession:
         *,
         codex_bin: str,
         work_dir: Path,
-        goal_id: str,
+        goal_id: str | None,
         objective: str,
         response_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
+        hard_timeout_sec: float | None = 900.0,
         resume_thread_id: str | None = None,
         execution_mode: bool = False,
         isolate_process_tree: bool = False,
@@ -565,7 +565,7 @@ class CodexChatAgentSession:
             messages=messages,
             thread_id="",
             work_dir=root,
-            context_summary=f"{goal_id}: {objective}".strip(),
+            context_summary=f"{goal_id}: {objective}".strip() if goal_id is not None else objective.strip(),
             response_timeout_sec=response_timeout_sec,
             idle_timeout_sec=idle_timeout_sec,
             hard_timeout_sec=hard_timeout_sec,
@@ -835,7 +835,11 @@ class CodexChatAgentSession:
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
-                    with self._message_dispatch_lock:
+                    # A streaming reader can route this RPC response while holding
+                    # the fence. Recheck our waiter instead of waiting for an event.
+                    if not self._message_dispatch_lock.acquire(timeout=0.1):
+                        continue
+                    try:
                         try:
                             message = waiter.get_nowait()
                         except queue.Empty:
@@ -870,6 +874,8 @@ class CodexChatAgentSession:
                                     continue
                                 self._pending_events.put(message)
                                 continue
+                    finally:
+                        self._message_dispatch_lock.release()
                 if message.get("id") == request_id:
                     if message.get("error"):
                         if method in {
@@ -988,7 +994,7 @@ class CodexChatAgentSession:
         last_activity_at = started_at
         while True:
             now = time.monotonic()
-            if now - started_at >= self.hard_timeout_sec:
+            if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:
                 raise self._timeout_error(
                     "hard_timeout", "Codex Chat turn reached its hard time limit."
                 )
@@ -996,15 +1002,14 @@ class CodexChatAgentSession:
                 raise self._timeout_error(
                     "idle_timeout", "Codex Chat turn stopped producing activity."
                 )
-            deadline = min(
-                started_at + self.hard_timeout_sec,
-                last_activity_at + self.idle_timeout_sec,
-            )
+            deadline = last_activity_at + self.idle_timeout_sec
+            if self.hard_timeout_sec is not None:
+                deadline = min(deadline, started_at + self.hard_timeout_sec)
             try:
                 message = self._next_event(deadline=deadline)
             except CodexChatAgentError:
                 now = time.monotonic()
-                if now - started_at >= self.hard_timeout_sec:
+                if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:
                     raise self._timeout_error(
                         "hard_timeout",
                         "Codex Chat turn reached its hard time limit.",

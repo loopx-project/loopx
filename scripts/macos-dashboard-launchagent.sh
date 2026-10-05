@@ -48,6 +48,7 @@ Environment overrides:
   LOOPX_LAUNCH_LABEL_PREFIX
   LOOPX_LOG_MAX_BYTES    Rotate an agent log once it exceeds this size (default 10 MiB)
   LOOPX_CHAT_CODEX_HOME  Explicit managed Codex home (upgrades preserve the existing binding)
+  LOOPX_CHAT_SCAN_PATHS_JSON  JSON array of absolute workspace directories (preserved on upgrade)
 EOF
 }
 
@@ -141,6 +142,14 @@ resolve_python_command() {
 
 resolve_loopx_python() {
   local python_command
+  # Ask the selected console script, rather than letting a checkout venv own
+  # the interpreter of an unrelated uv/pipx install. Legacy snapshots retain
+  # the existing resolver until their doctor exposes this projection.
+  python_command="$("$1" --format json doctor --installation-only | "$(resolve_python_command)" -c 'import json,sys; print((json.load(sys.stdin).get("python") or {}).get("executable") or "")')" || return 1
+  if [[ -n "$python_command" && -x "$python_command" ]]; then
+    printf '%s\n' "$python_command"
+    return 0
+  fi
   if python_command="$(bash "$repo_root/scripts/loopx-python.sh" 2>/dev/null)"; then
     printf '%s\n' "$python_command"
     return 0
@@ -149,12 +158,69 @@ resolve_loopx_python() {
 }
 
 resolve_global_registry() {
-  local python_command="$1"
-  if [[ -n "$registry_override" ]]; then
-    printf '%s\n' "$registry_override"
-    return 0
-  fi
-  "$python_command" -c 'from loopx.paths import global_registry_path, select_default_runtime_root; print(global_registry_path(select_default_runtime_root()))'
+  # A Python stdin entry otherwise imports the caller's checkout before the
+  # selected distribution. Resolve defaults outside that checkout.
+  (
+  cd /
+  "$1" - "$chat_plist" "$registry_override" <<'PY'
+import plistlib
+import shlex
+import sys
+from pathlib import Path
+
+selected = sys.argv[2]
+target = Path(sys.argv[1])
+if not selected and target.exists():
+    with target.open("rb") as stream:
+        plist = plistlib.load(stream)
+    selected = plist.get("EnvironmentVariables", {}).get("LOOPX_GLOBAL_REGISTRY")
+    if not selected:
+        args = plist.get("ProgramArguments", [])
+        words = shlex.split(args[2]) if len(args) == 3 and args[1] == "-c" else []
+        if "--registry" in words:
+            selected = words[words.index("--registry") + 1]
+if not selected:
+    from loopx.paths import global_registry_path, select_default_runtime_root
+    selected = str(global_registry_path(select_default_runtime_root()))
+path = Path(selected).expanduser()
+if not path.is_absolute():
+    raise SystemExit("LoopX managed registry must be absolute")
+print(path.resolve())
+PY
+  )
+}
+
+resolve_chat_scan_paths() {
+  "$1" - "$chat_plist" <<'PY'
+import json
+import os
+import plistlib
+import sys
+from pathlib import Path
+
+selected = os.environ.get("LOOPX_CHAT_SCAN_PATHS_JSON")
+target = Path(sys.argv[1])
+if selected is None and target.exists():
+    with target.open("rb") as stream:
+        plist = plistlib.load(stream)
+    selected = plist.get("EnvironmentVariables", {}).get("LOOPX_CHAT_SCAN_PATHS_JSON")
+if selected is not None and (not isinstance(selected, str) or len(selected) > 16000):
+    raise SystemExit("LoopX Chat workspace selection is too large")
+paths = json.loads(selected) if selected is not None else []
+if not isinstance(paths, list) or len(paths) > 32:
+    raise SystemExit("LoopX Chat workspace selection must be an array of at most 32 directories")
+resolved = []
+for item in paths:
+    if not isinstance(item, str) or not item or any(ord(c) < 32 for c in item):
+        raise SystemExit("LoopX Chat workspace paths must be nonempty strings without control characters")
+    path = Path(item).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise SystemExit("LoopX Chat workspace paths must be existing absolute directories")
+    value = str(path.resolve())
+    if value not in resolved:
+        resolved.append(value)
+print(json.dumps(resolved, ensure_ascii=False))
+PY
 }
 
 resolve_optional_command() {
@@ -247,9 +313,9 @@ PY
 
 write_plists() {
   local status_command python_command codex_command claude_command lark_cli_command registry
-  local path_prefix command_path command_dir status_shell chat_shell control_plane_write_arg lark_cli_arg codex_home_export chat_codex_home
+  local path_prefix command_path command_dir status_shell chat_shell control_plane_write_arg lark_cli_arg codex_home_export chat_codex_home chat_scan_paths chat_scan_args
   status_command="$(resolve_status_command)"
-  python_command="$(resolve_loopx_python)"
+  python_command="$(resolve_loopx_python "$status_command")"
   registry="$(resolve_global_registry "$python_command")"
   codex_command="$(resolve_optional_command codex)"
   claude_command="$(resolve_optional_command claude)"
@@ -275,9 +341,17 @@ write_plists() {
     lark_cli_arg=" --lark-cli-bin $(shell_quote "$lark_cli_command")"
   fi
   chat_codex_home="$(resolve_chat_codex_home "$python_command")"
+  chat_scan_paths="$(resolve_chat_scan_paths "$python_command")"
+  chat_scan_args="$("$python_command" -c 'import json,shlex,sys; print("".join(" --scan-path " + shlex.quote(path) for path in json.load(sys.stdin)))' <<<"$chat_scan_paths")"
+  expected_chat_runtime_identity >/dev/null || {
+    echo "Could not resolve the installed LoopX runtime identity; existing plists were kept." >&2
+    return 1
+  }
   codex_home_export=" export CODEX_HOME=$(shell_quote "$chat_codex_home"); export LOOPX_CHAT_CODEX_HOME=$(shell_quote "$chat_codex_home");"
-  status_shell="$(log_rotation_prelude status) export LOOPX_PYTHON=$(shell_quote "$python_command"); export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") serve-status --global-registry --host $(shell_quote "$host") --port $(shell_quote "$status_port") --limit $(shell_quote "$status_limit")$control_plane_write_arg"
-  chat_shell="$(log_rotation_prelude chat) export LOOPX_PYTHON=$(shell_quote "$python_command");$codex_home_export export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") chat --global-registry --host $(shell_quote "$host") --port $(shell_quote "$chat_port") --codex-bin $(shell_quote "$codex_command") --claude-bin $(shell_quote "$claude_command")$lark_cli_arg --replace-existing-loopx-chat --no-open"
+  # Registry has already been resolved explicitly. --global-registry would
+  # replace it with <common_runtime_root>/registry.json and lose custom routes.
+  status_shell="$(log_rotation_prelude status) export LOOPX_PYTHON=$(shell_quote "$python_command"); export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") serve-status --host $(shell_quote "$host") --port $(shell_quote "$status_port") --limit $(shell_quote "$status_limit")$chat_scan_args$control_plane_write_arg"
+  chat_shell="$(log_rotation_prelude chat) export LOOPX_PYTHON=$(shell_quote "$python_command");$codex_home_export export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") chat --host $(shell_quote "$host") --port $(shell_quote "$chat_port") --codex-bin $(shell_quote "$codex_command") --claude-bin $(shell_quote "$claude_command")$lark_cli_arg$chat_scan_args --replace-existing-loopx-chat --no-open"
 
   mkdir -p "$launch_agents_dir" "$logs_dir"
 
@@ -321,6 +395,10 @@ EOF
   <dict>
     <key>LOOPX_CHAT_CODEX_HOME</key>
     <string>$(xml_escape "$chat_codex_home")</string>
+    <key>LOOPX_GLOBAL_REGISTRY</key>
+    <string>$(xml_escape "$registry")</string>
+    <key>LOOPX_CHAT_SCAN_PATHS_JSON</key>
+    <string>$(xml_escape "$chat_scan_paths")</string>
   </dict>
   <key>ProgramArguments</key>
   <array>
@@ -358,9 +436,14 @@ bootstrap_one() {
 }
 
 start_agents() {
+  local expected
+  expected="$(expected_chat_runtime_identity)" || {
+    echo "Could not resolve the installed LoopX runtime identity; existing agents were kept." >&2
+    return 1
+  }
   bootstrap_one "$status_label" "$status_plist"
   bootstrap_one "$chat_label" "$chat_plist"
-  verify_current_chat_runtime
+  verify_current_chat_runtime "$expected"
 }
 
 stop_agents() {
@@ -372,7 +455,7 @@ expected_chat_runtime_identity() {
   local status_command python_command
   status_command="$(resolve_status_command)"
   python_command="$(resolve_python_command)"
-  "$status_command" --format json doctor | "$python_command" -c '
+  "$status_command" --format json doctor --installation-only | "$python_command" -c '
 import json
 import sys
 
@@ -380,13 +463,16 @@ payload = json.load(sys.stdin)
 manifest = ((payload.get("release_manifest") or {}).get("manifest") or {})
 package = manifest.get("package") or {}
 source = manifest.get("source") or {}
-identity = {
+identity = payload.get("service_runtime_identity") or {
     "schema_version": "loopx_runtime_identity_v1",
     "package_version": package.get("version"),
     "release_id": manifest.get("release_id"),
     "source_revision": source.get("git_commit"),
 }
-if not identity["package_version"] or not identity["release_id"]:
+if (not isinstance(identity, dict)
+    or identity.get("schema_version") != "loopx_runtime_identity_v1"
+    or not identity.get("package_version")
+    or not (identity.get("release_id") or identity.get("package_fingerprint"))):
     raise SystemExit(2)
 print(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 '
@@ -396,7 +482,7 @@ chat_runtime_identity() {
   local python_command payload
   python_command="$(resolve_python_command)"
   # A scheme-less curl endpoint defaults to local HTTP; managed replacement rejects non-loopback hosts.
-  payload="$(curl -fsS "$chat_runtime_endpoint/api/chat/capabilities" 2>/dev/null)"
+  payload="$(curl -fsS --connect-timeout 1 --max-time 5 "$chat_runtime_endpoint/api/chat/capabilities" 2>/dev/null)"
   "$python_command" -c '
 import json
 import sys
@@ -417,7 +503,7 @@ verify_current_chat_runtime() {
     echo "curl is required to verify the restarted LoopX Chat runtime." >&2
     return 1
   fi
-  expected="$(expected_chat_runtime_identity)" || {
+  expected="${1:-}"; [[ -n "$expected" ]] || expected="$(expected_chat_runtime_identity)" || {
     echo "Could not resolve the installed LoopX runtime identity." >&2
     return 1
   }
@@ -443,7 +529,7 @@ print_status_contract_health() {
     echo "- control_plane_write_api: unknown"
     return
   fi
-  status_json="$(curl -fsS "$status_url" 2>/dev/null || true)"
+  status_json="$(curl -fsS --connect-timeout 1 --max-time 5 "$status_url" 2>/dev/null || true)"
   if [[ -z "$status_json" ]]; then
     echo "- status_contract: unavailable (status feed not reachable)"
     echo "- control_plane_write_api: unknown"
