@@ -146,8 +146,9 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
     )
 
 
-def test_enabled_hook_and_read_preserve_evidence_and_authority(tmp_path):
-    path = registry(tmp_path, planning=True)
+@pytest.mark.parametrize("planning", [False, True])
+def test_enabled_hook_and_read_preserve_evidence_and_authority(tmp_path, planning):
+    path = registry(tmp_path, graph=True, planning=planning)
     root = tmp_path / "runtime"
     log = explore_result_log_path(root, "research")
     for i in range(5):
@@ -180,11 +181,17 @@ def test_enabled_hook_and_read_preserve_evidence_and_authority(tmp_path):
     result = explore_turn_context(
         registry_path=path, runtime_root=root, goal_id="research", agent_id="worker"
     )
-    assert result["graph_enabled"] and result["harness_enabled"]
+    assert result["graph_enabled"] and result["harness_enabled"] is planning
     assert len(result["graph"]["recent_nodes"]) == 3
     assert result["graph"]["omitted_nodes"] == 2
     assert result["graph"]["recent_findings"][0]["status"] == "refuted"
-    assert result["harness"]["orchestration_gate"]["state"] == "analysis_only"
+    assert result["graph"]["recent_findings"][0]["title"] == (
+        "Route falsified by controlled experiment"
+    )
+    if planning:
+        assert result["harness"]["orchestration_gate"]["state"] == "analysis_only"
+    else:
+        assert result["harness"] is None
     assert not result["boundary"]["starts_agents"]
     for p, content in before.items():
         assert p.read_bytes() == content

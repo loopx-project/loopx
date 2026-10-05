@@ -29,7 +29,8 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     graph: graph ? {
       counts: projection.counts ?? {},
       recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
-      recent_findings: findings.slice(0, 3).map(row => compact(row, ["finding_id", "node_id", "title", "status"])),
+      // The canonical evidence projection calls the finding's title `finding`.
+      recent_findings: findings.slice(0, 3).map(row => compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status"])),
       omitted_nodes: Math.max(0, nodes.length - 3),
       summary_command: command("summary"),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
