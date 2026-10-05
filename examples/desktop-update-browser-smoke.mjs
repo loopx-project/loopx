@@ -48,7 +48,7 @@ try {
     if (failUpdate) throw new Error("private diagnostic must not be displayed");
     await new Promise((done) => setTimeout(done, 150));
     nativeState = {
-      phase: args.action === "check" ? "available" : args.action === "align_runtime" ? "connecting" : "restart_required",
+      phase: args.action === "check" ? "available" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : "restart_required",
       details: { version: "0.5.5", channel: args.channel },
     };
     return nativeState;
@@ -116,7 +116,10 @@ try {
   await missing.screenshot({ path: resolve(output, "missing-assets.png") });
   await missing.unroute("**/assets/*.js");
   await missing.getByRole("link", { name: "重新加载 / Reload" }).click();
-  await missing.getByRole("button", { name: "更新 LoopX" }).waitFor();
+  // This page has no injected native bridge: recovery loads the browser
+  // workspace, whose updater entry is intentionally unavailable.
+  await missing.getByRole("button", { name: "更新 LoopX" }).waitFor({ state: "hidden" });
+  await missing.locator(".personal-workspace-shell").waitFor();
 
   await page.setViewportSize({ width: 1280, height: 900 });
   nativeState = null;
@@ -214,9 +217,6 @@ try {
   environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null };
   nativeState = { phase: "error", details: { code: "runtime_install_exit_2" } };
   await page.reload();
-  assert.equal(await startupPanel.getAttribute("data-state"), "loading");
-  await page.waitForTimeout(2500);
-  assert.equal(await startupPanel.getAttribute("data-state"), "loading", "escalation waits for several terminal poll rounds");
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error");
   assert.equal(await startupPanel.getAttribute("aria-busy"), "false");
   const bootHeadline = await page.locator("#status").innerText();
@@ -224,7 +224,8 @@ try {
   assert.ok(bootHeadline.includes("Python 3.11+"), bootHeadline);
   assert.ok(bootHeadline.includes("恢复与更新"), bootHeadline);
   assert.equal(await startupDots.isVisible(), false);
-  await page.getByText("恢复与更新 / Recovery & updates").click();
+  assert.equal(await page.locator("details.recovery").getAttribute("open"), "");
+  assert.equal(await page.locator("#boot-elapsed").innerText(), "等待恢复");
   assert.ok((await page.locator("#update-status").innerText()).includes("本机多半缺少可用的 Python 3.11+"));
   const bootDiagnostics = JSON.parse(await page.locator("#diagnostics").inputValue());
   assert.equal(bootDiagnostics.schema_version, "desktop_recovery_diagnostics_v2");
@@ -240,99 +241,24 @@ try {
   nativeState = { phase: "runtime_required", details: { code: "runtime_setup_required" } };
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error" && document.querySelector("#status").innerText.includes("请修复当前版本，成功后重启"));
   environmentTelemetry = null;
-  // A different installed CLI runtime is the operator's decision, shown on the
-  // first screen with both choices: update the App and runtime together, or
-  // replace the CLI runtime with this App's bundled snapshot. Nothing is
-  // installed until one of them is chosen.
-  const pairingState = { phase: "runtime_pairing_required", details: {
-    code: "runtime_pairing_required", app_version: "1.0.5",
-    installed_revision: "a".repeat(40), bundled_revision: "b".repeat(40),
-    installed_identity_available: true, revision_matches: false,
-  } };
-  nativeState = pairingState;
-  await page.reload();
-  const pairingPanel = page.locator("#pairing");
-  await pairingPanel.waitFor({ state: "visible" });
-  assert.equal(await startupPanel.getAttribute("data-state"), "decision");
-  assert.equal(await startupPanel.getAttribute("aria-busy"), "false");
-  assert.equal(await startupDots.isVisible(), false);
-  assert.equal(await page.locator("#status").innerText(), "需要你选择 App 与 CLI 运行时的对齐方式");
-  assert.equal(await page.locator("#pairing-installed").innerText(), "aaaaaaaaaaaa");
-  assert.equal(await page.locator("#pairing-bundled").innerText(), "bbbbbbbbbbbb");
-  assert.ok((await page.locator("#pairing-status").innerText()).includes("本地服务需要两者一致"));
-  assert.equal(await page.getByRole("button", { name: /升级：更新 App 与运行时/ }).isEnabled(), true);
-  assert.equal(await page.getByRole("button", { name: /回退 CLI：改用本 App 自带运行时/ }).isEnabled(), true);
-  // A decision never escalates into the error projection, and the native boot
-  // failure callback cannot overwrite it.
-  await page.evaluate(() => window.loopxBootFailed("启动失败，请重试。"));
-  await page.waitForTimeout(2600);
-  assert.equal(await startupPanel.getAttribute("data-state"), "decision");
-  assert.equal(await pairingPanel.isVisible(), true);
-  assert.equal(await page.locator("#status").innerText(), "需要你选择 App 与 CLI 运行时的对齐方式");
-  await page.screenshot({ path: resolve(output, "startup-pairing-decision.png") });
-  await page.emulateMedia({ colorScheme: "dark" });
-  await page.screenshot({ path: resolve(output, "startup-pairing-decision-dark.png") });
-  await page.emulateMedia({ colorScheme: "light" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "the decision must fit a phone-width window");
-  const upgradeBox = await page.getByRole("button", { name: /升级：更新 App 与运行时/ }).boundingBox();
-  const alignBox = await page.getByRole("button", { name: /回退 CLI：改用本 App 自带运行时/ }).boundingBox();
-  assert.ok(upgradeBox && alignBox && upgradeBox.y + upgradeBox.height <= alignBox.y + 1, "both choices stay visible and ordered");
-  await page.screenshot({ path: resolve(output, "startup-pairing-decision-mobile.png") });
-  await page.setViewportSize({ width: 1280, height: 900 });
-
-  // "Upgrade" is one intent: check this App's channel, then continue into the
-  // verified install instead of asking for a second click.
-  calls.length = 0;
-  await page.getByRole("button", { name: /升级：更新 App 与运行时/ }).click();
-  await page.waitForFunction(() => document.querySelector("#pairing-status").textContent.includes("重启"));
-  assert.deepEqual(calls.map((call) => call.args?.action), ["check", "apply"], "upgrade must check then install");
-  assert.deepEqual(calls.at(-1).args.channel, "stable");
-  assert.equal(await pairingPanel.isVisible(), true, "the install outcome stays on the decision surface");
-
-  // A channel with nothing newer says so and leaves the CLI choice standing.
-  nativeState = pairingState;
-  await page.reload();
-  await pairingPanel.waitFor({ state: "visible" });
-  calls.length = 0;
-  checkUpToDate = true;
-  await page.getByRole("button", { name: /升级：更新 App 与运行时/ }).click();
-  await page.waitForFunction(() => document.querySelector("#pairing-status").textContent.includes("没有更新的 App 构建"));
-  assert.deepEqual(calls.map((call) => call.args?.action), ["check"], "a channel without a newer build must not install anything");
-  assert.equal(await pairingPanel.isVisible(), true);
-  checkUpToDate = false;
-
-  // "Roll back the CLI" installs this App's snapshot and reconnects the same
-  // window; the chooser retires as soon as services connect.
-  nativeState = pairingState;
-  await page.reload();
-  await pairingPanel.waitFor({ state: "visible" });
-  calls.length = 0;
-  await page.getByRole("button", { name: /回退 CLI：改用本 App 自带运行时/ }).click();
-  await page.getByText("正在连接本地服务", { exact: true }).waitFor();
-  assert.deepEqual(calls.map((call) => call.args?.action), ["align_runtime"]);
-  assert.equal(await pairingPanel.isVisible(), false);
-  nativeState = { phase: "connecting", details: { service: "chat" } };
-  await page.getByText("正在连接管家对话服务", { exact: true }).waitFor();
-
   // Production boot surface must expose native installation and service
   // stages even while recovery is collapsed; reload keeps native elapsed time.
   nativeState = { phase: "installing_runtime", details: {} };
   startupTiming = { elapsed_ms: 35000, phase_elapsed_ms: 32000 };
   await page.reload();
-  await page.getByText("正在安装 App 配套运行时", { exact: true }).waitFor();
+  await page.getByText("正在准备所需组件", { exact: true }).waitFor();
   assert.ok((await page.locator("#boot-elapsed").innerText()).includes("35 秒"));
   assert.equal(await page.locator("details.recovery").getAttribute("open"), null);
   await page.screenshot({ path: resolve(output, "startup-installing-progress.png") });
   await page.reload();
-  await page.getByText("正在安装 App 配套运行时", { exact: true }).waitFor();
+  await page.getByText("正在准备所需组件", { exact: true }).waitFor();
   assert.ok((await page.locator("#boot-elapsed").innerText()).includes("35 秒"));
   nativeState = { phase: "connecting", details: { service: "chat" } };
-  await page.getByText("正在连接管家对话服务", { exact: true }).waitFor();
+  await page.getByText("正在打开工作区", { exact: true }).waitFor();
   await page.getByText(/启动用时较长/).waitFor();
   nativeState = { phase: "service_error", details: { code: "service_start_failed" } };
   await page.getByText("本地服务连接失败，正在等待重试", { exact: true }).waitFor();
-  console.log("desktop-update-browser-smoke: passed (confirmation, failure redaction, mobile, missing assets + reload, startup motion states, startup recovery, startup error escalation, runtime pairing decision)");
+  console.log("desktop-update-browser-smoke: passed (confirmation, failure redaction, mobile, missing assets + reload, startup motion states, startup recovery, immediate terminal recovery, automatic startup presentation)");
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

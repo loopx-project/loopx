@@ -57,31 +57,18 @@ pub fn record_pending(app: &AppHandle, version: &str, channel: &str) -> Result<(
     Ok(())
 }
 
-/// Outcome of resolving the persisted update journal against the running App.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Resume {
-    /// No journal existed; nothing was resumed.
-    Absent,
-    /// The approved journal was applied and the bundled runtime installed.
-    Applied,
-    /// A journal naming another App version was discarded. The on-disk
-    /// runtime was not touched; the caller must re-run the App/runtime
-    /// pairing gate on this same start before any service connects.
-    StaleDiscarded,
-}
-
-pub fn resume_pending(app: &AppHandle) -> Result<Resume, String> {
+// Resolve old App-owned global-runtime journals without reviving their
+// exact-revision downgrade policy. An incomplete App retains recovery.
+pub(crate) fn finish_legacy_journal(app: &AppHandle) -> Result<(), String> {
     let path = journal(app)?;
     match resolve_journal(&path, &app.package_info().version.to_string())? {
-        JournalResolution::Absent => Ok(Resume::Absent),
-        JournalResolution::StaleDiscarded => Ok(Resume::StaleDiscarded),
+        JournalResolution::Absent | JournalResolution::StaleDiscarded => Ok(()),
         JournalResolution::Approved => {
-            let metadata = identity(app)?;
-            if !selected_revision_matches(&metadata) {
-                install(app)?;
+            let executable = std::env::current_exe().map_err(|_| "app_install_incomplete")?;
+            if !crate::update_backup::installed_bundle_verifies(&executable) {
+                return Err("app_install_incomplete".into());
             }
-            fs::remove_file(&path).map_err(|_| "update_state_unavailable")?;
-            Ok(Resume::Applied)
+            discard_journal_at(&path).map(|_| ())
         }
     }
 }
@@ -132,7 +119,17 @@ pub(crate) fn discard_journal_at(path: &Path) -> Result<bool, String> {
     }
 }
 
-pub fn install(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn private_executable(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| "runtime_selection_unavailable")?
+        .join("runtime")
+        .join("bin")
+        .join("loopx"))
+}
+
+pub(crate) fn install_private(app: &AppHandle) -> Result<String, String> {
     let metadata = identity(app)?;
     let archive = app
         .path()
@@ -140,17 +137,16 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         .map_err(|_| "runtime_bundle_missing")?
         .join("runtime/runtime-source.tar.gz");
     let bytes = fs::read(archive).map_err(|_| "runtime_bundle_missing")?;
-    install_snapshot(&bytes, &metadata)
+    let executable = private_executable(app)?;
+    let root = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("runtime_selection_unavailable")?;
+    install_snapshot(&bytes, &metadata, root)?;
+    Ok(executable.to_string_lossy().into_owned())
 }
 
-pub(crate) fn selected_revision_matches(metadata: &Value) -> bool {
-    crate::services::runtime_identity_for_executable(&crate::services::loopx_executable())
-        .as_ref()
-        .and_then(|value| value["source_revision"].as_str())
-        .is_some_and(|revision| metadata["source_revision"].as_str() == Some(revision))
-}
-
-fn install_snapshot(bytes: &[u8], metadata: &Value) -> Result<(), String> {
+fn install_snapshot(bytes: &[u8], metadata: &Value, private_root: &Path) -> Result<(), String> {
     let digest: String = Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -174,8 +170,17 @@ fn install_snapshot(bytes: &[u8], metadata: &Value) -> Result<(), String> {
         c
     };
     crate::services::configure_runtime_environment(&mut command);
+    let root = private_root;
+    fs::create_dir_all(root).map_err(|_| "runtime_selection_unavailable")?;
+    command
+        .env("LOOPX_BIN_DIR", root.join("bin"))
+        .env("LOOPX_RELEASES_DIR", root.join("releases"))
+        .env("LOOPX_SHELL_PROFILE", root.join("shell-profile"))
+        .env("LOOPX_MAN_ROOT", root.join("man"))
+        .env("LOOPX_MAN_DIR", root.join("man/man1"));
+    let selected_executable = root.join("bin/loopx").to_string_lossy().into_owned();
     // Preserve the working interpreter of an existing managed snapshot.
-    if let Ok(executable) = fs::canonicalize(crate::services::loopx_executable()) {
+    if let Ok(executable) = fs::canonicalize(&selected_executable) {
         if let Some(release) = executable.parent().and_then(Path::parent) {
             if let Ok(python) = fs::read_to_string(release.join(".loopx-python")) {
                 command.env("LOOPX_PYTHON", python.trim());
@@ -215,9 +220,8 @@ fn install_snapshot(bytes: &[u8], metadata: &Value) -> Result<(), String> {
         match child.try_wait() {
             Ok(Some(status)) => {
                 return if status.success() {
-                    let installed = crate::services::runtime_identity_for_executable(
-                        &crate::services::loopx_executable(),
-                    );
+                    let installed =
+                        crate::services::runtime_identity_for_executable(&selected_executable);
                     if installed.as_ref().map(|v| &v["source_revision"])
                         == Some(&metadata["source_revision"])
                     {
@@ -275,28 +279,34 @@ fn extract(bytes: &[u8], destination: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
-    #[ignore = "requires isolated installer paths and a built App runtime bundle"]
-    fn real_bundled_installer_qualifies_selected_cli() {
-        let root = std::env::var("LOOPX_TEST_BUNDLE").expect("isolated bundle path");
-        for key in [
-            "LOOPX_BIN",
-            "LOOPX_BIN_DIR",
-            "LOOPX_RELEASES_DIR",
-            "LOOPX_REGISTRY",
-            "LOOPX_RUNTIME_ROOT",
-            "LOOPX_MAN_DIR",
-            "LOOPX_SKILLS_DIR",
-        ] {
-            assert!(
-                std::env::var(key).is_ok(),
-                "explicit isolated {key} required"
-            );
+    #[ignore = "requires an isolated private installer root and built App bundle"]
+    fn real_private_installer_keeps_the_default_cli_owner() {
+        let bundle = std::path::PathBuf::from(std::env::var("LOOPX_TEST_BUNDLE").unwrap());
+        let root = std::path::PathBuf::from(std::env::var("LOOPX_TEST_PRIVATE_RUNTIME").unwrap());
+        for key in ["LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT"] {
+            assert!(std::env::var(key).is_ok());
         }
-        let root = Path::new(&root);
+        let default = crate::services::loopx_executable();
+        let original = fs::read(&default).unwrap();
         let metadata: Value =
-            serde_json::from_slice(&fs::read(root.join("identity.json")).unwrap()).unwrap();
-        let bytes = fs::read(root.join("runtime-source.tar.gz")).unwrap();
-        install_snapshot(&bytes, &metadata).unwrap();
+            serde_json::from_slice(&fs::read(bundle.join("identity.json")).unwrap()).unwrap();
+        install_snapshot(
+            &fs::read(bundle.join("runtime-source.tar.gz")).unwrap(),
+            &metadata,
+            &root,
+        )
+        .unwrap();
+        let observed = crate::services::runtime_identity_for_executable(
+            root.join("bin/loopx").to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(observed["source_revision"], metadata["source_revision"]);
+        assert_eq!(
+            fs::read(default).unwrap(),
+            original,
+            "separate package manager remains untouched"
+        );
+        assert!(root.join("shell-profile").exists());
     }
     #[test]
     fn corrupt_archive_cannot_reach_installer() {
