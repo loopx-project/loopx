@@ -348,7 +348,7 @@ merge/release gates. Released Hub 1.4.14 plus #98's candidate Client logic passe
 beta.6 install, identity, pinned update and removal through native DSH 0.2;
 that candidate is not an installed-marketplace publication claim.
 
-The published package passed native URL installation, beta.5-on-compatible-0.1.5
+The published package passed native CLI URL installation, beta.5-on-compatible-0.1.5
 to beta.6-on-0.2 upgrade/removal, and offline plugin-tarball installation/removal.
 A clean Linux container used the released LoopX 1.2.4 wheel to verify PEP 668
 private bootstrap, skills, authentication and GoalBar readback. The original
@@ -360,7 +360,12 @@ preconfigured unique binding passed Start/Pause through the published CLI:
 model turn. This does not qualify Windows desktop market installation,
 initialization, control, upgrade/removal or model-driven continuation. Network
 recovery still depends on external connectivity; an offline plugin archive
-requires compatible host/CLI dependencies or their caches. The L1 observer still
+requires compatible host/CLI dependencies or their caches. Native browser hot
+uninstall disconnected the Web service while the dependency remained; it is a
+failed journey, not covered by the passing CLI removal. Close DSH before CLI
+removal and restart it afterwards. [Issue #5671](https://github.com/loopx-project/loopx/issues/5671)
+also reports a missing Windows desktop-host CLI module before plugin loading;
+that host packaging failure needs its own Windows/upstream readback. The L1 observer still
 consumes only
 `session/created`, `session/event`, and `session/disposed`; this compatibility
 repair does not close its separately budgeted C0/C1 or overhead qualification.
