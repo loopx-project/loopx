@@ -32,7 +32,7 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
     "Exact monitor-poll settlement->no refresh/spend; else "
     "no-change=surface_only/no spend; writeback material=outcome+vision. "
-    "Missing vision: same-turn checkpoint-context recheck, add only evidenced "
+    "Only after committed writeback: same-turn checkpoint-context for missing vision, add evidenced "
     "vision; stale->reread; unchanged->truthful --vision-unchanged-reason."
 )
 REWARD_MEMORY_OUTCOME_RULE = (

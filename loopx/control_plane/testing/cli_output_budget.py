@@ -172,12 +172,10 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "small": {"json": 12_000, "markdown": 300},
             # The crowded fixture exercises the required-vision route. Its
             # TurnEnvelope intentionally carries the complete authoring schema
-            # that the validator accepts, plus the typed executor and selection
-            # facts needed to decide whether execution is authorized. The
-            # Explicit registry routing adds 75 necessary command characters:
-            # the same fixture measured 14,482 before routing and 14,557 after.
-            # Keep the executable authority binding intact; 14,600 leaves a
-            # 43-character margin without relaxing line or per-Todo growth.
+            # that the validator accepts, plus typed executor/selection facts
+            # and explicit registry routing. Completing its evidence-linked
+            # example while removing duplicate prose changes the same fixture
+            # from 14,360 to 14,571 characters; retain the 14,600 ceiling.
             # The over-target TurnEnvelope diagnostic remains visible instead
             # of hiding authority overflow; latest main renders it in 542
             # characters, leaving a narrow 58-character presentation margin.
@@ -186,9 +184,8 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         },
         max_lines={
             "small": {"json": 320, "markdown": 12},
-            # The same latest-main fixture measures 389 lines. Keep a bounded
-            # 11-line formatting margin while the semantic character budget
-            # above remains the primary cost guard.
+            # The complete example renders in 397 lines. Keep the existing
+            # 400-line ceiling; characters remain the primary cost guard.
             "crowded": {"json": 400, "markdown": 12},
             "multi_agent": {"json": 320, "markdown": 12},
         },
@@ -196,8 +193,12 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         max_json_growth_chars_per_unit=60,
         # The complete validator-owned vision-authoring schema appears only on
         # the required-vision route. Account for that fixed semantic packet
-        # separately so it does not relax the per-Todo growth budget.
-        max_json_fixed_semantic_growth_chars=3_800,
+        # separately so it does not relax the per-Todo growth budget. The
+        # executable example changes crowded-minus-small from 5,957 to 6,168
+        # chars. The old 3,800 + 35*60 allowance was already 57 short on base;
+        # 4,200 leaves 132 chars of fixed headroom. Absolute and per-Todo
+        # ceilings remain unchanged; this is not a model-token measurement.
+        max_json_fixed_semantic_growth_chars=4_200,
     ),
     CliOutputBudgetSpec(
         surface_id="status",

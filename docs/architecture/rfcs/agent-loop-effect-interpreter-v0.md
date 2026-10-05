@@ -419,6 +419,16 @@ commands bind the original actor and route. Receipt repair reuses the existing
 idempotent writer. This is a bounded M7.4 adoption with no shared executor or
 new authority store; it does not certify terminal Todo or Goal acceptance.
 
+The R5 compact projection also retains the existing CLI settlement plan intact,
+including its effect identity, ordered conditional steps and host handoff. Action
+signature coverage v5 detects removal or mutation of that plan; packets without
+one retain their historical coverage. Real CLI validation exercises premature
+spend rejection and one original-Turn writeback/spend with idempotent replay.
+This closes a projection omission, not the short-context rollout: same-Turn
+cached detail delivery, normal/replan context selection and measured model
+behavior remain unqualified. The 8 KiB target and delivery growth checks stay
+unchanged. See [TurnEnvelope](../../reference/protocols/turn-envelope-v0.md).
+
 ### What Is Missing
 
 - A generic shared executor is deliberately absent. The current adapters share

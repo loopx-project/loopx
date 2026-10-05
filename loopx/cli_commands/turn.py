@@ -134,6 +134,10 @@ def handle_turn_command(
         from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
         turn_start_hook_dispatch = extend_preferences(turn_start_hook_dispatch, runtime_root=runtime_root,
             registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
+        from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
+        turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=args.goal_id, agent_id=args.agent_id)
         # `run-once` and `managed-step` must resolve the same governing decision
         # from the same live status, scheduler context and capability hooks, so
         # this Turn takes all of them -- and its later settle-against inputs --
