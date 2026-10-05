@@ -66,10 +66,21 @@ owner submitting a directory entry.
   [PR #738](https://github.com/XiaomingX/mimofan/pull/738) explicitly names that
   workflow and is merged. **Status: development-workflow evidence**.
 - **Meta-RLR** (hk20013106) — [PR #17](https://github.com/hk20013106/RLR/pull/17),
-  merged, adds a CLI/JSON maintenance boundary. LoopX owns maintenance
-  goal/todo/evidence/monitor/replan state while `research_loop` owns scientific
-  state. **Status: maintenance integration merged**; later auto-wake
-  [PR #26](https://github.com/hk20013106/RLR/pull/26) is closed unmerged.
+  merged August 13, 2026, adds the external CLI/JSON maintenance boundary;
+  scientific state remains owned by `research_loop`. Closed, unmerged
+  [PR #26](https://github.com/hk20013106/RLR/pull/26) was superseded by
+  [PR #34](https://github.com/hk20013106/RLR/pull/34), merged August 23, 2026.
+  The checked main [root entry point](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/research_loop_v04.py)
+  composes an outer maintenance adapter. Its [activation and failure boundary](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake.py)
+  requires explicit `RLR_META_RLR_AUTOWAKE_CONFIG`, classifies eligible failures
+  and resolves verified repair provenance; the [adapter](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake_adapter.py)
+  preserves the original failure if maintenance is unavailable. The
+  [LoopX boundary](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/loopx_cli.py)
+  uses external JSON CLI calls. [Windows test jobs](https://github.com/hk20013106/RLR/actions/runs/32649860637)
+  succeeded at PR #34's exact head; its continuous failure/repair/resume scenario
+  remains an author-reported result. **Status: optional maintenance and auto-wake
+  integration merged**. Current LoopX compatibility and sustained research use
+  were not independently reproduced. Checked October 5, 2026.
 - **LoopX Console** (xielixing) — a third-party BitFun MiniApp for GitHub issue
   repair. Independent [v3.9.29](https://github.com/xielixing/loopx-console/releases/tag/v3.9.29)
   was published August 18, 2026, with a MiniApp ZIP asset.
@@ -330,7 +341,8 @@ accepted design documents are distinct from depending on the LoopX runtime.
   AAOP's historical pilot/retirement and LoopX Console's independent release,
   historical CLI pin, zyra's default branch and embedded source pin, and the separate
   OpenBitFun proposal were reconciled on October 5. GoTry's dated workflow reports
-  were separated from its open product acceptance.
+  were separated from its open product acceptance. Meta-RLR's merged auto-wake
+  successor and current source wiring were reconciled with its historical PRs.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.

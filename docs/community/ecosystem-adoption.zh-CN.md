@@ -53,10 +53,19 @@
   [PR #738](https://github.com/XiaomingX/mimofan/pull/738) 明确提及该工作流并已合并。
   **状态：开发工作流证据**。
 - **Meta-RLR**（hk20013106）——已合并的
-  [PR #17](https://github.com/hk20013106/RLR/pull/17) 增加 CLI/JSON 维护边界。
-  LoopX 管理维护目标、待办、证据、监视和重规划，科研状态仍由 `research_loop` 所有。
-  **状态：维护集成已合并**；后续自动唤醒
-  [PR #26](https://github.com/hk20013106/RLR/pull/26) 已关闭、未合并。
+  [PR #17](https://github.com/hk20013106/RLR/pull/17) 于 2026-08-13 增加外部
+  CLI/JSON 维护边界，科研状态仍由 `research_loop` 所有。已关闭未合并的
+  [PR #26](https://github.com/hk20013106/RLR/pull/26) 被后续
+  [PR #34](https://github.com/hk20013106/RLR/pull/34) 替代，后者于 2026-08-23 合并。
+  核对的 main [根入口](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/research_loop_v04.py)
+  组合外层维护 adapter；[启用与失败边界](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake.py)
+  要求显式配置 `RLR_META_RLR_AUTOWAKE_CONFIG`，分类可处理的失败并解析已验证修复
+  的来源绑定。[adapter](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake_adapter.py)
+  在维护不可用时保留原始失败；[LoopX 边界](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/loopx_cli.py)
+  使用外部 JSON CLI 调用。[Windows 测试任务](https://github.com/hk20013106/RLR/actions/runs/32649860637)
+  在 PR #34 的确切 head 上成功；连续失败、修复与恢复场景仍属于作者报告。
+  **状态：可选维护与自动唤醒集成已合并**。当前 LoopX 兼容与持续科研使用未独立
+  复现。核对日期：2026-10-05。
 - **LoopX Console**（xielixing）——用于修复 GitHub Issue 的第三方 BitFun MiniApp。
   独立版本 [v3.9.29](https://github.com/xielixing/loopx-console/releases/tag/v3.9.29)
   于 2026-08-18 发布，附有 MiniApp ZIP。
@@ -282,6 +291,7 @@
 - 局部更新：**2026-10-04–05**，按当前公开 PR/Issue 状态和固定版本源文件复核
   OpenViking、NoKV、Hufu 和 benjamin-plugins；10 月 5 日对齐 AAOP 历史试点/退役、
   LoopX Console 独立发布与历史 CLI pin、zyra 的默认分支与内嵌源码 pin，
-  GoTry 有日期的工作流自述及开放产品验收，以及单独的 OpenBitFun 提案。
+  GoTry 有日期的工作流自述及开放产品验收，以及单独的 OpenBitFun 提案；
+  对齐 Meta-RLR 已合并的自动唤醒替代方案、当前代码接线与历史 PR。
   区分提案打包配置、历史工具和试点、插件注册及当前验收限制。
   未独立复现真实集成，其余条目未重新验真。
