@@ -500,6 +500,15 @@ receipts and successful artifacts. Existing integration receipts, exact candidat
 SHA validation and ref CAS still own code publication. This adds no cross-host,
 PostgreSQL or model-quality guarantee.
 
+Code publication remains a separate operation. Qualify ref CAS against an
+integration target that is not checked out; this protocol does not wrap direct
+Git writes or promise concurrent working-directory isolation. If publication
+responds ambiguously, read the integration status and exact current SHA, verify
+that combined candidate, then use the existing `integration-branch sync
+--candidate-ref SHA --execute` recovery. This can adopt the already published
+candidate without moving the branch again. A clean merge is not task acceptance:
+run the task verifier on that combined SHA before confirming its result.
+
 ### Read basis for checkpoint-only recovery
 
 Missing-checkpoint supplementation now requires an explicit read receipt. This is
