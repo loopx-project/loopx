@@ -1,6 +1,8 @@
 /** Isolated process barriers around the production persistence methods. No
  * runtime test flag or alternate store implementation enters product code. */
 import {existsSync, readFileSync, writeFileSync} from "node:fs";
+import fs from "node:fs";
+import {syncBuiltinESMExports} from "node:module";
 import {join} from "node:path";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
@@ -13,6 +15,32 @@ let raw = "";
 for await (const chunk of process.stdin) raw += chunk;
 const input = JSON.parse(raw) as {mode: string; barrier: string; provider: string;
   method: string; params: JsonObject; repeat?: boolean; fault?: string; provider_direct?: boolean};
+if (input.fault?.startsWith("after_")) {
+  const descriptors = new Map<number, string>();
+  const open = fs.openSync;
+  const flush = fs.fsyncSync;
+  fs.openSync = ((path, ...args) => {
+    const fd = open(path, ...args);
+    descriptors.set(fd, String(path));
+    return fd;
+  }) as typeof fs.openSync;
+  fs.fsyncSync = fd => {
+    flush(fd);
+    const path = descriptors.get(fd) ?? "";
+    const suffix = input.fault === "after_json" ? ".json" : input.fault === "after_markdown" ? ".md" : "index.jsonl";
+    if (path.includes("runs") && path.endsWith(suffix)) process.exit(86);
+  };
+  syncBuiltinESMExports();
+}
+if (input.fault === "before_artifacts") {
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    rename(from, to);
+    if (String(to).includes("checkpoint-contexts") &&
+        JSON.parse(readFileSync(to, "utf8")).commit_attempt != null) process.exit(86);
+  };
+  syncBuiltinESMExports();
+}
 const signal = (name: string, value: unknown = true) => writeFileSync(join(input.barrier, name), JSON.stringify(value));
 const pause = () => {
   const deadline = Date.now() + 20000;

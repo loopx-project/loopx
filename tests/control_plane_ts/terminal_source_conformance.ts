@@ -2,7 +2,7 @@
  * validation, lease retirement and receipt recovery on every real provider. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
+import type {AuthorityStore, AuthorityStoreHead} from "../../loopx/control_plane/coordination/authority_store.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {executeCoordinationTodoTerminalLifecycle as execute,
   type CoordinationTodoTerminalLifecycleInput} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
@@ -24,6 +24,63 @@ const validation = {schema_version: "issue_fix_validation_command_v0", command_l
   stdout_captured: false, stderr_captured: false, local_path_captured: false};
 
 export function registerTerminalSourceConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
+  test(`${provider}: protected completion final CAS preserves a racing peer and historical recovery`, async t => {
+    const {store, contender} = await factory(t);
+    const goal = "protected-terminal-cas";
+    const fixture = productionScaleCoordinationFixture(goal, "native");
+    const scenario = fixture.semantic_cases.terminal_source!;
+    assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+      next_projection: fixture.projection, events: [], receipts: []})).status, "applied");
+    const before = await loaded(store);
+    const request: CoordinationTodoTerminalLifecycleInput = {goal_id: goal, todo_id: fixture.completion_todo_id,
+      expected_role: "agent", command: "complete", actor_agent_id: "agent-a", registered_agents: fixture.registered_agents,
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      operation_identity: {kind: "completion_turn"},
+      lease_idempotency_key: fixture.completion_lease_idempotency_key,
+      lease_expected_version: fixture.completion_lease_expected_version,
+      allow_user_gate_auto_acquire: false, requested_no_followup: false,
+      requested_completion_turn_key: "protected-turn", requested_completion_identity_source: "turn_settlement",
+      linked_successor_todo_ids: [], successor_intents: [], note: "Reviewed result", evidence: "Verified result", reason: null,
+      clear_claim: false, validation_declaration: declaration, validation_receipt: validation,
+      validation_declaration_sha256: canonicalAuthoritySha256(declaration),
+      completion_policy_request: null, dry_run: false, now: new Date(String(scenario.observed_at)),
+      delivery_read_context_id: "result-read", validation_source_provider_revision: before.provider_revision};
+    const missingCheck = await execute(store, request);
+    assert.equal(missingCheck.reason_code, "delivery_basis_check_required", JSON.stringify(missingCheck));
+    const checkedHeads: string[] = [];
+    const checkBasis = async (head: AuthorityStoreHead) => {
+      checkedHeads.push(head.provider_revision);
+      return {ok: true}; // The peer is unrelated; basis construction has separate integration coverage.
+    };
+    const peer = (before.head.todos as JsonObject[]).find(todo => todo.todo_id !== request.todo_id)!;
+    let attemptedId = "";
+    const racing = new Proxy(store, {get(target, key) {
+      if (key === "commitAuthority") return async (...args: Parameters<AuthorityStore["commitAuthority"]>) => {
+        attemptedId = args[0].operation_id;
+        assert.equal((await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+          operation_id: "racing-peer", expected_provider_revision: before.provider_revision, projection: before.head,
+          mutations: [{kind: "todo_upsert", todo: {...peer, note: "Peer update survives"}}]}))).status, "applied");
+        return target.commitAuthority(...args);
+      };
+      const member = Reflect.get(target, key);
+      return typeof member === "function" ? member.bind(target) : member;
+    }});
+    const rejected = await execute(racing, request, async () => true, checkBasis);
+    assert.equal(rejected.conflict_kind, "provider_revision_mismatch", JSON.stringify(rejected));
+    assert.ok(attemptedId);
+    assert.equal((await store.readReceipt(attemptedId)).status, "missing");
+    const current = await loaded(store);
+    assert.equal((current.head.todos as JsonObject[]).find(todo => todo.todo_id === request.todo_id)!.status, "open");
+    const completed = await execute(store, request, async () => true, checkBasis);
+    assert.equal(completed.status, "applied", JSON.stringify(completed));
+    assert.deepEqual([...new Set(checkedHeads)], [before.provider_revision, current.provider_revision]);
+    const after = await loaded(store);
+    assert.equal((after.head.todos as JsonObject[]).find(todo => todo.todo_id === peer.todo_id)!.note, "Peer update survives");
+    const replay = await execute(contender, request, async () => {throw new Error("history before authority");},
+      async () => {throw new Error("history before freshness");});
+    assert.equal(replay.status, "replayed");
+    assert.deepEqual(await loaded(store), after);
+  });
   for (const schema of ["legacy", "native"] as const) {
     test(`${provider}: supersede links existing work and retires its original lease atomically (${schema})`, async t => {
       const {store, contender} = await factory(t);

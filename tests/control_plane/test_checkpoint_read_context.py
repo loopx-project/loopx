@@ -14,7 +14,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
-def _missing(root: Path):
+def _missing(root: Path, *, defer=False):
     project, runtime, registry = _write_fixture(root)
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     for args in (
@@ -28,6 +28,8 @@ def _missing(root: Path):
     delivery = ("refresh-state", *binding, "--classification", "validated_change",
                 "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
                 "--no-global-sync", "--suppress-external-sinks")
+    if defer:
+        return project, runtime, registry, binding, delivery, None
     rc, original = _run_cli(registry, runtime, *delivery, cwd=project)
     assert rc == 0 and original["vision_checkpoint"]["decision"] == "missing_required", original
     return project, runtime, registry, binding, delivery, original
@@ -44,6 +46,103 @@ def test_checkpoint_recovery_is_not_a_fresh_turn_preflight(tmp_path):
     assert rc == 1, recovery
     assert recovery["error"] == "checkpoint-context requires the original committed Turn writeback"
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_first_delivery_context_cli_rejects_stale_and_replays_success(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    todo = {"schema_version": "todo_item_v0", "todo_id": TODO_ID, "index": 1,
+            "role": "agent", "status": "open", "done": False,
+            "text": "Validate and settle the selected delivery.", "claimed_by": AGENT_ID,
+            "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo"}
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo])
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+                         "--scan-path", str(project), cwd=project)
+    assert rc == 0, json.dumps(guard)
+    read = ("checkpoint-context", *binding, "--purpose", "first_delivery")
+    rc, context = _run_cli(registry, runtime, *read, cwd=project)
+    assert rc == 0, context
+    delivery = ("refresh-state", *binding, "--first-delivery", "--classification", "validated_change",
+                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                "--vision-summary", "Continue the scoped route.", "--vision-acceptance", "Checks pass; remaining work stays open.",
+                "--no-global-sync", "--suppress-external-sinks")
+    index = runtime / f"goals/{GOAL_ID}/runs/index.jsonl"
+    before = index.read_bytes() if index.exists() else b""
+    rc, no_context = _run_cli(registry, runtime, *delivery, cwd=project)
+    assert rc == 1 and no_context["error_code"] == "checkpoint_read_context_required", no_context
+    state.write_text(state.read_text(encoding="utf-8") + "\n## Acceptance\n\nVerify the additional output.\n", encoding="utf-8")
+    rc, stale = _run_cli(registry, runtime, *delivery, "--checkpoint-read-context", context["read_context_id"], cwd=project)
+    assert rc == 1 and stale["error_code"] == "checkpoint_read_context_stale", stale
+    assert "goal" in stale["checkpoint_read_context"]["changed_components"]
+    assert (index.read_bytes() if index.exists() else b"") == before
+    rc, context = _run_cli(registry, runtime, *read, cwd=project)
+    assert rc == 0, context
+    commit = (*delivery, "--checkpoint-read-context", context["read_context_id"])
+    rc, saved = _run_cli(registry, runtime, *commit, cwd=project)
+    assert rc == 0 and saved["vision_checkpoint"]["satisfied"], json.dumps(saved)
+    after = index.read_bytes()
+    state.write_text(state.read_text(encoding="utf-8") + "\nAcceptance changed after success.\n", encoding="utf-8")
+    rc, replay = _run_cli(registry, runtime, *commit, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"], replay
+    assert index.read_bytes() == after
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_delivery_result_basis_precedes_cas_and_replays_before_current_freshness(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    todo = {"schema_version": "todo_item_v0", "todo_id": TODO_ID, "index": 1,
+            "role": "agent", "status": "open", "done": False, "claimed_by": AGENT_ID,
+            "text": "Validate and settle the selected delivery.", "task_class": "advancement_task",
+            "archive_state": "active", "source_section": "Agent Todo"}
+    peer = {**todo, "todo_id": "todo_unrelated_peer", "index": 2, "text": "Independent output."}
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo, peer], handoff_mode="soft_claim"), state_path=state, provider=provider)
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+        "--scan-path", str(project), cwd=project)
+    assert rc == 0, guard
+    read = ("checkpoint-context", *binding, "--purpose", "delivery_result")
+    rc, context = _run_cli(registry, runtime, *read, cwd=project)
+    assert rc == 0, context
+    complete = ("todo", "complete", *binding, "--note", "Validated the candidate; direction review remains.")
+    rc, missing = _run_cli(registry, runtime, *complete, cwd=project)
+    assert rc == 1 and missing.get("error_code") == "checkpoint_read_context_unknown_or_replaced", missing
+    state.write_text(state.read_text(encoding="utf-8") + "\n## Acceptance\n\nAdditional acceptance requirement.\n", encoding="utf-8")
+    rc, stale = _run_cli(registry, runtime, *complete, "--delivery-read-context", context["read_context_id"], cwd=project)
+    assert rc == 1 and stale.get("error_code") == "checkpoint_read_context_stale", json.dumps(stale)
+    rc, context = _run_cli(registry, runtime, *read, cwd=project)
+    assert rc == 0, context
+    commit = (*complete, "--delivery-read-context", context["read_context_id"])
+    rc, peer_update = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", "todo_unrelated_peer", "--agent-id", AGENT_ID, "--note", "Peer progress must survive.", cwd=project)
+    assert rc == 0, peer_update
+    rc, saved = _run_cli(registry, runtime, *commit, cwd=project)
+    assert rc == 0 and saved["completed"], saved
+    rc, peer_readback = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+        "--todo-id", "todo_unrelated_peer", cwd=project)
+    assert rc == 0 and peer_readback["todo"]["note"] == "Peer progress must survive.", peer_readback
+    state.write_text(state.read_text(encoding="utf-8") + "\nRequirement after successful result.\n", encoding="utf-8")
+    rc, replay = _run_cli(registry, runtime, *commit, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"], replay
+    rc, conflict = _run_cli(registry, runtime, *commit, "--note", "Different candidate intent.", cwd=project)
+    assert rc == 1, conflict
+    # The next direction reads the committed result, so its own open -> done
+    # change cannot invalidate the new basis.
+    rc, direction = _run_cli(registry, runtime, "checkpoint-context", *binding, "--purpose", "first_delivery", cwd=project)
+    assert rc == 0 and direction["basis"]["todo"]["status"] == "done", direction
 
 
 def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(tmp_path):
