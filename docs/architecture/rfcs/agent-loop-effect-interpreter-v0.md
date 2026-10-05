@@ -419,6 +419,8 @@ commands bind the original actor and route. Receipt repair reuses the existing
 idempotent writer. This is a bounded M7.4 adoption with no shared executor or
 new authority store; it does not certify terminal Todo or Goal acceptance.
 
+The existing R5 CLI now supports opt-in capture of the full decided payload before display projection (`quota should-run --decision-output-dir`, with an explicit Turn id). Each invocation uses a new private directory; reading the observation does not rerun the guard, and required selection/lease revalidation remains fresh. This is transport-only Python filesystem adaptation over the shared decision and TypeScript envelope owners. It closes tool-truncation recovery for an explicit caller, not worker adoption, automatic normal/replan context selection, or model-efficiency acceptance. See the [TurnEnvelope capture contract](../../reference/protocols/turn-envelope-v0.md).
+
 ### What Is Missing
 
 - A generic shared executor is deliberately absent. The current adapters share

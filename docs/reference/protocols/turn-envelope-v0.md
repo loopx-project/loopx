@@ -11,6 +11,41 @@ Preview it explicitly:
 loopx quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
 ```
 
+For a tool with bounded output, optionally capture the full decided payload before
+its display projection. Choose a **new directory for each invocation**, even when
+reentering the same Turn:
+
+```bash
+loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-instance-id <turn-id> --turn-envelope --decision-output-dir ./guard-001
+cat ./guard-001/decision.json
+```
+
+`--decision-output-dir` is valid only with `quota should-run` and an explicit
+`--turn-instance-id`. Its parent must exist. LoopX creates the directory privately
+(0700 on POSIX) before running the guard, rejects existing paths including
+symlinks, and atomically publishes `decision.json` (0600 on POSIX) before printing
+the result. The file contains the unprojected decision and its original receipt;
+it excludes display-only host poll metadata. It can contain private Goal context:
+keep it out of public artifacts. No capture is created without this option.
+
+If a tool truncates the displayed JSON, read this file instead of rerunning the
+guard merely to recover the observation. The file is **not fresh authority**:
+Todo selection, lease changes, cancellation, quota changes or other required
+revalidation still use a fresh guard invocation and a new capture directory.
+Check the saved Goal/Agent/Turn identity before use; a cache filename does not
+prove identity. Nothing here bypasses the owning mutation-time validation.
+Capture also preserves decided rejection/diagnostic payloads; inspect `ok` before
+acting. A late disk failure can happen after the guard has committed its receipt;
+the CLI reports that boundary rather than claiming rollback. An empty capture
+directory is not a usable decision. Omit the option to disable capture; remove
+unneeded local captures through ordinary file management.
+
+This is a CLI transport primitive under the existing quota/context owner, not a
+new capability or Python decision rule. It does not automatically switch workers
+to compact packets, select replan history, or qualify model efficiency. The
+frontend and Lark do not consume these local files; their entrypoints are unchanged.
+
 The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the
 [PR-05 migration](protocol-action-packet-decision-v0.md) omits
