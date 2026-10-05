@@ -2,6 +2,12 @@
 
 from importlib import import_module
 
+from .cash_reconciliation import (
+    FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION,
+    FINANCE_CASH_RECONCILIATION_SCHEMA_VERSION,
+    assess_cash_reconciliation,
+)
+
 from .attribution import (
     EXPLAINED_BETA_COMPONENTS,
     FINANCE_BETA_ATTRIBUTION_INPUT_SCHEMA_VERSION,
@@ -71,6 +77,8 @@ __all__ = [
     "FINANCE_CASE_EVALUATION_SCHEMA_VERSION",
     "FINANCE_CASE_INPUT_SCHEMA_VERSION",
     "FINANCE_CASE_REPLAY_RECEIPT_SCHEMA_VERSION",
+    "FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION",
+    "FINANCE_CASH_RECONCILIATION_SCHEMA_VERSION",
     "FINANCE_CONTRACT_LIQUIDITY_EVALUATION_SCHEMA_VERSION",
     "FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_EVALUATION_SCHEMA_VERSION",
@@ -95,6 +103,7 @@ __all__ = [
     "build_finance_transaction_approval_packet",
     "build_finance_value_discovery_packet",
     "assess_numeric_accuracy",
+    "assess_cash_reconciliation",
     "assess_period_comparison",
     "assess_period_encoding",
     "evaluate_finance_case_gates",
