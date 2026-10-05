@@ -735,6 +735,19 @@ def attach_agent_lane_next_actions(
                 guard=guard,
             )
         latest_action = guard.get("latest_run_recommended_action")
+        delivery_progress = guard.get("first_delivery_progress")
+        if isinstance(delivery_progress, dict):
+            item["first_delivery_progress"] = delivery_progress
+        if (
+            isinstance(delivery_progress, dict)
+            and guard.get("recommended_action") == delivery_progress["next_action"]
+        ):
+            item["recommended_action"] = delivery_progress["next_action"]
+            if isinstance(project_asset, dict):
+                project_asset["next_action"] = delivery_progress["next_action"]
+            goal_channel = item.get("goal_channel_projection")
+            if isinstance(goal_channel, dict):
+                goal_channel["next_action"] = delivery_progress["next_action"]
         for target in (item, project_asset):
             if not isinstance(target, dict):
                 continue

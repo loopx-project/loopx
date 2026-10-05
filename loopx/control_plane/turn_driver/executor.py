@@ -791,6 +791,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
+    first_delivery_context: Callable[[str], dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     result = (
@@ -799,6 +800,10 @@ def _host_result_stage(
         else None
     )
     if "typed_result" not in completed_phases:
+        if first_delivery_context is not None:
+            context = first_delivery_context("delivery_result")
+            journal["delivery_result_context"] = {key: context[key] for key in ("read_context_id", "versions", "settlement_identity")}
+            request = {**request, "delivery_result_context": context}
         journal["host_attempt_count"] = int(journal.get("host_attempt_count") or 0) + 1
         persist_journal(journal)
         from ...extensions.codex_native_child import configured_native_child_limit
@@ -1088,7 +1093,7 @@ def _typed_settlement_stage(
             )
         )
 
-    def writeback_effect(effect_ref: str) -> Mapping[str, Any]:
+    def perform_writeback(effect_ref: str) -> Mapping[str, Any]:
         if completion_intent_error:
             return {
                 "ok": False,
@@ -1105,6 +1110,18 @@ def _typed_settlement_stage(
                 )
             return invoke_result_effect(completion_writeback, result, effect_ref)
         return invoke_result_effect(writeback, result, effect_ref)
+
+    def writeback_effect(effect_ref: str) -> Mapping[str, Any]:
+        from ..goals.checkpoint_context_io import CheckpointReadContextRejected
+        try:
+            return perform_writeback(effect_ref)
+        except CheckpointReadContextRejected as error:
+            if error.code in {"checkpoint_read_context_stale", "checkpoint_read_context_unknown_or_replaced"}:
+                reviews = journal.get("direction_reviews")
+                if isinstance(reviews, list) and reviews:
+                    reviews[-1].update(decision=None, rejected=error.code)
+                    persist_journal(journal)
+            return {"ok": False, "appended": False, "reason": str(error), **error.payload}
 
     journal_adapter = TurnSettlementJournalAdapter(
         journal=journal,
@@ -1266,6 +1283,45 @@ def _typed_settlement_stage(
     )
 
 
+def _first_delivery_stage(
+    *, plan: Mapping[str, Any], request: Mapping[str, Any], result: dict[str, Any],
+    journal: dict[str, Any], completed_phases: list[str], persist_journal: Callable[..., None],
+    effects: Mapping[str, Any], first_delivery_context: Callable[[str], dict[str, Any]] | None,
+    first_delivery_completion: CompletionWriteback | None, completion_intent: CompletionIntent | None,
+    runtime_root: Path, goal_id: str, host_runner: HostRunner | None,
+    argv: Sequence[str] | None, project: Path, timeout_seconds: float,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Run the protected result/direction stage, preserving settlement ordering."""
+    if first_delivery_context is not None and "durable_writeback" not in completed_phases:
+        from .first_delivery import prepare_first_delivery
+        from ...usage_goal import observe_goal_execution
+
+        try:
+            def invoke_direction(host_request: Mapping[str, Any]) -> dict[str, Any]:
+                with observe_goal_execution(runtime_root, goal_id,
+                        host=str((plan.get("host") or {}).get("kind") or "unknown")):
+                    return (_run_host_runner(host_request, runner=host_runner) if host_runner is not None
+                        else _run_host(host_request, argv=argv or [], project=project, timeout_seconds=timeout_seconds))
+
+            result = prepare_first_delivery(plan=plan, request=request, result=result, journal=journal,
+                persist=persist_journal, read_context=first_delivery_context, invoke_host=invoke_direction,
+                completion_intent=completion_intent, commit_result=first_delivery_completion)
+        except (ValueError, OSError) as error:
+            failure = _host_failure(plan, kind=LoopXTurnResultKind.WRITEBACK_FAILED,
+                completed_phases=completed_phases, failed_phase="durable_writeback", reason=str(error))
+            journal.update(status="failed", reason=str(error), result_kind=LoopXTurnResultKind.WRITEBACK_FAILED.value,
+                receipt=failure["receipt"], completed_phases=completed_phases,
+                validation_stage="first_delivery_direction")
+            persist_journal(journal)
+            return result, execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+
+    if first_delivery_context is not None and "durable_writeback" in completed_phases:
+        result = {**result, "delivery_read_context_id": journal["delivery_result_context"]["read_context_id"],
+            "checkpoint_read_context_id": journal["direction_reviews"][-1]["read_context_id"], "first_delivery": True}
+
+    return result, None
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
@@ -1293,7 +1349,13 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    first_delivery_context: Callable[[str], dict[str, Any]] | None = None,
+    first_delivery_completion: CompletionWriteback | None = None,
 ) -> dict[str, Any]:
+    if plan.get("first_delivery_freshness") and first_delivery_context is None:
+        raise ValueError("Protected Turn recovery requires its first delivery adapter")
+    if first_delivery_context is not None and goal_admission is not None and goal_admission.enabled:
+        raise ValueError("First delivery inference cannot run inside source-session effect admission")
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
@@ -1528,6 +1590,7 @@ def run_loopx_turn_once(
             host_runner=host_runner,
             usage_runtime_root=runtime_root,
             usage_goal_id=goal_id,
+            first_delivery_context=first_delivery_context,
             argv=argv,
             completion_lifecycle_configured=all(
                 callback is not None
@@ -1560,6 +1623,16 @@ def run_loopx_turn_once(
             journal=journal,
             persist_journal=persist_journal,
             effects=effects,
+        )
+        if terminal is not None:
+            return finish_recovery(terminal)
+
+        result, terminal = _first_delivery_stage(
+            plan=plan, request=request, result=result, journal=journal, completed_phases=completed_phases,
+            persist_journal=persist_journal, effects=effects, first_delivery_context=first_delivery_context,
+            first_delivery_completion=first_delivery_completion, completion_intent=completion_intent,
+            runtime_root=runtime_root, goal_id=goal_id, host_runner=host_runner,
+            argv=argv, project=project, timeout_seconds=timeout_seconds,
         )
         if terminal is not None:
             return finish_recovery(terminal)

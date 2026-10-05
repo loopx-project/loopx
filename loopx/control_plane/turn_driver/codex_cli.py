@@ -192,6 +192,14 @@ def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
 def codex_cli_result_schema(
     request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if request is not None and request.get("direction_review") is not None:
+        properties = {
+            "read_context_id": {"type": "string"},
+            "decision": {"type": "string", "enum": ["continue", "revalidate_result", "terminal_ready"]},
+            "agent_vision_json": {"type": "string", "maxLength": HOST_AGENT_VISION_JSON_MAX_CHARS},
+            "vision_unchanged_reason": {"type": "string", "maxLength": 240},
+        }
+        return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
     text_limits = dict(HOST_RESULT_TEXT_LIMITS)
     properties: dict[str, Any] = {
         "schema_version": {
@@ -276,6 +284,12 @@ def _prompt(request: Mapping[str, Any]) -> str:
     request_json = json.dumps(
         request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
+    if request.get("direction_review") is not None:
+        return ("Review only the current direction basis in direction_review. Implementation has already run. "
+            "Do not execute work, write files, call external effects, or settle quota. Return only the direction schema. "
+            "Echo the exact read_context_id. Use revalidate_result if current requirements invalidate the prepared result. "
+            "Otherwise author a Vision in agent_vision_json or an unchanged reason, leaving the other string empty. "
+            "Pending tasks remain pending even when a selected result was committed.\n" + request_json)
     instructions = [
         "Execute exactly one bounded LoopX Turn in the current workspace.",
         "Use the TurnEnvelope as the source of truth. Perform work only when its contract allows it.",
@@ -652,6 +666,9 @@ def run_codex_cli_host(
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
+    direction_only = request.get("direction_review") is not None
+    if direction_only:
+        sandbox, mcp_server = "read-only", None
     if sandbox not in CODEX_CLI_SANDBOXES:
         raise ValueError(f"Codex CLI sandbox must be one of {CODEX_CLI_SANDBOXES}")
     if reasoning_effort is not None:
@@ -662,11 +679,11 @@ def run_codex_cli_host(
         raise ValueError("Codex CLI executable is unavailable")
     lineage = _lineage(request)
     planned_session = _mapping(request.get("session"))
-    planned_action = str(planned_session.get("action") or "")
+    planned_action = "start_new" if direction_only else str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))
     if context_policy.get("mode") is not None and context_policy["mode"] not in SUPPORTED_ITERATION_CONTEXT_POLICIES:
         raise ValueError("iteration context policy must be fresh or resume")
-    fresh_iteration = context_policy.get("mode") == "fresh"
+    fresh_iteration = direction_only or context_policy.get("mode") == "fresh"
     session_scope = str(context_policy.get("binding_scope") or "todo")
     if fresh_iteration and goal_admission is not None:
         goal_admission.require_current()
@@ -709,6 +726,8 @@ def run_codex_cli_host(
     exact_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
 
     def store_session(observed_session_id: str) -> None:
+        if direction_only:
+            return
         def commit() -> None:
             _store_codex_cli_session(
                 runtime_root,

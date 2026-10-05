@@ -79,6 +79,13 @@ def execute_turn_run_once(
     execution_started = False
     try:
         project = Path(args.project).expanduser().resolve()
+        protected_delivery = bool(getattr(args, "first_delivery", False) or payload.get("first_delivery_freshness"))
+        if protected_delivery:
+            if args.host not in {"generic-cli", "codex-cli"} or getattr(args, "codex_operation_tools", False):
+                raise ValueError("First delivery currently supports generic-cli and ordinary codex-cli hosts.")
+            if goal_admission is not None and goal_admission.enabled:
+                raise ValueError("First delivery managed inference is not yet supported by the source-session effect profile.")
+            payload["first_delivery_freshness"] = True
         planned_host = (
             payload.get("host") if isinstance(payload.get("host"), dict) else {}
         )
@@ -179,6 +186,13 @@ def execute_turn_run_once(
                     f"{step_kind.value} effect ref does not match Turn identity"
                 )
 
+        def first_delivery_context(purpose: str) -> dict[str, Any]:
+            from ..control_plane.goals.checkpoint_context_io import read_checkpoint_context
+            return read_checkpoint_context(registry_path=registry_path, runtime_root_override=runtime_root_arg,
+                goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
+                purpose=purpose, decision_scope="goal", goal_ref=goal_ref)
+
         def append_settlement_event(
             effect_payload: Mapping[str, object],
             *,
@@ -277,6 +291,8 @@ def execute_turn_run_once(
                 project=state_project,
                 state_file=None,
                 classification=str(result["classification"]),
+                first_delivery=bool(result.get("first_delivery")),
+                checkpoint_read_context_id=result.get("checkpoint_read_context_id"),
                 recommended_action=str(result["recommended_action"]),
                 # A host's next_action is follow-up guidance, not refresh-state's
                 # explicit within-task step edit (which requires a runnable Todo).
@@ -358,6 +374,11 @@ def execute_turn_run_once(
                 goal_id=args.goal_id,
                 todo_id=todo_id,
                 completion_turn_key=settlement_identity.turn_instance_id,
+                delivery_read_context_id=result.get("delivery_read_context_id"),
+                delivery_direction_context_id=(result.get("checkpoint_read_context_id")
+                    if protected_delivery and effect_ref.endswith("#terminal_closeout") else None),
+                no_followup=protected_delivery and effect_ref.endswith("#terminal_closeout"),
+                delivery_settlement_identity=settlement_identity.as_dict() if protected_delivery else None,
                 evidence=(
                     "LoopX Turn validated completion: "
                     + str(result.get("summary") or result["classification"])
@@ -433,7 +454,7 @@ def execute_turn_run_once(
             *,
             effect_ref: str,
         ) -> dict[str, object]:
-            completion = todo_completion(result, effect_ref=effect_ref)
+            completion = result.get("_delivery_completion") or todo_completion(result, effect_ref=effect_ref)
             if not completion.get("ok"):
                 return completion
             todo_id = str(selected_todo.get("todo_id") or "")
@@ -894,6 +915,8 @@ def execute_turn_run_once(
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
+            first_delivery_context=first_delivery_context if protected_delivery else None,
+            first_delivery_completion=todo_completion if protected_delivery else None,
         )
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure
         from ..usage_ping import capture_failure

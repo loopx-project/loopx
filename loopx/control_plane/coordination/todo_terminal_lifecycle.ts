@@ -11,6 +11,7 @@ import type { JsonObject } from "../effect_program.ts";
 import type {
   AuthorityStore,
   AuthorityStoreCommit,
+  AuthorityStoreHead,
 } from "./authority_store.ts";
 import {
   AuthorityStoreProtocolError,
@@ -77,6 +78,9 @@ type TodoRole = typeof TODO_ROLES[number];
 type CompletionIdentitySource = typeof COMPLETION_IDENTITY_SOURCES[number];
 
 interface CoordinationTodoTerminalLifecycleBaseInput {
+  /** Immutable read identity, included in the operation payload commitment. */
+  readonly delivery_read_context_id?: string;
+  readonly delivery_direction_context_id?: string;
   readonly review_basis?: {readonly provider_revision: string; readonly registry_sha256: string};
   /** Presence selects source-bound validation; null means no effect issued yet. */
   readonly validation_source_provider_revision?: string | null;
@@ -349,6 +353,18 @@ function validateSuccessorSemantics(
 function normalizeTerminalInput(
   raw: CoordinationTodoTerminalLifecycleInput,
 ): CoordinationTodoTerminalLifecycleInput {
+  if (raw.delivery_read_context_id !== undefined) {
+    requireAuthorityStoreId(raw.delivery_read_context_id, "delivery read context id");
+    if (raw.operation_identity.kind !== "completion_turn" || raw.user_update !== undefined || raw.review_basis !== undefined) {
+      throw new AuthorityStoreProtocolError("delivery basis requires an ordinary Turn completion");
+    }
+  }
+  if (raw.delivery_direction_context_id !== undefined) {
+    requireAuthorityStoreId(raw.delivery_direction_context_id, "delivery direction context id");
+    if (raw.delivery_read_context_id === undefined || !raw.requested_no_followup) {
+      throw new AuthorityStoreProtocolError("direction receipt is only valid for protected terminal closeout");
+    }
+  }
   if (raw.review_basis !== undefined) {
     const basis = canonicalAuthorityObject(raw.review_basis, "terminal review basis");
     if (Object.keys(basis).some(key => !["provider_revision", "registry_sha256"].includes(key)) ||
@@ -471,6 +487,11 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     todo_id: input.todo_id,
     expected_role: input.expected_role,
     command: input.command,
+    ...(input.delivery_read_context_id === undefined ? {} : {
+      delivery_read_context_id: input.delivery_read_context_id,
+      note: input.note, evidence: input.evidence, reason: input.reason,
+      ...(input.delivery_direction_context_id === undefined ? {} : {delivery_direction_context_id: input.delivery_direction_context_id}),
+    }),
     // Older receipts deliberately retain their original fingerprint. A reviewed
     // command binds both its approved snapshot and its complete prose intent.
     ...(input.review_basis === undefined ? {} : {review_basis: input.review_basis,
@@ -1024,6 +1045,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   store: AuthorityStore,
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  deliveryBasisCheck?: (head: AuthorityStoreHead) => Promise<JsonObject>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1078,6 +1100,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
     head = observation.authority;
   }
+  if (input.delivery_read_context_id !== undefined) {
+    if (deliveryBasisCheck === undefined) return terminalFailure("delivery_basis_check_required",
+      "Protected completion requires its source and provider basis check.", {}, "decision_rejection");
+    const basis = await deliveryBasisCheck(head);
+    if (basis.ok !== true) return terminalFailure(String(basis.error_code), String(basis.error),
+      {delivery_read_context: basis}, "decision_rejection");
+  }
   let update: CoordinationTodoUpdateInput | undefined;
   if (input.user_update !== undefined) {
     try {
@@ -1104,7 +1133,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   const reviewedRevision = input.review_basis?.provider_revision ?? update?.expected_provider_revision;
   const validationRevision = input.user_update?.validation_source_provider_revision ?? input.validation_source_provider_revision;
   if ((reviewedRevision !== undefined && reviewedRevision !== head.provider_revision) ||
-      (validationRevision != null && validationRevision !== head.provider_revision)) {
+      (input.delivery_read_context_id === undefined && validationRevision != null && validationRevision !== head.provider_revision)) {
     return terminalFailure("provider_revision_mismatch", "Todo changed during completion review or validation; reread and retry");
   }
   if ((update !== undefined || input.validation_source_provider_revision !== undefined) &&
@@ -1237,7 +1266,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "decision_rejection");
   }
   const acceptanceBinding = acceptanceRequirements === null ? null
-    : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
+    : acceptanceSourceBinding(input, acceptanceRequirements,
+      input.delivery_read_context_id !== undefined && validationRevision != null ? validationRevision : head.provider_revision);
   let acceptanceEvidence: JsonObject | null = null;
   if (acceptanceRequirements !== null && acceptanceBinding !== null &&
       input.goal_acceptance_validation_receipts != null) {
@@ -1290,6 +1320,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
       }
       if (fence.outcome === "continue" && fence.reason === "same_turn_terminal_upgrade") {
         const originalInput = {...input, requested_no_followup: false,
+          delivery_direction_context_id: undefined,
           operation_id: completionTurnOperationId(input, false)};
         const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
         if (original === null) return terminalFailure("terminal_completion_receipt_required",

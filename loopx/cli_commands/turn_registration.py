@@ -313,6 +313,8 @@ def register_turn_commands(
     )
     run_once.add_argument("--timeout-seconds", type=float, default=None,
                           help="Optional execution deadline; by default wait for host completion or cancellation.")
+    run_once.add_argument("--first-delivery", action="store_true",
+        help="Opt into File/SQLite result freshness and a separately metered direction review for this Turn.")
     run_once.add_argument(
         "--retry-failed-turn",
         action="store_true",

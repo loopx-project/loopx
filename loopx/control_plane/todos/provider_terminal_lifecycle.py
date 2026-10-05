@@ -129,6 +129,9 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
             call.get("completion_identity_source") if complete else None
         ),
         review_basis=call.get("terminal_review_basis"),
+        delivery_read_context_id=call.get("delivery_read_context_id"),
+        delivery_direction_context_id=call.get("delivery_direction_context_id"),
+        delivery_settlement_identity=call.get("delivery_settlement_identity"),
         completion_delivery_workspace=(
             call.get("completion_delivery_workspace") if complete else None
         ),
@@ -300,6 +303,9 @@ def terminal_canonical_todo_if_promoted(
     self_merged: bool,
     dry_run: bool,
     review_basis: Mapping[str, Any] | None = None,
+    delivery_read_context_id: str | None = None,
+    delivery_direction_context_id: str | None = None,
+    delivery_settlement_identity: Mapping[str, Any] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any] | None:
@@ -323,6 +329,8 @@ def terminal_canonical_todo_if_promoted(
             str(exc), code=exc.code, payload=payload
         ) from exc
     if canonical is None:
+        if delivery_read_context_id is not None:
+            raise ValueError("delivery freshness requires File or SQLite canonical authority")
         return None
     todos = [dict(todo) for todo in canonical["todos"]]
     # The canonical transaction owns missing/role/archive lifecycle decisions.
@@ -431,10 +439,37 @@ def terminal_canonical_todo_if_promoted(
             "dry_run": dry_run,
             "observed_at": now_local(),
         }
-    result = effect_runtime_result(
-        "coordination.local_authority.todo_terminal", request,
-        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-    )
+    def invoke() -> Any:
+        if (delivery_read_context_id is not None or delivery_direction_context_id is not None) and delivery_settlement_identity is None:
+            raise ValueError("delivery read context requires the original settlement identity")
+        if delivery_settlement_identity is not None:
+            from ..goals.checkpoint_context_io import delivery_result_context_input
+            from ..quota.settlement import SettlementIdentity
+
+            if state_file is None:
+                raise ValueError("delivery freshness requires the registered state file")
+            context = delivery_result_context_input(
+                runtime_root=runtime_root, registry_path=registry_path, state_file=state_file,
+                identity=SettlementIdentity.from_runtime_payload(delivery_settlement_identity),
+                read_context_id=delivery_read_context_id,
+                direction_read_context_id=delivery_direction_context_id,
+            )
+            if context is not None:
+                request["delivery_context"] = context
+        for capture_attempt in range(3):
+            outcome = effect_runtime_result("coordination.local_authority.todo_terminal", request,
+                timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+            if not isinstance(outcome, Mapping) or outcome.get("reason_code") != "delivery_source_capture_changed" or capture_attempt == 2:
+                return outcome
+            # Recapture IO, retaining the original Agent decision and read ID.
+            request["delivery_context"] = delivery_result_context_input(
+                runtime_root=runtime_root, registry_path=registry_path, state_file=state_file,
+                identity=SettlementIdentity.from_runtime_payload(delivery_settlement_identity),
+                read_context_id=delivery_read_context_id,
+                direction_read_context_id=delivery_direction_context_id,
+            )
+
+    result = invoke()
     if isinstance(result, Mapping) and result.get("status") == "resolve_validation":
         # Admission and receipt recovery precede host-local declaration IO.
         # Resolving private argv grants no authority to run it; re-enter the
@@ -447,10 +482,7 @@ def terminal_canonical_todo_if_promoted(
             registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
             persist_if_resolved=not dry_run,
         )
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
+        result = invoke()
     completion_validation_executed = False
     if isinstance(result, Mapping) and result.get("status") == "execute_validation":
         request["validation_source_provider_revision"] = result["provider_revision"]
@@ -466,10 +498,7 @@ def terminal_canonical_todo_if_promoted(
             )
         completion_validation_executed = True
         request["observed_at"] = now_local()
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
+        result = invoke()
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
             "canonical Todo terminal transaction returned an invalid result",

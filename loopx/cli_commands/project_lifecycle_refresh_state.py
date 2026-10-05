@@ -97,6 +97,11 @@ def register_refresh_state_command(
     binding.add_argument("--todo-id")
     binding.add_argument("--replan-obligation-id")
     context_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    context_parser.add_argument("--purpose", choices=("supplement_checkpoint", "first_delivery", "delivery_result"),
+        default="supplement_checkpoint",
+        help="Explicitly enroll this original Turn in protected first delivery, or repair its missing checkpoint.")
+    context_parser.add_argument("--decision-scope", choices=("agent_lane", "goal"), default="agent_lane",
+        help="Complete work collection used by the first direction judgment; reading grants no write authority.")
     context_parser.add_argument("--project")
     context_parser.add_argument("--state-file")
     context_parser.add_argument("--dependency-todo-id", action="append", default=[],
@@ -105,6 +110,8 @@ def register_refresh_state_command(
         "refresh-state",
         help="Append a read-only run from active goal state after state-only updates.",
     )
+    refresh_state_parser.add_argument("--first-delivery", action="store_true",
+        help="Commit an explicitly enrolled first direction using its fresh checkpoint-context receipt.")
     add_subcommand_format(refresh_state_parser)
     refresh_state_parser.add_argument(
         "--goal-id",
@@ -447,6 +454,7 @@ def handle_refresh_state_command(
                 project=Path(args.project).expanduser() if args.project else None,
                 state_file=Path(args.state_file).expanduser() if args.state_file else None,
                 dependency_todo_ids=args.dependency_todo_id,
+                purpose=args.purpose, decision_scope=args.decision_scope,
                 goal_ref=goal_ref,
             )
         except Exception as exc:
@@ -564,6 +572,7 @@ def handle_refresh_state_command(
             merge_agent_vision_patch=merge_agent_vision_patch,
             vision_unchanged_reason=args.vision_unchanged_reason,
             checkpoint_read_context_id=getattr(args, "checkpoint_read_context", None),
+            first_delivery=bool(getattr(args, "first_delivery", False)),
             progress_observation=progress_observation,
             usage_measurement=usage_measurement,
             usage_codex_session=(
