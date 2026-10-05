@@ -21,7 +21,7 @@ TURN = "turn-periodic-successor-review"
 ROOT = Path(loopx.__file__).resolve().parents[1]
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, later_vision: bool = False):
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, later_vision: bool = False, future_monitor: bool = True):
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project", tmp_path / "runtime"
@@ -75,7 +75,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
         assert result.returncode == expected_code, {k: payload.get(k) for k in ["error", "reason", "autonomous_replan_obligation", "heartbeat_receipt", "goal_frontier_projection"]}
         return payload
 
-    if later_vision:
+    if later_vision and future_monitor:
         call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
             "--text", "Observe the independent external gate", "--task-class", "continuous_monitor",
             "--action-kind", "monitor", "--target-key", "external-gate",
@@ -223,3 +223,59 @@ def test_invalidated_successor_cannot_rebind_or_close_original_turn(
     assert denied_spend.get("appended") is not True
     rows = [json.loads(line) for line in index.read_text().splitlines()]
     assert not any(row.get("classification") == "quota_slot_spent" for row in rows)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    call, _, index = _fixture(tmp_path, monkeypatch, provider, later_vision=True, future_monitor=False)
+    state = tmp_path / "project" / "ACTIVE_GOAL_STATE.md"
+    # Terminal convergence requires explicit complete sources, never absence.
+    state.write_text(state.read_text() + "\n## User Todo / Owner Review Reading Queue\n")
+    covered = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Observe the now covered source", "--task-class", "continuous_monitor",
+        "--action-kind", "monitor", "--target-key", "covered-source", "--cadence", "30m",
+        "--next-due-at", "2099-01-01T00:00:00Z", "--expires-at", "2099-01-02T00:00:00Z")
+    call("todo", "complete", "--goal-id", GOAL, "--todo-id", covered["todo_id"],
+        "--agent-id", AGENT, "--no-follow-up", "--evidence", "Declared source coverage is complete.")
+    guard = _guard(call)
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert guard["autonomous_replan_obligation"]["triggers"][0]["kind"] == "vision_acceptance_gap"
+    binding = ("--goal-id", GOAL, "--agent-id", AGENT,
+               "--turn-instance-id", TURN, "--replan-obligation-id", identity["replan_obligation_id"])
+    vision = tmp_path / "covered-vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "no_followup",
+        "vision_patch": {"acceptance_summary": "The independently accepted source outcome is covered."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "stop",
+            "prior_assumption": "The source frontier still needs another bounded probe.",
+            "observed_reality": "The declared coverage is complete and no successor remains.",
+            "retained": ["the independently accepted source contract"],
+            "evidence_refs": ["evidence:source-coverage"]},
+    }))
+    refreshed = call("refresh-state", *binding,
+        "--classification", "covered_frontier_closeout", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(vision),
+        "--progress-result-class", "no_followup", "--progress-coverage-scope-id", "source-coverage",
+        "--progress-coverage-complete", "--progress-evidence-id", "evidence:source-coverage",
+        "--no-global-sync", "--suppress-external-sinks")
+    assert refreshed["settlement_progress"]["state"] == "spend_required"
+    pending = _guard(call)
+    assert pending["heartbeat_receipt"]["settlement_identity"] == identity
+    assert pending["settlement_progress"]["state"] == "spend_required"
+    assert pending.get("selected_todo") is None
+    spent = call("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
+    assert spent["appended"] is True
+    assert spent["settlement_progress"]["state"] == "settled"
+    assert call("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")["appended"] is False
+    terminal = _guard(call, "turn-after-covered-vision-closeout")
+    assert terminal["ok"] is True
+    assert terminal["effective_action"] == "terminal_no_followup"
+    assert terminal["should_run"] is False
+    assert terminal.get("autonomous_replan_obligation") is None
+    # A terminal execution frontier does not silently declare the Goal achieved.
+    assert json.loads((tmp_path / "registry.json").read_text())["goals"][0]["status"] == "active"
+    rows = [json.loads(line) for line in index.read_text().splitlines()]
+    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1

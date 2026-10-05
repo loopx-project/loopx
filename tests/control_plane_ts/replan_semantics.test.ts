@@ -307,6 +307,7 @@ test("vision ACK freshness covers its durable run, never later gaps or unknown t
   }
   for (const invalid of [{recorded: false}, {generated_at: null},
     {semantic_delta: {accepted: false, outcomes: ["fresh_vision_path_outcome"]}},
+    {semantic_delta: {accepted: true, outcomes: ["new_surface"]}},
     {semantic_delta: {accepted: true, outcomes: []}}]) {
     assert.equal(projectReplanSemantics({...request, ack: {...ack, ...invalid}}).acknowledged, false);
   }

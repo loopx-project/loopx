@@ -29,8 +29,8 @@ budgeting, dreaming, or product-specific replan logic.
 
 ## Replan ACK freshness
 
-An accepted vision ACK covers gaps at or before its enclosing durable run's
-timestamp. A vision patch label cannot acknowledge a later gap. The atomic
+An accepted ACK with a legal vision outcome covers gaps at or before its
+enclosing durable run's timestamp. A vision patch label cannot acknowledge a later gap. The atomic
 writeback's vision and ACK share that run timestamp, so reading the same run
 does not rearm planning. Completed-chain gaps use their canonical `completed_at`
 source instead. Missing or invalid source timestamps cannot establish coverage.
@@ -44,6 +44,13 @@ the original Turn reconstructs the same source obligation and revalidates its
 exact canonical successor receipt. A wrong owner, deferred/closed successor or
 changed source cannot settle that Turn. Refresh/spend remain required and retain
 the original binding; the successor executes only under a later admission.
+
+Coverage-backed terminal outcomes remain legal under their existing evidence
+and lifecycle gates. A terminal frontier must still allow the original Turn's
+outstanding debit exactly once, then refuse new work. Replan settlement does not
+declare the Goal achieved, remove unfinished Todos or waive independent Goal
+Acceptance checks. Complete source evidence and explicit closure intent remain
+necessary for terminal convergence.
 
 Bootstrap heartbeat cadence supplies an initial interval. Current
 backoff may lengthen it above the configured minimum while retaining ACTIVE.

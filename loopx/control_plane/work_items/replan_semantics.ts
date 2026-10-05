@@ -221,7 +221,8 @@ function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
       gap.source === "recent_completed_advancement_todo" ? gap.completed_at : null));
   });
   return {acknowledged: ack.recorded === true && delta.accepted === true &&
-    strings(delta.outcomes).length > 0 && Number.isFinite(acknowledgedAt) &&
+    strings(delta.outcomes).some(outcome => VISION_OUTCOMES.some(known => known === outcome)) &&
+    Number.isFinite(acknowledgedAt) &&
     gaps.length > 0 && gaps.every(time => Number.isFinite(time) && time <= acknowledgedAt)};
 }
 
