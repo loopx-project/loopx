@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import stat
 import subprocess
@@ -22,14 +23,25 @@ ROUTE_SELECTORS.update(
 )
 ARK_FLASH_ALIAS = "ark/deepseek-v4-flash"
 ARK_LEGACY_FLASH_ALIAS = "deepseek-v4-flash"
-ARK_FLASH_LABEL = "Ark · DeepSeek V4.1 Flash"
-ARK_PRO_LABEL = "Ark · DeepSeek V4 Pro"
 # The ids a stock operator configuration names. They are only the default view
 # of the Ark rows: an operator who configures a newer upstream generation --
 # DeepSeek-V4.1-Flash under its own endpoint id -- gets that id's row instead,
 # because the configured id is the model a request has to name.
 SHIPPED_ARK_MODEL = "deepseek-v4-flash-ga-260731"
 SHIPPED_ARK_PRO_MODEL = "deepseek-v4-pro-ga-260813"
+# Generations this package can name without guessing. ``deepseek-flash`` is the
+# vendor's canonical DeepSeek-V4.1-Flash id (DeepSeek API changelog), and Ark
+# names DeepSeek-V4.1-Flash under its own upstream id (Ark release notes).
+VALIDATED_ARK_GENERATIONS = {
+    "deepseek-flash": "V4.1",
+    "deepseek-v4-1-flash-260910": "V4.1",
+}
+# An Ark id spells the generation it serves: ``...-v4-1-flash-...`` is V4.1 and
+# ``...-v4-flash-...`` is V4. One digit per position keeps a custom id such as
+# ``v41`` from being read as a generation instead of as an unknown spelling.
+_ARK_GENERATION_SPELLING = re.compile(
+    r"(?:^|[-_.])v(?P<major>\d)(?:[._-](?P<minor>\d))?(?=$|[-_.])"
+)
 
 
 def release_suffix(model: str) -> str:
@@ -39,20 +51,70 @@ def release_suffix(model: str) -> str:
     return tail if len(tail) == 6 and tail.isdigit() else model
 
 
+def ark_generation(model: str) -> str | None:
+    """Return the generation the configured id itself proves, or ``None``.
+
+    The operator's own configuration is the witness: a validated Ark id that
+    spells ``v4-1`` serves DeepSeek-V4.1-Flash and one that spells ``v4`` serves
+    DeepSeek-V4-Flash. An id that spells neither -- a custom endpoint name, or
+    one of the ids the vendor renamed globally -- keeps no generation claim
+    rather than borrowing the newest one.
+    """
+
+    if model in VALIDATED_ARK_GENERATIONS:
+        return VALIDATED_ARK_GENERATIONS[model]
+    match = _ARK_GENERATION_SPELLING.search(model)
+    if match is None:
+        return None
+    major, minor = match.group("major"), match.group("minor")
+    return f"V{major}.{minor}" if minor else f"V{major}"
+
+
+def _ark_label(model: str, kind: str) -> str:
+    generation = ark_generation(model)
+    # No generation is named when the configured id does not prove one.
+    return f"Ark · {model}" if generation is None else f"Ark · DeepSeek {generation} {kind}"
+
+
+def _ark_endpoint_label(model: str, kind: str) -> str:
+    base = _ark_label(model, kind)
+    suffix = release_suffix(model)
+    return f"{base} ({suffix})" if suffix != model else f"{base} (endpoint id)"
+
+
+def ark_labels(flash_model: str, pro_model: str) -> dict[str, str]:
+    """Return the truthful labels for the two configured upstream ids.
+
+    One owner for both consumers: the App catalog rows and the CPA runtime
+    config render the same generation for the same configured id, so one row
+    cannot read as V4 in one surface and V4.1 in the other.
+    """
+
+    flash = _ark_label(flash_model, "Flash")
+    return {
+        "flash": flash,
+        "flash_legacy": f"{flash} (legacy id)",
+        "flash_endpoint": _ark_endpoint_label(flash_model, "Flash"),
+        "pro": _ark_endpoint_label(pro_model, "Pro"),
+    }
+
+
 def ark_selectors(flash_model: str, pro_model: str) -> dict[str, str]:
     """Return the Ark-backed catalog rows for the configured upstream ids.
 
     The two ids come from the operator's own configuration, so moving to a
     newer upstream generation is a configuration change rather than a source
     change. The two historical aliases stay, so a selector pinned to either
-    spelling keeps resolving to whatever the endpoint now serves.
+    spelling keeps resolving to whatever the endpoint now serves, labelled by
+    the generation that configured id proves.
     """
 
+    labels = ark_labels(flash_model, pro_model)
     return {
-        ARK_FLASH_ALIAS: ARK_FLASH_LABEL,
-        ARK_LEGACY_FLASH_ALIAS: f"{ARK_FLASH_LABEL} (legacy id)",
-        flash_model: f"{ARK_FLASH_LABEL} ({release_suffix(flash_model)})",
-        pro_model: f"{ARK_PRO_LABEL} ({release_suffix(pro_model)})",
+        ARK_FLASH_ALIAS: labels["flash"],
+        ARK_LEGACY_FLASH_ALIAS: labels["flash_legacy"],
+        flash_model: labels["flash_endpoint"],
+        pro_model: labels["pro"],
     }
 
 

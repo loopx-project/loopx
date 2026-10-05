@@ -11,7 +11,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from loopx_codex_provider_routing.operator import rollback, run, snapshot
-from loopx_codex_provider_routing.operator_catalog import AppCatalog, release_suffix
+from loopx_codex_provider_routing.operator_catalog import (
+    SELECTORS,
+    AppCatalog,
+    ark_generation,
+    release_suffix,
+)
 from loopx_codex_provider_routing.operator_runtime import (
     CPAOperator,
     sha256,
@@ -159,41 +164,84 @@ class OperatorTests(unittest.TestCase):
             self.assertNotIn(f'alias: "{alias}"', compatibility)
         self.assertIn("disable-cooling: false", config)
 
-    def test_ark_rows_follow_the_configured_generation(self):
-        """One configured id yields one row, labelled by product generation.
+    def test_ark_rows_name_the_generation_the_configured_id_proves(self):
+        """Old, new and custom upstream ids keep truthful generations.
 
         The Ark rows are the only DeepSeek surface that names an upstream
-        endpoint id, so they must be adopted from the operator's configuration
-        rather than from a literal here; otherwise moving to a newer generation
-        -- DeepSeek-V4.1-Flash -- would need a source change.
+        endpoint id, so the row is adopted from the operator's configuration
+        and labelled by the generation that id proves -- never by a literal
+        here. Reusing one label for every flash id made a stock V4 endpoint read
+        as V4.1 in both the App catalog and the CPA config.
         """
 
-        generation = "deepseek-v4-1-flash-ga-261001"
-        configured = AppCatalog(
-            CPAOperator(OperatorSettings({**self.data, "ark_model": generation}))
+        cases = (
+            # (configured id, flash row, legacy alias, endpoint row, pro row)
+            (
+                "deepseek-v4-flash-ga-260731",
+                "Ark · DeepSeek V4 Flash",
+                "Ark · DeepSeek V4 Flash (legacy id)",
+                "Ark · DeepSeek V4 Flash (260731)",
+                "Ark · DeepSeek V4 Pro (260813)",
+            ),
+            (
+                "deepseek-v4-1-flash-260910",
+                "Ark · DeepSeek V4.1 Flash",
+                "Ark · DeepSeek V4.1 Flash (legacy id)",
+                "Ark · DeepSeek V4.1 Flash (260910)",
+                "Ark · DeepSeek V4 Pro (260813)",
+            ),
+            (
+                "custom-ark-flash",
+                "Ark · custom-ark-flash",
+                "Ark · custom-ark-flash (legacy id)",
+                "Ark · custom-ark-flash (endpoint id)",
+                "Ark · custom-ark-pro (endpoint id)",
+            ),
         )
-        self.assertIn(generation, configured.SELECTORS)
-        self.assertNotIn(self.data["ark_model"], configured.SELECTORS)
+        for flash_model, flash, legacy, endpoint, pro in cases:
+            data = {**self.data, "ark_model": flash_model}
+            if flash_model == "custom-ark-flash":
+                data["ark_pro_model"] = "custom-ark-pro"
+            runtime = CPAOperator(OperatorSettings(data))
+            catalog = AppCatalog(runtime)
+            self.assertEqual(catalog.SELECTORS["ark/deepseek-v4-flash"], flash)
+            self.assertEqual(catalog.SELECTORS["deepseek-v4-flash"], legacy)
+            self.assertEqual(catalog.SELECTORS[flash_model], endpoint)
+            self.assertEqual(catalog.SELECTORS[data["ark_pro_model"]], pro)
+            config = runtime.runtime_config("fixture-key", management_secret="fixture")
+            # Both consumers render the same generation for the same id.
+            for label in (flash, legacy, endpoint, pro):
+                self.assertIn(f'display-name: "{label}"', config)
+
+    def test_shipped_ark_defaults_stay_v4_and_the_canonical_default_is_v41(self):
+        """The shipped rows and the product default keep distinct generations."""
+
+        configured = AppCatalog(self.runtime).SELECTORS
+        self.assertEqual(configured["ark/deepseek-v4-flash"], "Ark · DeepSeek V4 Flash")
         self.assertEqual(
-            configured.SELECTORS[generation], "Ark · DeepSeek V4.1 Flash (261001)"
+            configured["deepseek-v4-flash-ga-260731"], "Ark · DeepSeek V4 Flash (260731)"
         )
-        # The two historical aliases keep resolving, and the ids that need no
-        # release suffix read as their own id.
-        self.assertEqual(
-            configured.SELECTORS["ark/deepseek-v4-flash"], "Ark · DeepSeek V4.1 Flash"
-        )
-        self.assertEqual(
-            configured.SELECTORS["deepseek-v4-flash"],
-            "Ark · DeepSeek V4.1 Flash (legacy id)",
-        )
+        self.assertEqual(configured["ark/deepseek-v4-flash"], SELECTORS["ark/deepseek-v4-flash"])
+        self.assertEqual(ark_generation("deepseek-flash"), "V4.1")
+        self.assertEqual(ark_generation("deepseek-v4-1-flash-260910"), "V4.1")
+        self.assertEqual(ark_generation("deepseek-v4-flash-ga-260731"), "V4")
+        self.assertIsNone(ark_generation("custom-ark-flash"))
         self.assertEqual(release_suffix("deepseek-flash"), "deepseek-flash")
 
-    def test_runtime_config_renders_the_same_generation_label(self):
-        # A row that reads as one generation in the App catalog and another in
-        # the CPA config would make two surfaces disagree about what runs.
+    def test_catalog_rows_use_the_same_label_as_the_runtime_config(self):
+        self.seed()
+        self.seed_model_caches()
+        rows = {
+            m["slug"]: m["display_name"]
+            for m in AppCatalog(self.runtime).generate_catalog()["models"]
+        }
         config = self.runtime.runtime_config("fixture-key", management_secret="fixture")
-        self.assertIn('display-name: "Ark · DeepSeek V4.1 Flash"', config)
-        self.assertIn('alias: "deepseek-v4-flash"', config)
+        self.assertEqual(rows["ark/deepseek-v4-flash"], "Ark · DeepSeek V4 Flash")
+        self.assertEqual(
+            rows[self.data["ark_model"]], "Ark · DeepSeek V4 Flash (260731)"
+        )
+        self.assertIn(f'display-name: "{rows["ark/deepseek-v4-flash"]}"', config)
+        self.assertIn(f'display-name: "{rows[self.data["ark_model"]]}"', config)
 
     def test_cooldown_reset_is_scoped_and_not_a_health_claim(self):
         self.seed()
@@ -283,40 +331,7 @@ class OperatorTests(unittest.TestCase):
 
     def test_catalog_uses_native_model_metadata_and_fast_parity(self):
         self.seed()
-        base = {
-            "input_modalities": ["text", "image"],
-            "supported_reasoning_levels": [
-                {"effort": e}
-                for e in ("low", "medium", "high", "xhigh", "max", "ultra")
-            ],
-            "additional_speed_tiers": ["fast"],
-            "service_tiers": [{"id": "priority"}],
-        }
-        for key, models in (
-            ("gpt_cache", ["gpt-5.6-sol", "gpt-5.6-luna"]),
-            ("astra_cache", ["gpt-6-astra"]),
-            ("ark_catalog", [self.data["ark_model"], self.data["ark_pro_model"]]),
-        ):
-            write_private(
-                self.settings.paths[key],
-                json.dumps(
-                    {
-                        "models": [
-                            {
-                                **base,
-                                "slug": model,
-                                "input_modalities": ["text"]
-                                if key == "ark_catalog"
-                                else ["text", "image"],
-                                "context_window": 100000
-                                if model == "gpt-6-astra"
-                                else 50000,
-                            }
-                            for model in models
-                        ]
-                    }
-                ),
-            )
+        self.seed_model_caches()
         catalog = AppCatalog(self.runtime)
         rows = {m["slug"]: m for m in catalog.generate_catalog()["models"]}
         self.assertEqual(len(rows), 25)
@@ -376,6 +391,48 @@ class OperatorTests(unittest.TestCase):
             write_private(self.runtime.MODEL_CATALOG, json.dumps(broken))
             with self.assertRaisesRegex(RuntimeError, "standard-only"):
                 self.runtime.validate()
+
+    def seed_model_caches(self, ark_models=None):
+        """Write the private model caches a real operator config points at."""
+
+        base = {
+            "input_modalities": ["text", "image"],
+            "supported_reasoning_levels": [
+                {"effort": e}
+                for e in ("low", "medium", "high", "xhigh", "max", "ultra")
+            ],
+            "additional_speed_tiers": ["fast"],
+            "service_tiers": [{"id": "priority"}],
+        }
+        ark_models = ark_models or [
+            self.data["ark_model"],
+            self.data["ark_pro_model"],
+        ]
+        for key, models in (
+            ("gpt_cache", ["gpt-5.6-sol", "gpt-5.6-luna"]),
+            ("astra_cache", ["gpt-6-astra"]),
+            ("ark_catalog", ark_models),
+        ):
+            write_private(
+                self.settings.paths[key],
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                **base,
+                                "slug": model,
+                                "input_modalities": ["text"]
+                                if key == "ark_catalog"
+                                else ["text", "image"],
+                                "context_window": 100000
+                                if model == "gpt-6-astra"
+                                else 50000,
+                            }
+                            for model in models
+                        ]
+                    }
+                ),
+            )
 
     def test_new_preset_qualification_and_negative_fast_admission(self):
         from copy import deepcopy
