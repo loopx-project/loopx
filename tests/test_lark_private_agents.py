@@ -121,9 +121,13 @@ def test_committed_host_claim_replays_after_audience_revocation(ordinary):  # no
         send(provider, transport, "select", f"/agent {grant['target_ref']}")
         send(provider, transport, "ask", "committed private question")
         row = next(row for row in transport.core.pending() if row["message"] == "committed private question")
-        committed = claim(store, runtime, sid, "stable-claim")
-        assert committed["claimed"] and committed["turn"]["turn_id"] == row["turn_id"]
-        assert committed["turn"]["claim_id"] == "stable-claim"
+        send(provider, transport, "queued", "not yet claimed")
+        queued = next(row for row in transport.core.pending() if row["message"] == "not yet claimed")
+        with pytest.raises(ConnectionError, match="response lost"):
+            committed = claim(store, runtime, sid, "stable-claim")
+            assert committed["claimed"] and committed["turn"]["turn_id"] == row["turn_id"]
+            assert committed["turn"]["claim_id"] == "stable-claim"
+            raise ConnectionError("synthetic response lost after the durable claim")
         bindings = transport.bindings
         bindings.change_agent_target(binding_id=bid, expected_revision=bindings.read()["revision"], target_ref=grant["target_ref"])
         # A different claim id still cannot take over the committed Turn.
@@ -143,6 +147,10 @@ def test_committed_host_claim_replays_after_audience_revocation(ordinary):  # no
         transport.reconcile()
         # Revocation still withholds the private result from the original App.
         assert not any("Recovered answer" in text for _, text in provider.writes)
+        # The recovery exception grants no authority to start queued or new work.
+        assert not claim(store, runtime, sid, "fresh-claim")["claimed"]
+        assert store.load_turn(sid, queued["turn_id"])["status"] == "failed"
+        assert send(provider, transport, "new-after-revoke", "new private work")[0]["status"] == "command_rejected"
     finally:
         runtime.close()
 

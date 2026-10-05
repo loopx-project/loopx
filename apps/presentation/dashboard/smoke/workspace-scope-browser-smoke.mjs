@@ -54,7 +54,7 @@ try {
   await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话" }).click();
   await scope.click();
   await page.getByRole("option", { name: "notes" }).click();
-  await page.getByText("工作区对话 · 只读").waitFor();
+  await page.getByText("工作区对话 · 读写").waitFor();
   const workspaceUrl = page.url();
   assert.match(workspaceUrl, /[?&]workspace=[0-9a-f]{24}(?:&|$)/u);
   const question = "整理一下最近的素材";
