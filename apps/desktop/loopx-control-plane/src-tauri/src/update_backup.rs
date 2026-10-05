@@ -141,9 +141,32 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn recoverable_backup(root: &Path) -> Option<PathBuf> {
+    let previous = root.join("previous");
+    if previous.join("LoopX.app/Contents/Info.plist").is_file() {
+        return Some(previous);
+    }
+    fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let sequence = entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("older-")?
+                .parse::<u128>()
+                .ok()?;
+            let path = entry.path();
+            path.join("LoopX.app/Contents/Info.plist")
+                .is_file()
+                .then_some((sequence, path))
+        })
+        .max_by_key(|(sequence, _)| *sequence)
+        .map(|(_, path)| path)
+}
+
 pub fn available(app: &AppHandle) -> bool {
-    cfg!(target_os = "macos")
-        && root(app).is_ok_and(|r| r.join("previous/LoopX.app/Contents/Info.plist").is_file())
+    cfg!(target_os = "macos") && root(app).is_ok_and(|root| recoverable_backup(&root).is_some())
 }
 
 pub fn prepare(app: &AppHandle) -> Result<(), String> {
@@ -187,10 +210,10 @@ pub fn restore(app: &AppHandle) -> Result<(), String> {
     // must not require it to be intact; the verified backup source is what
     // must pass verification (`copy` re-checks its codesign signature).
     let executable = std::env::current_exe().map_err(|_| "app_bundle_required")?;
-    let previous = root(app)?.join("previous");
-    let version = fs::read_to_string(previous.join("version")).map_err(|_| "backup_unavailable")?;
+    let backup = recoverable_backup(&root(app)?).ok_or("backup_unavailable")?;
+    let version = fs::read_to_string(backup.join("version")).map_err(|_| "backup_unavailable")?;
     let handle = app.clone();
-    restore_verified_backup(&executable, &previous, move || {
+    restore_verified_backup(&executable, &backup, move || {
         crate::bundled_runtime::record_pending(&handle, version.trim(), "rollback")
     })
 }
@@ -293,6 +316,30 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::signed_app_test_support::{ad_hoc_signed_synthetic_app, synthetic_executable};
     use super::*;
+
+    #[test]
+    fn interrupted_rotation_keeps_the_latest_old_backup_recoverable() {
+        let root = tempfile::tempdir().unwrap();
+        for sequence in [1000, 2000] {
+            let backup = root.path().join(format!("older-{sequence}"));
+            fs::create_dir_all(backup.join("LoopX.app/Contents")).unwrap();
+            fs::write(backup.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
+            fs::write(backup.join("version"), format!("1.0.{sequence}")).unwrap();
+        }
+        let unrelated = root.path().join("older-not-a-sequence");
+        fs::create_dir_all(unrelated.join("LoopX.app/Contents")).unwrap();
+        fs::write(unrelated.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
+
+        assert_eq!(
+            recoverable_backup(root.path()),
+            Some(root.path().join("older-2000"))
+        );
+
+        let previous = root.path().join("previous");
+        fs::create_dir_all(previous.join("LoopX.app/Contents")).unwrap();
+        fs::write(previous.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
+        assert_eq!(recoverable_backup(root.path()), Some(previous));
+    }
 
     #[test]
     fn failed_replacement_restores_original() {

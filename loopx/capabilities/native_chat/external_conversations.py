@@ -94,6 +94,7 @@ class ChatExternalConversations:
             if controller.store.turn_for_client(current["session_id"], client_id) is not None:
                 # The canonical store validates exact replay before its closed
                 # Session check. Never move an accepted request to a new Session.
+                self._record_steward_ingress(row, selected, current, client_id)
                 turn, _ = controller.store.create_queued_turn(current["session_id"],
                     client_turn_id=client_id, message=row["message"], origin="lark",
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
@@ -176,6 +177,7 @@ class ChatExternalConversations:
                     mode="resume_latest", conversation_binding_id=row["binding_id"], source_context=row["source"])
             row["session_id"] = current["session_id"]
             _atomic_write_json(path, row)
+            self._record_steward_ingress(row, selected, current, plan["client_turn_id"])
             try:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
                     client_turn_id=plan["client_turn_id"], message=row["message"],
@@ -188,6 +190,32 @@ class ChatExternalConversations:
                 row.update(status="rejected", response="队列已满，本条没有被受理；请稍后重新发送。")
         _atomic_write_json(path, row)
         return row
+
+    def _record_steward_ingress(self, row: dict[str, Any], selected: dict[str, Any],
+                               session: dict[str, Any], client_turn_id: str) -> None:
+        if selected["binding"]["context_kind"] != "steward":
+            return
+        if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
+            raise ValueError("the verified steward source belongs to another Session")
+        from ..manager_context import register_ingress
+        from ...control_plane.collaboration.inbox import normalize_source_context
+
+        try:
+            normalize_source_context(row["message"])
+        except ValueError:
+            # Inbox bounds are not ordinary Chat admission bounds. Preserve the
+            # full native message; no provenance means no context delivery.
+            return
+
+        # Persist provenance before enqueue can launch the model. This is the
+        # existing inbox owner, not a delivery grant: its separate sender/target
+        # policy still decides which registered recipient may receive context.
+        # The independently verified App-scoped owner reference is deliberately
+        # used instead of copying another profile's raw provider identity.
+        register_ingress(getattr(self.controller, "coordination_runtime_root", self.controller.store.root.parent),
+            session_id=session["session_id"], client_turn_id=client_turn_id,
+            channel=selected["channel_id"], sender_id=selected["context"]["operator_ref"],
+            message=row["message"], source_id=row["request_ref"])
 
     def pending(self) -> list[dict[str, Any]]:
         return [_read_json(path) for path in sorted(self.root.glob("*.json"))]

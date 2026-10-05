@@ -324,11 +324,17 @@ def evidence_goal_scope(runtime_root: Path, channel: str) -> list[str] | None:
         return []
 
 
+def _require_external_channel(channel: str) -> None:
+    # Legacy manager connections and native App/source bindings both identify
+    # one exact audience. Never accept a prefix or a partially specified binding.
+    if not re.fullmatch(r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24})", channel):
+        raise ValueError("an exact external manager channel is required")
+
+
 def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel: str,
                              goal_ids: list[str], execute: bool = False) -> dict:
     """Local operator grants only selected Goal summaries to an exact audience."""
-    if not re.fullmatch(r"manager\.external\.[a-f0-9]{24}", channel):
-        raise ValueError("an exact external manager channel is required")
+    _require_external_channel(channel)
     registry = load_project_registry(registry_path)
     available = {g.get("id") for g in registry.get("goals", []) if isinstance(g, dict)}
     if any(g not in available for g in goal_ids):
@@ -361,8 +367,7 @@ def configure_delivery_target(
     execute: bool = False,
 ) -> dict:
     """Observe registry/policy and persist a typed sender-bound recipient change."""
-    if not re.fullmatch(r"manager\.external\.[a-f0-9]{24}", channel):
-        raise ValueError("an exact external manager channel is required")
+    _require_external_channel(channel)
     path = _root(runtime_root) / "policy.json"
 
     def update(*, apply: bool) -> dict:

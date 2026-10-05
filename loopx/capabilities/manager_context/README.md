@@ -53,6 +53,21 @@ external delivery, including future replay. Existing inbox records are retained.
 Provider ingress receipts bind message digest, channel and sender; a model cannot
 create or widen that provenance through its response.
 
+Native steward private conversations record that provenance before the canonical
+Turn can start, using this App's independently verified opaque `operator_ref`.
+Use the exact Session channel `manager.external.native.<binding-ref>.<source-ref>`
+and that owner reference in the private source policy. The same read-scope and
+delivery-target commands accept this exact channel alongside legacy channels;
+partial channels and wildcards are rejected. Native admission and crash replay
+retain the original Session, request and message. An App's portfolio read grant
+alone does not grant context delivery, and inbox delivery does not launch a worker.
+Provenance uses the controller's resolved coordination runtime root when present,
+so a separate Chat store cannot split it from the recipient policy and inbox.
+Controllers predating that root retain the existing Chat-parent layout.
+Messages outside the shared inbox's source-context bounds remain intact in
+ordinary Chat, but cannot be handed off as inline context; use a scoped artifact
+for larger material. Image content is not transferred by this text ingress record.
+
 The existing worker turn-start hook exposes only a bounded pending count and
 required read command, without copying private content into status projections.
 Read and record a decision through the installed CLI:

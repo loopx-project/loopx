@@ -159,4 +159,18 @@ jobs:
           # immutable signed assets and feed are completely uploaded.
           pointer="desktop-$CHANNEL"
           gh release view "$pointer" >/dev/null 2>&1 || gh release create "$pointer" --prerelease --latest=false --target "$SOURCE_REF" --title "Desktop $CHANNEL channel" --notes "Pointer to the latest complete signed desktop build."
-          gh release upload "$pointer" dist/updater/desktop-updater.json --clobber
+          pointer_assets="$(gh release view "$pointer" --json assets --jq '.assets[].name')"
+          decision=advance
+          if grep -Fxq desktop-updater.json <<<"$pointer_assets"; then
+            mkdir -p dist/current-pointer
+            gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer
+            decision="$(python scripts/desktop_update_feed.py \
+              --channel-pointer-decision "$CHANNEL" \
+              --current-feed dist/current-pointer/desktop-updater.json \
+              --candidate-feed dist/updater/desktop-updater.json)"
+          fi
+          if [ "$decision" = advance ]; then
+            gh release upload "$pointer" dist/updater/desktop-updater.json --clobber
+          else
+            echo "::notice title=Desktop channel retained::$pointer already points to an equal or newer build"
+          fi
