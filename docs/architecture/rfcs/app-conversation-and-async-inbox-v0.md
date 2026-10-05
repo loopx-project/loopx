@@ -30,9 +30,9 @@ the TypeScript owner decides context identity and scope. Native Codex resume ret
 the original upstream thread and workspace. HTTP/protocol fixtures qualify that
 continuity and denial behavior; they do not establish real model adoption.
 
-The App grant is workspace reading for the local owner. The App scope alone does
-not qualify Lark private-message admission, installed or mobile journeys, or
-authorize edits. A revoked grant keeps the history readable and blocks new
+The local App grant covers the selected owner workspace under its current host
+permissions. Scope selection alone does not qualify Lark private-message
+admission, installed or mobile journeys. A revoked grant keeps history readable and blocks new
 messages until the host grants it again. The independent Lark checkpoint below
 qualifies its source implementation separately.
 
@@ -51,7 +51,7 @@ shared request owner, and a replay retains the original Session/Turn target.
 A lost admission correlation cannot move a request to a newer Session. Admission
 feedback and final delivery use separate durable provider intents; an ambiguous
 write is read back without blind resend. Unsupported media receives an explicit
-notice. The workspace grant grants neither Goal, portfolio nor peer execution authority.
+notice. The workspace grant conveys no Goal, portfolio or peer execution authority.
 
 The packaged settings journey, source revocation/recovery, duplicate events,
 native queue/stop and two-App isolation have synthetic-provider regression and
@@ -95,10 +95,16 @@ Host grant removal or downgrade is rechecked before admission and resume.
 
 Typed Core/HTTP/native-host regressions qualify default writes, explicit read-only,
 workspace identity, independent App grants, old-Session rejection and exact-thread
-resume. A real Codex canary edited and read back a synthetic note under project
-rules while preserving prior text and creating no Goal. It is a host/filesystem
-result, not live Lark write-workflow, material intake or release qualification.
-Maintainer review, installed/Lark journeys and broader IM interactions remain open.
+resume. Earlier source evidence records a Codex canary editing and reading back a
+synthetic note while preserving prior text and creating no Goal. This historical
+host/filesystem evidence is separate from current synthetic-protocol regression
+checks and does not qualify live Lark, material intake or a release.
+Committed same-claim replay is separate from new admission: after a lost response
+and target revocation, the original host can recover its committed receipt; new
+claims and external result publication remain denied. Current validation uses real
+Core HTTP, file storage and the claim broker with synthetic Codex/provider
+transport; it does not rerun a live-model edit or phone journey. Installed/Lark
+journeys and broader IM interactions remain open.
 
 ## Bound steward private Chat: explicit new commissions
 
