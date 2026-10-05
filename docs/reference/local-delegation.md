@@ -945,21 +945,25 @@ Linked evidence has a stepwise back action and a separate exit to the execution 
 
 A lost downstream result or revoked adoption leaves the freshly verified original/response/revision readable and marks adoption unavailable. Select **Verify linked work** again after recovery; adoption returns only when the current receipt and exact consumer identity, input and output agree. A lost core version still clears the correction trace.
 
-Expand **Current validation basis** in the existing evidence reader to inspect the source, definition digest, check count and file-pin count from this read. The additive `validation` object on `delegate read` contains `source`, `basis_sha256`, `check_count` and `pinned_file_count`; its source reuses `goal_acceptance` or `todo_validation`. The digest binds the current canonical requirements and selected validation effects. It does not export their commands, paths or labels, and it is neither a stored success receipt nor verifier identity. A read still reruns the original checks and requires the exact stored output versions. Rule-file drift or validation failure withdraws the report and basis; restoration needs an explicit recheck. Older runtimes remain readable with the basis identity marked unavailable.
+Expand **Current validation basis** in the existing evidence reader to inspect the source, definition digest, check count and file-pin count from this read. The additive `validation` object on `delegate read` contains `source`, `basis_sha256`, `check_count`, `pinned_file_count`, `checked_at` and `output_versions` (relative `ref` and bare `sha256` pairs); its source reuses `goal_acceptance` or `todo_validation`. The digest binds the current canonical requirements and selected validation effects. It does not export their commands, absolute paths or labels, and it is neither a stored success receipt nor verifier identity.
+
+The host now reads declared outputs before and after running the current checks. If their versions differ, the first return is refused as well as later reads; the original journal cannot accept newly changed, unchecked bytes. `checked_at` is the host's UTC completion observation for that read, and `output_versions` names the bytes that remained unchanged across the checks. This bounded observation does not prove that a validator semantically evaluated every output, detect a change and restoration between snapshots, or establish an independent reviewer. Each read still requires the exact stored output versions. Rule-file drift or validation failure withdraws the report and basis; restoration needs an explicit recheck. Older runtimes remain readable with missing basis or check/version records marked unavailable. A frontend response carrying records for another output version cannot present them as this report's checks. These are read-only observations through the existing delegation grant; no new configuration, verifier authority or task execution is implied.
 
 A revision can have current task acceptance and valid requester adoption while independent-verifier evidence is missing. These are distinct facts. The correction path explicitly says **Independent verification · evidence not provided**; neither `responds_to`, a reviewer's name nor a successful validator is an exact-version independent-verifier receipt.
 
-The following views use the packaged frontend with an isolated production SQLite/HTTP/CLI fixture. They contain synthetic data and do not qualify a live-model correction or the installed native App. The desktop view exposes the missing verifier beside valid adoption; the mobile view shows the same gap in the scrollable correction path. The stale view shows acceptance withdrawn after changed output:
+The following packaged transport-fixture views show current check records and their withdrawal. A separate isolated production SQLite/HTTP/CLI journey exercises the same reader with actual host checks, missing output and explicit restoration. All data is synthetic; these checks do not qualify a live-model correction or the installed native App.
 
-![Packaged correction evidence: current validation basis and the independent-verifier gap](../assets/personal-workspace/team-evidence-desktop.png)
+![Packaged validation detail: host check time and stable declared output versions](../assets/personal-workspace/team-check-records-desktop.png)
 
-![390px correction evidence with the missing-verifier state](../assets/personal-workspace/team-evidence-mobile.png)
+![390px validation detail with readable output versions](../assets/personal-workspace/team-check-records-mobile.png)
+
+![Unavailable output clears the report and check records](../assets/personal-workspace/team-check-records-unavailable.png)
 
 ![Current execution list withdraws acceptance for changed output](../assets/personal-workspace/team-evidence-stale.png)
 
 ![Downstream loss preserves the current correction and marks adoption unavailable](../assets/personal-workspace/team-adoption-unavailable.png)
 
-中文：证据详情可展开“本次验收依据”，查看当前规则来源、定义摘要、检查与文件固定项数；不暴露命令、路径或私有标签，也不代表独立验收者。规则文件变化或验收失败清除产物与依据，恢复后显式重读；旧运行时明确标为依据未提供。返回执行列表现在单次重读当前页，保留分页与键盘焦点；产物变化撤回验收，列表失联清除旧行，可刷新恢复，不启动额外工作。任务接受有效和请求方采用有效，仍不能证明独立验收者验证了准确版本。纠偏路径对此明确留缺口。后续结果失联或采用撤回不会抹去当前仍有效的纠偏证据；原地重新核验可恢复准确版本的采用，核心来源失效则仍清除路径。图中均为隔离 production SQLite/HTTP/CLI 与打包前端的合成数据，不作为真实模型纠偏或已安装 Native App 验收。
+中文：证据详情可展开“本次验收依据”，查看当前规则来源、定义摘要、检查与文件固定项数，以及 host 的 UTC 检查完成时间和检查前后保持一致的产物版本。首次返回同样拒绝检查期间变更的文件；不暴露命令、绝对路径或私有标签，也不代表独立验收者或证明规则语义完整，无法发现两次快照之间变更后恢复的内容。规则文件变化或验收失败清除产物与依据，恢复后显式重读；旧运行时和不匹配版本明确标为检查记录未提供。返回执行列表现在单次重读当前页，保留分页与键盘焦点；产物变化撤回验收，列表失联清除旧行，可刷新恢复，不启动额外工作。任务接受有效和请求方采用有效，仍不能证明独立验收者验证了准确版本。纠偏路径对此明确留缺口。后续结果失联或采用撤回不会抹去当前仍有效的纠偏证据；原地重新核验可恢复准确版本的采用，核心来源失效则仍清除路径。图中为打包前端的合成数据；另用隔离生产 SQLite/HTTP/CLI 验证同一读回和实际失效/恢复，不作为真实模型纠偏或已安装 Native App 验收。
 
 ## Use the same bindings through MCP
 

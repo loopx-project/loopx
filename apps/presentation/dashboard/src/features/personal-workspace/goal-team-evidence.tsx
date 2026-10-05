@@ -58,6 +58,13 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
     : (zh ? "投递状态待核实" : "Delivery requires reconciliation");
   const hasCorrectionPath = Boolean(result?.dependencies?.some(link => link.relation === "revises")
     && result?.dependencies?.some(link => link.relation === "responds_to"));
+  // Defensive transport readback: never present a witness for another report version.
+  const checkedOutputs = result?.validation?.output_versions;
+  const checkedAt = result?.validation?.checked_at;
+  const hasCheckedOutputs = Boolean(checkedAt && Number.isFinite(Date.parse(checkedAt))
+    && checkedOutputs?.length && checkedOutputs.length === result?.artifacts?.length
+    && new Set(checkedOutputs.map(row => row.ref)).size === checkedOutputs.length
+    && checkedOutputs.every(row => result?.artifacts?.some(artifact => artifact.ref === row.ref && artifact.sha256 === row.sha256)));
   return <section className="goal-team-evidence" aria-label={zh ? "执行证据" : "Execution evidence"} aria-busy={busy}>
     <div className="goal-team-work-actions"><h3>{zh ? "执行证据" : "Execution evidence"}</h3>
       <button type="button" disabled={busy} onClick={() => void read()}>{zh ? "重新读取证据" : "Recheck evidence"}</button></div>
@@ -81,6 +88,11 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
             {result.validation.pinned_file_count} {zh ? "项文件版本固定" : "file pins"}</p>
           <p>{zh ? "本次读取重跑了当前规则，并核对产物版本。规则标识不证明独立复核者或异议已解决。"
             : "This read reran the current rules and checked output versions. The rule identity does not attest an independent reviewer or resolve an objection."}</p>
+          {hasCheckedOutputs ? <>
+            <p>{zh ? "本次检查完成于" : "Checks completed at"}{" "}<time dateTime={checkedAt}>{checkedAt}</time></p>
+            <p>{zh ? "检查前后保持一致的产物版本" : "Output versions unchanged across these checks"}</p>
+            {checkedOutputs!.map(row => <p key={row.ref}>{row.ref}{" · "}<code>{row.sha256}</code></p>)}
+          </> : <p>{zh ? "未提供与当前产物匹配的检查时间及版本记录。" : "Check time and version records matching this report are unavailable."}</p>}
           <code>{result.validation.basis_sha256}</code>
         </> : <p>{zh ? "此运行时未提供验收依据标识。" : "This runtime did not provide the validation basis identity."}</p>}
       </details> : null}
