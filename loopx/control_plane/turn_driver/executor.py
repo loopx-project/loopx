@@ -1293,7 +1293,7 @@ def _first_delivery_stage(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Run the protected result/direction stage, preserving settlement ordering."""
     if first_delivery_context is not None and "durable_writeback" not in completed_phases:
-        from .first_delivery import prepare_first_delivery
+        from .direction_review import prepare_first_delivery
         from ...usage_goal import observe_goal_execution
 
         try:

@@ -16,7 +16,7 @@ export function evaluateFirstDelivery(value: unknown): JsonObject {
       quota_spent: request.quota_spent === true,
       goal_completion_certified: false,
       next_action: stage === "operation_unknown" ? "Read back the original Turn and its run artifacts; retain its identity."
-        : stage === "direction_pending" ? "Resume the original Turn or read first_delivery context and judge the current direction. Retain the committed result."
+        : stage === "direction_pending" ? "Result retained; review the current direction using the original Turn, then resume its remaining settlement."
         : stage === "settlement_pending" ? "Resume the original Turn's remaining settlement; retain successful writeback and quota receipts."
         : "Turn settlement is complete. Read the current Goal obligations before selecting further work."};
   }

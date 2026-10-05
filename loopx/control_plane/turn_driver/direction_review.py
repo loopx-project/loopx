@@ -1,4 +1,4 @@
-"""Bounded direction inference using the existing Turn journal and Host IO.
+"""Host IO for bounded direction inference using the existing Turn journal.
 
 Todo/run receipts remain the commit authority. This module records which read
 was delivered to which inference, and never manufactures a fresh token for a

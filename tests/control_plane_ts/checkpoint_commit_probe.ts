@@ -68,9 +68,10 @@ if (input.mode === "checkpoint") {
 } else if (input.mode === "writer") {
   const original = prototype.commitAuthority;
   prototype.commitAuthority = async function(commit) {
+    const started = performance.now();
     signal("writer-entered");
     const result = await original.call(this as SqliteAuthorityStore & FileAuthorityStore, commit);
-    signal("provider-result", result);
+    signal("provider-result", {...result, elapsed_ms: performance.now() - started});
     return result;
   };
 }

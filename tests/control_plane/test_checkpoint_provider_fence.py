@@ -249,7 +249,7 @@ def test_existing_cli_maintenance_guard_precedes_provider_commit(tmp_path, monke
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("first_delivery", [False, True])
-def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tmp_path, monkeypatch, provider, first_delivery):
+def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tmp_path, monkeypatch, record_property, provider, first_delivery):
     _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider, first_delivery=first_delivery)
     context = read()
     barrier = tmp_path / "barrier"
@@ -282,7 +282,9 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
             assert saved["ok"] and not saved["replayed"]
             assert json.loads((barrier / "runtime-replay").read_text())["replayed"]
             finish(writer)
-            assert json.loads((barrier / "provider-result").read_text())["status"] == "applied"
+            provider_result = json.loads((barrier / "provider-result").read_text())
+            assert provider_result["status"] == "applied"
+            record_property("provider_commit_elapsed_ms", provider_result["elapsed_ms"])
             return saved
         finally:
             (barrier / "release").touch()

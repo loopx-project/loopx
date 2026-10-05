@@ -26,7 +26,7 @@ def _cli(args):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("interruption", [None, "result_response_lost", "direction_call_failed", "stale_direction", "deferred_terminal"])
+@pytest.mark.parametrize("interruption", [None, "result_response_lost", "direction_call_failed", "stale_direction", "deferred_terminal", "continuous_direction_change"])
 def test_managed_first_delivery_judges_after_result_and_replays_without_host(tmp_path, monkeypatch, provider, interruption):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(tmp_path)
@@ -76,19 +76,20 @@ assert "delivery_result_context" in request
             raise OSError("injected response loss after result CAS")
 
         monkeypatch.setattr(turn_run_once, "write_turn_validated_completion", lose_once)
-    elif interruption == "stale_direction":
+    elif interruption in {"stale_direction", "continuous_direction_change"}:
         from loopx.cli_commands import turn_run_once
         original = turn_run_once.refresh_state_run
 
         def change_basis_once(**kwargs):
             if kwargs.get("first_delivery"):
                 state.write_text(state.read_text(encoding="utf-8") + "\n## Direction update\nReview the current remaining frontier.\n", encoding="utf-8")
-                monkeypatch.setattr(turn_run_once, "refresh_state_run", original)
+                if interruption == "stale_direction":
+                    monkeypatch.setattr(turn_run_once, "refresh_state_run", original)
             return original(**kwargs)
 
         monkeypatch.setattr(turn_run_once, "refresh_state_run", change_basis_once)
     elif interruption == "direction_call_failed":
-        from loopx.control_plane.turn_driver import first_delivery
+        from loopx.control_plane.turn_driver import direction_review as first_delivery
         original = first_delivery.review_first_delivery
 
         def fail_once(**kwargs):
@@ -101,6 +102,16 @@ assert "delivery_result_context" in request
         assert result["status"] == "failed", result
         assert result["first_delivery_progress"]["stage"] in {"direction_pending", "operation_unknown"}
         code, result = _cli([*argv[:-1], "--resume-turn-key", result["resume_turn_key"], "--retry-failed-turn", "--execute"])
+    if interruption == "continuous_direction_change":
+        assert result["status"] == "failed", result
+        code, exhausted = _cli([*argv[:-1], "--resume-turn-key", result["resume_turn_key"], "--retry-failed-turn", "--execute"])
+        assert exhausted["status"] == "failed", exhausted
+        assert "budget exhausted" in json.dumps(exhausted)
+        assert (host_project / "host-calls.txt").read_text().splitlines() == ["implementation", "direction", "direction"]
+        rows = [json.loads(line) for line in (runtime / "goals/loopx-turn-fixture/runs/index.jsonl").read_text().splitlines()]
+        assert not any(row["classification"] == "quota_slot_spent" for row in rows)
+        assert not any(row.get("vision_checkpoint", {}).get("read_context") for row in rows)
+        return
     assert code == 0 and result["status"] == "committed", json.dumps(result)
     assert result["first_delivery_progress"]["stage"] == "settled"
     calls = ["implementation", "direction"] + (["direction"] if interruption == "stale_direction" else [])
