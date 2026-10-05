@@ -852,10 +852,10 @@ class Delegations:
             result["stop"] = {"stop_id": stop["stop_id"], "phase": stop["phase"]}
         if row["status"] == "accepted":
             # A saved receipt cannot hide an amended task, verifier or output.
-            artifacts = self._accepted(binding)
-            if artifacts != row["artifacts"]:
+            accepted = self._accepted(binding)
+            if accepted["artifacts"] != row["artifacts"]:
                 raise ValueError("delegation output changed after completion")
-            result["artifacts"] = artifacts
+            result.update(accepted)
         if row.get("error"):
             result["error"] = row["error"]
         return result
@@ -1323,7 +1323,7 @@ class Delegations:
     def _validate(self, binding: dict) -> dict:
         return delegation_validation.validate(self, binding)
 
-    def _accepted(self, binding: dict) -> list[dict]:
+    def _accepted(self, binding: dict) -> dict:
         validation = self._validate(binding)
         if not validation["plan"]["canonical_done"]:
             raise ValueError("delegation requires current canonical completion")
@@ -1345,7 +1345,7 @@ class Delegations:
                               "text": content.decode("utf-8")})
         if len(json.dumps(artifacts).encode()) > 64_000:
             raise ValueError("delegation aggregate return exceeds limit")
-        return artifacts
+        return {"artifacts": artifacts, "validation": validation["plan"]["observation"]}
 
     def execute(self, operation_id: str) -> None:
         path = self.path(operation_id)
@@ -1808,7 +1808,7 @@ class Delegations:
                     delegation_results.require_dependencies(
                         self, binding, delegation_results.operation_brief(self, row)
                     )
-                row["artifacts"] = self._accepted(binding)
+                row["artifacts"] = self._accepted(binding)["artifacts"]
                 if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
                     return_result(
                         self.root,
