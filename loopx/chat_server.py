@@ -1688,7 +1688,7 @@ def serve_chat(
     ).start()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
-    print("Agent boundary: local adapters, read-only sandbox, approval policy never", flush=True)
+    print(f"Agent boundary: local adapters, project grant {project_workspace_grant}, approval policy never", flush=True)
     print("Todo writes: preview-locked on loopback", flush=True)
     if enable_goal_subagent_configuration:
         print("Goal sub-agent configuration: preview-locked opt-in enabled", flush=True)

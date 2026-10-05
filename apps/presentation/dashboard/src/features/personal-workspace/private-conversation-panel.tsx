@@ -43,6 +43,9 @@ export function PrivateConversationPanel() {
     return () => {active = false; clearInterval(timer);};
   }, []);
 
+  const effectiveProjectGrant = executor === "codex" && projects.find(item => item.project_ref === project)?.grant === "workspace_write"
+    ? projectGrant : "workspace_read";
+
   function listenerLabel(state: string) {
     const labels: Record<string, [string, string]> = {starting: ["启动中", "Starting"], listening: ["实时连接就绪", "Live connection ready"],
       standby: ["等待已有监听服务", "Waiting for the existing listener"], retrying: ["重连中", "Reconnecting"],
@@ -91,12 +94,12 @@ export function PrivateConversationPanel() {
     <label>{zh ? "执行器" : "Executor"}<select aria-label={zh ? "私聊执行器" : "Private Chat executor"} value={executor} disabled={busy} onChange={event => setExecutor(event.target.value)}>
       {executors.map(executor => <option key={executor} value={executor}>{executor}</option>)}
     </select></label>
-    {role === "project" ? <label>{zh ? "工作区权限" : "Workspace access"}<select aria-label={zh ? "私聊工作区权限" : "Private Chat workspace access"} value={executor === "codex" ? projectGrant : "workspace_read"} disabled={busy || executor !== "codex"} onChange={event => setProjectGrant(event.target.value as "workspace_read" | "workspace_write")}>
+    {role === "project" ? <label>{zh ? "工作区权限" : "Workspace access"}<select aria-label={zh ? "私聊工作区权限" : "Private Chat workspace access"} value={effectiveProjectGrant} disabled={busy || executor !== "codex"} onChange={event => setProjectGrant(event.target.value as "workspace_read" | "workspace_write")}>
       <option value="workspace_read">{zh ? "只读" : "Read-only"}</option>
       <option value="workspace_write" disabled={projects.find(item => item.project_ref === project)?.grant === "workspace_read"}>{zh ? "工作区读写（默认）" : "Workspace writes (default)"}</option>
     </select></label> : null}
-    {role === "project" && executor === "codex" && projectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
-    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor || (role === "project" && executor === "codex" && projectGrant === "workspace_write" && projects.find(item => item.project_ref === project)?.grant === "workspace_read")} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" && executor === "codex" ? projectGrant : "workspace_read"))} type="button">
+    {role === "project" && effectiveProjectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
+    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read"))} type="button">
       {busy ? (zh ? "正在核验" : "Verifying") : (zh ? "连接本人私聊" : "Connect owner private Chat")}</button>
       <button disabled={busy} onClick={() => void act(refresh)} type="button">{zh ? "刷新状态" : "Refresh status"}</button></div>
     <p>{zh ? "从手机发送文字开始；后续消息进入原会话队列。/status 查看工作区、角色与持久排队状态，/help 查看用法与解绑入口，/stop 停止当前聊天执行，/new 开启新会话。图片、文件会明确提示暂不支持。" : "Send text from your phone to begin; follow-ups queue in the same Session. /status shows the workspace, role and durable queue, /help explains commands and where to unbind, /stop stops the current Chat Turn, /new starts a new conversation. Images and files receive an explicit unsupported response."}</p>

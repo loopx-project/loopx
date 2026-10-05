@@ -439,6 +439,7 @@ class CodexChatAgentSession:
     process_tree_owned: bool = False
     runtime_profile: str = "restricted"
     sandbox: str = "read-only"
+    project_context: dict[str, str] | None = None
     model: str | None = None
     reasoning_effort: str | None = None
     response_timeout_sec: float = 30.0
@@ -596,6 +597,7 @@ class CodexChatAgentSession:
             process_tree_owned=isolate_process_tree,
             runtime_profile=runtime_profile,
             sandbox=selected_sandbox,
+            project_context=policy["context"] if project_context is not None else None,
             model=model,
             reasoning_effort=reasoning_effort,
             model_catalog_compatibility_applied=_compatibility_catalog_path is not None,
@@ -983,7 +985,7 @@ class CodexChatAgentSession:
                     context_summary=self.context_summary,
                     execution_mode=self.execution_mode,
                     runtime_profile=self.runtime_profile,
-                    project_work=not self.execution_mode and self.sandbox == "workspace-write",
+                    project_work=self.project_context is not None and self.sandbox == "workspace-write",
                 ),
             }
         ]

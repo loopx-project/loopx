@@ -444,7 +444,9 @@ class ChatRuntimeController:
                 else None
             )
             if manager_profile is not None:
-                objective = manager_agent_objective(str(manager_profile["runtime_profile"]))
+                objective = manager_agent_objective(
+                    str(manager_profile["runtime_profile"])
+                )
             model_config = (
                 executor_model or manager_model_config(
                     endpoint=agent_id,
