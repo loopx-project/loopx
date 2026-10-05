@@ -80,6 +80,7 @@ from .quota_action_selection import (
     RequestedQuotaActionSelection,
     commit_requested_action_selection,
     load_requested_quota_action_selection,
+    inline_action_selection_reentry_args,
     reconcile_requested_quota_action_selection,
 )
 from .quota_context import (
@@ -530,6 +531,19 @@ def handle_quota_command(
             )
             action_selection_preflight_failed = action_selection_preflight.rejected
             if action_selection_preflight.rejected:
+                reentry_args = inline_action_selection_reentry_args(
+                    payload, args, selection=action_selection,
+                    preflight=action_selection_preflight,
+                    turn_instance_id=heartbeat_turn_id,
+                )
+                if reentry_args is not None:
+                    return handle_quota_command(
+                        reentry_args,
+                        registry_path=registry_path,
+                        runtime_root_arg=runtime_root_arg,
+                        print_payload=print_payload,
+                        append_cli_rollout_event=append_cli_rollout_event,
+                    )
                 heartbeat_receipt_existing = action_selection_preflight.receipt
                 heartbeat_receipt_existing_status = (
                     action_selection_preflight.receipt_status

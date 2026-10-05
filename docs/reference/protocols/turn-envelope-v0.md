@@ -87,8 +87,22 @@ or settlement authority: it preserves the explicit choice only so a no-argument
 same-Turn reentry cannot replace it with the current recommendation. An
 ineligible/rejected choice still replays the receipt without mutation; a
 first-call rejection reports
-`heartbeat_receipt.status=not_committed` and writes no receipt event. The agent
-receives `recovery_action=reenter_guard_without_selection` and one executable
+`heartbeat_receipt.status=not_committed` and writes no receipt event.
+
+For an eligible explicit choice deferred solely by runnable autonomous replan,
+the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
+that choice, the CLI now executes one same-Turn guard reentry and returns its
+fresh result directly, including in TurnEnvelope mode. This changes the previous
+default of returning a failed selection before asking the caller to reenter.
+It grants no delivery or spend authority: the fresh guard and receipt owner
+still decide the Todo/replan binding, and may return a newly changed gate. It
+does not retry other hard lanes, missing candidates, or a first-call refusal
+without a durable choice receipt. The reentry has no explicit selection, so it
+cannot recursively retry. Hosts that do not execute this CLI path can continue
+to use the existing recovery command.
+
+For other refusals, the agent receives
+`recovery_action=reenter_guard_without_selection` and one executable
 same-Turn guard in the full decision's `cli_channel.next_cli_actions`; the compact
 envelope preserves the recovery in its action and writeback preview. The failed
 selection exposes no settlement plan, spend command, or unadmitted replan action
