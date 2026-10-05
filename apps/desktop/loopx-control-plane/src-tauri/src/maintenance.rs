@@ -138,7 +138,10 @@ impl Maintenance {
             .as_str()
             .unwrap_or("idle")
             .to_string();
-        if phase == "restart_required" {
+        // A completed Check owns the available update until an explicit
+        // Apply/Repair/Forget action changes the phase. Another failed runtime
+        // probe must not erase its Install button while the user is acting.
+        if matches!(phase.as_str(), "available" | "restart_required") {
             return Ok(None);
         }
         match start() {
@@ -985,6 +988,30 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn an_available_update_stays_actionable_until_explicit_recovery() {
+        let state = Maintenance::default();
+        let available = state.publish("available", json!({"version":"1.2.4"}));
+        // A failed runtime must not erase the update the user just checked.
+        // Repeated supervisor ticks are observations, not a new user action.
+        for _ in 0..3 {
+            assert_eq!(
+                state
+                    .reconcile_services::<()>(|| panic!("update choice is pending"))
+                    .unwrap(),
+                None
+            );
+            assert_eq!(*state.snapshot.lock().unwrap(), available);
+        }
+        assert!(state.acquire().is_ok(), "the Apply action remains available");
+
+        // Forget/Repair publishes connecting, so a deliberate recovery can
+        // still resume the owning service supervisor in this same process.
+        state.publish("connecting", json!({}));
+        assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
+        assert_eq!(state.snapshot.lock().unwrap()["phase"], "ready");
     }
 
     #[test]

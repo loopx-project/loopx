@@ -926,6 +926,9 @@ snapshots cannot be ordered, the current App may maintain its own installation
 from its bundled artifact, while retaining a provably newer runtime or an
 independently managed CLI. Repair must retain its qualified promotion before
 reconnecting, and both HTTP services must read back that selected identity.
+An available signed App update must remain actionable while startup is blocked;
+an unchanged service retry cannot replace that result before the user applies
+the update or deliberately chooses another recovery action.
 Qualify ordinary packaged restart and same-window recovery alongside failure
 fallbacks; installation success or a temporary override does not close this
 bootstrap acceptance, Agent execution acceptance, or signed-release readiness.
