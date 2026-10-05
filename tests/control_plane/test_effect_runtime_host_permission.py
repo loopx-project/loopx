@@ -268,6 +268,23 @@ def test_real_locator_missing_or_invalid_still_allows_discovery(
         assert locator.read_text() == contents
 
 
+def test_directory_locator_is_unusable_even_when_open_reports_permission_denied(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    locator = tmp_path / "locator.json"
+    locator.mkdir()
+    original_read = Path.read_text
+
+    def read(path, *args, **kwargs):
+        if path == locator:
+            raise PermissionError(errno.EACCES, "directory cannot be opened as a file")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    assert effect_runtime._read_info(locator, fingerprint="fixture") is None
+    assert locator.is_dir(), "discovery must not remove a foreign locator"
+
+
 def test_real_locator_live_identity_is_unchanged(tmp_path: Path) -> None:
     locator = tmp_path / "locator.json"
     info = {"schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
