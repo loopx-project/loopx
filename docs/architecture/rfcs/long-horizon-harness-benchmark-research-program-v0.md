@@ -549,6 +549,56 @@ environment digests, parity status, disposition, reason codes, and redacted
 evidence references. A public receipt cannot upgrade an unknown private audit
 to `eligible`.
 
+#### Declared feedback and evaluation timing
+
+Qualification must compare observed access with the preregistered experiment
+protocol. Two independent choices belong in that protocol: whether the solver
+may request and receive native evaluation feedback, and whether the independent
+evaluator runs only after solving or also samples artifacts during solving.
+Background sampling does not itself authorize returning scores, diagnostics,
+logs, or evaluator artifacts to the solver. Local solver-authored validation
+remains separate from access to the independent evaluator.
+
+The current `benchmark_integrity_policy_v0` implementation varies network access
+but unconditionally requires `official_feedback_blinded` and
+`verifier_started_after_agent`. It cannot qualify every protocol above. This is
+an open toolkit/runner contract gap, not evidence that permitted native feedback
+is cheating. Keep affected receipts unqualified until the contract and evidence
+are delivered; do not set either boolean to true for a run where it is false.
+
+The next bounded implementation belongs to the existing `benchmark-toolkit`
+owner, with shared policy decisions in its typed TypeScript boundary and
+provider-specific observations in the native runner. Extend the existing policy
+and receipt rather than adding a competing eligibility calculation in a runner.
+Preserve the current blinded, post-solve default and its negative cases. An
+explicit protocol must be pinned before admission and bound to the runner's
+observations; changing it after seeing outcomes cannot qualify the old run.
+
+Acceptance requires all four feedback/timing combinations through the real
+runner and qualification entrypoint, including these counterexamples:
+
+- Allowed feedback carries only the benchmark-declared response. Hidden tests,
+  reference answers and evaluator implementation remain inaccessible. A score
+  response cannot grant access to their backing files or unrelated trials.
+- Blind background evaluation uses a controller-owned artifact snapshot and
+  evaluator. Score stores, submission endpoints, credentials, logs and network
+  routes must not provide a feedback path to the solver, including after resume.
+- Runner evidence binds the actual identity, mounts, environment and network
+  rules to the run. Missing or contradictory evidence stays unqualified;
+  neither a clean command scan nor a declared mode proves containment.
+- Provider credential exclusion is an independent boundary. A credential file
+  owned by the solver's OS user remains shell-readable even with mode `0600`.
+  Do not attest exclusion on that basis or waive it to admit a feedback mode.
+- Feedback availability is the only changed factor in a feedback ablation:
+  retain task requirements, iteration guidance, artifact selection, budgets,
+  evaluation cadence and source pins. Record authorized harness self-repair
+  separately from observed evaluator access.
+
+This checkpoint defines acceptance, not installed support or new access
+permission. Runner isolation and protocol support both remain prerequisites for
+countable results. Diagnostic observations retain their original qualification
+status; future integration must not rewrite historical receipts or active runs.
+
 ## 7. Architecture and Ownership
 
 ```mermaid
