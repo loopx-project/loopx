@@ -115,6 +115,11 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
+  "pnpm": {
+    "overrides": {
+      "@deepseek-ai/libreoffice-kit>fflate": "0.8.3"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/loopx-project/loopx.git",
