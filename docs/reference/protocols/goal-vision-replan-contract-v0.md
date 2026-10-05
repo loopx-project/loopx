@@ -468,6 +468,15 @@ For the same `agent_id`, a newer satisfied checkpoint with `patched` or
 `unchanged_with_reason` supersedes older
 `missing_required` checkpoints; `not_required` does not.
 
+The ordinary CLI settlement plan now puts a compact material-closeout reminder
+in its existing writeback step, before the first write. The shared authoring
+example includes the acceptance claim, continuation path and evidence reference;
+replace its illustrative claims and reference with observed facts. Explicit
+`in_flight_continuation` plans retain their existing short writeback precondition.
+This changes guidance in CLI/TurnEnvelope and the shared MCP/replan authoring
+projection, not validation, admission or receipt authority. It does not establish
+lower model token cost or eliminate all replanning; those require live measurement.
+
 A satisfied checkpoint is protocol-complete, but a material closeout also has
 to qualify its relationship to the final outcome. A patched checkpoint must
 name the active `acceptance_summary`, attach public-safe
