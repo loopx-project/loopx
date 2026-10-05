@@ -975,6 +975,13 @@ handler 不会新增 server。
 绕过它再打开第二个直接 writer。Runtime discovery 与启动全自动；用户无需配置
 端口或守护进程。
 
+对 managed loopback runtime，可见的 locator 只是发现证据；请求分派和成功回复
+必须等 locator 发布及其清理锁全部完成，idle retirement 也从这之后开始计时。
+即使首次回复后进程立刻退出，也不能让未写完的清理 claim 阻止替代 runtime 在
+原有锁预算内启动。真实 Node 发布反例覆盖首次 ping 与类型化写入，随后强制退出
+并验证替代 runtime 写入和回执重放；锁的 stale age、启动预算、认证、writer 权限
+和重试分类均保持不变。这只关闭该发布顺序缺口，不代表长期运维或跨平台资格完成。
+
 ### 2.3 TypeScript 拥有已迁 effect
 
 目标不是“TypeScript 决策、Python 永远执行”。TypeScript 可以拥有 atomic
