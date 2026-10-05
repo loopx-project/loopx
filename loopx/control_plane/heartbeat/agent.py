@@ -149,9 +149,10 @@ def render_peer_agent_scope_instruction(
     )
     if thin:
         return (
-            f"Equal peer `{identity}` (peer_v1); scope: {scope_text}. Quota claim/lease/workspace "
-            "contract + repo rules; continue todos; no cross-agent authority; "
-            "no scope in todo metadata."
+            f"Equal peer `{identity}` (peer_v1); scope: {scope_text}. Follow the current quota "
+            "claim/lease and workspace contract plus repository rules. Follow todo "
+            "continuation policy. Task-scoped coordination grants no authority over "
+            "other agents. Keep scope in the heartbeat prompt, not todo metadata."
         )
     if compact:
         return (

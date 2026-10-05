@@ -24,10 +24,7 @@ def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract
         runtime_profile="codex_app_heartbeat", **{mode: True},
     )
     body = payload["task_body"]
-    if mode == "thin":
-        assert "Quota claim/lease/workspace contract + repo rules" in body
-    else:
-        assert "quota claim/lease and workspace contract plus repo" in body
+    assert "quota claim/lease and workspace contract plus repository rules" in body
     assert "use an independent worktree for repository writes" not in body
     assert "independent repo worktree" not in body
     if mode != "full":
@@ -35,7 +32,8 @@ def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract
 
 
 @pytest.mark.parametrize("agents", [["worker-a"], ["worker-a", "worker-b"]])
-def test_thin_cli_budget_with_host_scope_and_runtime_capabilities(tmp_path, agents):
+@pytest.mark.parametrize("scope", ["Codex App heartbeat automation", "x" * 320])
+def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp_path, agents, scope):
     state = tmp_path / "state.md"
     state.write_text("# Synthetic guidance\n", encoding="utf-8")
     registry = tmp_path / "registry.json"
@@ -48,18 +46,24 @@ def test_thin_cli_budget_with_host_scope_and_runtime_capabilities(tmp_path, agen
     command = [sys.executable, "-m", "loopx.cli", "--format", "json",
                "--registry", str(registry), "heartbeat-prompt", "--goal-id",
                "synthetic-goal-validationx", "--agent-id", "worker-a", "--codex-app",
-               "--thin", "--agent-scope", "Codex App heartbeat automation"]
+               "--thin", "--agent-scope", scope]
     for capability in ("filesystem_read", "filesystem_write", "shell"):
         command.extend(["--available-capability", capability])
     packet = json.loads(subprocess.check_output(command, text=True))
     assert packet["ok"] is True
     budget = packet["interface_budget"]
-    assert budget["max_chars"] == 2500
+    assert budget["max_chars"] == 3000
     assert budget["budget_char_count"] <= budget["max_chars"]
     assert budget["within_budget"] is True
-    assert "Quota claim/lease/workspace contract + repo rules" in packet["task_body"]
-    assert "no cross-agent authority" in packet["task_body"]
-    assert "no scope in todo metadata" in packet["task_body"]
+    body = packet["task_body"]
+    assert "Equal peer `worker-a` (peer_v1)" in body
+    assert f"scope: {scope}" in body
+    assert "quota claim/lease and workspace contract plus repository rules" in body
+    assert "Follow todo continuation policy" in body
+    assert "Task-scoped coordination grants no authority over other agents" in body
+    assert "Keep scope in the heartbeat prompt, not todo metadata" in body
+    for capability in ("filesystem_read", "filesystem_write", "shell"):
+        assert capability in body
 
 
 def test_thin_agent_input_excludes_generator_and_embedded_command_duplicates() -> None:
