@@ -319,3 +319,25 @@ test("vision ACK freshness covers its durable run, never later gaps or unknown t
     completed_at: "2026-08-13T09:01:00+08:00"}]}).acknowledged, false);
   assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{completed_at: at}]}).acknowledged, false);
 });
+
+test("vision ACK compares strict calendar timestamps at microsecond precision", () => {
+  const at = "2026-08-01T00:30:00.000100Z";
+  const ack = {recorded: true, generated_at: at,
+    semantic_delta: {accepted: true, outcomes: ["fresh_vision_path_outcome"]}};
+  for (const completed of [false, true]) {
+    const gap = (timestamp: string) => completed
+      ? {kind: "vision_outcome_checkpoint_required", source: "recent_completed_advancement_todo",
+        completed_at: timestamp}
+      : {generated_at: timestamp};
+    for (const [timestamp, covered] of [
+      [at, true], ["2026-08-01T08:30:00.000100+08:00", true],
+      ["2026-08-01T00:30:00.000900Z", false], ["2026-02-30T00:00:00Z", false],
+    ] as const) {
+      assert.equal(projectReplanSemantics({operation: "vision_ack", ack,
+        acceptance_gaps: [gap(timestamp)]}).acknowledged, covered);
+    }
+    assert.equal(projectReplanSemantics({operation: "vision_ack",
+      ack: {...ack, generated_at: "2026-02-30T00:00:00Z"},
+      acceptance_gaps: [gap("2026-02-28T00:00:00Z")]}).acknowledged, false);
+  }
+});

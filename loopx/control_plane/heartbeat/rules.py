@@ -66,7 +66,7 @@ SCHEDULER_HINT_COMPACT_RULE = (
     "then ack/fail. No spend."
 )
 SCHEDULER_HINT_THIN_RULE = (
-    "Bootstrap/min=floor; follow backoff. "
+    "Bootstrap/min=floor; backoff. "
     "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend); "
     "else RRULE/projected-fallback_hint/ack/fail."
 )

@@ -34,6 +34,9 @@ enclosing durable run's timestamp. A vision patch label cannot acknowledge a lat
 writeback's vision and ACK share that run timestamp, so reading the same run
 does not rearm planning. Completed-chain gaps use their canonical `completed_at`
 source instead. Missing or invalid source timestamps cannot establish coverage.
+Comparison preserves microseconds and validates calendar dates; equivalent
+timezone offsets denote the same instant, while timestamps without a timezone
+cannot establish coverage.
 Exact Goal Acceptance hold checkpoints retain their additional revision checks.
 
 This changes quota/status re-entry for later vision gaps, including lanes that

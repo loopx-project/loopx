@@ -98,6 +98,37 @@ def _add(call, obligation_id: str):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("ack_at,gap_at,replan", [
+    ("2026-08-01T00:30:00.000100Z", "2026-08-01T00:30:00.000900Z", True),
+    ("2026-08-01T00:30:00.000100Z", "2026-08-01T00:30:00.000100Z", False),
+    ("2026-08-01T08:30:00.000100+08:00", "2026-08-01T00:30:00.000100Z", False),
+    ("2026-02-30T00:00:00Z", "2026-02-28T00:00:00Z", True),
+])
+def test_real_guard_uses_strict_microsecond_vision_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    ack_at: str, gap_at: str, replan: bool,
+) -> None:
+    call, _, index = _fixture(tmp_path, monkeypatch, provider, later_vision=True)
+    # Author only this disposable fixture's history, before its first guard.
+    rows = [json.loads(line) for line in index.read_text().splitlines()]
+    for row in rows:
+        row["generated_at"] = ack_at if row.get("autonomous_replan_ack") else gap_at
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    invalid_history = ack_at == "2026-02-30T00:00:00Z"
+    guarded = _guard(call, expected_code=1 if invalid_history else 0)
+    if invalid_history:
+        # Rejecting the ACK exposes the invalid durable source to context
+        # validation. Fail closed before committing any settlement receipt.
+        assert guarded["should_run"] is False
+        assert guarded["heartbeat_receipt"]["status"] == "write_failed"
+        return
+    assert guarded["goal_frontier_projection"]["acceptance_gaps"]
+    assert bool(guarded.get("autonomous_replan_obligation")) is replan
+    assert guarded["should_run"] is replan
+    assert guarded["decision"] == ("autonomous_replan_required" if replan else "skip")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("later_vision", [False, True])
 def test_successor_guard_returns_original_settlement_not_repeated_planning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool,
