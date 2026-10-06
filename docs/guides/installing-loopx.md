@@ -125,6 +125,13 @@ Chat listener before switching to launchd, and read back the original Sessions
 and one consumer per App. A generated plist alone does not qualify recovery
 after logout or reboot.
 
+The helper reads the full `/status.json` contract with a one-second connection
+deadline and a 15-second total deadline. A responding feed that takes longer
+than five seconds can therefore still show its schema and write-API setting.
+HTTP failures and feeds that miss the deadline remain unavailable; old schemas
+still carry the restart warning. This bounded diagnostic allowance does not
+reduce feed latency or qualify sustained service performance.
+
 Snapshot identities retain their release id and source revision. A non-editable
 wheel instead exposes an additive `package_fingerprint` in the existing
 `loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package
