@@ -146,7 +146,7 @@ def _run(executable: str, script: str, *, deadline: float | None = None) -> subp
     )
 
 
-def _navigation(config: ReaderConfig, url: str) -> str:
+def _navigation(config: ReaderConfig, url: str, *, image: bool = False) -> str:
     # Use the browser's URL rules before navigation, including dot segments and
     # query escaping. The fixed operator-owned script, not page data, supplies
     # this canonical target. Recheck its origin before touching the reserved Page.
@@ -167,7 +167,11 @@ def _navigation(config: ReaderConfig, url: str) -> str:
         "if(current.href!==url)return true;"
         "const root=document.querySelector('article')||"
         "document.querySelector('main,[role=\"main\"]')||document.body;"
-        "if(!root?.innerText.trim()||root.getAttribute('aria-busy')==='true')return false;"
+        "if(!root||root.getAttribute('aria-busy')==='true')return false;"
+        "const hasImage=Array.from(root.querySelectorAll('img')).some(im=>"
+        "im.complete&&im.naturalWidth>0&&im.naturalHeight>0&&im.getClientRects().length"
+        "&&getComputedStyle(im).visibility!=='hidden');"
+        f"if(!root.innerText.trim()&&!({json.dumps(image)}&&hasImage))return false;"
         "return !Array.from(root.querySelectorAll('[role=\"progressbar\"],[aria-busy=\"true\"]'))"
         ".some(n=>n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden');"
         "},target.href,{timeout:10000});}catch(e){"
@@ -264,7 +268,7 @@ def _image_script(config: ReaderConfig, url: str, index: int, path: str) -> str:
     # Capture one rendered image region, never a caller-selected path or script.
     request = f"{{url:target.href,index:{index},edge:{MAX_IMAGE_EDGE},ready:sourceReady}}"
     return (
-        _navigation(config, url) +
+        _navigation(config, url, image=True) +
         f"const request={request};"
         "const initial=await p.evaluate((r)=>{"
         "const u=new URL(location.href);u.hash='';"

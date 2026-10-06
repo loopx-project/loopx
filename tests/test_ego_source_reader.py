@@ -468,13 +468,15 @@ def run_generated_script(config, url, image, path, *, redirect=None, readiness=N
     harness = """
 const vm=require('node:vm'),fs=require('node:fs');
 let href='',domReads=0,captures=0,loaded=!readiness;
-const image={alt:'figure',currentSrc:'https://example.com/image.png',complete:true,
+const image={alt:'figure',currentSrc:'https://example.com/image.png',
+ get complete(){return !readiness?.startsWith('image_')||loaded;},
  naturalWidth:2,naturalHeight:2,scrollIntoView(){},
+ getClientRects(){return [1];},
  getBoundingClientRect(){return {left:0,top:0,width:2,height:2};}};
 const spinner={getClientRects(){return [1];}};
-const root={get innerText(){return loaded?text:'Navigation Loading';},
+const root={get innerText(){return readiness?.startsWith('image_')?'':loaded?text:'Navigation Loading';},
  getAttribute(){return readiness==='busy'&&!loaded?'true':null;},
- querySelectorAll(){return loaded?[]:[spinner];}};
+ querySelectorAll(selector){return selector==='img'?[image]:loaded?[]:[spinner];}};
 const article={innerText:text,getAttribute(){return null;},querySelectorAll(){return [];}};
 const doc=new Proxy({title:'Article',body:root,
  querySelector(selector){if(readiness==='article_with_sidebar')return selector==='article'?article:root;
@@ -490,7 +492,7 @@ const page={async goto(url){href=new URL(redirect||url).href;},
    if(readiness==='article_with_sidebar'){if(!initial)throw Error('readable article delayed');loaded=true;}
    else{
     if(initial)throw Error('loading content accepted');
-    if(readiness==='timeout')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
+    if(readiness==='timeout'||readiness==='image_timeout')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
     if(readiness==='user_control')throw Error('User took control');
     loaded=true;
    }
@@ -554,6 +556,18 @@ def test_short_readable_content_has_no_length_threshold(configured, tmp_path):
         reader.ReaderConfig.from_environment(), URL, False, tmp_path / "image.png", text="Hi",
     )
     assert result["ok"] and result["text"] == "Hi"
+
+
+@pytest.mark.parametrize("readiness,ok", [(None, True), ("image_loading", True), ("image_timeout", False)])
+def test_image_only_content_is_readable_after_pixels_load(configured, tmp_path, readiness, ok):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, True, tmp_path / "image.png",
+        readiness=readiness, text="",
+    )
+    assert result["ok"] is ok
+    assert observation["captures"] == int(ok)
+    if not ok:
+        assert result["error"] == "source_content_not_ready"
 
 
 @pytest.mark.parametrize("image", [False, True])

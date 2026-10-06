@@ -70,7 +70,8 @@ Both text and image reads wait up to 10 seconds within that same execution
 budget for readable semantic content after navigation. An article takes
 precedence over the main region and body; visible loading/busy indicators in
 that content delay extraction, while unrelated sidebar spinners do not. There
-is no minimum text length. A bounded readiness timeout returns
+is no minimum text length. Image reads also accept a visible, loaded image in
+that region without requiring a text caption. A bounded readiness timeout returns
 `source_content_not_ready`, preserving the Page for a later retry. Redirects
 remain fenced before DOM access; browser control or ownership failures are not
 treated as readiness timeouts. This is a rendering check, not proof of a
