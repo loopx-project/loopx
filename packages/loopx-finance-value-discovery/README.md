@@ -358,6 +358,31 @@ loopx extension run loopx-finance-value-discovery \
   --format json
 ```
 
+Extension 0.8.5 also dispatches `finance_period_comparison_input_v1` to the
+existing period assessment. For the same frozen input, the managed provider
+result matches the direct `assess-period` result:
+
+```bash
+loopx-finance-value-discovery assess-period \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v1.json \
+  --execute --format json
+```
+
+The example is synthetic. `period_evidence_eligible` applies only to the period
+axis; source authentication, lifecycle, financial admission and trading remain
+false. Missing declarations produce ineligible results; malformed inputs fail
+with an error packet. Version 0.8.3 supports the direct API/CLI but does not route
+these inputs through managed stdin. Qualify the exact binary/manifest/input
+pair before opting in, and retain the old pair for rollback.
+
+Run the provider dispatch regression cases from the repository root:
+
+```bash
+uv run --extra test pytest packages/loopx-finance-value-discovery/tests/test_period_dispatch.py
+```
+
 Developers can inspect or replay a frozen evaluation directly:
 
 ```bash
