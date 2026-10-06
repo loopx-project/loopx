@@ -574,7 +574,9 @@ def test_generated_domain_accepts_true_kernel_comparison() -> None:
     domain = smoke["ProducerDomain"].from_registry(registry)
     assert domain.kernel < domain.walked
     assert domain.walked - domain.kernel == {"settlement_binding_kind"}
-    assert domain.outside_by_tier == (("cross_runtime", 19),)
+    # M4 preserves the native lifecycle owner and relation, without claiming
+    # its production liveness from the retired Python compatibility-only set.
+    assert domain.outside_by_tier == (("cross_runtime", 20),)
 
 
 def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
@@ -594,12 +596,12 @@ def test_domain_membership_change_requires_regenerated_prose() -> None:
     # even if the independent numeric domain entries were already updated.
     registry["vocabularies"]["settlement_binding_kind"].pop("producers")
     for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
-        _invariant(registry, invariant_id)["domain"]["verified"] = 6
+        _invariant(registry, invariant_id)["domain"]["verified"] = 5
     with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
         smoke["check_formal_model"](registry["formal_model"], registry)
     projected = smoke["producer_domain_prose"](registry)
-    assert "20 cross_runtime" in projected["F1_producer_closedness.statement"]
-    assert "6 kernel and 0 outside" in projected["universes.vocabularies"]
+    assert "21 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "5 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
 @pytest.mark.parametrize("invariant_id", sorted({
