@@ -99,6 +99,31 @@ model execution. Synthetic host/provider checks cover idle/hard DM timeouts
 and an injected commission timeout; a live-provider recovery drill remains
 part of the switch gate below.
 
+### Private-message progress
+
+Private project and steward conversations present the original Turn's persisted
+`agent.phase` and filtered `answer.delta` events in one Bot-owned Markdown post.
+The existing delivery pump coalesces changes with a minimum two-second interval;
+provider latency can lengthen that interval. No timer invents activity. Thinking
+text, command arguments and tool output are excluded; only coarse observed work
+and the visible answer are presented. A draft shows at most the latest 6,000
+characters and clearly says it is provisional.
+
+The canonical terminal answer replaces that post without the draft limit. Stop,
+timeout and failure replace the partial answer with the actual terminal outcome.
+A commission's first native Turn uses the same presenter and original audience.
+Updates freshly verify the App, source and target chat, preview the exact post,
+and read it back before delivery/ACK. A lost edit acknowledgement is reconciled
+on the same message ID. Event cursors and provider attempts stay in the existing
+private delivery journal; they do not start another model Turn or listener.
+
+This Python code is provider presentation: Core still owns the Session, Turn,
+event stream, grants and result. It adds no shared state protocol or execution
+authority. Synthetic native-host/provider tests cover incremental presentation,
+coalescing, restart/replay, lost acknowledgement, exact stop, cleanup recovery,
+full final answers and App/audience isolation. Live installed-provider streaming
+and its latency remain separate qualification steps under S5/S10 and RFC A22/A23.
+
 ## Qualification before switching
 
 The acceptance owner is the steward RFC's

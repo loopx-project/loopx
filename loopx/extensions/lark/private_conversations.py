@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -20,11 +21,12 @@ from ...presentation.renderers.conversation_status_markdown import render_conver
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
-from .inbox_reply import _message, reply_lark_event_inbox, verify_lark_inbox_reply
+from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
 from .outbound import LarkOutboundTextError, normalize_lark_outbound_text, safe_lark_plain_text_fallback
 from .private_images import private_message_caption, private_message_images
+from .private_progress import UPDATE_INTERVAL_SEC, project_progress
 
 
 class LarkPrivateConversations:
@@ -321,9 +323,41 @@ class LarkPrivateConversations:
         config = inbox()
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
-            finalize_reactions=phase != "admission" and not (phase == "terminal" and record.get("commission_resources")),
+            finalize_reactions=phase not in {"admission", "progress"} and not (phase == "terminal" and record.get("commission_resources")),
             source_membership_verifier=lambda: self._source_verified(record))
-        if phase_state.get("attempt"):
+        progress = record["deliveries"].get("progress") or {}
+        stream = record.get("stream") or {}
+        edit = phase_state.get("edit_from")
+        if phase in {"terminal", "commission_result"} and progress.get("attempt") and not stream.get("closed") and not phase_state.get("started"):
+            # Freeze the known message proof before the first final edit. Later
+            # recovery can replace the same ID, never append another answer.
+            edit = {"text": stream.get("confirmed_text") or progress["text"],
+                    "attempt": stream.get("confirmed_attempt") or progress["attempt"]}
+            phase_state["edit_from"] = edit
+        if edit:
+            def before_edit(_intent: str) -> dict[str, bool]:
+                phase_state.update(text=text, started=True)
+                record["deliveries"][phase] = phase_state
+                _atomic_write_json(path, record)
+                return {"continue_delivery": True}
+
+            def edit_attempt(value: Any) -> None:
+                phase_state["attempt"] = dict(value)
+                record["deliveries"][phase] = phase_state
+                _atomic_write_json(path, record)
+
+            result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
+                before_send=before_edit, delivery_attempt_recorder=edit_attempt)
+            if result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
+                # Do not truncate long/mention-bearing final answers to fit a
+                # draft. Close it, then use the established full final sender.
+                if not self._close_progress(path, record, inbox=inbox):
+                    return False
+                phase_state.pop("edit_from", None)
+                record["deliveries"][phase] = phase_state
+                _atomic_write_json(path, record)
+                return self._deliver(path, record, phase, text, inbox=inbox)
+        elif phase_state.get("attempt"):
             result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"])
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
@@ -350,6 +384,62 @@ class LarkPrivateConversations:
         record["deliveries"][phase] = phase_state
         _atomic_write_json(path, record)
         return bool(phase_state["verified"])
+
+    def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path]) -> bool:
+        progress = record["deliveries"].get("progress") or {}
+        if not progress.get("verified"):
+            return self._deliver(path, record, "progress", text, inbox=inbox)
+        stream = record.setdefault("stream", {})
+        confirmed: dict[str, Any] = {}
+
+        def before_send(_intent: str) -> dict[str, bool]:
+            _atomic_write_json(path, record)
+            return {"continue_delivery": True}
+
+        result = update_lark_inbox_reply(project=self.runtime_root, config_path=inbox(),
+            message_id=record["event"]["message_id"], text=text,
+            previous_text=stream.get("confirmed_text") or progress["text"],
+            attempt=stream.get("confirmed_attempt") or progress["attempt"],
+            runner=self._reply_runner, source_membership_verifier=lambda: self._source_verified(record),
+            before_send=before_send, delivery_attempt_recorder=lambda value: confirmed.update(value))
+        stream["blocker"] = result.get("blocker")
+        if result.get("reply_verified") is True and result.get("ok") is True:
+            stream.update(confirmed_text=text, confirmed_attempt=confirmed)
+        _atomic_write_json(path, record)
+        return result.get("ok") is True
+
+    def _close_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
+        text = "回答已生成，完整结果将单独发送。"
+        if not self._edit_progress(path, record, text, inbox=inbox):
+            return False
+        record["stream"]["closed"] = True
+        _atomic_write_json(path, record)
+        return True
+
+    def _progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path],
+                  session_id: str | None = None, turn_id: str | None = None) -> None:
+        stream = record.setdefault("stream", {})
+        events = self.core.controller.store.events_after(session_id or record["session_id"],
+            turn_id or record["turn_id"], stream.get("cursor"))
+        text = project_progress(stream, events)
+        _atomic_write_json(path, record)
+        if not text or text == stream.get("confirmed_text"):
+            return
+        now = time.time()
+        if now - float(stream.get("last_attempt_at") or 0) < UPDATE_INTERVAL_SEC:
+            return
+        stream["last_attempt_at"] = now
+        _atomic_write_json(path, record)
+        # A failed creation must resume its frozen intent rather than trying a
+        # new body on an uncertain message. New chunks remain in the view.
+        progress = record["deliveries"].get("progress") or {}
+        if not progress.get("verified"):
+            initial = str(progress.get("text") or text)
+            if self._deliver(path, record, "progress", initial, inbox=inbox):
+                stream.update(confirmed_text=initial, confirmed_attempt=progress.get("attempt") or record["deliveries"]["progress"]["attempt"])
+                _atomic_write_json(path, record)
+        else:
+            self._edit_progress(path, record, text, inbox=inbox)
 
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
@@ -414,6 +504,7 @@ class LarkPrivateConversations:
                         self._deliver(path, record, "admission", admission, inbox=inbox)
                     if turn and turn["status"] in {"starting", "running"}:
                         self._feedback(path, record, inbox=inbox, processing=True)
+                        self._progress(path, record, inbox=inbox)
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
                     if turn["status"] == "failed" and turn.get("error_code") == "server_overloaded":
@@ -436,6 +527,8 @@ class LarkPrivateConversations:
                         first_turn = self.core.controller.store.load_turn(resources["session_id"], resources["turn_id"])
                         if first_turn and first_turn["status"] in {"starting", "running"}:
                             self._feedback(path, record, inbox=inbox, processing=True)
+                            self._progress(path, record, inbox=inbox,
+                                session_id=resources["session_id"], turn_id=resources["turn_id"])
                         if not first_turn or first_turn["status"] not in TERMINAL_TURN_STATES:
                             record["status"] = "commission_running"
                             _atomic_write_json(path, record)

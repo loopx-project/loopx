@@ -1,0 +1,272 @@
+"""Actual native Turn events drive mutable, source-bound Bot presentation."""
+import json
+import threading
+import time
+
+import pytest
+from test_chat_ordinary_project import ordinary  # noqa: F401
+from test_lark_private_conversations import Provider, connect
+from test_lark_private_feedback import active
+from test_native_steward_private import steward  # noqa: F401
+
+from loopx.chat_codex_goal import CodexGoalDriver
+from loopx.chat_store import _atomic_write_json, _read_json
+from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+from loopx.extensions.lark.private_progress import ANSWER_WINDOW, project_progress
+from loopx.extensions.lark.conversation_identity import observe_lark_conversation_identity
+
+
+class StreamingProvider(Provider):
+    def __init__(self):
+        super().__init__()
+        self.edits = []
+        self.hide_next_edit_readback = False
+        self.hidden_ref = None
+
+    def __call__(self, args, cwd=None, timeout=None):
+        if "+messages-edit" in args:
+            self.calls.append(list(args))
+            profile = args[args.index("--profile") + 1]
+            ref = args[args.index("--message-id") + 1]
+            content = args[args.index("--content") + 1]
+            text = json.loads(content)["zh_cn"]["content"][0][0]["text"]
+            if "--dry-run" in args:
+                return {"returncode": 0, "stdout": json.dumps({"ok": True, "api": [
+                    {"body": {"msg_type": "post", "content": content}}]})}
+            assert self.messages[ref]["chat_id"] == f"oc_{profile.replace('-', '_')}"
+            self.messages[ref]["body"] = {"content": content}
+            self.edits.append((profile, ref, text))
+            if self.hide_next_edit_readback:
+                self.hide_next_edit_readback = False
+                self.hidden_ref = ref
+                # The provider applied the body but lost its acknowledgement.
+                return {"returncode": 1, "stderr": "synthetic lost acknowledgement"}
+            return {"returncode": 0, "stdout": '{"ok":true}'}
+        if "+messages-mget" in args and args[args.index("--message-ids") + 1] == self.hidden_ref:
+            self.hidden_ref = None
+            return {"returncode": 1, "stderr": "synthetic unavailable readback"}
+        result = super().__call__(args, cwd=cwd, timeout=timeout)
+        if "auth" in args:
+            payload = json.loads(result["stdout"])
+            payload["appId"] = self.profile_apps[args[args.index("--profile") + 1]]
+            result = {**result, "stdout": json.dumps(payload)}
+        if "+messages-send" in args and "--dry-run" not in args:
+            ref = json.loads(result["stdout"])["data"]["message_id"]
+            self.messages[ref].update(chat_id=args[args.index("--chat-id") + 1],
+                                     sender={"sender_type": "app", "id": "cli_synthetic_bot"})
+        return result
+
+
+def streaming(fixture):
+    store, runtime, provider, transport = connect(fixture)
+    streamed = StreamingProvider()
+    # Existing binding observer and source reads must use the same provider.
+    streamed.__dict__.update(provider.__dict__)
+    transport.bindings.observe = lambda profile: observe_lark_conversation_identity(
+        profile=profile, runner=streamed, cli_bin="lark-cli")
+    transport.runner = streamed
+    fake = fixture[-2]
+    source = fake.read_text().replace('            continue\n        response =', '''            print(json.dumps({"method": "item/started", "params": {"threadId": "durable-thread", "turnId": active_turn, "item": {"id": "read", "type": "commandExecution", "command": "cat source.txt", "commandActions": [{"type": "read", "name": "source.txt"}]}}}), flush=True)
+            print(json.dumps({"method": "item/reasoning/textDelta", "params": {"threadId": "durable-thread", "turnId": active_turn, "itemId": "think", "delta": "synthetic private reasoning"}}), flush=True)
+            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "第一段回答。\\n"}}), flush=True)
+            continue
+        response =''')
+    fake.write_text(source)
+    return store, runtime, streamed, transport
+
+
+def start(fixture, profile="notes-app", name="stream"):
+    store, runtime, provider, transport = streaming(fixture)
+    event = provider.event(profile, name, "wait for interrupt")
+    transport.admit(profile, event)
+    row = transport.core.pending()[0]
+    active(store, row)
+    deadline = time.monotonic() + 10
+    while not any(e["kind"] == "answer.delta" for e in store.events_after(row["session_id"], row["turn_id"], None)):
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+    transport.reconcile()
+    return store, runtime, provider, transport, row
+
+
+def allow_update(transport, row):
+    path = transport.root / f"{row['request_ref']}.json"
+    record = _read_json(path)
+    record["stream"]["last_attempt_at"] = 0
+    _atomic_write_json(path, record)
+
+
+def test_native_stream_visible_before_terminal_coalesces_and_replays_without_new_message(ordinary):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        assert len(provider.writes) == 1
+        draft = provider.writes[0][1]
+        assert "第一段回答" in draft and "内容仍在生成" in draft
+        assert "synthetic private reasoning" not in draft and "cat source.txt" not in draft
+        assert store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
+        assert any(emoji == "OnIt" for _, _, emoji in provider.reactions.values())
+        sid, tid = row["session_id"], row["turn_id"]
+        for _ in range(40):
+            store.append_event(sid, tid, kind="answer.delta", payload={"text": "后续内容。"}, buffered=True)
+        transport.reconcile()
+        assert provider.edits == []  # Native chunks accumulate, edits are coalesced.
+        allow_update(transport, row)
+        replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                         runner=provider, cli_bin="lark-cli")
+        replay.reconcile()
+        assert len(provider.writes) == 1 and len(provider.edits) == 1
+        assert provider.edits[-1][2].count("后续内容。") == 40
+        replay.reconcile()
+        assert len(provider.edits) == 1
+        # Completing the real upstream Turn replaces the same post, immediately
+        # bypassing the draft throttle. The durable final answer is authoritative.
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        assert replay.reconcile() == 1
+        assert provider.edits[-1][2] == "Steered response."
+        assert len(provider.writes) == 1 and all(ref == "om_out_0" for _, ref, _ in provider.edits)
+        assert not any(emoji == "OnIt" for _, _, emoji in provider.reactions.values())
+        assert _read_json(replay.root / f"{row['request_ref']}.json")["status"] == "delivered"
+        replay.reconcile()
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(r["method"] == "thread/start" for r in requests) == 1
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+    finally:
+        runtime.close()
+
+
+def test_lost_edit_ack_recovered_by_readback_then_exact_stop_closes_draft(ordinary):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        store.append_event(row["session_id"], row["turn_id"], kind="answer.delta", payload={"text": "新片段。"})
+        allow_update(transport, row)
+        provider.hide_next_edit_readback = True
+        transport.reconcile()
+        assert len(provider.edits) == 1
+        allow_update(transport, row)
+        replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                         runner=provider, cli_bin="lark-cli")
+        replay.reconcile()
+        assert len(provider.edits) == 1  # Applied replacement is not repeated.
+        replay.admit("notes-app", provider.event("notes-app", "stop-stream", "/stop"))
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "interrupted"
+        provider.fail_reaction_delete = True
+        replay.reconcile()
+        assert provider.edits[-1][2] == "本次执行已停止。"
+        count = len(provider.edits)
+        provider.fail_reaction_delete = False
+        replay.reconcile()
+        assert len(provider.edits) == count
+        assert _read_json(replay.root / f"{row['request_ref']}.json")["status"] == "delivered"
+        assert "第一段回答" not in json.loads(provider.messages["om_out_0"]["body"]["content"])["zh_cn"]["content"][0][0]["text"]
+    finally:
+        runtime.close()
+
+
+def test_full_canonical_final_replaces_bounded_draft_without_truncation(ordinary):  # noqa: F811
+    final = "**完整结果**\n\n" + "保留每一段证据。\n" * 850
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"message": "Steered response.",', f'"message": {final!r},'))
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert transport.reconcile() == 1
+        assert provider.edits[-1][2] == final.strip()
+        assert len(provider.edits[-1][2]) > ANSWER_WINDOW
+        assert len(provider.writes) == 1
+    finally:
+        runtime.close()
+
+
+def test_two_app_streams_and_stop_are_isolated(ordinary):  # noqa: F811
+    store, runtime, provider, transport, first = start(ordinary)
+    try:
+        event = provider.event("steward-app", "other-stream", "wait for interrupt")
+        transport.admit("steward-app", event)
+        other = next(row for row in transport.core.pending() if row["request_ref"] != first["request_ref"])
+        active(store, other)
+        deadline = time.monotonic() + 10
+        while not any(e["kind"] == "answer.delta" for e in store.events_after(other["session_id"], other["turn_id"], None)):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        transport.reconcile()
+        assert [profile for profile, _ in provider.writes] == ["notes-app", "steward-app"]
+        transport.admit("notes-app", provider.event("notes-app", "isolation-stop", "/stop"))
+        runtime.wait_for_turn(session_id=first["session_id"], turn_id=first["turn_id"], timeout_sec=10)
+        transport.reconcile()
+        assert provider.edits[-1][:2] == ("notes-app", "om_out_0")
+        assert store.load_turn(other["session_id"], other["turn_id"])["status"] == "running"
+        assert any(profile == "steward-app" and emoji == "OnIt" for profile, _, emoji in provider.reactions.values())
+        assert first["session_id"] != other["session_id"]
+    finally:
+        runtime.close()
+
+
+def test_steward_commission_progress_uses_exact_first_turn_and_original_app(steward, monkeypatch):  # noqa: F811
+    store, runtime, original, transport, _, _, _ = steward
+    provider = StreamingProvider()
+    provider.__dict__.update(original.__dict__)
+    transport.runner = provider
+    started, release = threading.Event(), threading.Event()
+
+    def observe(self, emit):
+        emit("turn.started", {"upstream_turn_id": "native-first"})
+        emit("answer.delta", {"text": "委托首轮正在执行。"})
+        started.set()
+        assert release.wait(10)
+        raise self.session._timeout_error("hard_timeout", "Synthetic host timeout")
+
+    monkeypatch.setattr(CodexGoalDriver, "_observe", observe)
+    event = provider.event("steward-app", "delegate-stream", "/delegate --tokens 12000 wait for interrupt")
+    transport.admit("steward-app", event)
+    transport.reconcile()
+    proposal = transport.core.actions.store.list()[0]
+    confirm = provider.event("steward-app", "confirm-stream", "/confirm " + proposal["proposal_id"])
+    transport.admit("steward-app", confirm)
+    transport.reconcile()
+    assert started.wait(10)
+    transport.reconcile()
+    draft = next((ref, message) for ref, message in provider.messages.items()
+                 if "委托首轮正在执行" in str(message.get("body") or {}))
+    assert draft[1]["chat_id"] == "oc_steward_app"
+    resources = transport.core.actions.load(proposal["proposal_id"])["receipt"]["resource_ids"]
+    assert store.load_turn(resources["session_id"], resources["turn_id"])["status"] == "running"
+    release.set()
+    runtime.wait_for_turn(session_id=resources["session_id"], turn_id=resources["turn_id"], timeout_sec=10)
+    transport.reconcile()
+    assert provider.edits[-1][0:2] == ("steward-app", draft[0])
+    assert "委托首轮执行超时" in provider.edits[-1][2]
+    assert not any(profile == "notes-app" for profile, _ in provider.writes)
+
+
+@pytest.mark.parametrize("change", ["app", "audience"])
+def test_stream_rechecks_current_app_and_target_audience_before_edit(ordinary, change):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        store.append_event(row["session_id"], row["turn_id"], kind="answer.delta", payload={"text": "private next chunk"})
+        allow_update(transport, row)
+        if change == "app":
+            provider.profile_apps["notes-app"] = "cli_replaced_app"
+        else:
+            provider.messages["om_out_0"]["chat_id"] = "oc_other_audience"
+        transport.reconcile()
+        assert provider.edits == []
+        assert len(provider.writes) == 1
+        assert store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
+    finally:
+        runtime.close()
+
+
+def test_progress_is_bounded_and_does_not_invent_activity_or_show_reasoning():
+    state = {}
+    assert project_progress(state, [{"event_id": "1", "kind": "turn.started", "payload": {}}]) is None
+    assert project_progress(state, [{"event_id": "2", "kind": "agent.phase", "payload": {
+        "method": "item/reasoning/textDelta", "step": {"kind": "reasoning", "detail": "private chain"}}}]) is None
+    text = project_progress(state, [{"event_id": "3", "kind": "agent.phase", "payload": {
+        "method": "item/started", "step": {"kind": "command", "verb": "read", "state": "running", "detail": "secret command args"}}}])
+    assert "正在读取内容" in text and "secret" not in text
+    text = project_progress(state, [{"event_id": "4", "kind": "answer.delta", "payload": {"text": "a" * (ANSWER_WINDOW + 50)}}])
+    assert len(state["answer"]) == ANSWER_WINDOW and "最近的回答片段" in text
+    assert state["cursor"] == "4"

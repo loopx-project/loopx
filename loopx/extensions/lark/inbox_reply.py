@@ -939,6 +939,13 @@ def verify_lark_inbox_reply(
             "reply_verified": False,
             "blocker": "provider_delivery_mismatch",
         }
+    return _verified_reply_result(project=project, config_path=config_path, message_id=message_id,
+                                  runner=runner, finalize_reactions=finalize_reactions)
+
+
+def _verified_reply_result(*, project: str | Path, config_path: str | Path, message_id: str,
+                           runner: CommandRunner, finalize_reactions: bool) -> dict[str, Any]:
+    """Completion still waits for the existing reaction-cleanup owner."""
     cleanup = complete_lark_event_inbox_reactions(
         project=project,
         config_path=config_path,
@@ -953,6 +960,86 @@ def verify_lark_inbox_reply(
         "reaction_cleanup_verified": finalize_reactions and cleanup.get("ok") is True,
         "reaction_cleanup_deferred": not finalize_reactions,
     }
+
+
+def update_lark_inbox_reply(
+    *, project: str | Path, config_path: str | Path, message_id: str,
+    text: str, previous_text: str, attempt: Mapping[str, Any],
+    runner: CommandRunner = _default_runner,
+    source_membership_verifier: Callable[[], bool],
+    before_send: Callable[[str], Any],
+    delivery_attempt_recorder: Callable[[Any], None],
+    finalize_reactions: bool = False,
+) -> dict[str, Any]:
+    """Replace one known Bot reply, verifying source and exact provider readback.
+
+    Replacing the same message is idempotent: a lost update acknowledgement is
+    recovered by reading the requested body before another edit. The original
+    creation receipt binds the target to this App and source; it is not a new
+    message or a completion receipt until readback and cleanup succeed. The
+    required callback verifies the current native Core App identity, grants and
+    exact source audience, not only group membership. Reuse that one fresh
+    verification throughout this bounded provider operation.
+    """
+    config = load_lark_event_inbox_config(project=project, config_path=config_path)
+    reply = config["reply"]
+    profile, chat_id = str(reply["sender_profile"]), str(reply["chat_id"])
+    base = ["lark-cli", "--profile", profile]
+    prior = reply_lark_event_inbox(project=project, config_path=config_path,
+        message_id=message_id, text=previous_text, content_format="markdown", execute=False)
+    prior_receipt = str(prior.get("idempotency_key") or "")
+    if (set(attempt) != {"schema_version", "provider", "message_ref", "intent_digest", "provider_receipt"}
+            or attempt.get("schema_version") != "manager_return_delivery_attempt_v0"
+            or attempt.get("provider") != "lark"
+            or not MESSAGE_ID_PATTERN.fullmatch(str(attempt.get("message_ref") or ""))
+            or attempt.get("provider_receipt") != prior_receipt
+            or attempt.get("intent_digest") != _intent_digest(profile, chat_id, prior_receipt)):
+        return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_intent_conflict"}
+    desired = reply_lark_event_inbox(project=project, config_path=config_path,
+        message_id=message_id, text=text, content_format="markdown", execute=False)
+    # Rich mentions use the existing identity-verified text sender instead.
+    if desired.get("content_format") != "markdown":
+        return {"ok": False, "reply_verified": False, "blocker": "provider_update_format_unsupported"}
+    text = normalize_lark_outbound_text(text, limit=None, preserve_format=True)
+    content = lark_markdown_post_content(text)
+    body = {"msg_type": "post", "content": content}
+    if len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > LARK_POST_REQUEST_MAX_BYTES:
+        return {"ok": False, "reply_verified": False, "blocker": "provider_update_too_large"}
+    if not source_membership_verifier():
+        return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
+    ref = str(attempt["message_ref"])
+    read_args = [*base, "im", "+messages-mget", "--message-ids", ref, "--as", "bot", "--no-reactions", "--format", "json"]
+    readback = _call(runner, read_args)
+    message = _message(_json_object(readback.get("stdout")), ref)
+    if readback.get("returncode") != 0 or message is None:
+        return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
+    if (message.get("chat_id") != chat_id
+            or not isinstance(message.get("sender"), Mapping)
+            or message["sender"].get("sender_type") != "app"):
+        return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_intent_conflict"}
+    receipt = str(desired["idempotency_key"])
+    updated_attempt = {**attempt, "provider_receipt": receipt,
+                       "intent_digest": _intent_digest(profile, chat_id, receipt)}
+    if not lark_markdown_readback_matches(text=text, message=message):
+        edit_args = [*base, "im", "+messages-edit", "--message-id", ref,
+                     "--msg-type", "post", "--content", content, "--as", "bot", "--format", "json"]
+        preview = _call(runner, [*edit_args, "--dry-run"])
+        if preview.get("returncode") != 0 or not lark_markdown_preview_matches(text=text, payload=_json_object(preview.get("stdout"))):
+            return {"ok": False, "reply_verified": False, "blocker": "provider_update_preview_mismatch"}
+        if before_send(receipt).get("continue_delivery") is not True:
+            return {"ok": False, "reply_verified": False, "blocker": "provider_update_deferred"}
+        _call(runner, edit_args)
+        # An error or timeout may follow an applied edit. Readback, not the
+        # command return code, decides whether this exact body reached Lark.
+        readback = _call(runner, read_args)
+        message = _message(_json_object(readback.get("stdout")), ref)
+    delivery_attempt_recorder(updated_attempt)
+    if readback.get("returncode") != 0 or message is None:
+        return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
+    if not lark_markdown_readback_matches(text=text, message=message):
+        return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_mismatch"}
+    return _verified_reply_result(project=project, config_path=config_path, message_id=message_id,
+                                  runner=runner, finalize_reactions=finalize_reactions)
 
 
 def send_lark_inbox_message(
