@@ -658,6 +658,55 @@ test("accepted in-flight writeback closes only the exact Turn, not its Todo", as
   });
 });
 
+test("accepted semantic progress settles its Turn while the Todo stays open", async t => {
+  const checkpoint = {
+    schema_version: "vision_checkpoint_v0", agent_id: agentId, satisfied: true,
+    delivery_boundary: "semantic_closeout",
+    triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_progress"}],
+  };
+  const cases = [
+    {name: "paid progress", spend: true, expected: "settled"},
+    {name: "spend still required", spend: false, expected: "settlement_pending"},
+    {name: "missing writeback receipt", spend: true, remove: "refresh_state", expected: "open"},
+    {name: "missing spend receipt", spend: true, remove: "quota_spend", expected: "settlement_pending"},
+    ...[
+      ["not accepted", {satisfied: false}],
+      ["truthy acceptance", {satisfied: "true"}],
+      ["wrong schema", {schema_version: "other"}],
+      ["other agent", {agent_id: "peer"}],
+      ["no outcome trigger", {triggers: []}],
+      ["in-flight trigger", {triggers: [{kind: "in_flight_continuation", todo_id: todoId}]}],
+      ["mismatched outcome", {triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_gap"}]}],
+    ].map(([name, patch]) => ({name: String(name), spend: true, checkpoint: {...checkpoint, ...(patch as Record<string, unknown>)}, expected: "open"})),
+    ...["goal_id", "agent_id", "todo_id", "turn_instance_id"].map(field => ({
+      name: `other ${field}`, spend: true, patch: {[field]: "other"}, expected: "open",
+    })),
+    {name: "other effect", spend: true, patch: {settlement_identity: {...identity, effect_id: "other"}}, expected: "open"},
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const root = await fixture({writeback: true, spend: entry.spend,
+      visionCheckpoint: "checkpoint" in entry ? entry.checkpoint : checkpoint});
+    try {
+      if ("remove" in entry) {
+        const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+        const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        await writeFile(log, rows.filter(row => row.event_kind !== entry.remove).map(row => JSON.stringify(row)).join("\n") + "\n");
+      }
+      if ("patch" in entry) {
+        const index = join(root, "goals", goalId, "runs", "index.jsonl");
+        const rows = (await readFile(index, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        rows[0] = {...rows[0], ...entry.patch};
+        await writeFile(index, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+      }
+      const result = await readQuotaSettlement(request(root));
+      assert.equal(result.replay_phase, entry.expected);
+      assert.equal(result.completion_event, null);
+      assert.equal((result.terminal_closeout as any).payload.ok, false);
+      if (entry.name === "paid progress") assert.equal((result.progress as any).state, "settled");
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+});
+
 test("qualified path replan closes its Turn without a preselected obligation or Todo completion", async t => {
   const accepted = {
     schema_version: "autonomous_replan_ack_v0", recorded: true,

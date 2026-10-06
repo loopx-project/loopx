@@ -208,6 +208,15 @@ instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
 
+An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
+Todo-bound Turn after the matching writeback and spend receipts commit. Both
+`in_flight_continuation` and `semantic_closeout` use their corresponding typed
+checkpoint triggers. The latter can leave the Todo open or waiting while the
+eligible frontier changes. Reentering the same Turn returns
+`heartbeat_settled_skip` with the original binding; only a fresh Turn discovers
+new work or replan obligations. Missing, rejected or mismatched checkpoints and
+receipts remain incomplete; this replay rule grants no Todo or Goal completion.
+
 A Todo-bound path replan can be qualified during execution even when the
 initial guard selected no replan obligation. Its exact durable writeback must
 carry a recorded `autonomous_replan_ack_v0` with an accepted semantic delta or
