@@ -304,6 +304,40 @@ view on PayPal or any control company.
 
 ## Install And Run
 
+### Disclosure and presentation basis (candidate 0.8.6)
+
+Same economic period does not establish the same filing version or row scope.
+The v2 period input adds declared disclosure bases and an optional evidenced
+signed decomposition. A full aggregate can project to a narrower common scope
+only when each source-bound partition closes and the selected components are
+present. Missing declarations, changed pins and nonzero residuals remain holds.
+
+```bash
+loopx-finance-value-discovery assess-period \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v2.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v2.json \
+  --execute --format json
+```
+
+Both paths use the same [Finance contract](CONTRACT.md#disclosure-identity-and-presentation-scope-extension-086).
+The synthetic example has aggregate -340 = purchase -200 + disposal 30 + other
+-170, alongside a separately declared other-only -170. It qualifies only the
+declared period and presentation relation. Parent-declared partition coverage,
+source authenticity, PIT, accuracy and financial permission remain separate.
+v1 replay is unchanged; do not strip v2 fields to manufacture eligibility.
+App/Lark projection and independent source consumer adoption remain unqualified
+for this new version. No default install, Memory or trading change is implied.
+
+Use the existing disable/enable commands below to opt out and restore. Rollback
+requires the original pinned wheel and manifest; 0.8.5 supports v1 but rejects
+v2, rather than silently interpreting it as an economic-only comparison.
+
+0.8.6 候选新增披露身份与呈列范围轴：同名、同期间不自动合并。
+显式父审分解必须绑定各自来源/版本/范围，完整带符号组成与原金额闭合，
+目标组成两侧均存在。缺证和冲突继续 hold；算术与声明检查不代表来源真实、
+首次可得时钟、金融准入或完整 App/Lark 验收，旧 v1 回放保持。
+
 ### Signed cash reconciliation (candidate 0.8.5)
 
 `assess-cash` consumes six declared rows from one retained source column. It

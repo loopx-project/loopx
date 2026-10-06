@@ -29,6 +29,16 @@ def test_invalid_entry_rejected_before_model_call(kwargs):
         Execution(**kwargs)
 
 
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "loopx-goal", "plain", "native-goal"])
+def test_task_entry_defaults_to_planning_only_for_loopx_modes(mode):
+    kwargs = {"mode": mode}
+    if mode == "turn":
+        kwargs["validation_command"] = ("python", "validate.py")
+    expected = "loopx-planned" if mode in {"heartbeat", "turn", "loopx-goal"} else "seeded-todo"
+    assert Execution(**kwargs).task_entry == expected
+    assert Execution(**kwargs, task_entry="seeded-todo").task_entry == "seeded-todo"
+
+
 @pytest.fixture
 def planning_env(tmp_path):
     project = tmp_path / "project"
@@ -114,6 +124,8 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
     planning_env, context
 ):
     planning_env["LOOPX_ITERATION_CONTEXT"] = context
+    if context == "fresh":
+        planning_env.pop("LOOPX_TASK_ENTRY")  # Omitted worker setting uses the same planner.
     ids = []
     for invocation in range(2):
         receipt = run_once(planning_env)
@@ -240,7 +252,6 @@ def test_planning_budget_and_blocked_handoff_use_the_real_adapter_run(
     agent = harbor.BenchmarkCodex(
         logs_dir=tmp_path,
         model_name="openai/fixture",
-        task_entry="loopx-planned",
         turn_timeout_sec=250,
         scheduler_timeout_sec=500,
     )

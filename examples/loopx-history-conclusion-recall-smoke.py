@@ -204,6 +204,37 @@ def _case_export_rejects_non_public_goal_id_before_history_read(
     assert not (tmp_path / "out").exists()
 
 
+def _case_export_rejects_symlinked_goal_root(tmp_path: Path, monkeypatch) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    goal_root = out / "goal-through-link"
+    try:
+        goal_root.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        # Some Windows runners do not grant symlink creation to the test user.
+        return
+
+    monkeypatch.setattr(history_export, "collect_history", lambda **_: {"runs": []})
+    try:
+        export_goal_conclusions(
+            goal_id="goal-through-link",
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path,
+            out_dir=out,
+        )
+    except RuntimeError as exc:
+        assert "goal output directory must not be a symlink" in str(exc)
+    else:
+        raise AssertionError("export must reject a symlinked goal output directory")
+
+    assert goal_root.is_symlink(), "export must not replace the caller's symlink"
+    assert not (outside / "history-conclusions").exists(), (
+        "export must not create files through the symlink"
+    )
+
+
 def _case_export_preserves_foreign_files_when_retiring_owned_generation(
     tmp_path: Path, monkeypatch
 ) -> None:

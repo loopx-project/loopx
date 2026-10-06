@@ -353,13 +353,13 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
 
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("turns", [None, 2])
-def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing, turns):
+def test_explicit_seeded_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing, turns):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
     from loopx.cli import build_parser
 
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
-                           replan_after_turns=turns)
+                           replan_after_turns=turns, task_entry="seeded-todo")
     field = "replan_after_effective_turns" if turns else "replan_after_completed_todos"
     calls = []
 
@@ -489,7 +489,14 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
     monkeypatch.setattr(agent, "exec_as_root", execute)
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_get_env", lambda key: None)
-    asyncio.run(agent.install(SimpleNamespace(default_user="fixture", upload_dir=no_op)))
+    async def task_exec(**kwargs):
+        assert kwargs == {"command": 'printf "%s" "$PATH"', "timeout_sec": 30}
+        return SimpleNamespace(stdout="/task/toolchain:/usr/bin:/bin", return_code=0)
+    asyncio.run(agent.install(SimpleNamespace(
+        default_user="fixture", upload_dir=no_op, exec=task_exec,
+    )))
+    assert agent._task_path == "/task/toolchain:/usr/bin:/bin"
+    assert "/task/toolchain" in agent._shell_path_restore()
     command = next(c for c in commands if "> /logs/agent/loopx-install.json" in c)
     receipt = json.loads(shlex.split(command)[2])
     assert ("turn_envelope" in receipt) is enabled
@@ -530,3 +537,50 @@ def test_turn_cadence_readback_rejects_wrong_unit_or_value(tmp_path, monkeypatch
     monkeypatch.setattr(agent, "_loopx", cli)
     with pytest.raises(RuntimeError, match="readback mismatch"):
         asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Fixture", cwd=str(tmp_path)))
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat"])
+def test_task_toolchain_survives_profile_and_login_shell(tmp_path, monkeypatch, mode):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", execution_mode=mode)
+    # Shell metacharacters in an image path must remain literal, not execute.
+    tool_dir = tmp_path / "tools '$(touch injected)'"
+    tool_dir.mkdir()
+    tool = tool_dir / "task-compiler"
+    tool.write_text("#!/bin/sh\nprintf 'task-toolchain'\n")
+    tool.chmod(0o755)
+    agent._task_path = f"{tool_dir}:/usr/bin:/bin"
+    monkeypatch.setenv("PATH", "/operator/private/bin")
+    monkeypatch.setenv("OPERATOR_SECRET", "must-not-propagate")
+    profile = agent._profile_env()
+    assert "/operator/private/bin" not in profile["PATH"]
+    assert "OPERATOR_SECRET" not in profile
+    # BASH_ENV runs after login files; emulate a login profile resetting PATH.
+    restore = tmp_path / "bash-env"
+    restore.write_text(agent._shell_path_restore() + "\n")
+    for login in [False, True]:
+        result = subprocess.run(
+            ["/bin/bash", "-lc" if login else "-c", "task-compiler"],
+            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "BASH_ENV": str(restore)},
+            cwd=tmp_path, text=True, capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "task-toolchain"
+    assert not (tmp_path / "injected").exists()
+    if not agent.execution.uses_loopx:
+        assert "/opt/loopx-benchmark/node" not in agent._shell_path_restore()
+
+
+@pytest.mark.parametrize("stdout,return_code", [("", 0), ("/task/bin", 1)])
+def test_missing_task_path_fails_before_install(tmp_path, monkeypatch, stdout, return_code):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture")
+    async def task_exec(**kwargs):
+        return SimpleNamespace(stdout=stdout, return_code=return_code)
+    async def unexpected(*args):
+        pytest.fail("installation must not start without the task PATH")
+    monkeypatch.setattr(CodexOffline, "install", unexpected)
+    with pytest.raises(RuntimeError, match="task container PATH"):
+        asyncio.run(agent.install(SimpleNamespace(exec=task_exec)))

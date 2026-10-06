@@ -6,8 +6,6 @@ from typing import Any, Callable, Optional, TypeGuard
 
 from ..goals.goal_vision_wait_projection import attach_active_vision_waits
 from .contract import (
-    TODO_STATUS_DONE,
-    TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_USER_ACTION,
     build_todo_id,
@@ -140,15 +138,6 @@ def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
     if limit is None or len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
-
-
-def todo_item_status(item: dict[str, Any]) -> str:
-    """Return one Todo's explicit status with marker compatibility."""
-
-    status = normalize_todo_status(item.get("status"))
-    if status:
-        return status
-    return TODO_STATUS_DONE if item.get("done") else TODO_STATUS_OPEN
 
 
 def todo_archive_state(item: dict[str, Any]) -> str:
@@ -776,12 +765,6 @@ def todo_successor_todo_ids(item: dict[str, Any], *, items: list[dict[str, Any]]
     selected = dict(item)
     evaluation = evaluate_succession([selected], items)[0]
     return list(evaluation["successor_todo_ids"])
-
-
-def todo_item_is_succession_tracked_completion(item: dict[str, Any]) -> bool:
-    from .succession_warning import project_succession
-
-    return project_succession([item])[0]["tracked_completion"] is True
 
 
 def _structured_todo_group_items(

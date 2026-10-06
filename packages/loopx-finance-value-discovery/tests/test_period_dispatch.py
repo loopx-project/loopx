@@ -91,3 +91,30 @@ def test_legacy_discovery_stdin_retains_direct_reducer_result():
     assert invoke([], payload) == invoke(
         ["reduce", "--input-json", "-", "--format", "json"], payload
     )
+
+
+@pytest.mark.parametrize("case", ["closed_partition", "no_bridge", "missing_context",
+                                 "wrong_pin", "partition_conflict", "malformed"])
+def test_v2_disclosure_basis_direct_and_stdin_share_failure_and_recovery(case):
+    payload = json.loads((EXAMPLES / "period-comparison-v2.json").read_text())
+    if case == "no_bridge":
+        payload["basis_bridge"] = None
+    elif case == "missing_context":
+        payload["left"]["context"] = None
+    elif case == "wrong_pin":
+        payload["basis_bridge"]["left"]["version_ref"] = "wrong"
+    elif case == "partition_conflict":
+        payload["basis_bridge"]["left"]["components"][0]["value"] = "-201"
+    elif case == "malformed":
+        payload["basis_bridge"]["left"]["components"] = []
+    direct = invoke(["assess-period", "--input-json", "-"], payload)
+    assert invoke([], payload) == direct
+    code, result = direct
+    if case == "malformed":
+        assert code == 1 and result["ok"] is False
+        good = json.loads((EXAMPLES / "period-comparison-v2.json").read_text())
+        assert invoke([], good)[1]["comparison_evidence_eligible"]
+    else:
+        assert code == 0
+        assert result["schema_version"] == "finance_period_comparison_assessment_v2"
+        assert result["comparison_evidence_eligible"] is (case == "closed_partition")

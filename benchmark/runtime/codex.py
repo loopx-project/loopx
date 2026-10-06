@@ -22,7 +22,7 @@ class Execution:
     sandbox: str = "danger-full-access"
     timeout_seconds: float | None = None
     validation_command: tuple[str, ...] = ()
-    task_entry: str = "seeded-todo"
+    task_entry: str | None = None
     turn_envelope: bool = False
 
     def __post_init__(self) -> None:
@@ -30,6 +30,8 @@ class Execution:
             raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
+        if self.task_entry is None:
+            object.__setattr__(self, "task_entry", "loopx-planned" if self.uses_loopx else "seeded-todo")
         if self.task_entry not in TASK_ENTRIES:
             raise ValueError("unsupported task entry")
         if self.task_entry == "loopx-planned" and not self.uses_loopx:

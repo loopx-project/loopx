@@ -16,6 +16,15 @@ from ...chat_attachments import normalize_chat_image_attachments
 from ...file_lock import exclusive_file_lock
 
 
+def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
+    identity: dict[str, str] = {}
+    for field in ("goal_instance_id", "creation_operation_id"):
+        value = str(goal.get(field) or "").strip()
+        if value:
+            identity[field] = value
+    return identity
+
+
 class ChatExternalConversations:
     def __init__(self, controller: Any) -> None:
         self.controller = controller
@@ -253,9 +262,28 @@ class ChatExternalConversations:
             resources = row["commission_resources"]
             current = self.controller.store.load_session(resources["session_id"])
             turn = self.controller.store.load_turn(resources["session_id"], resources["turn_id"])
-            if not current or not turn or current.get("goal_id") != goal_id:
+            if self.actions is None:
                 continue
-            facts.append({"goal_id": goal_id, "turn_status": turn["status"],
+            try:
+                goal_identity = _commission_goal_identity(
+                    self.actions._goal(goal_id)
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if (
+                not goal_identity
+                or any(resources.get(key) != value for key, value in goal_identity.items())
+                or not current
+                or not turn
+                or current.get("goal_id") != goal_id
+                or (
+                    "goal_instance_id" in goal_identity
+                    and current.get("goal_instance_id")
+                    != goal_identity["goal_instance_id"]
+                )
+            ):
+                continue
+            facts.append({"goal_id": goal_id, **goal_identity, "turn_status": turn["status"],
                 "native_execution": current.get("native_goal"),
                 "result_delivery_verified": row.get("delivery_verified") is True,
                 "result_excerpt": str((turn.get("response") or {}).get("message") or "")[:500],
@@ -330,8 +358,12 @@ class ChatExternalConversations:
                             client_turn_id=f"commission-resume-{row['request_ref']}",
                             message=f"/goal resume --tokens {row['command_argument']['native_token_budget']}",
                             work_dir=Path(goal["repo"]), objective=str(goal.get("objective") or ""))
-                        row.update(commission_resources={"goal_id": row["target_goal_id"], "session_id": row["target_session_id"],
-                            "turn_id": turn["turn_id"]}, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
+                        row.update(commission_resources={
+                            "goal_id": row["target_goal_id"],
+                            **_commission_goal_identity(goal),
+                            "session_id": row["target_session_id"],
+                            "turn_id": turn["turn_id"],
+                        }, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
                     elif row["command"] == "cancel_commission":
                         self.actions.cancel(argument)
                         row["response"] = "已取消这份新委托预览；没有创建或启动 Goal。"

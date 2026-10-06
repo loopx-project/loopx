@@ -129,11 +129,6 @@ from .control_plane.todos.handoff_mode import (
     resolve_todo_completion_handoff,
 )
 from .control_plane.coordination.local_authority_shadow_adapter import effective_runtime_root
-from .control_plane.coordination.runtime_shadow_writer_adapter import (
-    write_captured_todo_state,
-    begin_todo_runtime_shadow_capture,
-    settle_todo_runtime_shadow_capture,
-)
 from .control_plane.work_items.task_lease import (
     enter_terminal_todo_lease_fence,
     hold_task_lease_mutation_fence,
@@ -645,6 +640,12 @@ def add_goal_todo(
         return canonical_create
     if operation_id is not None:
         raise ValueError("todo add --operation-id requires promoted canonical authority")
+    from .control_plane.coordination.runtime_shadow_writer_adapter import (
+        begin_todo_runtime_shadow_capture,
+        write_captured_todo_state,
+        settle_todo_runtime_shadow_capture,
+    )
+
     resolved_project, resolved_state_file = resolve_todo_state_path(
         registry_path=registry_path,
         goal_id=goal_id,
@@ -1036,6 +1037,11 @@ def update_goal_todo(
     ) and not (monitor_intent["observation"] is not None and status is None)):
         raise ValueError("update operation id and lease proof require a supported promoted update; no legacy write attempted")
     from .control_plane.todos.line_update import apply_todo_update_to_lines
+    from .control_plane.coordination.runtime_shadow_writer_adapter import (
+        begin_todo_runtime_shadow_capture,
+        write_captured_todo_state,
+        settle_todo_runtime_shadow_capture,
+    )
 
     resolved_project, resolved_state_file = resolve_todo_state_path(
         registry_path=registry_path,
@@ -1340,6 +1346,11 @@ def complete_goal_todo(
     from .control_plane.todos.line_update import (
         apply_todo_update_to_lines,
         link_generated_successor_todo_ids,
+    )
+    from .control_plane.coordination.runtime_shadow_writer_adapter import (
+        begin_todo_runtime_shadow_capture,
+        write_captured_todo_state,
+        settle_todo_runtime_shadow_capture,
     )
 
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
@@ -1668,6 +1679,11 @@ def supersede_goal_todo(
         apply_todo_update_to_lines,
         link_superseding_todo_id,
     )
+    from .control_plane.coordination.runtime_shadow_writer_adapter import (
+        begin_todo_runtime_shadow_capture,
+        write_captured_todo_state,
+        settle_todo_runtime_shadow_capture,
+    )
 
     if successor_todo_ids:
         raise ValueError("Existing-successor supersede requires promoted canonical Todo authority; migrate the Goal before retrying")
@@ -1819,6 +1835,12 @@ def archive_completed_todos(
     state_file: Path | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
+    from .control_plane.coordination.runtime_shadow_writer_adapter import (
+        begin_todo_runtime_shadow_capture,
+        write_captured_todo_state,
+        settle_todo_runtime_shadow_capture,
+    )
+
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
         raise ValueError("todo role must be one of: user, agent")
