@@ -61,7 +61,16 @@ def payload():
 
 def test_real_result_link_read_and_replay(tmp_path):
     args = fixture(tmp_path)
-    prepare_result_attachment(ATTACHMENT, **args)
+    context = explore_turn_context(**{
+        key: args[key] for key in ("registry_path", "runtime_root", "goal_id", "agent_id")
+    })
+    attachment = context["graph"]["result_attachment_template"]
+    with pytest.raises((ValueError, EffectRuntimeRejected)):
+        prepare_result_attachment(attachment, **args)
+    assert not explore_result_log_path(args["runtime_root"], "research").exists()
+    assert set(attachment) == set(ATTACHMENT)
+    attachment.update(ATTACHMENT)
+    prepare_result_attachment(attachment, **args)
     assert not explore_result_log_path(args["runtime_root"], "research").exists()
     first = deliver_result_attachment(payload=payload(), **args)
     assert first["ok"], first
@@ -275,7 +284,11 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
             **terminal_proof,
         )
     source = tmp_path / "result.json"
-    source.write_text(json.dumps(ATTACHMENT))
+    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    template = plan["ordered_steps"][1]["optional_attachments"][0]["attachment_template"]
+    assert set(template) == set(ATTACHMENT)
+    template.update(ATTACHMENT)
+    source.write_text(json.dumps(template))
     args = (
         "refresh-state",
         *binding,

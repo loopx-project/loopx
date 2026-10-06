@@ -140,6 +140,17 @@ an attachment; off mode adds no attachment metadata or evidence requirement.
 This point-of-use hint complements the turn-start read hook; it does not inspect
 local logs, generate findings, or require a no-evidence acknowledgement.
 
+The hint includes an `attachment_template`, also returned as
+`graph.result_attachment_template` by `turn-context`. Fill its blank fields
+after validating a reusable constraint, counterexample, or a result that changes
+or justifies the next route. Local notes and validation files are not ingested
+automatically. The incomplete template is rejected; it is not a finding.
+Goal, Agent, Todo and Turn already come from the ordinary writeback. Supply the
+actual tested input revision yourself, since a code revision alone need not
+identify the tested data. Keep raw logs local and reference bounded evidence.
+These prompts guide optional capture, not a finding-per-turn requirement;
+successful ingestion and later use must be measured separately.
+
 Add `--explore-result-json result.json` to the ordinary admitted work
 writeback, retaining its Goal, Agent, Todo, Turn and delivery fields. The
 attachment is validated before primary commit and stored with that writeback.

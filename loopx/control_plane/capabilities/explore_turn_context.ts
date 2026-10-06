@@ -105,6 +105,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const visibleResults = resultRows.slice(resultOffset, resultOffset + resultLimit);
   const remainingResults = Math.max(0, resultRows.length - resultOffset - visibleResults.length);
   const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent, ...args);
+  const writeback = exploreResultWritebackAffordance();
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
     graph: graph ? {
@@ -130,9 +131,10 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       },
       omitted_nodes: Math.max(0, nodes.length - 3),
       summary_command: command("summary"),
-      result_writeback_option: exploreResultWritebackAffordance().option,
-      result_attachment_schema: exploreResultWritebackAffordance().attachment_schema,
-      result_writeback_guidance: exploreResultWritebackAffordance().guidance,
+      result_writeback_option: writeback.option,
+      result_attachment_schema: writeback.attachment_schema,
+      result_writeback_guidance: writeback.guidance,
+      result_attachment_template: writeback.attachment_template,
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),
       guidance: "Use result_page.next_command for omitted results or node_command_template for a question; --result-limit can expand each page up to 20. Use existing evidence before repeating a route. Record meaningful hypotheses and supported or refuted results with stable node ids. Fill templates from actual evidence; do not create ceremonial nodes or infer findings from a score alone.",

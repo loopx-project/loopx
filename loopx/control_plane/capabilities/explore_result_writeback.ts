@@ -12,7 +12,15 @@ export function exploreResultWritebackAffordance(): JsonObject {
     option: "--explore-result-json <result.json>",
     attachment_schema: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
     required: false,
-    guidance: "When work yields reusable evidence, attach node_id, question, applicability, input_revision, observation, interpretation, status and evidence_refs to ordinary Todo/Turn refresh-state. This creates the question if absent, preserves existing node state, and links the result to this Todo. Use tentative for inconclusive or prerequisite failures; a score alone does not establish refutation. No attachment is required for routine work without new evidence.",
+    guidance: "After validation, capture a reusable constraint, counterexample, or result that changes or justifies the next route. Local notes and validation files do not enter Explore automatically. Fill the provided JSON template from the observed result, save it as result.json, and add the option to ordinary Todo/Turn refresh-state. Reuse a question id only with its existing question and applicability. Record the tested input revision and opaque evidence refs; keep raw logs local. Use tentative for inconclusive or prerequisite failures; a score alone does not establish refutation. No attachment is required for routine work without new evidence; do not invent findings to fill the graph.",
+    // Blank evidence fields deliberately fail validation until the caller
+    // supplies observed facts. Goal/Agent/Todo/Turn bind in ordinary writeback;
+    // a source-code revision here would not establish the tested input revision.
+    attachment_template: {
+      schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
+      node_id: "", question: "", applicability: "", input_revision: "",
+      observation: "", interpretation: "", status: "tentative", evidence_refs: [],
+    },
   };
 }
 
