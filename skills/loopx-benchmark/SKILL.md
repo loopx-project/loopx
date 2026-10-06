@@ -189,6 +189,40 @@ the task's normal tools instead of imposing this workflow.
   `required_capability` fields remain runtime prerequisites, not product
   capability switches.
 
+## Curate live comparison views
+
+When the user wants a persistent experiment overview, keep a stable per-task
+entry point backed by an explicit maintained selection, rather than sending a
+new long run-query URL after every restart. Keep task switching and full history
+one interaction away. Use the existing board/runtime projections for run state
+and the provider's authorized score projection; a display selection must not
+become a second source of score, integrity, or countability truth.
+
+- Include the requested baseline families and feedback modes, current experiments,
+  and important mechanism ablations. Do not silently reduce baselines to the
+  official runner: single-task and native-Goal controls may be essential. If a
+  requested baseline is unavailable, say so instead of substituting another arm.
+- By default, move superseded or problem-stopped attempts out of the core view,
+  while retaining their original traces, scores, retirement reason and replacement
+  reference in history. Never select by score or hide a valid low-scoring arm.
+  An explicitly requested historical baseline may remain visible, with its actual
+  status and incomplete duration labeled; display inclusion is not qualification.
+- Keep historical baselines distinct from current experiments. Expose each arm's
+  runner setting, source/scorer version, feedback mode, budget and sampling cadence
+  through concise labels and accessible details. Mark unmatched versions or budgets
+  as diagnostic context rather than implying a causal comparison.
+- Compare common elapsed sampling windows. Show each completed score promptly,
+  with pending, evaluating, failed and missing points distinguishable; never fill
+  missing scores with zero or splice different attempts into one curve. Preserve
+  original capture times and terminal samples.
+- Reconcile the selection on admission, replacement and retirement while keeping
+  the entry URL stable. Maintain campaign-specific identifiers in private operator
+  state; put only reusable guidance in the shipped skill.
+- Verify the rendered view: requested baselines and active ablations appear,
+  retired attempts are reachable through history, and links survive a selection
+  update. Review the populated first viewport for readable labels and navigation;
+  a correct query alone does not establish a usable comparison view.
+
 ## Campaign monitoring and post-run insight
 
 - When a campaign starts and the caller authorizes ongoing monitoring, add one
