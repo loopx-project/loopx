@@ -1,6 +1,7 @@
 mod bundled_runtime;
 mod maintenance;
 mod runtime_selection;
+mod service_endpoints;
 mod services;
 mod update_backup;
 
@@ -181,10 +182,12 @@ pub fn run() {
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
     // and backend together instead of reusing a separately built asset bundle.
+    let endpoints = service_endpoints::ServiceEndpoints::allocate(!cfg!(dev))
+        .expect("could not allocate LoopX loopback endpoints");
     #[cfg(dev)]
     let web_origin = "http://127.0.0.1:5173".to_string();
     #[cfg(not(dev))]
-    let web_origin = "http://127.0.0.1:8767/chat/".to_string();
+    let web_origin = endpoints.workspace_origin();
     let services = Arc::new(Mutex::new(None::<ServiceSet>));
     let services_for_setup = Arc::clone(&services);
     let navigation_origin: Url = web_origin.parse().expect("valid desktop origin");
@@ -277,7 +280,7 @@ pub fn run() {
                             }
                         }
                     }
-                    match maintenance::start_services(&handle) {
+                    match maintenance::start_services(&handle, &endpoints) {
                         Ok(None) => {
                             std::thread::sleep(std::time::Duration::from_millis(200));
                             continue;
@@ -524,20 +527,20 @@ mod tests {
     #[test]
     fn maintenance_acl_accepts_both_transports_only_on_the_app_origin() {
         use tauri::utils::acl::RemoteUrlPattern;
-        let page: tauri::Url = "http://127.0.0.1:8767/chat/".parse().unwrap();
+        let page: tauri::Url = "http://127.0.0.1:49123/chat/".parse().unwrap();
         let old: RemoteUrlPattern = page.to_string().parse().unwrap();
-        assert!(!old.test(&"http://127.0.0.1:8767".parse().unwrap()));
+        assert!(!old.test(&"http://127.0.0.1:49123".parse().unwrap()));
         let pattern: RemoteUrlPattern = super::maintenance_origin(&page).parse().unwrap();
         for allowed in [
-            "http://127.0.0.1:8767",
-            "http://127.0.0.1:8767/chat/?goal=x",
+            "http://127.0.0.1:49123",
+            "http://127.0.0.1:49123/chat/?goal=x",
         ] {
             assert!(pattern.test(&allowed.parse().unwrap()), "{allowed}");
         }
         for denied in [
-            "http://127.0.0.1:8766/chat/",
-            "http://localhost:8767/chat/",
-            "https://127.0.0.1:8767/chat/",
+            "http://127.0.0.1:8767/chat/",
+            "http://localhost:49123/chat/",
+            "https://127.0.0.1:49123/chat/",
             "https://example.com/chat/",
         ] {
             assert!(!pattern.test(&denied.parse().unwrap()), "{denied}");

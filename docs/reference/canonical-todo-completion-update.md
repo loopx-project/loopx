@@ -349,3 +349,32 @@ publication recovery, not cross-host distribution of private validation commands
 私有声明先持久保存，权威摘要再引用它；没有被权威 Todo 引用的内容不会成为验证要求。
 被选中内容损坏时仍拒绝执行。旧 sidecar 可继续读取，历史创建回执不能回滚新验证器。
 此改动不提供私有验证命令的跨主机分发，也不会自动清理未引用内容。
+
+## Completion-state crossing retirement
+
+Completion and terminal update already compose `completion_state.ts` inside
+their typed transaction. The following internal crossings have no production,
+dynamic-handler or packaged CLI caller after that adoption:
+
+| Retired entry | Last consumer / retained owner |
+| --- | --- |
+| Python `require_todo_completion_continuation` | No caller; live metadata decoding retains `require_todo_completion_metadata` |
+| Python `completion_continuation_for_write` | Facade-only test; completion and update call the TS state owner directly |
+| `todo.completion_state.continuation_for_write` RPC and `selectTodoCompletionContinuation` carrier | Retired facade and characterization; `completionContinuationForWrite` remains in the whole TS decisions |
+
+The retired RPC rejects unsupported-method requests. Continuation selection,
+contradictory-intent rejection and historical terminal recovery remain covered
+through the production owner. Python normalization/cache, import-compatible
+enums, original receipt values, Markdown projection, backup readers and live
+Host IO remain. This removes neither the Markdown writer nor shadow capture,
+and changes no provider default. File/SQLite CLI completion and settlement
+recovery are the real-path checks; installation qualification also runs those
+paths from a wheel with the retired entries absent. Reverting this code restores
+the internal crossing without converting data or rewriting receipts.
+
+完成与 terminal update 已在现有 TS 事务中组合完成状态规则。本批只退役两个无生产
+调用方的 Python 入口及其不再使用的 RPC carrier；选择 continuation、拒绝矛盾意图
+和历史收尾恢复仍由原 TS owner 承担。Python 编解码/cache、兼容枚举、原回执、
+Markdown 投影、备份读取及活跃 Host IO 保留。真实 File/SQLite CLI 和删除旧入口后的
+wheel 路径验证完成与结算恢复；本批不删除 Markdown writer/shadow，也不改变默认
+provider。代码回滚不需要转换数据或重写回执。

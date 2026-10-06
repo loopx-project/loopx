@@ -1,3 +1,4 @@
+use crate::service_endpoints::ServiceEndpoints;
 use command_group::{CommandGroup, GroupChild};
 use std::{
     env,
@@ -66,6 +67,11 @@ impl ServiceKind {
     }
 
     fn command_args(self) -> Vec<String> {
+        self.command_args_on_port(self.port())
+    }
+
+    fn command_args_on_port(self, port: u16) -> Vec<String> {
+        let port = port.to_string();
         match self {
             Self::Status => vec![
                 "serve-status",
@@ -73,7 +79,7 @@ impl ServiceKind {
                 "--host",
                 "127.0.0.1",
                 "--port",
-                "8766",
+                &port,
                 "--limit",
                 "80",
             ],
@@ -83,7 +89,7 @@ impl ServiceKind {
                 "--host",
                 "127.0.0.1",
                 "--port",
-                "8767",
+                &port,
                 "--no-open",
             ],
         }
@@ -141,11 +147,12 @@ pub(crate) struct SelectedRuntime {
 impl ServiceSet {
     pub(crate) fn start(
         runtime: &SelectedRuntime,
+        endpoints: &ServiceEndpoints,
         progress: impl Fn(&[ServiceKind]) + Sync,
     ) -> Result<Self, ServiceError> {
         Self::collect(connect_all(
             SERVICE_KINDS,
-            |kind| connect(kind, runtime),
+            |kind| connect(kind, runtime, endpoints),
             progress,
         ))
     }
@@ -231,15 +238,83 @@ fn connect_all<const N: usize>(
     })
 }
 
-fn connect(kind: ServiceKind, runtime: &SelectedRuntime) -> ServiceOutcome {
+fn connect(
+    kind: ServiceKind,
+    runtime: &SelectedRuntime,
+    endpoints: &ServiceEndpoints,
+) -> ServiceOutcome {
     let mut owned = None;
     let mut healed = false;
-    let result = connect_service(kind, runtime, &mut owned, &mut healed);
+    let result = if endpoints.isolated {
+        connect_owned_service(kind, endpoints.port(kind), runtime, &mut owned)
+    } else {
+        connect_service(kind, runtime, &mut owned, &mut healed)
+    };
     ServiceOutcome {
         owned,
         healed,
         result,
     }
+}
+
+// Release windows never borrow a listener or restart a LaunchAgent. A matching
+// revision alone cannot establish the listener's registry/process ownership.
+fn connect_owned_service(
+    kind: ServiceKind,
+    port: u16,
+    runtime: &SelectedRuntime,
+    owned: &mut Option<OwnedService>,
+) -> Result<(), ServiceError> {
+    if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        return Err(ServiceError(format!(
+            "LoopX {} private endpoint on port {port} is already occupied; retry startup",
+            kind.label()
+        )));
+    }
+    let mut command = Command::new(&runtime.executable);
+    configure_runtime_environment(&mut command);
+    command
+        .args(kind.command_args_on_port(port))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command.group_spawn().map_err(|error| {
+        ServiceError(format!(
+            "could not start private LoopX {}: {error}",
+            kind.label()
+        ))
+    })?;
+    *owned = Some(OwnedService { child });
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while Instant::now() < deadline {
+        let child = &mut owned.as_mut().expect("owned service").child;
+        if child
+            .try_wait()
+            .map_err(|error| ServiceError(error.to_string()))?
+            .is_some()
+        {
+            return Err(ServiceError(format!(
+                "private LoopX {} exited before readiness on port {port}",
+                kind.label()
+            )));
+        }
+        match probe_on_port(kind, port, runtime.identity.as_ref()) {
+            Probe::Matching => return Ok(()),
+            Probe::NotReady => return Err(ServiceError(format!(
+                "LoopX {} registry is invalid or unreadable on private port {port}; repair the registry and retry",
+                kind.label()
+            ))),
+            Probe::Foreign | Probe::Stale => return Err(ServiceError(format!(
+                "private LoopX {} reached an unexpected listener on port {port}; retry startup",
+                kind.label()
+            ))),
+            Probe::Unavailable | Probe::Unresponsive => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    Err(ServiceError(format!(
+        "private LoopX {} did not become ready on port {port}",
+        kind.label()
+    )))
 }
 
 fn connect_service(
@@ -1104,6 +1179,32 @@ mod tests {
             classify_response(ServiceKind::Chat, &response, Some(&installed)),
             Probe::Stale
         );
+    }
+
+    #[test]
+    fn private_endpoint_never_adopts_or_stops_an_existing_listener() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut owned = None;
+        let runtime = SelectedRuntime {
+            executable: "not-used-for-an-occupied-endpoint".into(),
+            identity: None,
+        };
+        let error =
+            connect_owned_service(ServiceKind::Chat, port, &runtime, &mut owned).unwrap_err();
+        assert!(error.to_string().contains("already occupied"));
+        assert!(owned.is_none());
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
+    }
+
+    #[test]
+    fn private_commands_use_the_window_endpoint_and_keep_loopback_scope() {
+        for kind in SERVICE_KINDS {
+            let args = kind.command_args_on_port(49123);
+            assert!(args.windows(2).any(|pair| pair == ["--port", "49123"]));
+            assert!(args.windows(2).any(|pair| pair == ["--host", "127.0.0.1"]));
+            assert!(args.iter().any(|arg| arg == "--global-registry"));
+        }
     }
 
     #[test]
