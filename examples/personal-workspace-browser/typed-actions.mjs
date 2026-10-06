@@ -1292,7 +1292,15 @@ export const typedActionsScenario = {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
       await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
-      await page.getByLabel(/^两次 Goal 复核间的已完成 Todo 数/u).waitFor({ state: "visible" });
+      const replanUnit = page.getByLabel(/^复核计数依据/u);
+      const replanCount = page.getByLabel("两次复核间的数量", { exact: true });
+      await replanUnit.waitFor({ state: "visible" });
+      await replanCount.waitFor({ state: "visible" });
+      // A current editor must retain the fixture's installed v0 Todo policy.
+      if (await replanUnit.inputValue() !== "completed_todos" || await replanCount.inputValue() !== "3"
+          || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
+        throw new Error("Opening the current cadence editor reinterpreted or wrote the legacy policy");
+      }
       await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
       await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
       for (const label of [/^启用$/u, /^允许一次有界安全修复$/u, /^要求精确 diff 回执$/u]) {
