@@ -91,11 +91,17 @@ legacy unscoped 回执属于该周期。三种意图共用同一个终结事务�
 ## 受配额约束的 CLI 完成
 
 交付通过原 validator，不等于该 Turn 已结算。共享 TS settlement plan 依次引导普通
-Todo 完成、永久 `refresh-state` 写回、一次 `quota spend-slot` 扣额，以及最终
-`todo complete --no-follow-up`；全部绑定原 Goal、Agent、Todo 和 Turn。普通完成
+Todo 完成、永久 `refresh-state` 写回和一次 `quota spend-slot` 扣额；全部绑定原
+Goal、Agent、Todo 和 Turn。只有当前契约允许最终范围收尾时，才执行
+`todo complete --no-follow-up`。普通完成
 保留 `active_goal` continuation，不制造虚假后继。该命令的执行条件是
 `todo_deliverable_complete`，必需的验证不会随条件省略。符合准入的
 `in_flight_continuation` 保留未交付 Todo 为 open，不会伪造通过验证的完成。
+
+共享 Todo 摘要仍保留缺少后继的诊断和计数，但告警是复核引导，不要求制造后继或
+终结已完成阶段。先复核剩余的授权 Goal 验收与可执行任务；范围内仍有工作时继续
+已有任务或重规划。队列为空本身不能证明最终范围可以收尾。图校验、空前沿重规划
+与终态证明仍由已有 typed 规则决定；这次提示调整覆盖 CLI、status 和 quota 读回。
 
 若提前终结、缺少写回或扣额，CLI JSON 和 Markdown 返回同一恢复计划；原 registry/runtime、
 project/state 路由和租约证明保留在对应命令支持的参数中。命令模板只是引导，不提供

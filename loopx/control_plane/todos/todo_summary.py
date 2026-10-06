@@ -57,10 +57,6 @@ from .todo_semantics import (
     todo_presentation_sort_key as projection_todo_presentation_sort_key,
     todo_projection_sort_key as projection_todo_projection_sort_key,
 )
-from .succession_warning import (
-    TODO_SUCCESSION_WARNING_REASON_CODE,
-    TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
-)
 from .resume_condition import evaluate_todo_resume_conditions
 from ..runtime.time import now_utc, now_utc_iso
 from ..work_items.project_asset import build_project_asset_todo_summary
@@ -930,6 +926,10 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
     summary = result.get("fields")
     if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":
         raise ValueError("invalid typed Todo summary fields")
+    warning = summary.get("todo_succession_warning")
+    warning_action = warning.get("recommended_action") if isinstance(warning, dict) else None
+    if summary.get("completed_without_successor_count") and not isinstance(warning_action, str):
+        raise ValueError("invalid typed Todo succession warning")
     for name, lane in lanes.items():
         mode = lane.get("format")
         if mode not in {"raw", "active", "compact", "recent", "gap"}:
@@ -948,11 +948,13 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
                         compact.pop(key, None)
                 if mode == "gap":
                     compact.update(succession_tracked=True,
-                        recommended_action="record no_followup=true or add/link a successor todo")
+                        recommended_action=warning_action)
             else:
                 raise ValueError("invalid Todo summary display format")
             formatted.append(compact)
         summary[name] = formatted
+    if isinstance(warning, dict):
+        warning["items"] = summary["completed_without_successor_items"]
     return {"summary": summary, "items": [items[index] for index in selected],
         "succession": [succession[index] for index in selected],
         "orchestration": {name: [items[index] for index in indices] for name, indices in orchestration.items()}}
@@ -1040,16 +1042,4 @@ def compact_evaluated_todo_group(
             projected["orchestration"], role=role)
     if handoff_gates:
         summary["handoff_gates"] = handoff_gates
-    if summary.get("completed_without_successor_count"):
-        summary["todo_succession_warning"] = {
-            "schema_version": TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
-            "reason_code": TODO_SUCCESSION_WARNING_REASON_CODE,
-            "count": summary["completed_without_successor_count"],
-            "items": summary["completed_without_successor_items"],
-            "recommended_action": (
-                "run loopx todo complete --no-follow-up for the completed Todo, "
-                "or add/link a successor Todo before closing the slice; do not "
-                "invent a user gate"
-            ),
-        }
     return summary

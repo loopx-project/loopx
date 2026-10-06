@@ -113,13 +113,22 @@ command or transport in this slice.
 
 A declared deliverable passing its validator is not the same event as its Turn
 being settled. The shared TypeScript settlement plan orders ordinary Todo
-completion, durable `refresh-state`, one `quota spend-slot`, then final
-`todo complete --no-follow-up`, all bound to the original Goal, Agent, Todo and
-Turn. Ordinary completion retains `active_goal` continuation without creating
+completion, durable `refresh-state` and one `quota spend-slot`, all bound to the
+original Goal, Agent, Todo and Turn. Final `todo complete --no-follow-up` applies
+only when the current contract permits final scope closeout. Ordinary completion
+retains `active_goal` continuation without creating
 an artificial successor. Its command has the condition
 `todo_deliverable_complete`; required validation is never conditional or waived.
 Qualified `in_flight_continuation` leaves unfinished work open and omits ordinary
 completion rather than pretending the deliverable passed.
+
+The shared Todo summary keeps missing-successor diagnostics and counts, but its
+warning is review guidance, not an obligation to create a successor or terminate
+a completed stage. Review remaining authorized Goal acceptance and the runnable
+frontier; continue existing work or replan while scope remains. An empty queue
+alone does not certify final scope closeout. Graph validation, empty-frontier
+replan and terminal proof remain governed by their existing typed rules. This
+guidance change is shared by CLI, status and quota readback.
 
 If final closeout is attempted before writeback/accounting, CLI JSON and Markdown
 return that same recovery plan. Supplied registry/runtime, project/state routes

@@ -124,6 +124,22 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     assert marker.read_text() == "run\n"
     assert not completed.get("successor_todo_ids")
     assert cli._spend_run_count(runtime) == 0
+    # Ordinary completion leaves a genuine lineage gap. Shared read guidance
+    # must not convert that diagnostic into mandatory terminal mutation.
+    code, ordinary = run("todo", "list", "--goal-id", cli.GOAL_ID)
+    assert code == 0, ordinary
+    warning = ordinary["agent_todos"]["todo_succession_warning"]
+    assert warning["count"] == 1
+    assert "ordinary Todo completion needs no artificial successor" in warning["recommended_action"]
+    assert "terminal_closure_proof" not in ordinary["agent_todos"]
+    code, continuing_guard = run(*guard_args)
+    assert code == 0, continuing_guard
+    assert continuing_guard["agent_todo_summary"]["todo_succession_warning"]["recommended_action"] == warning["recommended_action"]
+    code, unchanged = run("todo", "list", "--goal-id", cli.GOAL_ID)
+    assert code == 0, unchanged
+    assert unchanged["todos"] == ordinary["todos"]
+    assert marker.read_text() == "run\n"
+    assert cli._spend_run_count(runtime) == 0
     readback = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
                                        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID)
     assert readback is not None

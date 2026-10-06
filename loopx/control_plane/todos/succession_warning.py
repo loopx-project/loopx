@@ -103,8 +103,9 @@ def build_todo_succession_warning_lanes(
         "recommended_action": warning.get(
             "recommended_action",
             (
-                "run loopx todo complete --no-follow-up for the completed Todo, "
-                "or add/link a successor Todo; do not invent a user gate"
+                "Review remaining authorized Goal acceptance and the runnable frontier; "
+                "follow the current quota settlement/replan contract. "
+                "A summary warning does not authorize terminal action."
             ),
         ),
     }

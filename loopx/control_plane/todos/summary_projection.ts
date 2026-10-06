@@ -177,6 +177,16 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
   const gaps = source.filter(index => rows[index].successor_gap === true).sort(byTime(false));
   if (gaps.length) {
     fields.completed_without_successor_count = gaps.length;
+    // A missing lineage edge is a review prompt, not authority to terminate an
+    // ordinary completed stage. Replan and settlement retain their own gates.
+    fields.todo_succession_warning = {
+      schema_version: "todo_succession_warning_v0",
+      reason_code: "completed_advancement_without_successor",
+      count: gaps.length,
+      recommended_action: "Review remaining authorized Goal acceptance and the runnable frontier. " +
+        "Continue existing work or replan while scope remains; ordinary Todo completion needs no artificial successor. " +
+        "Use --no-follow-up only for final scope closeout allowed by the current settlement contract.",
+    };
     lane("completed_without_successor_items", gaps, 5, "gap");
   }
   if (selected.watch_only_monitor_items.length) {
