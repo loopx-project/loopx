@@ -30,6 +30,8 @@ _STEP_KINDS = (
     "durable_writeback",
     "quota_spend",
     "terminal_closeout",
+    "delivery_context",
+    "direction_context",
 )
 _MISSING = object()
 
@@ -62,6 +64,8 @@ class HostTodoSettlementRequest:
     vision_path: str | None = None
     vision_unchanged_reason: str | None = None
     checkpoint_read_context_id: str | None = None
+    first_delivery: bool = False
+    delivery_read_context_id: str | None = None
     goal_ref: Mapping[str, str] | None = None
 
 
@@ -105,13 +109,16 @@ def _request_payload(
         payload["provider_outcomes"] = provider_outcomes
     if request.goal_ref is not None:
         payload["goal_ref"] = dict(request.goal_ref)
-    if request.vision_path or request.vision_unchanged_reason or phase in {"vision_refresh", "vision_context"}:
+    if request.vision_path or request.vision_unchanged_reason or phase in {"vision_refresh", "vision_context"} or request.first_delivery:
         payload.update(
             schema_version="loopx_host_todo_completion_transaction_v1",
             vision_path=request.vision_path,
             vision_unchanged_reason=request.vision_unchanged_reason,
             checkpoint_read_context_id=request.checkpoint_read_context_id,
         )
+    if request.first_delivery:
+        payload.update(schema_version="loopx_host_todo_completion_transaction_v2", first_delivery=True,
+            delivery_read_context_id=request.delivery_read_context_id)
     return payload
 
 
@@ -272,10 +279,12 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         value.get("provider_id") != "loopx_cli"
         or value.get("kind") != "ordered_cli_sequence"
         or not isinstance(raw_steps, list)
-        or len(raw_steps) not in {4, 5}
+        or len(raw_steps) not in {2, 3, 4, 5}
     ):
         raise RuntimeError("TypeScript host provider plan shape mismatch")
-    expected = _STEP_KINDS[: len(raw_steps)]
+    expected = (("guard", "delivery_context") if len(raw_steps) == 2 else
+        ("guard", "lifecycle_completion", "direction_context") if len(raw_steps) == 3 else
+        _STEP_KINDS[: len(raw_steps)])
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:

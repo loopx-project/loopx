@@ -930,7 +930,7 @@ def build_quota_should_run(
         build_quota_should_run as _build_quota_should_run,
     )
 
-    return _build_quota_should_run(
+    payload = _build_quota_should_run(
         status_payload,
         goal_id=goal_id,
         agent_id=agent_id,
@@ -953,6 +953,19 @@ def build_quota_should_run(
         workspace_path=workspace_path,
         goal_ref=goal_ref,
     )
+    observation_root = runtime_root or status_payload.get("runtime_root")
+    if goal_ref is None and agent_id and observation_root:
+        from .control_plane.goals.checkpoint_context_io import pending_first_delivery_progress
+
+        delivery_progress = pending_first_delivery_progress(
+            Path(observation_root), goal_id, agent_id,
+        )
+        if delivery_progress is not None:
+            payload["first_delivery_progress"] = delivery_progress
+            # Observation cannot grant work or override an owner pause/health hold.
+            if delivery_progress.get("settlement_identity") and payload.get("ok") and payload.get("state") != "paused":
+                payload["recommended_action"] = delivery_progress["next_action"]
+    return payload
 
 
 def _quota_spend_index_basis(

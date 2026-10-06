@@ -32,7 +32,7 @@ def wait_for(path: Path, child=None, timeout=20):
         time.sleep(0.01)
 
 
-def refresh(registry, runtime, token, *, goal_ref=None):
+def refresh(registry, runtime, token, *, goal_ref=None, first_delivery=False):
     from loopx.state_refresh import refresh_state_run
     from tests.control_plane.test_quota_settlement_cli import GOAL_ID, AGENT_ID, TODO_ID, TURN_ID
     return refresh_state_run(registry_path=Path(registry), runtime_root_override=str(runtime),
@@ -41,8 +41,9 @@ def refresh(registry, runtime, token, *, goal_ref=None):
         delivery_batch_scale="implementation", delivery_outcome="outcome_progress",
         vision_unchanged_reason="The current basis remains applicable.",
         checkpoint_read_context_id=token, dry_run=False, sync_global=False,
+        **({"delivery_workspace_path": Path(registry).parent.parent} if first_delivery else {}),
         external_delivery={"suppress": True, "resume_key": None},
-        goal_ref=goal_ref)
+        goal_ref=goal_ref, first_delivery=first_delivery)
 
 
 def main(request):

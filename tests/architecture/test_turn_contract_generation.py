@@ -1,6 +1,7 @@
 """Independent acceptance of Turn generation, rejection and source adoption."""
 
 from copy import deepcopy
+import hashlib
 import json
 import runpy
 import subprocess
@@ -103,6 +104,21 @@ def test_generator_check_is_deterministic_and_does_not_repair(tmp_path, monkeypa
     monkeypatch.setattr(sys, "argv", ["generator", "--check"])
     assert generator.main() == 1
     assert path.read_text() == "stale\n"
+
+
+def test_generation_has_one_content_identity_across_checkout_newlines(tmp_path, monkeypatch):
+    source = generator.CONTRACT_PATH.read_text(encoding="utf-8").encode("utf-8")
+    contract = tmp_path / "contract.json"
+    monkeypatch.setattr(generator, "CONTRACT_PATH", contract)
+    contract.write_bytes(source)
+    lf = generator.build_artifacts()
+    contract.write_bytes(source.replace(b"\n", b"\r\n"))
+    assert generator.build_artifacts() == lf
+    digest = hashlib.sha256(source).hexdigest()
+    assert all(f"SHA256: {digest}" in artifact for artifact in lf.values())
+    # Newline normalization must not exempt other changes from provenance.
+    contract.write_bytes(source + b" ")
+    assert generator.build_artifacts() != lf
 
 
 def test_typescript_settlement_reexports_generated_result_set():

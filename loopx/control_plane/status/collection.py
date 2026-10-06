@@ -287,6 +287,9 @@ def collect_status(
         )
     attach_goal_acceptance_observations(payload, history=history)
     attach_goal_artifact_lifecycle_projections(payload, history=history)
+    from .first_delivery import attach_first_delivery_status
+
+    attach_first_delivery_status(payload, runtime_root=runtime_root, agent_id=agent_lane_id)
     payload["projection_envelope"] = seal_projection_envelope(
         projection="status",
         observed_at=now_utc_iso(),

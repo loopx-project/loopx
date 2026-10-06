@@ -106,6 +106,7 @@ from .control_plane.goals.vision_checkpoint import (
 from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
 from .control_plane.goals.checkpoint_context_io import (
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
+    first_delivery_context_enrolled,
 )
 from .registry import registry_goals as registry_goals, resolve_state_file as resolve_state_file
 from .runtime import validate_goal_id_path_segment
@@ -718,6 +719,7 @@ def refresh_state_run(
     merge_agent_vision_patch: bool = False,
     vision_unchanged_reason: str | None = None,
     checkpoint_read_context_id: str | None = None,
+    first_delivery: bool = False,
     progress_observation: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
@@ -735,6 +737,8 @@ def refresh_state_run(
         raise ValueError("--next-action-basis requires --next-action")
     if checkpoint_read_context_id and not turn_instance_id:
         raise ValueError("--checkpoint-read-context requires the original Turn identity")
+    if first_delivery and not (turn_instance_id and agent_id and (todo_id or replan_obligation_id)):
+        raise ValueError("--first-delivery requires the original Goal/Agent/Todo or obligation/Turn")
     validate_public_safe_text("classification", classification)
     if usage_measurement is not None and usage_codex_session is not None:
         raise ValueError("--usage-json cannot be combined with --usage-codex-session")
@@ -822,6 +826,7 @@ def refresh_state_run(
         refresh_recovery = None
         prior_writeback_run = None
         checkpoint_supplement = False
+        first_delivery_checkpoint = False
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
             if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
                 require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
@@ -841,6 +846,11 @@ def refresh_state_run(
                 source_admission=source_admission,
                 borrow_source_admission=source_admission is not None,
                 refresh_retry=(refresh_retry_request := {
+                    **({"first_delivery_request": {
+                        "classification": classification, "recommended_action": recommended_action,
+                        "agent_lane": agent_lane, "progress_scope": progress_scope,
+                        "completion_todo_id": completion_todo_id, "completion_turn_key": completion_turn_key,
+                    }} if first_delivery else {}),
                     "checkpoint_read_context_id": checkpoint_read_context_id,
                     "external_delivery": external_delivery,
                     "vision": agent_vision_packet,
@@ -890,7 +900,20 @@ def refresh_state_run(
                     recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,
                 )
-            if checkpoint_read_context_id and not checkpoint_supplement:
+            first_delivery_checkpoint = (
+                refresh_recovery["decision"] == "append"
+                and first_delivery_context_enrolled(runtime_root, settlement_identity)
+            )
+            if first_delivery != first_delivery_checkpoint:
+                raise ValueError("first delivery requires matching --first-delivery and persisted first_delivery context; "
+                    "read and judge checkpoint-context --purpose first_delivery on the original Turn")
+            if first_delivery_checkpoint and not (agent_vision_packet or vision_unchanged_reason):
+                raise ValueError("first delivery direction is pending; read checkpoint-context --purpose first_delivery "
+                    "for this original Turn, judge the returned state, then submit its context and direction")
+            if first_delivery_checkpoint and (next_action or usage_codex_session is not None):
+                raise ValueError("first delivery checkpoint does not support combined next-action or session usage booking; "
+                    "retain the original Turn and use separately owned stages")
+            if checkpoint_read_context_id and not (checkpoint_supplement or first_delivery_checkpoint):
                 raise ValueError("--checkpoint-read-context applies only to a missing-checkpoint supplement")
             settlement_workspace_requirement = resolve_settlement_workspace_requirement(
                 delivery_workspace_causality, settlement_binding_kind=settlement_identity.binding_kind.value
@@ -1337,13 +1360,15 @@ def refresh_state_run(
                     source_context=recommendation_source_context(current_goal, current_text,
                         source_registry=next_action_source_registry, todo_fields=current_planning.todo_fields),
                     runs=newest_first_runs)
-            if checkpoint_supplement:
+            if checkpoint_supplement or first_delivery_checkpoint:
                 assert settlement_identity is not None
                 context = usage_booking_guard.enter_context(checkpoint_commit_guard(
                     runtime_root=runtime_root, registry_path=registry_path,
                     state_file=resolved_state_file, identity=settlement_identity,
                     read_context_id=checkpoint_read_context_id,
                     goal_ref=goal_ref,
+                    purpose="first_delivery" if first_delivery_checkpoint else "supplement_checkpoint",
+                    decision_scope=normalized_progress_scope if first_delivery_checkpoint else None,
                 ))
                 for projection in (record, index_record, payload):
                     projection["vision_checkpoint"] = {
@@ -1411,12 +1436,14 @@ def refresh_state_run(
                 index_record["markdown_path"] = str(markdown_path)
                 payload["json_path"] = str(json_path)
                 payload["markdown_path"] = str(markdown_path)
-                if checkpoint_supplement:
+                if checkpoint_supplement or first_delivery_checkpoint:
                     saved = commit_checkpoint_run(runtime_root=runtime_root, registry_path=registry_path,
                         state_file=resolved_state_file, identity=settlement_identity,
                         refresh_retry=refresh_retry_request, record=record, index_record=index_record,
                         markdown=render_state_refresh_markdown(payload) + "\n",
-                        goal_ref=goal_ref, source_admission=source_admission)
+                        goal_ref=goal_ref, source_admission=source_admission,
+                        purpose="first_delivery" if first_delivery_checkpoint else "supplement_checkpoint",
+                        decision_scope=normalized_progress_scope if first_delivery_checkpoint else None)
                     for projection in (record, index_record, payload):
                         projection["vision_checkpoint"]["read_context"] = saved["context"]
                     for projection in (index_record, payload):

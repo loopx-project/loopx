@@ -799,7 +799,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#1",
-      "line": 629,
+      "line": 638,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -807,7 +807,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#2",
-      "line": 710,
+      "line": 719,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -967,7 +967,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#5",
-      "line": 672,
+      "line": 674,
       "column": 25,
       "kind": "codec_read",
       "api": "load_registry",
@@ -975,7 +975,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#6",
-      "line": 743,
+      "line": 745,
       "column": 13,
       "kind": "codec_read",
       "api": "load_registry",
@@ -983,7 +983,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#7",
-      "line": 788,
+      "line": 790,
       "column": 38,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1182,8 +1182,24 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/control_plane/goals/checkpoint_commit.ts::<anonymous>::direct_json_read:readFileSync#1",
+      "line": 334,
+      "column": 34,
+      "kind": "direct_json_read",
+      "api": "readFileSync",
+      "classification": "legacy_registry_source"
+    },
+    {
+      "site": "loopx/control_plane/goals/checkpoint_context_io.py::<module>._local_source_facts::codec_read:load_registry#1",
+      "line": 300,
+      "column": 20,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/control_plane/goals/checkpoint_context_io.py::<module>.read_checkpoint_context::codec_read:load_registry#1",
-      "line": 137,
+      "line": 325,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2175,7 +2191,7 @@
     },
     {
       "site": "loopx/state_refresh.py::<module>.refresh_state_run::codec_read:load_registry#1",
-      "line": 804,
+      "line": 808,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

@@ -8,6 +8,7 @@ import { normalizeDeliveryWorkspaceSnapshot } from "../agents/delivery_workspace
 import { decodeExternalDelivery, type ExternalDeliveryRequest } from "./refresh_external_delivery.ts";
 
 export interface RefreshRetryRequest {
+  first_delivery_request?: JsonObject | null;
   checkpoint_read_context_id?: string | null;
   external_delivery?: ExternalDeliveryRequest | null;
   vision: JsonObject | null;
@@ -38,6 +39,8 @@ export function decodeRefreshRetry(value: unknown): RefreshRetryRequest | null {
     return value;
   };
   return {
+    first_delivery_request: input.first_delivery_request == null ? null
+      : requireJsonObject(input.first_delivery_request, "first_delivery_request"),
     checkpoint_read_context_id: input.checkpoint_read_context_id == null ? null : nullableString("checkpoint_read_context_id"),
     external_delivery: decodeExternalDelivery(input.external_delivery),
     vision: input.vision === null ? null : requireJsonObject(input.vision, "refresh_retry.vision"),
@@ -82,17 +85,24 @@ export function refreshRecovery(
     ...(request.checkpoint_read_context_id ? {checkpoint_read_context_id: request.checkpoint_read_context_id} : {}),
   })).digest("hex") : null;
   const mutationDigest = createHash("sha256").update(canonical(request.mutation)).digest("hex");
+  const firstDigest = request.first_delivery_request == null ? null
+    : createHash("sha256").update(canonical(request.first_delivery_request)).digest("hex");
   const changesMutation = Object.values(request.mutation).some((value) =>
     value !== null && value !== false && (!Array.isArray(value) || value.length > 0));
   const result = (decision: Decision, reason: string): JsonObject => ({
     schema_version: "refresh_recovery_v0",
     decision, reason, vision_request_digest: digest,
     mutation_digest: mutationDigest,
+    ...(firstDigest ? {first_delivery_request_digest: firstDigest} : {}),
     ...(request.checkpoint_read_context_id ? {checkpoint_read_context_id: request.checkpoint_read_context_id} : {}),
     original_generated_at: jsonObject(prior?.refresh_recovery)?.original_generated_at
       ?? prior?.generated_at ?? null,
   });
   if (!prior) return result("append", "first_writeback");
+  const priorFirstDigest = jsonObject(prior.refresh_recovery)?.first_delivery_request_digest ?? null;
+  if ((firstDigest !== null || priorFirstDigest !== null) && firstDigest !== priorFirstDigest) {
+    return result("reject", "committed_first_delivery_request_conflict");
+  }
   const checkpoint = jsonObject(prior.vision_checkpoint);
   const priorDigest = jsonObject(prior.refresh_recovery)?.vision_request_digest;
   // Repeated CLI annotations are not mutations. Semantic delivery changes are.

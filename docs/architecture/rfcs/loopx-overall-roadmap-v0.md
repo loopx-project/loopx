@@ -956,6 +956,20 @@ independent admission without weakening task-level validation. See the
 [acceptance contract](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0).
 This narrows a local recovery gap, not the full R1/R2 coordination acceptance.
 
+**R1 first delivery checkpoint.** The opt-in local-registry File/SQLite
+CLI/MCP prerequisite binds ordinary Todo result commits and subsequent
+caller-authored direction decisions to separate read bases. Existing typed
+owners retain original-Turn receipt recovery, same-head checks and provider CAS.
+Relevant dependencies, frontier membership, acceptance and source identity are
+checked at the owning commit. See the [operating protocol](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness).
+Unindexed artifacts remain unknown and require original-identity reconciliation.
+Protected no-followup is rejected before new effects; ordinary closeout remains
+unchanged. Default owning-Agent continuation, committed-result repair and
+protected terminal redirection are subsequent delivery; an optional independent
+reviewer requires a separately registered contract. This prerequisite does not
+close the frontend/Agent journey, distributed atomicity, independent Goal
+acceptance or model-outcome acceptance.
+
 **R1 transaction checkpoint.** Team-plan admission and whole-batch planning now live in `work_items/team_plan.ts`. Confirmation assigns all admitted lanes in one write with a durable operation receipt; identity is proposal + lane, never Todo text. File/SQLite authority uses the existing CAS and receipt owner; legacy Markdown writes the records and immutable receipt together under its existing fence and lock. Exact replay reads historical results even after a receiver changes, completes or deletes work. A precommit failure creates no lane prefix, and pending canonical display delivery requires recovery before Chat reports verified success. The card names partial assignments and gaps; quota/stop remain advisory and an explicit enforcement claim is rejected. Agent-originated settlement binds the same state basis at its journal's first write and re-reads it at settlement; a plan whose basis is missing or moved, or whose every lane is a gap, is a typed failed receipt that creates no Todo and replays unchanged.
 
 This closes the local assignment/retry portion of F4, not R1's collaboration acceptance. Registered receivers are assigned without being impersonated as authors; agent-originated settlement cannot assign another peer without owner confirmation. Assignment does not attest receiver adoption, a lease, execution, dependency consumption or independent acceptance. Do not add a second confirmation to ordinary already-authorized work. Gap resolution requires new explicit intent; replay must not silently extend the confirmed subset. The fingerprint binds current local state and canonical revision, not a full shared Goal-intent transaction. R2/R3/R4 still own executor qualification, receiver adoption/result return and shared intent/authorization; the cross-host Turn lease is not a plan barrier.
