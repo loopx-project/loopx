@@ -103,7 +103,16 @@ def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
     thread.start()
     try:
         with urlopen(f"http://127.0.0.1:{server.server_port}/status.json", timeout=5) as response:
-            assert json.load(response) == {"ok": True, "runtime_root": "[local-path]", "diagnostic": "[local-path]"}
+            payload = json.load(response)
+            assert payload["ok"] is True
+            assert payload["runtime_root"] == "[local-path]"
+            assert payload["diagnostic"] == "[local-path]"
+            assert str(root) not in json.dumps(payload)
+            dashboard_api = payload["local_dashboard_api"]
+            assert dashboard_api["source"] == "chat"
+            assert dashboard_api["status_url"] == "/status.json"
+            assert dashboard_api["presentation_surfaces_url"] == "/extension-presentation-surfaces"
+            assert dashboard_api["presentation_detail_url"] == "/extension-projection"
     finally:
         server.shutdown()
         thread.join(timeout=5)
