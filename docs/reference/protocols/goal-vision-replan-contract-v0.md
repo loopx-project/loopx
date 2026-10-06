@@ -495,6 +495,13 @@ recovery writes remain blocked until the original artifacts can be reconciled.
 Observation reuses one complete canonical Todo snapshot across the discovered
 identities; it does not truncate older pending work.
 
+Ordinary Todo completion recovers an exact terminal receipt before checking an
+unreadable optional enrollment source, without changing its request fingerprint.
+For a new completion, the original Turn's verified ordinary writeback can prove
+that a damaged shared supplement is optional. Missing or inconsistent history,
+an enrolled writeback, or any result enrollment receipt remains
+`checkpoint_commit_unknown`; unreadable JSON alone never proves non-enrollment.
+
 After a lost response, retry the original request. `checkpoint-context` for its
 first-delivery identity verifies an indexed direction and artifacts before
 returning `committed`. A proved empty append can retry after freshness validation.
