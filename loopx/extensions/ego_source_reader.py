@@ -159,6 +159,20 @@ def _navigation(config: ReaderConfig, url: str) -> str:
         f"console.log({json.dumps(SPACE_MARKER)}+JSON.stringify({{closed:true}}));throw e;}}"
         f"const p=t.page({json.dumps(config.page)});"
         "await p.goto(target.href);"
+        # Navigation can finish while an SPA contains only its navigation or
+        # a loading shell. Prefer semantic content, including short posts;
+        # unrelated sidebar/comment spinners must not delay a readable article.
+        "let sourceReady=true;try{await p.waitForFunction((url)=>{"
+        "const current=new URL(location.href);current.hash='';"
+        "if(current.href!==url)return true;"
+        "const root=document.querySelector('article')||"
+        "document.querySelector('main,[role=\"main\"]')||document.body;"
+        "if(!root?.innerText.trim()||root.getAttribute('aria-busy')==='true')return false;"
+        "return !Array.from(root.querySelectorAll('[role=\"progressbar\"],[aria-busy=\"true\"]'))"
+        ".some(n=>n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden');"
+        "},target.href,{timeout:10000});}catch(e){"
+        "if(!String(e?.message).includes('page.waitForFunction timed out'))throw e;"
+        "sourceReady=false;}"
     )
 
 
@@ -171,13 +185,14 @@ def _script(config: ReaderConfig, url: str) -> str:
         # Fence before reading DOM, atomically with extraction. A raced Page or
         # redirect returns no content, even within another authorized origin.
         "if(current.href!==request.url)return {error:'source_url_changed'};"
+        "if(!request.ready)return {error:'source_content_not_ready'};"
         "const text=document.body?.innerText||'';"
         "return {url:current.href,title:document.title,"
         "text:text.slice(0,request.limit),truncated:text.length>request.limit,"
         "image_count:document.images.length,images:Array.from(document.images).slice(0,128)"
         ".map((im,index)=>({index,alt:im.alt.slice(0,512),"
         "natural_width:im.naturalWidth,natural_height:im.naturalHeight}))};"
-        f"}},{{url:target.href,limit:{MAX_TEXT_CHARS}}});"
+        f"}},{{url:target.href,limit:{MAX_TEXT_CHARS},ready:sourceReady}});"
         f"console.log({json.dumps(MARKER)}+JSON.stringify({{...r,"
         "requested_url:requestedUrl,canonical_url:target.href}));"
     )
@@ -205,8 +220,8 @@ def _result(stdout: str, stderr: str, url: str) -> dict[str, object]:
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") == "source_url_changed":
-            return {"ok": False, "error": "source_url_changed"}
+        if value.get("error") in {"source_url_changed", "source_content_not_ready"}:
+            return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
         text, title = value["text"], value["title"]
         if (not isinstance(text, str) or not text.strip()
@@ -247,13 +262,14 @@ def _image_inventory(value: object) -> list[dict[str, object]]:
 
 def _image_script(config: ReaderConfig, url: str, index: int, path: str) -> str:
     # Capture one rendered image region, never a caller-selected path or script.
-    request = f"{{url:target.href,index:{index},edge:{MAX_IMAGE_EDGE}}}"
+    request = f"{{url:target.href,index:{index},edge:{MAX_IMAGE_EDGE},ready:sourceReady}}"
     return (
         _navigation(config, url) +
         f"const request={request};"
         "const initial=await p.evaluate((r)=>{"
         "const u=new URL(location.href);u.hash='';"
         "if(u.href!==r.url)return {error:'source_url_changed'};"
+        "if(!r.ready)return {error:'source_content_not_ready'};"
         "const im=document.images[r.index];if(!im)return {error:'source_image_unavailable'};"
         "im.scrollIntoView({block:'center'});return {ok:true};},request);"
         "if(initial.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify(initial));}else{"
@@ -291,7 +307,7 @@ def _image_result(stdout: str, stderr: str, url: str, index: int, path: str) -> 
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") in {"source_url_changed", "source_image_unavailable",
+        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_image_unavailable",
                                    "source_image_bounds_unsupported"}:
             return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)

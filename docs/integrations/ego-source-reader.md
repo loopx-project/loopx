@@ -66,6 +66,16 @@ commands. Calls within one process reject concurrent reads. Execution times out
 after 30 seconds; returned text is limited to 100,000 characters. Errors omit
 raw browser diagnostics; use local provider logs for diagnosis.
 
+Both text and image reads wait up to 10 seconds within that same execution
+budget for readable semantic content after navigation. An article takes
+precedence over the main region and body; visible loading/busy indicators in
+that content delay extraction, while unrelated sidebar spinners do not. There
+is no minimum text length. A bounded readiness timeout returns
+`source_content_not_ready`, preserving the Page for a later retry. Redirects
+remain fenced before DOM access; browser control or ownership failures are not
+treated as readiness timeouts. This is a rendering check, not proof of a
+complete article or a solved verification wall.
+
 Results include the actual URL, rendered text, digest, character count and
 truncation flag. `image_count` and the first 128 image indices, alt labels and
 natural dimensions are DOM metadata; `images_read` remains false for text reads.

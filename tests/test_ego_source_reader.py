@@ -330,14 +330,13 @@ def test_duplicate_or_non_json_result_is_rejected():
     assert not reader._result(output, output, URL)["ok"]
 
 
-def test_url_is_json_data_and_fence_precedes_dom_read(configured):
+def test_url_is_json_data_and_normalized_before_navigation(configured):
     config = reader.ReaderConfig.from_environment()
     url = 'https://example.com/?q=";process.exit();//'
     script = reader._script(config, url)
     assert "requestedUrl=" + json.dumps(url) in script
     assert "await p.goto(target.href)" in script
     assert script.index("new URL(requestedUrl)") < script.index("await p.goto(")
-    assert script.index("current.href!==request.url") < script.index("document.body")
 
 
 def png(width=2, height=2):
@@ -457,7 +456,8 @@ def test_text_read_exposes_image_indices_without_claiming_visual_read(configured
     assert result["images_read"] is False
 
 
-def run_generated_script(config, url, image, path, *, redirect=None):
+def run_generated_script(config, url, image, path, *, redirect=None, readiness=None,
+                         text="Source evidence"):
     """Execute the production script in Node, without the user's browser/Page."""
     import shutil
     node = shutil.which("node")
@@ -467,16 +467,35 @@ def run_generated_script(config, url, image, path, *, redirect=None):
               else reader._script(config, url))
     harness = """
 const vm=require('node:vm'),fs=require('node:fs');
-let href='',domReads=0,captures=0;
+let href='',domReads=0,captures=0,loaded=!readiness;
 const image={alt:'figure',currentSrc:'https://example.com/image.png',complete:true,
  naturalWidth:2,naturalHeight:2,scrollIntoView(){},
  getBoundingClientRect(){return {left:0,top:0,width:2,height:2};}};
-const doc=new Proxy({title:'Article',body:{innerText:'Source evidence'},images:[image]},
+const spinner={getClientRects(){return [1];}};
+const root={get innerText(){return loaded?text:'Navigation Loading';},
+ getAttribute(){return readiness==='busy'&&!loaded?'true':null;},
+ querySelectorAll(){return loaded?[]:[spinner];}};
+const article={innerText:text,getAttribute(){return null;},querySelectorAll(){return [];}};
+const doc=new Proxy({title:'Article',body:root,
+ querySelector(selector){if(readiness==='article_with_sidebar')return selector==='article'?article:root;
+ return readiness&&selector!=='article'?root:null;},images:[image]},
  {get(target,key){domReads++;return target[key];}});
 const page={async goto(url){href=new URL(redirect||url).href;},
  async evaluate(fn,arg){return vm.runInNewContext('('+fn.toString()+')(arg)',
- {URL,location:{href},document:doc,arg,scrollX:0,scrollY:0});},
- async waitForFunction(fn,arg){if(!await this.evaluate(fn,arg))throw Error('not loaded');},
+ {URL,location:{href},document:doc,arg,scrollX:0,scrollY:0,
+ getComputedStyle(){return {visibility:'visible'};}});},
+ async waitForFunction(fn,arg){
+  if(typeof arg==='string'&&readiness){
+   const initial=await this.evaluate(fn,arg);
+   if(readiness==='article_with_sidebar'){if(!initial)throw Error('readable article delayed');loaded=true;}
+   else{
+    if(initial)throw Error('loading content accepted');
+    if(readiness==='timeout')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
+    if(readiness==='user_control')throw Error('User took control');
+    loaded=true;
+   }
+  }
+  if(!await this.evaluate(fn,arg))throw Error('not loaded');},
  async screenshot(options){captures++;fs.writeFileSync(options.path,Buffer.from(pixels,'base64'));}};
 async function taskSpace(){return {page(){return page;}};}
 (async()=>{await eval('(async()=>{'+source+'})()');
@@ -485,6 +504,7 @@ async function taskSpace(){return {page(){return page;}};}
 """
     import base64
     inputs = ("const source=" + json.dumps(script) + ";const redirect=" + json.dumps(redirect)
+              + ";const readiness=" + json.dumps(readiness) + ";const text=" + json.dumps(text)
               + ";const pixels=" + json.dumps(base64.b64encode(png()).decode()) + ";")
     result = subprocess.run([node, "-e", inputs + harness], capture_output=True,
                             text=True, timeout=10, check=True)
@@ -493,6 +513,47 @@ async function taskSpace(){return {page(){return page;}};}
     decoded = (reader._image_result(result.stdout, result.stderr, url, 0, str(path)) if image
                else reader._result(result.stdout, result.stderr, url))
     return decoded, json.loads(observed)
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness", ["loading", "busy", "article_with_sidebar"])
+def test_rendered_content_waits_without_accepting_navigation_shell(
+    configured, tmp_path, image, readiness,
+):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness,
+    )
+    assert result["ok"]
+    if not image:
+        assert result["text"] == "Source evidence"
+    assert observation["captures"] == int(image)
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_readiness_timeout_returns_no_shell_or_image(configured, tmp_path, image):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness="timeout",
+    )
+    assert result == {"ok": False, "error": "source_content_not_ready"}
+    assert observation["captures"] == 0
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_readiness_does_not_swallow_user_control(configured, tmp_path, image):
+    with pytest.raises(subprocess.CalledProcessError):
+        run_generated_script(
+            reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+            readiness="user_control",
+        )
+
+
+def test_short_readable_content_has_no_length_threshold(configured, tmp_path):
+    result, _ = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, False, tmp_path / "image.png", text="Hi",
+    )
+    assert result["ok"] and result["text"] == "Hi"
 
 
 @pytest.mark.parametrize("image", [False, True])
