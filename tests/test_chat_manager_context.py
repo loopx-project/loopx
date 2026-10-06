@@ -94,6 +94,45 @@ def test_context_scopes_before_read_and_missing_registry_is_unknown(
     assert missing["warnings"] == ["registry_unavailable"]
 
 
+def test_current_agent_work_reaches_prompt_without_extra_detail_reads(monkeypatch, tmp_path):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME, manager_index
+
+    todos = [{"todo_id": f"todo_{i}", "title": f"Implement task {i}",
+              "status": "in-progress", "priority": "P0", "claimed_by": "worker",
+              "readiness": "runnable", "raw_receipt": "excluded"} for i in range(5)]
+    source = {"revision": "sha256:fixture", "latest_recorded_at": "2026-01-01T00:00:00Z"}
+    monkeypatch.setattr(context, "build_goal_portfolio", lambda **_: {
+        "snapshot_id": "fixture", "coverage": {"complete": False},
+        "goals": [{"goal_id": "alpha", "activation_state": "active", "quality": "stale",
+                   "source": source, "agent_coverage": {"attempted": 8, "omitted": 2},
+                   "agents": [{"agent_id": "worker", "source_verified": True, "todos": todos},
+                              {"agent_id": "unread", "source_verified": False, "todos": todos}]}],
+    })
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Current-work projection must not add Todo or delivery-history reads")
+
+    monkeypatch.setattr(context, "read_manager_goal_details", forbidden)
+    monkeypatch.setattr(context, "read_manager_delivery_history", forbidden)
+    result = context.manager_turn_context(tmp_path / "registry.json", {"channel_id": "manager"},
+                                         tmp_path, include_details=False)
+    index = manager_index(result)
+    row = index["goals"][0]
+    assert row["source"] == source and row["quality"] == "stale"
+    assert row["agent_coverage"] == {"attempted": 8, "omitted": 2}
+    worker, unread = row["agents"]
+    assert worker["todo_count_in_projection"] == 5 and worker["todos_omitted"] == 2
+    assert [t["todo_id"] for t in worker["todos"]] == ["todo_0", "todo_1", "todo_2"]
+    assert all(t["claimed_by"] == "worker" for t in worker["todos"])
+    assert unread["todos"] == [] and unread["todo_count_in_projection"] is None
+    assert "raw_receipt" not in json.dumps(index)
+    assert result["goals"][0]["current_todos"]["status"] == "not_read"
+    page = ManagerInspection(context=result, registry_path=tmp_path / "registry.json",
+                             runtime_root=tmp_path, owner_scope=True,
+                             scope_valid=lambda: True, record=lambda _: None).read(TOOL_NAME, {"view": "portfolio"})
+    assert page["ok"] and page["rows"][0]["agents"] == row["agents"]
+
+
 def test_external_context_binds_scope_and_evidence_to_goal_instance(
     monkeypatch, tmp_path
 ):

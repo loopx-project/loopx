@@ -14,6 +14,7 @@ from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_manager_details import read_manager_goal_details
 from .chat_manager_history import read_manager_delivery_history
+from .capabilities.manager_context.inspection import agent_work_summary
 from .history import decode_registry_snapshot
 from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
 from .chat import redact_local_paths
@@ -648,13 +649,7 @@ def manager_turn_context(
                     row["goal_id"], "portfolio_row_missing_lifecycle"
                 ),
                 "agents": [
-                    {
-                        "agent_id": a.get("agent_id"),
-                        "source_verified": a.get("source_verified"),
-                        "waiting_on": a.get("waiting_on"),
-                        "owner_gate_ids": a.get("owner_gate_ids", []),
-                        "todo_count_in_projection": len(a.get("todos", [])),
-                    }
+                    agent_work_summary(a)
                     for a in row.get("agents", [])
                 ],
                 "deliveries": row.get("deliveries", []),

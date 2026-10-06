@@ -14,6 +14,7 @@ from loopx.capabilities.manager_context.inspection import (
     READ_TOOL,
     READ_VIEWS,
     TOOL_NAME,
+    agent_work_summary,
     manager_index,
 )
 from loopx.chat_agent import CodexChatAgentSession, CodexChatAgentError
@@ -229,10 +230,32 @@ def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
     assert result["source"]["status"] == "unavailable"
     tool.context["goals"][0]["current_todos"] = {"body": "x" * 40000}
     index = manager_index(tool.context)
-    assert len(json.dumps(index)) < 1000
+    assert len(json.dumps(index)) < 2000
     result = tool.read(TOOL_NAME, {"view": "portfolio"})
     assert result["oversized_rows"] == [0]
     assert len(json.dumps(result)) < 2000
+
+
+def test_agent_work_summary_bounds_content_without_inventing_execution():
+    summary = agent_work_summary({"agent_id": "worker", "source_verified": True,
+                                  "todos": [{"todo_id": "todo_1", "title": "x" * 25000,
+                                             "status": "blocked", "readiness": "blocked",
+                                             "raw_private_body": "excluded"}]})
+    assert len(summary["todos"][0]["title"]) == 240
+    assert summary["todos"][0]["content_truncated"] is True
+    assert summary["todos"][0]["status"] == "blocked"
+    assert summary["todos_omitted"] == 0 and "raw_private_body" not in json.dumps(summary)
+    tool_index = manager_index({"goals": [{"goal_id": "stopped", "activation_state": "stopped",
+                                           "agents": [summary]}]})
+    assert tool_index["goals"] == [] and tool_index["stopped_goals_excluded"] == 1
+
+
+def test_current_work_portfolio_keeps_authorization_fence(tmp_path):
+    tool, records = inspector(tmp_path, scope=lambda: False)
+    tool.context["goals"][0]["agents"] = [{"agent_id": "worker", "todos": [{"title": "private"}]}]
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert result == {"ok": False, "error": "authorization_changed"}
+    assert not records and "private" not in json.dumps(result)
 
 
 def test_delivery_pages_cross_day_without_duplication(tmp_path):
