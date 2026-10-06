@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import stat
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 
 import pytest
 
@@ -28,6 +30,7 @@ from loopx.control_plane.operator_provider import (
     operator_provider_store_path,
     write_operator_provider,
 )
+from loopx.control_plane import operator_provider as operator_provider_module
 from loopx.control_plane.turn_driver.host_binding import selected_turn_host
 
 KEY = "sk-operator-provider-fixture-key"
@@ -132,6 +135,60 @@ def test_an_update_merges_one_field_without_clearing_the_other(tmp_path):
 
     assert cleared[PROVIDER_KEY_FIELD]["configured"] is False
     assert cleared[BASE_URL_FIELD]["value"] == BASE_URL
+
+
+def test_concurrent_partial_updates_preserve_both_credential_fields(
+    tmp_path, monkeypatch
+):
+    write_operator_provider(
+        runtime_root=tmp_path,
+        api_key=KEY,
+        base_url=BASE_URL,
+        environ={},
+    )
+    real_read = operator_provider_module.read_operator_provider
+    arrivals_lock = Lock()
+    release_reads = Event()
+    arrivals = 0
+
+    def synchronized_read(runtime_root=None):
+        nonlocal arrivals
+        state = real_read(runtime_root)
+        with arrivals_lock:
+            arrivals += 1
+            if arrivals == 2:
+                release_reads.set()
+        # On the fixed path, the first writer waits here while holding the
+        # file lock; the second then reads the first writer's saved state.
+        # Without the lock, both callers load the same old record.
+        release_reads.wait(timeout=0.5)
+        return state
+
+    monkeypatch.setattr(
+        operator_provider_module, "read_operator_provider", synchronized_read
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        key_update = executor.submit(
+            write_operator_provider,
+            runtime_root=tmp_path,
+            api_key=OTHER_KEY,
+            environ={},
+        )
+        endpoint_update = executor.submit(
+            write_operator_provider,
+            runtime_root=tmp_path,
+            base_url="https://updated.example.invalid/v1",
+            environ={},
+        )
+        assert key_update.result()[PROVIDER_KEY_FIELD]["configured"] is True
+        assert endpoint_update.result()[BASE_URL_FIELD]["value"] == (
+            "https://updated.example.invalid/v1"
+        )
+
+    final = real_read(tmp_path)
+    assert final[PROVIDER_KEY_FIELD] == OTHER_KEY
+    assert final[BASE_URL_FIELD] == "https://updated.example.invalid/v1"
 
 
 def test_clearing_the_last_field_removes_the_record(tmp_path):

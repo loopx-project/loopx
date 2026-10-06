@@ -44,6 +44,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..file_lock import exclusive_file_lock
 from ..paths import select_default_runtime_root
 from ..registry import atomic_write_json, read_json
 from .operator_credential import (
@@ -211,6 +212,11 @@ def _secure_write(path: Path, payload: dict[str, Any]) -> None:
     path.chmod(0o600)
 
 
+def _remove_operator_provider(path: Path) -> None:
+    if path.is_file():
+        path.unlink()
+
+
 def write_operator_provider(
     *,
     runtime_root: Path | None = None,
@@ -228,27 +234,29 @@ def write_operator_provider(
     credential the operator did not mean to touch.
     """
 
-    stored = read_operator_provider(runtime_root)
-    current: dict[str, Any] = dict(stored) if stored is not None else {
-        "schema_version": OPERATOR_PROVIDER_STORE_SCHEMA,
-        PROVIDER_KEY_FIELD: None,
-        BASE_URL_FIELD: None,
-    }
-    if clear_api_key:
-        current[PROVIDER_KEY_FIELD] = None
-    elif api_key is not None:
-        current[PROVIDER_KEY_FIELD] = api_key
-    if clear_base_url:
-        current[BASE_URL_FIELD] = None
-    elif base_url is not None:
-        current[BASE_URL_FIELD] = base_url
-    normalized = normalize_operator_provider(current)
-    if normalized[PROVIDER_KEY_FIELD] is None and normalized[BASE_URL_FIELD] is None:
-        # An empty record configures nothing, and leaving it behind would make
-        # "this machine has a credential" true for a file that carries no
-        # credential at all.
-        return clear_operator_provider(runtime_root, environ=environ)
-    _secure_write(operator_provider_store_path(runtime_root), normalized)
+    path = operator_provider_store_path(runtime_root)
+    with exclusive_file_lock(path, operation="write_operator_provider"):
+        stored = read_operator_provider(runtime_root)
+        current: dict[str, Any] = dict(stored) if stored is not None else {
+            "schema_version": OPERATOR_PROVIDER_STORE_SCHEMA,
+            PROVIDER_KEY_FIELD: None,
+            BASE_URL_FIELD: None,
+        }
+        if clear_api_key:
+            current[PROVIDER_KEY_FIELD] = None
+        elif api_key is not None:
+            current[PROVIDER_KEY_FIELD] = api_key
+        if clear_base_url:
+            current[BASE_URL_FIELD] = None
+        elif base_url is not None:
+            current[BASE_URL_FIELD] = base_url
+        normalized = normalize_operator_provider(current)
+        if normalized[PROVIDER_KEY_FIELD] is None and normalized[BASE_URL_FIELD] is None:
+            # An empty record configures nothing, and leaving it behind would
+            # make "this machine has a credential" read as configured.
+            _remove_operator_provider(path)
+        else:
+            _secure_write(path, normalized)
     return operator_provider_projection(runtime_root, environ=environ)
 
 
@@ -260,8 +268,8 @@ def clear_operator_provider(
     """Remove this machine's stored credential and return the readback."""
 
     path = operator_provider_store_path(runtime_root)
-    if path.is_file():
-        path.unlink()
+    with exclusive_file_lock(path, operation="clear_operator_provider"):
+        _remove_operator_provider(path)
     return operator_provider_projection(runtime_root, environ=environ)
 
 
