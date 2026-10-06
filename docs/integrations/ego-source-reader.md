@@ -67,9 +67,11 @@ after 30 seconds; returned text is limited to 100,000 characters. Errors omit
 raw browser diagnostics; use local provider logs for diagnosis.
 
 Both text and image reads wait up to 10 seconds within that same execution
-budget for readable semantic content after navigation. An article takes
-precedence over the main region and body; visible loading/busy indicators in
-that content delay extraction, while unrelated sidebar spinners do not. There
+budget for readable semantic content after navigation. Articles inside the
+main region take precedence, with the main region or body as fallback. Ancillary
+landmarks such as sidebars and navigation cannot select or block the content
+region. Visible loading/busy indicators in the content and a busy ancestor
+delay extraction; unrelated sidebar spinners do not. There
 is no minimum text length. Image reads also accept a visible, loaded image in
 that region without requiring a text caption. A bounded readiness timeout returns
 `source_content_not_ready`, preserving the Page for a later retry. Redirects
