@@ -140,7 +140,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Quota Should Run",
         max_chars={
             "small": {"json": 20_000, "markdown": 6_700},
-            "crowded": {"json": 35_500, "markdown": 7_800},
+            "crowded": {"json": 34_000, "markdown": 7_800},
             "multi_agent": {"json": 23_000, "markdown": 7_000},
         },
         max_lines={
@@ -175,7 +175,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # The same fixed-path fixture emits 14,647 chars on base and head;
             # 15,000 leaves 353 chars without dropping these decision inputs.
             # Keep the line, per-Todo and fixed semantic-growth guards below.
-            "crowded": {"json": 15_500, "markdown": 600},
+            "crowded": {"json": 15_000, "markdown": 600},
             "multi_agent": {"json": 12_000, "markdown": 300},
         },
         max_lines={
@@ -292,9 +292,9 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            "small": {"json": 3_400, "markdown": 6_000},
-            "crowded": {"json": 3_400, "markdown": 6_000},
-            "multi_agent": {"json": 3_400, "markdown": 6_000},
+            "small": {"json": 3_400, "markdown": 5_100},
+            "crowded": {"json": 3_400, "markdown": 5_100},
+            "multi_agent": {"json": 3_400, "markdown": 5_100},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -516,9 +516,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("task_body", "quota_guard_command", "interface_budget"),
         markdown_anchor="# Heartbeat Automation Prompt",
-        # Complete registry routes are required in independently executable
-        # recovery/regeneration commands, including on the 128-character root.
-        max_chars={"json": 12_500, "markdown": 11_000},
+        max_chars={"json": 10_500, "markdown": 9_000},
         max_lines={"json": 58, "markdown": 115},
     ),
     CliOutputModeVariantSpec(

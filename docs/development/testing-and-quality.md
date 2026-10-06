@@ -782,28 +782,16 @@ TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量
 
 ### Budget Failure Decisions
 
-The brief heartbeat's 128-character-root regression fixture retains complete
-registry routes. Commit `fb20c153ba2c2a7376efe68091a76ca470effbde`
-added those routes: its immediate parent emitted 10,417 JSON / 8,846 Markdown
-characters; the same workload then emitted 12,107 / 10,198 and failed the
-10,500 / 9,000 ceilings. The additional JSON cost is 1,690 characters across
-eight executable command fields and two commands in the task body. Generator
-JSON and its Markdown input view expose distinct recovery/regeneration commands;
-removing their authority or fields would change those consumers' contract.
-The revised regression ceilings are 12,500 / 11,000 (393 / 802 characters of
-headroom on that workload). This preserves the original failure and fixture,
-does not change the thin task-body budget, and is not a frozen SLO qualification.
-The thin Markdown diagnostics also repeat full routes in the generator-input
-view: the standard differential fixture emitted 5,438 characters on both the
-unchanged base and candidate, exceeding 5,100. Its Markdown regression ceiling
-is 6,000 (562 characters of headroom); thin JSON and the 3,000-character task-body
-budget remain unchanged. Distinct execution commands remain directly runnable.
-The same immutable base/candidate differential also found unchanged crowded
-admission and Turn-plan JSON at 34,371 / 15,023 against 34,000 / 15,000 ceilings.
-These retain the current admission/settlement and executable-plan fields; no
-caller migration or truncation is part of this repair. Their crowded JSON
-ceilings are 35,500 / 15,500 (1,129 / 477 characters of measured headroom).
-Line, population, growth, semantic and structural-differential checks stay fixed.
+Complete registry routes exposed an existing brief heartbeat regression on the
+unchanged 128-character-root fixture. Commit
+`fb20c153ba2c2a7376efe68091a76ca470effbde` added those routes: its immediate parent
+emitted 10,417 JSON / 8,846 Markdown characters; the same workload then emitted
+12,107 / 10,198 against 10,500 / 9,000 ceilings. The additional JSON cost is 1,690
+characters across eight command fields and two task-body commands. Keep the
+original failure, full paths, fixture, consumer fields and thresholds while
+qualifying a separate compaction or justified budget change. This history is
+not a waived regression or a frozen SLO pass. An unchanged base failure must be
+attributed before it is distinguished from a new candidate regression.
 
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
