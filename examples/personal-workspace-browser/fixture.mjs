@@ -1877,7 +1877,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (apply) {
       state.actionApplies.push(apply[1]);
       if (actionKinds.get(apply[1]) === "heartbeat.bind" && !state.allowNextHeartbeatApply) {
-        await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate: { kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。" }, write_attempted: false }, status: 409 });
+        const gate = { kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。" };
+        // The production HTTP handler persists mark_gated before returning 409.
+        const proposal = { ...actionProposals.get(apply[1]), status: "gated", gate, updated_at: new Date().toISOString() };
+        actionProposals.set(apply[1], proposal);
+        await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate, proposal, write_attempted: false }, status: 409 });
         return;
       }
       if (actionKinds.get(apply[1]) === "heartbeat.bind") state.allowNextHeartbeatApply = false;
