@@ -33,12 +33,6 @@
       "expected_result": {"schema_version": "loopx_todo_completion_state_result_v0", "value": null}
     },
     {
-      "name": "contradictory terminal write",
-      "method": "continuation_for_write",
-      "request": {"schema_version": "loopx_todo_completion_state_request_v0", "no_followup": true, "has_successor": true},
-      "expected_error": "todo completion cannot record both no_followup and a successor"
-    },
-    {
       "name": "ordinary completion keeps goal active",
       "method": "evaluate",
       "request": {"schema_version": "loopx_todo_completion_state_request_v0", "todo": {"status": "open", "no_followup": false, "completion_continuation": ""}, "requested_no_followup": false, "has_successor": false},

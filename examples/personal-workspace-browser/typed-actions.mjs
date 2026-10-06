@@ -1292,7 +1292,13 @@ export const typedActionsScenario = {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
       await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
-      await page.getByLabel(/^两次 Goal 复核间的已完成 Todo 数/u).waitFor({ state: "visible" });
+      const reviewUnit = page.getByLabel(/^复核计数依据/u);
+      const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
+      await reviewUnit.waitFor({ state: "visible" });
+      await reviewCount.waitFor({ state: "visible" });
+      assert.equal(await reviewUnit.inputValue(), "completed_todos");
+      assert.equal(await reviewCount.inputValue(), "3");
+      assert.deepEqual(await reviewUnit.locator("option").evaluateAll((options) => options.map((option) => option.value).filter(Boolean)), ["completed_todos", "effective_turns"]);
       await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
       await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
       for (const label of [/^启用$/u, /^允许一次有界安全修复$/u, /^要求精确 diff 回执$/u]) {

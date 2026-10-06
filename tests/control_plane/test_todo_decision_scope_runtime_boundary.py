@@ -5,6 +5,7 @@ from collections.abc import Callable
 import pytest
 
 from loopx.control_plane.todos import decision_scope
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 SCOPE = {
     "schema_version": "decision_scope_v0",
@@ -53,6 +54,7 @@ def _response(value: object) -> dict[str, object]:
             ),
             {"schema_version": "wrong_standing_v0"},
         ),
+        (lambda: decision_scope.todo_gate_relation(GATE, AGENT_ITEM), True),
         (
             lambda: decision_scope.todo_gate_relation(GATE, AGENT_ITEM),
             {"schema_version": "unknown_relation_v0"},
@@ -141,3 +143,16 @@ def test_fallback_runtime_result_fails_closed(monkeypatch, value):
             [GATE], [AGENT_ITEM], agent_id="agent-a", allow_unrelated_gate=True,
             monitor_debt_backoff_active=False,
         )
+
+
+@pytest.mark.parametrize("operation", ["covers", "scope_relation", "exact_relation"])
+def test_retired_scalar_operations_are_rejected_by_real_runtime(operation: str) -> None:
+    with pytest.raises(EffectRuntimeRejected, match="unsupported decision scope operation"):
+        effect_runtime_result("todo.decision_scope.evaluate", {
+            "schema_version": "todo_decision_scope_request_v0",
+            "operation": operation,
+            "gate_scope": SCOPE,
+            "required_scope": SCOPE,
+            "gate": {**GATE, "is_gate": True},
+            "item": AGENT_ITEM,
+        })

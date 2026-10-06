@@ -16,6 +16,33 @@ from loopx.control_plane.goals.legacy_event_source import (
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.control_plane.todos import completion_validation
 from loopx.todos import complete_goal_todo
+from loopx.control_plane.todos.todo_index import build_todo_index
+from loopx.control_plane.runtime.public_safety import public_safe_compact_text
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_authority, isolate_sqlite_runtime,
+)
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+
+@pytest.mark.parametrize("status", ["open", "blocked", "deferred", "done"])
+def test_rollout_audit_cannot_overwrite_current_todo_state_or_claim(tmp_path, status):
+    current = {"todo_id": "todo_current", "text": "Current authority work",
+        "status": status, "done": status in ("deferred", "done"), "claimed_by": None}
+    events = [{"goal_id": "goal-a", "todo_id": "todo_current", "event_kind": "todo_update",
+        "status": "open" if status != "open" else "done", "agent_id": "old-actor",
+        "summary": "Historical update", "recorded_at": "2026-01-01T00:00:00Z"}]
+    result = build_todo_index(queue={"items": [{"goal_id": "goal-a",
+        "agent_todos": {"items": [current]}}]}, history={"goals": [{"id": "goal-a"}]},
+        runtime_root=tmp_path, public_safe_compact_text=public_safe_compact_text,
+        events_for_goal=lambda goal_id, **kwargs: events)
+    row = result["items"][0]
+    assert row["status"] == status
+    assert row["done"] is current["done"]
+    assert row.get("agent_id") is None
+    assert row["latest_event_status"] == events[0]["status"]
+    assert row["latest_event_summary"] == "Historical update"
+    assert row["event_count"] == 1
 
 @pytest.mark.parametrize("alias", [None, "state_event_log", "state_events_file", "event_log"])
 @pytest.mark.parametrize("contents", ["{broken\n", '{"event_type":"todo_added"}\n'])
@@ -175,3 +202,101 @@ def test_http_status_preserves_healthy_goal_when_retired_source_appears(tmp_path
     finally:
         server.terminate()
         server.wait(timeout=10)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_directory_lifecycle_uses_canonical_state_despite_stale_audit(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\n## Agent Todo\n\n")
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime),
+        "goals": [{"id": "goal-a", "repo": str(tmp_path), "state_file": str(state),
+            "domain": "software", "status": "active",
+            "adapter": {"kind": "read_only_project_map_v0", "status": "connected"},
+            "coordination": {"registered_agents": ["agent-a", "agent-b", "agent-c"]}}]}))
+    initialize_canonical_authority(runtime, "goal-a",
+        build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[], handoff_mode="hard_lease"),
+        state_path=state, provider=provider)
+
+    def cli(*args, success=True):
+        code, payload = run_json_cli_result(*args, "--goal-id", "goal-a", registry_path=registry)
+        if success:
+            assert code == 0 and payload.get("ok") is True, payload
+        return payload
+
+    def readback(expected, lease_status=None, *, agent="agent-a", target=None):
+        target = target or todo_id
+        before = cli("todo", "list")
+        current = next(row for row in before["todos"] if row["todo_id"] == target)
+        assert current["status"] == expected
+        payload = cli("status")
+        indexed = next(row for row in payload["todo_index"]["items"] if row["todo_id"] == target)
+        assert indexed["status"] == expected
+        directory = cli("agent-directory", "--agent-id", agent)
+        work = next(row for row in directory["rows"] if row["agent_id"] == agent)["work"]
+        if expected == "done":
+            assert work is None
+        else:
+            assert work["todo_id"] == target and work["todo_status"] == expected
+            assert work["claimed_by"] == agent
+            assert work.get("lease_status") == lease_status
+        after = cli("todo", "list")
+        assert before["authority_read"]["provider_revision"] == after["authority_read"]["provider_revision"]
+        assert before["todos"] == after["todos"]
+
+    try:
+        added = cli("todo", "add", "--role", "agent", "--text", "Long canonical task " + "work " * 140,
+            "--claimed-by", "agent-a")
+        todo_id = added["todo_id"]
+        lease = cli("task-lease", "acquire", "--todo-id", todo_id, "--owner", "agent-a",
+            "--idempotency-key", "directory-live-lease")
+        readback("open", "active")
+        cli("task-lease", "release", "--todo-id", todo_id, "--owner", "agent-a",
+            "--idempotency-key", "directory-live-lease", "--expected-version", str(lease["lease"]["version"]))
+        before = cli("todo", "list")
+        cli("todo", "update", "--todo-id", todo_id, "--agent-id", "agent-a",
+            "--status", "blocked", "--reason", "Fixture lifecycle transition",
+            "--update-operation-id", "directory-blocked", "--clear-resume-when",
+            "--update-expected-provider-revision", before["authority_read"]["provider_revision"])
+        readback("blocked", "released")
+        deferred = cli("todo", "add", "--role", "agent", "--text", "Wait for an explicit decision",
+            "--status", "deferred", "--resume-when", "todo_done:" + todo_id, "--claimed-by", "agent-b")
+        readback("deferred", agent="agent-b", target=deferred["todo_id"])
+        finished = cli("todo", "add", "--role", "agent", "--text", "Validate the terminal readback",
+            "--claimed-by", "agent-c")
+        terminal_lease = cli("task-lease", "acquire", "--todo-id", finished["todo_id"], "--owner", "agent-c",
+            "--idempotency-key", "directory-terminal-lease")
+        cli("todo", "complete", "--todo-id", finished["todo_id"], "--agent-id", "agent-c",
+            "--evidence", "validation://directory-lifecycle", "--no-follow-up",
+            "--task-lease-idempotency-key", "directory-terminal-lease", "--task-lease-expected-version",
+            str(terminal_lease["lease"]["version"]))
+        readback("done", agent="agent-c", target=finished["todo_id"])
+        # A readable stale display and rollout history cannot rescue a lost provider.
+        state.write_text("## Agent Todo\n- [ ] Old work\n"
+            f"  <!-- loopx:todo todo_id={todo_id} status=open claimed_by=agent-a -->\n")
+        authority = runtime / "authority" / f"{provider}-v0"
+        unavailable = runtime / "unavailable-provider"
+        authority.rename(unavailable)
+        for command in ("status", "agent-directory"):
+            failure = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+                "--runtime-root", str(runtime), "--format", "json", command, "--goal-id", "goal-a"],
+                capture_output=True, text=True, timeout=60)
+            if failure.stdout.strip():
+                failed = json.loads(failure.stdout)
+                if command == "status":
+                    assert not failed["ok"] and not failed.get("todo_index", {}).get("items")
+                else:
+                    assert all(row["work"] is None for row in failed.get("rows", []))
+            else:
+                # Some source-loss paths raise the owning unavailable error.
+                # That failure is not a successful empty or legacy work view.
+                assert failure.returncode != 0
+                assert "LocalCoordinationAuthorityUnavailable:" in failure.stderr
+        unavailable.rename(authority)
+        readback("blocked", "released")
+        readback("deferred", agent="agent-b", target=deferred["todo_id"])
+        readback("done", agent="agent-c", target=finished["todo_id"])
+    finally:
+        restart_effect_runtime()

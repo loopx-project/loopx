@@ -79,21 +79,6 @@ def normalize_todo_completion_continuation(value: Any) -> str | None:
     return normalized if isinstance(normalized, str) else None
 
 
-def require_todo_completion_continuation(value: Any) -> str:
-    result = _result(
-        "todo.completion_state.require_metadata",
-        {
-            "schema_version": TODO_COMPLETION_STATE_REQUEST_SCHEMA,
-            "key": "completion_continuation",
-            "value": _string_value(value),
-        },
-    )
-    normalized = result.get("value")
-    if not isinstance(normalized, str):
-        raise RuntimeError("TypeScript completion continuation result shape mismatch")
-    return normalized
-
-
 def normalize_todo_completion_recovery(value: Any) -> str | None:
     normalized = _normalize_cached("recovery", _string_value(value))
     return normalized if isinstance(normalized, str) else None
@@ -112,18 +97,3 @@ def require_todo_completion_metadata(key: str, value: Any) -> str | None:
     if normalized is not None and not isinstance(normalized, str):
         raise RuntimeError("TypeScript completion metadata result shape mismatch")
     return normalized
-
-
-def completion_continuation_for_write(*, no_followup: bool, has_successor: bool) -> str:
-    result = _result(
-        "todo.completion_state.continuation_for_write",
-        {
-            "schema_version": TODO_COMPLETION_STATE_REQUEST_SCHEMA,
-            "no_followup": no_followup,
-            "has_successor": has_successor,
-        },
-    )
-    continuation = result.get("continuation")
-    if continuation not in {item.value for item in TodoCompletionContinuation}:
-        raise RuntimeError("TypeScript completion continuation result shape mismatch")
-    return str(continuation)

@@ -436,7 +436,7 @@ lanes; real CLI tests cover full/envelope parity, rejection before writeback and
 one debit across replay. It is a transport correction, not closure of R5 model
 context-efficiency acceptance or a change to the typed settlement rules.
 
-The existing R5 CLI now supports opt-in capture of the full decided payload before display projection (`quota should-run --decision-output-dir`, with an explicit Turn id). Each invocation uses a new private directory. When capture and TurnEnvelope are combined, the typed detail link points to that saved observation with expected identity and source-hash reference; reading it does not rerun the guard. Required selection/lease revalidation remains fresh. This is transport-only Python filesystem adaptation over the shared decision and TypeScript envelope owners. It closes tool-truncation recovery for an explicit caller, not worker adoption, automatic normal/replan context selection, or model-efficiency acceptance. See the [TurnEnvelope capture contract](../../reference/protocols/turn-envelope-v0.md).
+The existing R5 CLI captures full decisions before projection, with a private directory per invocation and readback that does not rerun admission. Default-off heartbeat renderer/shared-worker adoption now covers explicit host-owned Turns: selection retains the capture route, and real CLI tests exercise reentry and exactly-once settlement. Python adapts filesystem/command transport over the TypeScript decision owner. Native Goal begin-Turn, installed App/Lark/UI adoption, model token/IO cost and decision quality remain unqualified; existing trials are not changed. See the [TurnEnvelope capture contract](../../reference/protocols/turn-envelope-v0.md).
 
 ### What Is Missing
 

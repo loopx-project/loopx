@@ -14,6 +14,7 @@ from ...state_refresh import now_local
 from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityUnavailable,
+    local_authority_is_promoted,
     read_canonical_todos_if_promoted,
 )
 from ..effect_runtime import (
@@ -46,10 +47,9 @@ def create_canonical_todo_if_promoted(
     project: Path | None = None, state_file: Path | None = None,
     operation_id: str | None = None,
 ) -> dict[str, Any] | None:
-    canonical = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root, goal_id=goal_id
-    )
-    if canonical is None:
+    # The durable fence selects the route; the native transaction owns the
+    # complete-head validation. A separate source read supplies no create facts.
+    if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
         return None
     if operation_id is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", operation_id):
         raise ValueError("operation_id must be a non-empty public-safe token")

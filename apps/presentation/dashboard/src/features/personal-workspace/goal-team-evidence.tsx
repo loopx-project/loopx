@@ -66,7 +66,10 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
     {result ? <>
       <p role="status"><strong>{result.agent_id} · {delegationStateLabel(result, zh)}</strong>{" · "}{observedAt}</p>
       <p>{zh ? "按需读取的当前观察，不是持续在线状态；验收不代表协调员已采用。" : "An on-demand observation, not continuous liveness; acceptance does not establish coordinator adoption."}</p>
-      <GoalTeamEpisode sessionId={sessionId} result={result} zh={zh} onInspect={onInspect}/>
+      <GoalTeamEpisode sessionId={sessionId} result={result} zh={zh} onInspect={onInspect} onObservation={value => {
+        setResult(value); setObservedAt(value ? new Date().toLocaleTimeString() : "");
+        setError(value ? "" : (zh ? "关联执行或版本已变化；请重新读取证据。" : "A linked execution or version changed; recheck the evidence."));
+      }}/>
       <GoalTeamComparison sessionId={sessionId} result={result} zh={zh}/>
       {hasCorrectionPath ? <details className="goal-team-lineage-detail"><summary>{zh ? "版本与采用关系详情" : "Version and adoption details"}</summary>
         <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/></details>

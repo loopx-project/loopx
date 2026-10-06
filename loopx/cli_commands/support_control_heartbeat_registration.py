@@ -157,6 +157,11 @@ def register_heartbeat_control_commands(
         help="Generate the thinnest generic dispatcher body for trusted agents that inspect LoopX state themselves.",
     )
 
+    heartbeat_prompt_parser.add_argument(
+        "--decision-output-root",
+        help="Opt into the short TurnEnvelope with full local captures; requires thin mode and an explicit host-owned Turn ID.",
+    )
+
     heartbeat_prequota_parser = subparsers.add_parser(
         "heartbeat-prequota",
         help=(

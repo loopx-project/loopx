@@ -6,10 +6,13 @@ import {
   buildTodoCompletionMetadataUpdates,
   normalizeTodoCompletionValue,
   requireTodoCompletionMetadataValue,
-  selectTodoCompletionContinuation,
   selectTodoCompletionState,
   TODO_COMPLETION_STATE_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/todos/completion_state.ts";
+import {
+  createEffectRuntimeHandlers,
+  dispatchEffectRuntimeMethod,
+} from "../../loopx/control_plane/effect_runtime_handlers.ts";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -24,7 +27,7 @@ const fixture = JSON.parse(
   source_baseline: string;
   cases: Array<{
     name: string;
-    method: "normalize" | "require_metadata" | "continuation_for_write" |
+    method: "normalize" | "require_metadata" |
       "evaluate" | "metadata_updates";
     request: Record<string, unknown>;
     expected_result?: Record<string, unknown>;
@@ -35,7 +38,6 @@ const fixture = JSON.parse(
 const methods = {
   normalize: normalizeTodoCompletionValue,
   require_metadata: requireTodoCompletionMetadataValue,
-  continuation_for_write: selectTodoCompletionContinuation,
   evaluate: selectTodoCompletionState,
   metadata_updates: buildTodoCompletionMetadataUpdates,
 } as const;
@@ -46,7 +48,7 @@ test("pinned Python completion-state characterization remains exact", () => {
     "loopx_todo_completion_state_characterization_v0",
   );
   assert.equal(fixture.source_baseline, "0c59d47f6");
-  assert.equal(fixture.cases.length, 11);
+  assert.equal(fixture.cases.length, 10);
   for (const item of fixture.cases) {
     const evaluate = methods[item.method];
     if (item.expected_error) {
@@ -60,6 +62,46 @@ test("pinned Python completion-state characterization remains exact", () => {
       assert.deepEqual(evaluate(item.request), item.expected_result, item.name);
     }
   }
+});
+
+test("whole completion owner selects continuation and rejects contradictory intent", () => {
+  const request = {
+    schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
+    todo: { status: "open", no_followup: false },
+  };
+  for (const [noFollowup, hasSuccessor, continuation] of [
+    [false, false, "active_goal"],
+    [false, true, "successor"],
+    [true, false, "no_followup"],
+  ] as const) {
+    assert.deepEqual(selectTodoCompletionState({
+      ...request, requested_no_followup: noFollowup, has_successor: hasSuccessor,
+    }), {
+      schema_version: "loopx_todo_completion_state_result_v0",
+      continuation, recovery: null,
+    });
+  }
+  assert.throws(() => selectTodoCompletionState({
+    ...request, requested_no_followup: true, has_successor: true,
+  }), /cannot record both no_followup and a successor/);
+});
+
+test("retired continuation-only RPC fails closed; live metadata decoding remains", async () => {
+  const handlers = createEffectRuntimeHandlers({
+    fingerprint: "completion-retirement-test", requestShutdown: () => undefined,
+  });
+  await assert.rejects(dispatchEffectRuntimeMethod(
+    handlers, "todo.completion_state.continuation_for_write", {
+      schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
+      no_followup: false, has_successor: false,
+    },
+  ), /unsupported Effect runtime method/);
+  assert.deepEqual(await dispatchEffectRuntimeMethod(
+    handlers, "todo.completion_state.require_metadata", {
+      schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
+      key: "completion_continuation", value: "SUCCESSOR",
+    },
+  ), { schema_version: "loopx_todo_completion_state_result_v0", value: "successor" });
 });
 
 test("runtime boundary rejects malformed authority input", () => {

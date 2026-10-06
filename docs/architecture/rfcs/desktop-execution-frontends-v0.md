@@ -1049,6 +1049,23 @@ pass the shared conformance suite.
 
 ## Validation criteria
 
+### Native service ownership
+
+Packaged native windows use their own loopback status/Chat endpoints and own
+only the children they start. A ready service with the same source revision is
+not proof of the same registry or App ownership. Window navigation and native
+maintenance permissions must follow that exact Chat origin. A runtime repair
+keeps the same window endpoints and starts both replacement children from the
+one qualified selection; it must not rediscover the global CLI independently.
+CLI services and Vite development retain their existing shared ports; packaged App startup no
+longer borrows or restarts those services or their LaunchAgents.
+
+Qualify a packaged window while independent shared services are running: both
+HTTP runtime identities and the rendered workspace belong to its selected
+runtime; quit, runtime repair and reopen affect only its children. An occupied
+private endpoint fails without adopting or terminating its listener. A source
+checkout or passing helper test does not qualify this native process boundary.
+
 ### Shared
 
 - one binding has at most one active executor and serialized user ingress;

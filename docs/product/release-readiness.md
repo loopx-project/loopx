@@ -199,6 +199,29 @@ attestation separately binds those bytes to the repository, workflow, commit,
 and build event; neither mechanism claims that the package is vulnerability
 free.
 
+For a browser-fixture error discovered after an immutable tag was published,
+maintainers may dispatch the release workflow from reviewed tooling with
+`tag` set to that existing release and `browser_fixture_commit` set to a full,
+merged commit SHA. Only the personal-workspace fixture, typed-actions and goal-work-map
+scenario files are extracted from that commit; its other changes are not
+applied to the product checkout. A non-default commit must contain at least
+one correction in these fixture owners. The wheel and sdist are built before
+those test corrections are applied; checksums are verified again after the
+browser and managed-runtime tests, and the fixtures are restored. An empty
+input uses the tagged fixtures. This does not skip browser validation, rebuild
+from `main`, move the tag, or authorize product changes.
+
+`RELEASE-SOURCES.json` records the product tag/commit, browser fixture commit,
+workflow commit/ref, and package/checksum hashes. It is uploaded and attested
+alongside the packages. For a dispatched recovery, the attestation's build
+source identifies the workflow commit; the product source remains the tagged
+commit named in this separately attested record. Verify both, rather than
+assuming the builder and product commits are identical:
+
+```bash
+gh attestation verify RELEASE-SOURCES.json --repo loopx-project/loopx
+```
+
 PyPI publication is an explicit, fail-closed extension of the same build. The
 release workflow publishes only when maintainers have configured all of these:
 

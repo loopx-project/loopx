@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { goalCreateRequest } from "./goal-create-request.ts";
+import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -428,7 +429,14 @@ assert.match(machineSettings, /periodicReportActivationDescription/, "Machine pe
 assert.match(i18n, /Enabled means automatic delivery at validated stage boundaries/, "English machine settings name automatic stage delivery");
 assert.match(i18n, /开启后将在已验证的阶段节点自动投递/, "Chinese machine settings name automatic stage delivery");
 assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale\)/, "Machine capability fields follow the selected locale");
-assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/, "Goal capability fields follow the selected locale and capability");
+assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/,
+  "Goal fields use the selected locale and capability-specific vocabulary");
+assert.deepEqual(localizedCapabilityFieldCopy("en", "explore_harness").mode.options,
+  { off: "Off", evidence: "Evidence only", planning: "Evidence and planning" });
+assert.deepEqual(localizedCapabilityFieldCopy("zh-CN", "explore_harness").mode.options,
+  { off: "关闭", evidence: "仅记录证据", planning: "证据与规划" });
+assert.equal(localizedCapabilityFieldCopy("en", "explore_harness").enabled.label, "Enabled");
+assert.equal(localizedCapabilityFieldCopy("zh-CN", "explore_harness").enabled.label, "启用");
 assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");

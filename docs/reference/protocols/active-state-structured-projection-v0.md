@@ -357,6 +357,14 @@ renderer/write failure leaves typed `pending` delivery
 evidence without reversing or hiding the canonical commit. A later successful
 mutation, committed `refresh-state` (including same-Turn replay), or
 `todo project-markdown --execute` replays the current head idempotently. This is projection recovery, not a second authority path.
+Canonical creation selects that route from the existing durable writer fence;
+it does not prefetch the entire Todo source into Python before the native create
+transaction. The fence grants no write authority: the transaction still checks
+the complete current head, source and actor. Original-operation replay remains
+a historical receipt, and validated-create recovery still checks the current
+validator digest before publishing its private declaration. Post-commit display
+delivery retains its complete-source read and durable confirmation. Unpromoted
+creation keeps the existing Markdown writer.
 The ordinary state writer and projection writer share durable atomic publication.
 Missing-display recovery uses create-only publication and cannot overwrite a
 concurrently restored document. When bytes already match, execution still syncs

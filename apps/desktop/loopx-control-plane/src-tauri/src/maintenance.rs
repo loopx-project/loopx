@@ -774,7 +774,10 @@ fn automatic_app_update(app: &AppHandle) {
     // of the installed App. Diagnostics retain the failed check.
 }
 
-pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::ServiceSet>, String> {
+pub fn start_services(
+    app: &AppHandle,
+    endpoints: &crate::service_endpoints::ServiceEndpoints,
+) -> Result<Option<crate::services::ServiceSet>, String> {
     app.state::<Maintenance>()
         .startup_started
         .get_or_init(Instant::now);
@@ -795,7 +798,7 @@ pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::Service
                 return Err(error);
             }
         };
-        crate::services::ServiceSet::start(&runtime, |pending| {
+        crate::services::ServiceSet::start(&runtime, endpoints, |pending| {
             let service = crate::services::ServiceKind::pending_label(pending);
             app.state::<Maintenance>()
                 .publish("connecting", json!({"service":service}));
