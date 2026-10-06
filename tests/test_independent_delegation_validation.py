@@ -195,6 +195,48 @@ def test_cross_repository_validator_uses_verified_binding_worktree(service):
         runner._validate(binding)
 
 
+@pytest.mark.parametrize("extra_file", [None, "DELEGATION.json", "unrelated.txt"])
+def test_native_validator_retires_only_its_exact_host_input(service, monkeypatch, extra_file):
+    root, runner = service
+    repository = root / "validation-repository"
+    repository.mkdir()
+    def git(*args):
+        subprocess.run(["git", "-C", str(repository), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", *args],
+                       check=True, capture_output=True)
+    git("init", "-b", "main")
+    (repository / "marker").write_text("ok")
+    git("add", "marker")
+    git("commit", "-m", "Validation fixture")
+    remote = "https://example.invalid/synthetic/validation.git"
+    git("remote", "add", "origin", remote)
+    workspace = root / "validation-worker"
+    git("worktree", "add", "--detach", str(workspace), "HEAD")
+    independent_binding(service, task_repository=remote,
+                        validation_argv=[sys.executable, "-c",
+                                         "from pathlib import Path; assert Path('marker').read_text() == 'ok'"])
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["workspace"] = str(workspace)
+    runner.config.write_text(json.dumps(config))
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "validator-host-input", brief())
+    row = json.loads(runner.path("validator-host-input").read_text())
+    binding = runner.binding("analysis")
+    runner._write_delegation_bootstrap(row, binding)
+    if extra_file:
+        (workspace / extra_file).write_text("Caller-owned content")
+    arguments = runner._execution_arguments(binding, "validator-host-input")
+    argv = json.loads(arguments[arguments.index("--validation-command-json") + 1])
+    result = subprocess.run(argv, cwd=workspace, capture_output=True, text=True, timeout=30)
+    assert (result.returncode == 0) is (extra_file is None), result.stderr
+    assert (workspace / "marker").read_text() == "ok"
+    if extra_file:
+        assert (workspace / extra_file).read_text() == "Caller-owned content"
+    else:
+        assert not (workspace / "DELEGATION.json").exists()
+    assert not demo.canonical_tasks(root)[binding["todo_id"]]["done"]
+
+
 @pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
 def test_independent_result_reconnects_and_revalidates_without_goal_binding(service, monkeypatch, handoff_mode):
     root, runner = service

@@ -102,6 +102,13 @@ receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 p
 这闭合 T1/T2/L2 的一组真实终结 caller，剩余 leased metadata、executor fence 和 T4
 仍未完成。[语义、调用次数与回滚](../../reference/canonical-terminal-review.zh-CN.md)。
 
+Canonical supersede 的 CLI/facade 现在把已有后继关联交给同一个 terminal owner。
+一次提交关联已声明的替代工作、退役原任务并释放原租约，取代先更新关联再 supersede
+的序列。回执恢复、source/actor/lease fence 和单向显示交付仍由既有 owner 负责。
+不新增 Python 决策 owner 或 writer；未晋级 Markdown 的新直接关联选项明确拒绝。
+这缩小 T1/T2 的恢复成本，不代表 T4 退役、默认 provider 验收或新前端 lifecycle
+流程完成。
+
 Canonical create/claim/update/Monitor poll/terminal 事务现共用
 `coordination/authority_source.ts`；Python adapter 经 `authority_registry_source`
 在注册/grant 投影前后校验来源。外部验证结束后保留原 witness，在新 effect/提交前

@@ -1629,6 +1629,7 @@ def supersede_goal_todo(
     todo_id: str,
     role: str | None = None,
     reason: str | None = None,
+    successor_todo_ids: list[str] | None = None,
     next_agent_todo: str | None = None,
     next_user_todo: str | None = None,
     next_user_task_class: str | None = None,
@@ -1645,6 +1646,8 @@ def supersede_goal_todo(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if successor_todo_ids:
+        raise ValueError("Existing-successor supersede requires promoted canonical Todo authority; migrate the Goal before retrying")
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if next_task_repository and not next_agent_todo:
         raise ValueError("--next-task-repository requires --next-agent-todo")

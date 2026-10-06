@@ -16,8 +16,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: signed-desktop-${{ github.event_name == 'release' && 'stable' || 'main' }}
-  cancel-in-progress: false
+  group: signed-desktop-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'release' && 'stable' || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:

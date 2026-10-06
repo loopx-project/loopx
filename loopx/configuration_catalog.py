@@ -7,7 +7,7 @@ from typing import Any
 from .capabilities.configuration_ui import build_capability_configuration_catalog
 from .control_plane.agent_context import agent_context_descriptor
 from .explore_graph import explore_configuration
-from .control_plane.goals.goal_vision_policy import completed_todo_replan_threshold
+from .capabilities.todo_replan_cadence.goal_configuration import configuration_summary as cadence_configuration_summary
 
 DEFAULT_MULTI_SUBAGENT_MAX_CHILDREN = 2
 
@@ -163,34 +163,32 @@ def build_goal_configuration_catalog(
                 "feature_id": "todo_replan_cadence",
                 "display_name": "Goal review cadence",
                 "availability": "supported_opt_in",
-                "default": {"completed_todos": 5},
-                "current": {
-                    "completed_todos": completed_todo_replan_threshold(
-                        settings.get("execution_profile")
-                    ),
+                "default": {"count_unit": "completed_todos", "count": 5},
+                "current": cadence_configuration_summary({"execution_profile": settings.get("execution_profile")}) or {
+                    "count_unit": "completed_todos", "count": 5,
                 },
-                "consider_when": "A short Todo chain needs earlier review against the Goal.",
+                "consider_when": "Direction needs regular review even while the same Todo remains open.",
                 "effect": (
-                    "Requires review after 1–5 same-agent advancement Todo completions "
-                    "without a covering outcome checkpoint; default 5 in standard and fine modes."
+                    "Choose 1–5 completed Todos or settled work Turns per Agent. "
+                    "Legacy settings retain their completed-Todo units until explicitly changed."
                 ),
                 "does_not": [
                     "create host continuation turns or interrupt running work",
-                    "count open Todos, protocol steps, or another Agent's completions",
+                    "count retries, unfinished attempts or another Agent's work as effective Turns",
                     "bypass quota, permissions, or outcome evidence requirements",
                 ],
                 "commands": {
                     "preview_enable": _configure_command(
-                        goal_id, "--execution-replan-after-todos", "3"
+                        goal_id, "--execution-replan-after-turns", "3"
                     ),
                     "apply_enable": _configure_command(
-                        goal_id, "--execution-replan-after-todos", "3", execute=True
+                        goal_id, "--execution-replan-after-turns", "3", execute=True
                     ),
                     "preview_disable": _configure_command(
-                        goal_id, "--clear-execution-replan-after-todos"
+                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns"
                     ),
                     "apply_disable": _configure_command(
-                        goal_id, "--clear-execution-replan-after-todos", execute=True
+                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns", execute=True
                     ),
                     "verify": [inspect_command],
                 },

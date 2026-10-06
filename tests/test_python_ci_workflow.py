@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -37,39 +38,46 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     assert "python -m mypy" not in dashboard
 
     assert "if: always() && needs.changes.outputs.core_tests == 'true'" in aggregate
+    assert "NEEDS_JSON: ${{ toJSON(needs) }}" in aggregate
+    assert "scripts/ci/review_gate.py verify-core" in aggregate
     assert (
         "needs: [changes, kernel-static-checks, typescript-coverage, "
         "dashboard-acceptance, chat-bundle-browser]"
     ) in aggregate
-    assert "needs.chat-bundle-browser.result" in aggregate
-    assert "needs.kernel-static-checks.result" in aggregate
-    assert "needs.typescript-coverage.result" in aggregate
-    assert "needs.dashboard-acceptance.result" in aggregate
 
 
+@pytest.mark.parametrize("kind", ["full", "presentation"])
 @pytest.mark.parametrize("kernel", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("typescript", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("dashboard", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("browser", ["success", "failure", "cancelled", "skipped"])
-def test_checks_aggregate_requires_every_parallel_lane(
-    kernel: str, typescript: str, dashboard: str, browser: str,
+def test_checks_aggregate_requires_every_planned_parallel_lane(
+    kind: str, kernel: str, typescript: str, dashboard: str, browser: str,
 ) -> None:
-    gate = WORKFLOW.split("name: Require kernel and Dashboard qualification", 1)[1]
-    script = gate.split("run: |", 1)[1].split("\n\n  node-minimum-compatibility:", 1)[0]
+    gate = WORKFLOW.split("name: Require the planned backend and Dashboard qualification", 1)[1]
+    command = gate.split("run: ", 1)[1].splitlines()[0]
+    args = shlex.split(command)
+    args[0] = sys.executable
+    backend = kind == "full"
+    needs = {
+        "changes": {"result": "success", "outputs": {
+            "change_kind": kind, "core_tests": "true",
+            "backend_tests": str(backend).lower(), "python_tests": str(backend).lower(),
+            "stage2c_tests": str(backend).lower(), "presentation_tests": str(not backend).lower(),
+        }},
+        "kernel-static-checks": {"result": kernel},
+        "typescript-coverage": {"result": typescript},
+        "dashboard-acceptance": {"result": dashboard},
+        "chat-bundle-browser": {"result": browser},
+    }
     result = subprocess.run(
-        ["bash", "-e", "-c", script],
-        env={
-            **os.environ,
-            "BROWSER_RESULT": browser,
-            "DASHBOARD_RESULT": dashboard,
-            "KERNEL_RESULT": kernel,
-            "TYPESCRIPT_RESULT": typescript,
-        },
-        capture_output=True,
-        check=False,
+        args, cwd=WORKFLOW_ROOT,
+        env={**os.environ, "NEEDS_JSON": json.dumps(needs)},
+        capture_output=True, check=False,
     )
+    required_backend = "success" if backend else "skipped"
     assert (result.returncode == 0) == (
-        kernel == typescript == dashboard == browser == "success"
+        kernel == typescript == required_backend and dashboard == browser == "success"
     )
 
 
@@ -235,6 +243,11 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
         < browser.index("npm run smoke:chat-upgrade")
     )
     assert "continue-on-error" not in browser
+    for name in ("kernel-static-checks", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
+        header = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
+        assert "if: needs.changes.outputs.backend_tests == 'true'" in header
+    dashboard = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split("    steps:", 1)[0]
+    assert "if: needs.changes.outputs.core_tests == 'true'" in dashboard
     assert "scripts/chat_bundle.py verify --source" in job
     assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job
@@ -415,7 +428,7 @@ def test_typescript_core_shards_feed_one_complete_coverage_report() -> None:
     assert "name: typescript-control-plane-coverage" in report
     assert "path: coverage/control-plane/lcov.info" in report
     forward = WORKFLOW.split("  node-forward-compatibility:\n", 1)[1].split("  test-shard:\n", 1)[0]
-    assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in forward
+    assert "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')" in forward
     assert "continue-on-error: true" in forward
 
 

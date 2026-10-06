@@ -408,3 +408,47 @@ def configure_delivery_target(
         if update(apply=False)["granted_before"] != grant:
             raise ValueError("delivery target verification failed")
     return {**result, "readback_verified": True}
+
+
+def configure_delivery_scope(runtime_root: Path, *, channel: str,
+                             local_delivery_scope: str, sender_id: str | None = None,
+                             execute: bool = False, if_absent: bool = False) -> dict:
+    """One owner policy for current/future registered recipients, not execution."""
+    if not re.fullmatch(r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24})", channel):
+        raise ValueError("an exact external manager channel is required")
+    path = _root(runtime_root) / "policy.json"
+
+    def update(apply: bool) -> dict:
+        policy = _read(path) if path.exists() else {"schema_version": POLICY_SCHEMA, "sources": {}}
+        if policy.get("schema_version") != POLICY_SCHEMA or not isinstance(policy.get("sources"), dict):
+            raise ValueError("invalid manager policy")
+        source = policy.get("sources", {}).get(channel)
+        if source is None and sender_id:
+            source = {"sender_ids": [sender_id]}
+        if not isinstance(source, dict):
+            raise ValueError("external manager channel must already be configured")
+        if sender_id is not None and sender_id not in source.get("sender_ids", []):
+            raise ValueError("the supplied sender differs from the current channel grant")
+        try:
+            planned = effect_runtime_result("collaboration.source.configure_scope", {
+                "source": source, "local_delivery_scope": local_delivery_scope})
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if if_absent and channel in policy["sources"]:
+            return {**planned, "local_delivery_scope": source.get("local_delivery_scope", "all_registered"), "would_change": False}
+        if apply and planned["would_change"]:
+            policy.setdefault("sources", {})[channel] = planned["source"]
+            _write(path, policy)
+        return planned
+
+    if execute:
+        with exclusive_file_lock(path.with_suffix(".lock")):
+            result = update(True)
+            if update(False)["would_change"]:
+                raise ValueError("delivery scope verification failed")
+    else:
+        result = update(False)
+    return {"ok": True, "executed": execute, "channel_id": channel,
+            "local_delivery_scope": result["local_delivery_scope"],
+            "would_change": result["would_change"], "readback_verified": execute,
+            "execution_started": False}

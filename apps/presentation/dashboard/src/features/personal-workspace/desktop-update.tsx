@@ -34,15 +34,23 @@ export function DesktopUpdate() {
   const [rollbackAvailable, setRollbackAvailable] = useState(false);
   const [runtimeSelection, setRuntimeSelection] = useState<RuntimeSelection>();
   const busy = useRef(false);
+  const statusGeneration = useRef(0);
   const invoke = (window as DesktopWindow).__TAURI__?.core.invoke;
   const working = workingPhases.includes(state.phase);
   const repairAvailable = runtimeSelection?.explicit !== true && runtimeSelection?.bundled_repair_available !== false;
 
-  function readStatus(value: UpdateStatus) {
+  function readStatus(value: UpdateStatus, includeState = true) {
     setVersion(value.app_version);
     setRollbackAvailable(value.rollback_available === true);
     setRuntimeSelection(value.runtime_selection);
-    if (value.state?.phase) setState(value.state);
+    if (includeState && value.state?.phase) setState(value.state);
+  }
+
+  function commitStatus(value: UpdateStatus, generation: number) {
+    if (generation !== statusGeneration.current) return false;
+    const stateIsCurrent = !busy.current || !value.state?.phase || workingPhases.includes(value.state.phase);
+    readStatus(value, stateIsCurrent);
+    return true;
   }
 
   useEffect(() => {
@@ -56,22 +64,32 @@ export function DesktopUpdate() {
   useEffect(() => {
     if (!invoke) return;
     let alive = true;
+    const generation = ++statusGeneration.current;
     void invoke<UpdateStatus>("desktop_update_status").then((value) => {
-      if (!alive) return;
-      readStatus(value);
+      if (!alive || !commitStatus(value, generation)) return;
       const selected = value.state?.details?.channel ?? (value.app_version.includes("-main.") ? "main" : "stable");
       setChannel(selected);
       if (!value.state?.phase) {
-        void invoke<UpdateState>("desktop_update", { action: "check", channel: selected }).then((next) => { if (alive) setState(next); }).catch((error: unknown) => { if (alive) setState(failedUpdate(error)); });
+        const actionGeneration = ++statusGeneration.current;
+        void invoke<UpdateState>("desktop_update", { action: "check", channel: selected }).then((next) => {
+          if (alive && actionGeneration === statusGeneration.current) setState(next);
+        }).catch((error: unknown) => {
+          if (alive && actionGeneration === statusGeneration.current) setState(failedUpdate(error));
+        });
       }
-    }).catch(() => { if (alive) setState(failedUpdate(null, "desktop_status_unavailable")); });
-    return () => { alive = false; };
+    }).catch(() => {
+      if (alive && generation === statusGeneration.current) setState(failedUpdate(null, "desktop_status_unavailable"));
+    });
+    return () => { alive = false; statusGeneration.current++; };
   }, [invoke]);
 
   useEffect(() => {
     if (!invoke || !working) return;
     const timer = window.setInterval(() => {
-      void invoke<UpdateStatus>("desktop_update_status").then(readStatus).catch(() => {});
+      const generation = ++statusGeneration.current;
+      void invoke<UpdateStatus>("desktop_update_status").then((value) => {
+        commitStatus(value, generation);
+      }).catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
   }, [invoke, working]);
@@ -79,14 +97,21 @@ export function DesktopUpdate() {
   async function run(action: "check" | "apply" | "repair" | "restart" | "rollback" | "forget_runtime_selection") {
     if (!invoke || busy.current) return;
     busy.current = true;
+    statusGeneration.current++;
     setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : "downloading" });
     try {
       if (!version) {
-        readStatus(await invoke<UpdateStatus>("desktop_update_status"));
+        const generation = ++statusGeneration.current;
+        commitStatus(await invoke<UpdateStatus>("desktop_update_status"), generation);
       }
-      setState(await invoke<UpdateState>("desktop_update", { action, channel }));
+      const next = await invoke<UpdateState>("desktop_update", { action, channel });
+      statusGeneration.current++;
+      setState(next);
     }
-    catch (error: unknown) { setState(failedUpdate(error, version ? "update_failed" : "desktop_status_unavailable")); }
+    catch (error: unknown) {
+      statusGeneration.current++;
+      setState(failedUpdate(error, version ? "update_failed" : "desktop_status_unavailable"));
+    }
     finally { busy.current = false; }
   }
   const message: Record<Phase, string> = {

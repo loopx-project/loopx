@@ -182,10 +182,10 @@ def packet_ref(prefix: str, packet: Mapping[str, Any]) -> str:
     return f"{prefix}-{digest}"
 
 
-def capability_contract(*, packet_role: str) -> dict[str, Any]:
+def capability_contract(*, packet_role: str, project_scoped: bool = False) -> dict[str, Any]:
     return {
         "capability_id": "material_lifecycle",
-        "scope": "goal",
+        "scope": "project" if project_scoped else "goal",
         "default_enabled": False,
         "packet_role": packet_role,
         "creates_authority": False,

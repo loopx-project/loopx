@@ -107,19 +107,11 @@ def capability_configuration_editor(
             "supported_scopes": ["machine", "goal"],
             "writable_scopes": ["machine", "goal"],
             "fields": [
-                _field(
-                    "completed_todos",
-                    "Completed Todos between Goal reviews",
-                    "number",
-                    minimum=1,
-                    maximum=5,
-                    required=True,
-                    description=(
-                        "Default 5 in both turn modes. Use 2 or 3 for earlier review; "
-                        "the Goal editor writes an explicit override. Counts this "
-                        "Agent's advancement work."
-                    ),
-                ),
+                _field("count_unit", "Count between reviews", "select",
+                       options=["completed_todos", "effective_turns"], required=True,
+                       description="Existing completed-Todo values keep their units until explicitly changed."),
+                _field("count", "Review interval", "number", minimum=1, maximum=5, required=True,
+                       description="Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
             ],
         },
         "periodic_report": {

@@ -219,7 +219,11 @@ def assert_status_agent_lane_next_action_projection() -> None:
     assert side_action in markdown, markdown
     assert f"next_agent_todo: {primary_action} claimed_by=codex-main-control scope=goal_all_agents" in markdown, markdown
     assert f"asset_agent_todo: {primary_action} claimed_by=codex-main-control scope=goal_all_agents" in markdown, markdown
+    # The handoff reducer consumes an explicit history array even when empty.
+    for goal in payload["run_history"]["goals"]:
+        goal.setdefault("latest_runs", [])
     packet = build_review_packet(payload, goal_id=goal_id, action_kind="codex")
+    assert packet["ok"] is True, packet
     assert packet["agent_member"]["agent_id"] == "codex-side-bypass", packet
     assert "Agent 成员：agent=codex-side-bypass agent_model=peer_v1" in packet["project_agent_handoff"], packet
     assert "profile_role=product-validation" in packet["project_agent_handoff"], packet

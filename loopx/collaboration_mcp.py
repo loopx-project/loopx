@@ -73,6 +73,7 @@ from .control_plane.collaboration.peers import (
     request,
     require_operation_id,
 )
+from .presentation.answer_instruction import conversation_answer_instruction
 
 
 _PINNED_MODULE_LAUNCHER = (
@@ -330,7 +331,12 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             caller_goal_ref=caller_goal_ref,
         )
 
-    @server.tool()
+    @server.tool(description=(
+        "Return a conclusion to the original requester. For a later changed fact, "
+        "append an update with a stable update_id; retry with the same id and text. "
+        "Neither a blocker nor a returned result certifies completion of the work. "
+        + conversation_answer_instruction()
+    ))
     def return_result(request_id: str, text: str, update_id: str | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
@@ -643,19 +649,28 @@ class Delegations:
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
               parent_request_id: str | None = None, *, conversation: dict | None = None,
-              confirmed_operation_id: str | None = None) -> dict:
+              confirmed_operation_id: str | None = None,
+              source_request_id: str | None = None) -> dict:
         """Start or replay one bound operation.
 
         ``conversation`` is supplied only by the trusted Chat host, never by
         the model: the session and Turn that started the operation.  It is
         kept on first creation and never replaced, so a later wake returns to
-        that conversation and no other.
+        that conversation and no other. ``source_request_id`` is also host-only:
+        the receiver's existing inbox request, separate from the user brief.
         """
         binding = self.binding(binding_id, require_active=True)
         require_operation_id(operation_id)
         brief = normalize_request({"goal_id": self.goal_id, "agent_id": binding["agent_id"], "brief": brief})["brief"]
         if any(item.get("delegation", {}).get("operation_id") == operation_id for item in brief["inputs"]):
             raise ValueError("delegation cannot depend on itself")
+        if source_request_id is not None:
+            with collaboration_goal_scope(self.registry, goal_id=self.goal_id, agents=(),
+                                          caller_goal_ref=self._caller_goal_ref()) as scope:
+                original = _entry(self.root, self.goal_id, binding["agent_id"], source_request_id, scope=scope)
+                decide_collaboration_lifecycle(scope, operation="history_inspect", record=original)
+            if original.get("brief") != brief:
+                raise ValueError("source request brief does not match delegated work")
         path = self.path(operation_id)
         with exclusive_file_lock(path.with_suffix(".dispatch")):
             exists = path.exists()
@@ -665,6 +680,8 @@ class Delegations:
                                 binding["agent_id"], operation_id, brief, parent_request_id,
                                 caller_goal_ref=self._caller_goal_ref())
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
+            if source_request_id is not None:
+                identity["source_request_id"] = source_request_id
             if confirmed_operation_id is not None:
                 # Internal callback adapter only: a canonical locator/CAS fence,
                 # not an executor identity or domain execution permission.
@@ -1483,16 +1500,24 @@ class Delegations:
                 operation="history_inspect",
                 record=entry,
             )
+        source_id = row["identity"].get("source_request_id")
+        source_instruction = (
+            " Original owner inbox request " + source_id + ": read its original context, "
+            "independently acknowledge adopt/defer/reject, and return an audience-safe conclusion "
+            "for that exact request with manager-inbox report. A peer return alone does not reply "
+            "to the original conversation. Final prose is not a receipt."
+        ) if source_id else ""
         return {
             "request_id": request_id,
             "brief": entry["brief"],
+            **({"source_request_id": source_id} if source_id else {}),
             "instruction": (
                 "Use the loopx_delegation tools to read_context and call "
                 "assess_request for this request before working. If you adopt "
                 "it, call return_result with the evidence-backed conclusion "
                 "after validation. Final-answer prose alone is not an adoption "
                 "or return receipt."
-            ),
+            ) + source_instruction,
         }
 
     def _write_delegation_bootstrap(self, row: dict, binding: dict) -> None:
@@ -1914,7 +1939,14 @@ def main():
         service = Delegations(args.runtime_root, args.registry, args.goal_id,
                               args.agent_id, args.execution_config)
         if args.delegation_action == "validate":
-            service._validate(service._bound(_read(service.path(args.operation_id))))
+            row = _read(service.path(args.operation_id))
+            binding = service._bound(row)
+            # The native Turn invokes this after its Host returns, before the
+            # worker's outer finally. Retire only the exact operation-owned
+            # input before the canonical clean-worktree check; user files and
+            # actual delivery changes must still be rejected by that check.
+            service._clear_delegation_bootstrap(row, binding)
+            service._validate(binding)
         else:
             service._stop_signal = install_worker_stop_signal(
                 service._stop_path(service.path(args.operation_id)))

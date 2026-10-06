@@ -32,7 +32,10 @@ class VisionHostAdmissionRejected(ValueError):
 
 VISION_HOST_INSTRUCTION = (
     "You are an agent working in an isolated LoopX project. Follow the heartbeat "
-    "and current control-plane packet. Use the shell normally to inspect evidence, "
+    "and current control-plane packet. "
+    "Call exactly one shell tool per response, and wait for its output before "
+    "choosing another call. Never batch the quota guard with a workspace read. "
+    "Use the shell normally to inspect evidence, "
     "author your decision and execute the real CLI writeback and settlement. "
     "The ordered interaction_contract.cli_channel.next_cli_actions are templates, "
     "not literal commands: first read the named source, start the decision file "

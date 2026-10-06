@@ -156,8 +156,9 @@ def register_todo_linkage_arguments(
         dest="successor_todo_ids",
         action="append",
         help=(
-            "For todo update/complete, link an existing successor todo to the "
-            "current todo. Repeat for multiple successors."
+            "For todo update/complete, or canonical supersede, link an existing "
+            "successor todo to the current todo. Supersede links and retires "
+            "atomically. Repeat for multiple successors."
         ),
     )
     todo_parser.add_argument(
@@ -538,8 +539,8 @@ def validate_todo_supersede_options(args: argparse.Namespace) -> None:
     validate_successor_routing_options(args)
     if any(getattr(args, field) for field in ("blocks_agent", "clear_blocks_agent", "excluded_agents", "clear_excluded_agents", "global_gate", "clear_global_gate", "unblocks_todo_id", "resume_when")):
         raise ValueError("todo supersede does not update current todo routing metadata; use todo update first")
-    if args.successor_todo_ids:
-        raise ValueError("todo supersede does not support --successor-todo-id; use --next-agent-todo or update the source todo before supersede")
+    if args.successor_todo_ids and (args.next_agent_todo or args.next_user_todo):
+        raise ValueError("--successor-todo-id links existing work and cannot be combined with --next-agent-todo or --next-user-todo")
     if any(getattr(args, field) for field in ("monitor_target_key", "cadence", "next_due_at", "expires_at")):
         raise ValueError("todo supersede does not update target or monitor schedule metadata; use todo update before supersede")
 

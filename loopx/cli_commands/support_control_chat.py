@@ -156,6 +156,10 @@ def register_chat_and_dashboard_commands(
     dashboard_parser.add_argument(
         "--verbose", action="store_true", help="Print HTTP request logs."
     )
+    chat_parser.add_argument(
+        "--no-private-reactions", action="store_true",
+        help="Disable received/processing reactions for native Lark private conversations. Enabled by default.",
+    )
 
 
 __all__ = ["register_chat_and_dashboard_commands"]

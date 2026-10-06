@@ -437,6 +437,8 @@ def configure_goal(
     quota_window_hours: float | None = None,
     execution_turn_granularity: str | None = None,
     execution_replan_after_todos: int | None = None,
+    execution_replan_after_turns: int | None = None,
+    clear_execution_replan_after_turns: bool = False,
     clear_execution_replan_after_todos: bool = False,
     self_repair_enabled: bool | None = None,
     self_repair_health: bool | None = None,
@@ -823,6 +825,8 @@ def configure_goal(
         goal,
         turn_granularity=execution_turn_granularity,
         replan_after_completed_todos=execution_replan_after_todos,
+        replan_after_effective_turns=execution_replan_after_turns,
+        clear_replan_after_effective_turns=clear_execution_replan_after_turns,
         clear_replan_after_completed_todos=clear_execution_replan_after_todos,
     )
     legacy_hierarchy_before = legacy_agent_hierarchy_present(before_goal)

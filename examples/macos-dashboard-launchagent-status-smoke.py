@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -31,6 +33,9 @@ def run_script(fake_bin: Path, home: Path, args: list[str], *, schema_version: i
         "LOOPX_STATUS_CONTRACT_MIN_VERSION": "2",
         "CODEX_HOME": "",
         "LOOPX_CHAT_CODEX_HOME": "",
+        "LOOPX_CHAT_RUNTIME_ROOT": "",
+        "LOOPX_CHAT_IDLE_TIMEOUT_SECONDS": "",
+        "LOOPX_CHAT_HARD_TIMEOUT_SECONDS": "",
         **(extra_env or {}),
     }
     return subprocess.run(
@@ -275,6 +280,7 @@ def main() -> int:
         assert "--port 8767" in default_chat_plist, default_chat_plist
         assert "--replace-existing-loopx-chat" in default_chat_plist, default_chat_plist
         assert "--no-open" in default_chat_plist, default_chat_plist
+        assert "--runtime-root" not in shlex.split(plistlib.loads(chat_plist.read_bytes())["ProgramArguments"][2])
         assert f"export CODEX_HOME={(home / '.codex').resolve()};" in default_chat_plist, default_chat_plist
         assert "export LOOPX_PYTHON=" in default_plist, default_plist
         assert "export LOOPX_PYTHON=" in default_chat_plist, default_chat_plist
@@ -307,7 +313,8 @@ def main() -> int:
         selected_chat_plist = chat_plist.read_text(encoding="utf-8")
         assert "--enable-control-plane-write-api" in write_plist, write_plist
         selected = (home / 'selected-codex-home').resolve()
-        assert f"export CODEX_HOME={selected};" in selected_chat_plist, selected_chat_plist
+        assert f"export LOOPX_CHAT_CODEX_HOME={selected};" in selected_chat_plist, selected_chat_plist
+        assert f"export CODEX_HOME={(home / '.codex').resolve()};" in selected_chat_plist, selected_chat_plist
         run_script(fake_bin, home, ["install"], schema_version=2,
                    extra_env={"CODEX_HOME": str(home / "unrelated-upgrader")})
         assert plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_CODEX_HOME"] == str(selected)
@@ -317,8 +324,6 @@ def main() -> int:
         workspaces = [(home / "workspace one").resolve(), (home / "workspace $(touch sentinel) & two").resolve()]
         for workspace in workspaces:
             workspace.mkdir()
-        import json
-        import shlex
         custom_registry = (home / "isolated" / "registry.json").resolve()
         run_script(fake_bin, home, ["install"], schema_version=2, extra_env={
             "LOOPX_CHAT_SCAN_PATHS_JSON": json.dumps([str(p) for p in workspaces]),
@@ -350,6 +355,111 @@ def main() -> int:
                               extra_env={"FAKE_RUNTIME_IDENTITY": json.dumps(wheel_identity)}, check=False)
         assert rejected.returncode != 0
         assert chat_plist.read_bytes() == before
+
+        # A coordinator can resume workers from another existing Codex home.
+        # The Chat override must not overwrite that execution profile.
+        execution_home = (home / "worker home").resolve()
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"CODEX_HOME": str(execution_home),
+                              "LOOPX_CHAT_CODEX_HOME": str(selected)})
+        installed = plistlib.loads(chat_plist.read_bytes())
+        assert installed["EnvironmentVariables"]["CODEX_HOME"] == str(execution_home)
+        assert installed["EnvironmentVariables"]["LOOPX_CHAT_CODEX_HOME"] == str(selected)
+        run_script(fake_bin, home, ["restart"], schema_version=2)
+        preserved = plistlib.loads(chat_plist.read_bytes())
+        assert preserved["EnvironmentVariables"] == installed["EnvironmentVariables"]
+        # Execute the generated wrapper with a bounded fixture entrypoint.
+        # It must transport both settings, including spaces, to the same child.
+        fake_loopx = fake_bin / "loopx"
+        original_entry = fake_loopx.read_bytes()
+        write_executable(fake_loopx, f"#!{sys.executable}\nimport json, os, sys\n"
+                         "print(json.dumps({'homes':{k:os.environ[k] for k in "
+                         "['CODEX_HOME','LOOPX_CHAT_CODEX_HOME']},'argv':sys.argv[1:]}))\n")
+        try:
+            launched = subprocess.run(preserved["ProgramArguments"],
+                                      capture_output=True, text=True, check=True)
+            transported = json.loads(launched.stdout)
+            assert transported["homes"] == {key: preserved["EnvironmentVariables"][key]
+                                            for key in ("CODEX_HOME", "LOOPX_CHAT_CODEX_HOME")}
+            argv = transported["argv"]
+            assert argv[argv.index("--registry") + 1] == str(custom_registry)
+            assert [argv[i + 1] for i, word in enumerate(argv[:-1]) if word == "--scan-path"] == [str(p) for p in workspaces]
+            assert "--global-registry" not in argv
+            assert not (root_sentinel := REPO_ROOT / "sentinel").exists(), root_sentinel
+        finally:
+            fake_loopx.write_bytes(original_entry)
+        before_invalid_home = chat_plist.read_bytes()
+        rejected = run_script(fake_bin, home, ["install"], schema_version=2,
+                              extra_env={"CODEX_HOME": "relative-worker-home"}, check=False)
+        assert rejected.returncode != 0 and "CODEX_HOME must be absolute" in rejected.stderr
+        assert chat_plist.read_bytes() == before_invalid_home
+
+        # Login/restart must reopen the selected Session store and retain its
+        # execution timeouts, rather than silently using another root/defaults.
+        runtime_root = (home / "chat state $(touch sentinel) & existing").resolve()
+        runtime_root.mkdir()
+        native_state = runtime_root / "retained-session.json"
+        native_state.write_text('{"session":"retained"}')
+        run_script(fake_bin, home, ["install"], schema_version=2, extra_env={
+            "LOOPX_CHAT_RUNTIME_ROOT": str(runtime_root),
+            "LOOPX_CHAT_IDLE_TIMEOUT_SECONDS": "600",
+            "LOOPX_CHAT_HARD_TIMEOUT_SECONDS": "1800",
+        })
+        run_script(fake_bin, home, ["restart"], schema_version=2)
+        runtime_plist = plistlib.loads(chat_plist.read_bytes())
+        runtime_command = shlex.split(runtime_plist["ProgramArguments"][2])
+        assert runtime_command[runtime_command.index("--runtime-root") + 1] == str(runtime_root)
+        assert float(runtime_command[runtime_command.index("--idle-timeout-seconds") + 1]) == 600
+        assert float(runtime_command[runtime_command.index("--hard-timeout-seconds") + 1]) == 1800
+        assert "--runtime-root" not in shlex.split(plistlib.loads(status_plist.read_bytes())["ProgramArguments"][2])
+        assert native_state.read_text() == '{"session":"retained"}'
+        assert not (REPO_ROOT / "sentinel").exists()
+        original_entry = fake_loopx.read_bytes()
+        write_executable(fake_loopx, f"#!{sys.executable}\nimport json,sys\nfrom pathlib import Path\n"
+                         "args=sys.argv[1:]; root=Path(args[args.index('--runtime-root')+1])\n"
+                         "print(json.dumps({'argv':args,'state':json.loads((root/'retained-session.json').read_text())}))\n")
+        try:
+            actual = subprocess.run(runtime_plist["ProgramArguments"],
+                                    capture_output=True, text=True, check=True)
+            readback = json.loads(actual.stdout)
+            assert readback["state"] == {"session": "retained"}
+            assert readback["argv"][readback["argv"].index("--runtime-root") + 1] == str(runtime_root)
+            assert not (REPO_ROOT / "sentinel").exists()
+        finally:
+            fake_loopx.write_bytes(original_entry)
+        both_before = [p.read_bytes() for p in (chat_plist, status_plist)]
+        for key, value in (("LOOPX_CHAT_RUNTIME_ROOT", "relative"),
+                           ("LOOPX_CHAT_RUNTIME_ROOT", "bad\npath"),
+                           ("LOOPX_CHAT_IDLE_TIMEOUT_SECONDS", "nan"),
+                           ("LOOPX_CHAT_HARD_TIMEOUT_SECONDS", "-1")):
+            rejected = run_script(fake_bin, home, ["install"], schema_version=2,
+                                  extra_env={key: value}, check=False)
+            assert rejected.returncode != 0 and key in rejected.stderr
+            assert [p.read_bytes() for p in (chat_plist, status_plist)] == both_before
+
+        # An older explicit argv binding is decoded without executing it.
+        legacy_runtime = plistlib.loads(chat_plist.read_bytes())
+        legacy_runtime.pop("EnvironmentVariables")
+        legacy_runtime["ProgramArguments"] = ["/bin/zsh", "-c",
+            f"exec loopx --registry {shlex.quote(str(custom_registry))} "
+            f"--runtime-root {shlex.quote(str(runtime_root))} chat "
+            "--idle-timeout-seconds 600 --hard-timeout-seconds 1800"]
+        chat_plist.write_bytes(plistlib.dumps(legacy_runtime))
+        run_script(fake_bin, home, ["install"], schema_version=2)
+        saved = plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]
+        assert saved["LOOPX_CHAT_RUNTIME_ROOT"] == str(runtime_root)
+        assert float(saved["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"]) == 600
+        assert float(saved["LOOPX_CHAT_HARD_TIMEOUT_SECONDS"]) == 1800
+        changed_root = (home / "explicit replacement").resolve()
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"LOOPX_CHAT_RUNTIME_ROOT": str(changed_root),
+                              "LOOPX_CHAT_IDLE_TIMEOUT_SECONDS": "700"})
+        changed = plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]
+        assert changed["LOOPX_CHAT_RUNTIME_ROOT"] == str(changed_root)
+        assert float(changed["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"]) == 700
+        assert float(changed["LOOPX_CHAT_HARD_TIMEOUT_SECONDS"]) == 1800
+        assert not changed_root.exists(), "selection must not create or migrate a Session store"
+        assert native_state.read_text() == '{"session":"retained"}'
 
         # Legacy generated plists used only a shell export. Preserve quoted
         # paths across upgrades without ever executing their command contents.

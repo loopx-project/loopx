@@ -1776,7 +1776,7 @@ def assert_side_agent_replans_when_deferred_successor_is_ready() -> None:
     assert "successor_replan_recorded" in actions[1], actions
     assert "loopx refresh-state" in actions[1], actions
     assert "--agent-id codex-side-bypass" in actions[1], actions
-    assert "loopx quota spend-slot" in actions[2], actions
+    assert "loopx --format json quota spend-slot" in actions[2], actions
     assert "--agent-id codex-side-bypass" in actions[2], actions
     assert guard["automation_liveness"]["automation_action"] == "execute_bounded_work", guard
     markdown = render_quota_should_run_markdown(guard)
@@ -2060,62 +2060,69 @@ def assert_handoff_does_not_cross_ordinary_priority_boundary() -> None:
     assert guard["recommended_action"] == current_action, guard
 
 
-def assert_agent_lane_next_action_prefers_explicit_next_action_todo_id() -> None:
+def assert_explicit_action_selection_replaces_unbound_prose() -> None:
     ordinary_action = (
         "[P0] Run SWE-Marathon full-suite polling and record compact results."
     )
     parity_action = (
         "[P0] Repair benchmark treatment product-path parity before claiming uplift."
     )
-    guard = build_quota_should_run(
-        status_payload(
-            status="next_action_todo_id_projection",
-            next_action=(
-                "[P0] Continue todo_parity_slice: repair treatment parity before "
-                "another full-suite polling slice."
-            ),
-            coordination={
-                "agent_model": "peer_v1",
-                "registered_agents": ["codex-main-control"],
-            },
-            agent_todo_items=[
-                {
-                    "index": 1,
-                    "text": ordinary_action,
-                    "role": "agent",
-                    "status": "open",
-                    "priority": "P0",
-                    "task_class": "advancement_task",
-                    "claimed_by": "codex-main-control",
-                    "todo_id": "todo_full_suite",
-                    "required_capabilities": ["shell"],
-                },
-                {
-                    "index": 2,
-                    "text": parity_action,
-                    "role": "agent",
-                    "status": "open",
-                    "priority": "P0",
-                    "task_class": "advancement_task",
-                    "claimed_by": "codex-main-control",
-                    "todo_id": "todo_parity_slice",
-                    "required_capabilities": ["shell"],
-                },
-            ],
+    payload = status_payload(
+        status="next_action_todo_id_projection",
+        next_action=(
+            "[P0] Continue todo_parity_slice: repair treatment parity before "
+            "another full-suite polling slice."
         ),
-        goal_id=GOAL_ID,
-        agent_id="codex-main-control",
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": ["codex-main-control"],
+        },
+        agent_todo_items=[
+            {
+                "index": 1,
+                "text": ordinary_action,
+                "role": "agent",
+                "status": "open",
+                "priority": "P0",
+                "task_class": "advancement_task",
+                "claimed_by": "codex-main-control",
+                "todo_id": "todo_full_suite",
+                "required_capabilities": ["shell"],
+            },
+            {
+                "index": 2,
+                "text": parity_action,
+                "role": "agent",
+                "status": "open",
+                "priority": "P0",
+                "task_class": "advancement_task",
+                "claimed_by": "codex-main-control",
+                "todo_id": "todo_parity_slice",
+                "required_capabilities": ["shell"],
+            },
+        ],
+    )
+    # Unbound prose cannot replace the typed selected Todo. Explicit selection
+    # uses the authoritative inventory and does not rewrite the recommendation.
+    unbound = build_quota_should_run(payload, goal_id=GOAL_ID, agent_id="codex-main-control")
+    assert unbound["agent_lane_next_action"]["todo_id"] == "todo_full_suite", unbound
+    summary = payload["attention_queue"]["items"][0]["project_asset"]["agent_todos"]
+    summary["items"] = list(summary["first_open_items"])
+    guard = build_quota_should_run(
+        payload, goal_id=GOAL_ID, agent_id="codex-main-control",
+        requested_action_todo_id="todo_parity_slice",
     )
     next_action = guard["agent_lane_next_action"]
     assert next_action["todo_id"] == "todo_parity_slice", guard
-    assert next_action["selected_by"] == "active_next_action_todo", guard
-    assert next_action["confidence"] == "selected", guard
-    assert guard["recommended_action"] == parity_action, guard
+    assert next_action["selected_by"] == "agent_action_selection", guard
+    assert guard["action_selection_qualification"]["state"] == "qualified", guard
+    assert next_action["text"] == parity_action, guard
+    assert guard["recommended_action"] == ordinary_action, guard
     markdown = render_quota_should_run_markdown(guard)
     assert "agent_lane_next_action: todo_id=todo_parity_slice" in markdown, markdown
 
 
-def assert_active_next_action_todo_survives_compact_candidate_limits() -> None:
+def assert_explicit_action_selection_survives_compact_candidate_limits() -> None:
     filler_items = [
         {
             "index": index,
@@ -2153,6 +2160,7 @@ def assert_active_next_action_todo_survives_compact_candidate_limits() -> None:
         preferred_todo_ids={"todo_skillsbench_lifecycle"},
     )
     assert agent_todos is not None
+    agent_todos["items"] = [*filler_items, target_item]
     assert all(
         item.get("todo_id") != "todo_skillsbench_lifecycle"
         for item in agent_todos["executable_backlog_items"]
@@ -2178,29 +2186,33 @@ def assert_active_next_action_todo_survives_compact_candidate_limits() -> None:
     item["agent_todos"] = agent_todos
     item["project_asset"]["agent_todos"] = agent_todos
 
+    unbound = build_quota_should_run(
+        payload, goal_id=GOAL_ID, agent_id="codex-main-control",
+    )
+    portfolio = unbound["action_portfolio"]
+    assert portfolio["primary"]["todo_id"] == filler_items[0]["todo_id"], unbound
+    assert portfolio["suggested_actions"][0]["todo_id"] == filler_items[0]["todo_id"], portfolio
+    agent_channel = unbound["interaction_contract"]["agent_channel"]
+    assert agent_channel["selection_required"] is True, agent_channel
+    assert agent_channel["delivery_allowed"] is False, agent_channel
+    assert agent_channel["action_portfolio_ref"] == "$.action_portfolio", agent_channel
+
     guard = build_quota_should_run(
         payload,
         goal_id=GOAL_ID,
         agent_id="codex-main-control",
+        requested_action_todo_id="todo_skillsbench_lifecycle",
     )
     next_action = guard["agent_lane_next_action"]
     assert next_action["todo_id"] == "todo_skillsbench_lifecycle", guard
-    assert next_action["selected_by"] == "active_next_action_todo", guard
-    assert next_action["source"] == (
-        "agent_todo_summary.active_next_action_executable_items"
-    ), next_action
-    assert guard["recommended_action"] == target_action, guard
+    assert next_action["selected_by"] == "agent_action_selection", guard
+    assert guard["action_selection_qualification"]["state"] == "qualified", guard
+    assert next_action["selection_binding"] == "pending_action_selection", next_action
+    assert next_action["text"] == target_action, guard
+    assert guard["recommended_action"] == filler_items[0]["text"], guard
     selected_todo = guard["selected_todo"]
     assert selected_todo["todo_id"] == "todo_skillsbench_lifecycle", guard
-    portfolio = guard["action_portfolio"]
-    assert portfolio["primary"]["todo_id"] == "todo_skillsbench_lifecycle", guard
-    assert portfolio["suggested_actions"][0]["todo_id"] == (
-        "todo_skillsbench_lifecycle"
-    ), portfolio
-    agent_channel = guard["interaction_contract"]["agent_channel"]
-    assert agent_channel["selection_required"] is True, agent_channel
-    assert agent_channel["delivery_allowed"] is False, agent_channel
-    assert agent_channel["action_portfolio_ref"] == "$.action_portfolio", agent_channel
+    assert "action_portfolio" not in guard, guard
     markdown = render_quota_should_run_markdown(guard)
     assert "agent_lane_next_action: todo_id=todo_skillsbench_lifecycle" in markdown, markdown
 
@@ -2245,8 +2257,8 @@ def main() -> int:
     assert_peer_handoff_uses_ordinary_priority_order()
     assert_handoff_without_dependency_link_has_no_special_rank()
     assert_handoff_does_not_cross_ordinary_priority_boundary()
-    assert_agent_lane_next_action_prefers_explicit_next_action_todo_id()
-    assert_active_next_action_todo_survives_compact_candidate_limits()
+    assert_explicit_action_selection_replaces_unbound_prose()
+    assert_explicit_action_selection_survives_compact_candidate_limits()
     print("work-lane-contract-smoke ok")
     return 0
 

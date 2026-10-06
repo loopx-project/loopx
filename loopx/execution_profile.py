@@ -154,6 +154,14 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return profile
 
+    if "replan_after_effective_turns" in value and "replan_after_completed_todos" in value:
+        raise ValueError("choose one review cadence unit")
+    if "replan_after_effective_turns" in value:
+        effective = value["replan_after_effective_turns"]
+        if isinstance(effective, bool) or not isinstance(effective, int) or not 1 <= effective <= 5:
+            raise ValueError("replan_after_effective_turns must be an integer from 1 to 5")
+        profile["replan_after_effective_turns"] = effective
+
     threshold = completed_todo_replan_threshold(value)
     if threshold != COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD:
         profile["replan_after_completed_todos"] = threshold
@@ -233,6 +241,8 @@ def apply_goal_execution_profile_change(
     turn_granularity: str | None,
     replan_after_completed_todos: int | None,
     clear_replan_after_completed_todos: bool,
+    replan_after_effective_turns: int | None = None,
+    clear_replan_after_effective_turns: bool = False,
 ) -> None:
     if (
         clear_replan_after_completed_todos
@@ -242,14 +252,25 @@ def apply_goal_execution_profile_change(
             "--clear-execution-replan-after-todos cannot be combined with "
             "--execution-replan-after-todos"
         )
+    if replan_after_effective_turns is not None and (
+        replan_after_completed_todos is not None or clear_replan_after_effective_turns
+    ):
+        raise ValueError("choose one review cadence override or clear operation")
     raw = goal.get("execution_profile")
     profile = dict(raw) if isinstance(raw, dict) else {}
     if (
         turn_granularity is None
         and replan_after_completed_todos is None
+        and replan_after_effective_turns is None
+        and not clear_replan_after_effective_turns
         and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
     ):
         return
+    if clear_replan_after_effective_turns or replan_after_completed_todos is not None:
+        profile.pop("replan_after_effective_turns", None)
+    if replan_after_effective_turns is not None:
+        profile["replan_after_effective_turns"] = replan_after_effective_turns
+        profile.pop("replan_after_completed_todos", None)
     if clear_replan_after_completed_todos:
         profile.pop("replan_after_completed_todos", None)
     goal["execution_profile"] = configure_execution_profile(
@@ -356,4 +377,6 @@ def execution_profile_summary(profile: dict[str, Any] | None) -> str:
             f" replan_after_completed_todos={normalized['replan_after_completed_todos']}"
             if "replan_after_completed_todos" in normalized else ""
         )
+        + (f" replan_after_effective_turns={normalized['replan_after_effective_turns']}"
+           if "replan_after_effective_turns" in normalized else "")
     )

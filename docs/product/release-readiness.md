@@ -680,6 +680,12 @@ path, and canary route rather than as a user-facing release baseline.
   canary checks; the full Python/public smoke/model-behavior/PostgreSQL matrix
   and a separate Pages check were not run.
 
+- `v1.2.4` on 2026-10-03 20:38 +08:00: scoped Chat coordination, recoverable
+  state migration, explicit local preferences, and handoff ownership at commit
+  `fc42b84cedb21a56c15ca3b4af5eab0407829cf8`. See the
+  [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.4)
+  for its shipped capability usage and qualification limits.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 

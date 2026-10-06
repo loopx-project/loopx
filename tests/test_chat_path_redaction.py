@@ -8,7 +8,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from loopx.chat import VisibleResponseStreamFilter, parse_agent_response, redact_local_paths
+from loopx.chat import VisibleResponseStreamFilter, parse_agent_response, redact_local_paths, redact_response_markdown
 from loopx.chat_status_api import ChatStatusRequestMixin
 
 
@@ -33,6 +33,29 @@ def test_canonical_private_path_shapes_and_public_urls():
     assert redact_local_paths("/mnt/private/a.txt") == "[local-path]"
     public = "https://example.org/tmp/file.json ./relative/file.json docs/file.json"
     assert redact_local_paths(public) == public
+
+
+@pytest.mark.parametrize("destination", [
+    "/custom-volume/project/report.md#result", "/custom-volume/project/a(b).md:12",
+    '</custom-volume/project/a file.md> "title"',
+    "file:///custom-volume/project/report.md", "%2Fcustom-volume%2Fproject%2Freport.md",
+    r"Q:\private state\report.md",
+])
+def test_response_local_links_keep_labels_without_broken_or_private_destinations(destination):
+    text = f"- [报告 [结果]]({destination})；[公开来源](https://example.org/a(b))."
+    result = parse_agent_response(text, protected_paths=["/custom-volume/project", r"Q:\private state"])["message"]
+    assert result == "- 报告 [结果]；[公开来源](https://example.org/a(b))."
+
+
+def test_response_link_repair_preserves_code_and_does_not_rewrite_status_json():
+    link = "[label](/custom-volume/project/report.md)"
+    code = f"`{link}`\n```md\n{link}\n```\n"
+    assert redact_response_markdown(code, protected_paths=["/custom-volume/project"]) == code.replace(
+        "/custom-volume/project/report.md", "[project]")
+    assert json.loads(redact_local_paths(json.dumps({"message": link}), protected_paths=["/custom-volume/project"])) == {
+        "message": "[label]([project])"}
+    raw = '<loopx-review-json>' + json.dumps({"message": link}) + '</loopx-review-json>'
+    assert parse_agent_response(raw, protected_paths=["/custom-volume/project"])["message"] == "label"
 
 
 @pytest.mark.parametrize("root", [

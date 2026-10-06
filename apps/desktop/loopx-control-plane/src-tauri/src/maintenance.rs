@@ -265,8 +265,6 @@ fn detect_environment() -> Value {
 
 #[tauri::command]
 pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> Value {
-    let snapshot = state.status_snapshot();
-    let last_failure = state.last_failure.lock().unwrap().clone();
     // Probing spawns bounded sub-processes; the boot page polls every second,
     // so serve the cached block and refresh at most every ENVIRONMENT_TTL.
     let environment = {
@@ -278,7 +276,21 @@ pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> V
         cache.as_ref().expect("refreshed above").1.clone()
     };
     let selection = crate::runtime_selection::selected(&app).ok();
-    json!({"state": snapshot, "startup": state.startup_timing(), "last_failure": last_failure, "app_version": app.package_info().version.to_string(), "runtime": bundled_runtime::identity(&app).ok(), "runtime_selection":{"explicit":selection.as_ref().is_some_and(|selected| selected.environment_override), "remembered":selection.as_ref().is_some_and(|selected| selected.explicit), "bundled_repair_available":selection.is_some() && !state.separately_managed_runtime.load(Ordering::Acquire)}, "rollback_available": crate::update_backup::available(&app), "environment": environment})
+    let runtime = bundled_runtime::identity(&app).ok();
+    let runtime_selection = json!({
+        "explicit": selection.as_ref().is_some_and(|selected| selected.environment_override),
+        "remembered": selection.as_ref().is_some_and(|selected| selected.explicit),
+        "bundled_repair_available": selection.is_some()
+            && !state.separately_managed_runtime.load(Ordering::Acquire),
+    });
+    let rollback_available = crate::update_backup::available(&app);
+    let app_version = app.package_info().version.to_string();
+    let startup = state.startup_timing();
+    // Read mutable transaction state after the potentially blocking
+    // diagnostics so this response cannot revive a superseded phase.
+    let snapshot = state.status_snapshot();
+    let last_failure = state.last_failure.lock().unwrap().clone();
+    json!({"state": snapshot, "startup": startup, "last_failure": last_failure, "app_version": app_version, "runtime": runtime, "runtime_selection": runtime_selection, "rollback_available": rollback_available, "environment": environment})
 }
 #[tauri::command]
 pub async fn desktop_update(

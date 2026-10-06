@@ -31,7 +31,8 @@ permissions:
 
 concurrency:
   group: release-artifacts-${{ github.event.release.tag_name || inputs.tag || github.ref }}
-  cancel-in-progress: false
+  # Superseded PR validation may stop; publication retains its serialized lane.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

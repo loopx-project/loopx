@@ -24,9 +24,6 @@ from .control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
     read_goal_configuration_with_source_route,
 )
-from .control_plane.goals.goal_vision_policy import (
-    normalize_completed_todo_replan_threshold,
-)
 from .orchestration import subagent_model_configuration_options
 
 CHAT_GOAL_CONFIGURATION_PATH = "/api/chat/goal-configuration"
@@ -192,7 +189,7 @@ def _goal_capability_options(
         if capability_id == "periodic_report":
             return {"clear_periodic_report_configuration": True}
         if capability_id == "todo_replan_cadence":
-            return {"clear_execution_replan_after_todos": True}
+            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True}
         if capability_id == "pull_request_review":
             return {"clear_pull_request_review_configuration": True}
         if capability_id == "change_quality_qualification":
@@ -205,7 +202,7 @@ def _goal_capability_options(
     config = dict(configuration)
     allowed: dict[str, set[str]] = {
         "goal_capability_organization": {"mode", "discovery_budget_minutes", "max_trials"},
-        "todo_replan_cadence": {"completed_todos"},
+        "todo_replan_cadence": {"completed_todos", "count_unit", "count"},
         "multi_subagent": {
             "enabled",
             "max_children",
@@ -239,11 +236,11 @@ def _goal_capability_options(
     if capability_id == "goal_capability_organization":
         return {"capability_improvement_configuration": config}
     if capability_id == "todo_replan_cadence":
-        return {
-            "execution_replan_after_todos": normalize_completed_todo_replan_threshold(
-                config.get("completed_todos")
-            ),
-        }
+        from .capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
+        cadence = normalize_replan_cadence_configuration(config)
+        option = ("execution_replan_after_turns" if cadence["count_unit"] == "effective_turns"
+                  else "execution_replan_after_todos")
+        return {option: cadence["count"]}
     if capability_id == "periodic_report":
         return {"periodic_report_configuration": config}
     if capability_id == "reward_memory":

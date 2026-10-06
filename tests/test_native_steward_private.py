@@ -72,6 +72,46 @@ def finish(runtime, row):
     return runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
 
 
+def test_personal_steward_uses_registered_portfolio_and_configured_inbox_root(steward, tmp_path):
+    from loopx.capabilities.manager_context.discovery import agent_page
+    from loopx.capabilities.manager_context import configure_delivery_scope
+    from loopx.capabilities.native_chat.project_context import coordination_runtime_root
+    store, runtime, _, transport, binding, _, workspace = steward
+    scope = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    saved = transport.bindings.resolve(binding_id=binding["binding_id"], **scope)["context"]
+    canonical = tmp_path / "canonical-runtime"
+    registry = {"common_runtime_root": str(canonical), "goals": [
+        {"id": "maintenance", "coordination": {"registered_agents": ["reviewer", "builder"]}},
+        {"id": "notes", "coordination": {"registered_agents": ["curator"]}},
+    ]}
+    runtime.registry_path.write_text(json.dumps(registry))
+    assert coordination_runtime_root(runtime.registry_path, store.root.parent) == canonical
+    fresh = transport.bindings.session_context(saved)
+    assert fresh["context"]["goal_ids"] == ["maintenance", "notes"]
+    assert fresh["context"]["source_ref"] == saved["source_ref"]
+    assert agent_page(runtime.registry_path, goal_ids=fresh["context"]["goal_ids"], limit=100)["matched"] == 3
+    preview = configure_delivery_scope(canonical, channel=fresh["channel_id"],
+        local_delivery_scope="all_registered", sender_id=binding["operator_ref"])
+    assert preview["would_change"] and not (canonical / ".local/manager-context/policy.json").exists()
+    applied = configure_delivery_scope(canonical, channel=fresh["channel_id"],
+        local_delivery_scope="all_registered", sender_id=binding["operator_ref"], execute=True)
+    assert applied["readback_verified"]
+    assert not configure_delivery_scope(canonical, channel=fresh["channel_id"],
+        local_delivery_scope="all_registered", execute=True)["would_change"]
+    legacy = dict(binding)
+    legacy.pop("goal_scope")
+    transport.bindings.path.write_text(json.dumps({"schema_version": "loopx_chat_conversation_bindings_v0", "revision": 20, "bindings": [legacy]}))
+    assert transport.bindings.session_context(saved)["context"]["goal_ids"] == []
+    retained = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward")
+    assert "goal_scope" not in retained
+    upgraded = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward", goal_scope="all_registered")
+    assert upgraded["binding_id"] == binding["binding_id"]
+    assert transport.bindings.session_context(saved)["context"]["goal_ids"] == ["maintenance", "notes"]
+    assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
+
+
 def test_verified_empty_steward_is_not_missing_authorization_and_does_not_inherit(steward):
     store, runtime, provider, transport, binding, _, _ = steward
     transport.admit("steward-app", provider.event("steward-app", "empty", "What new work do you manage?"))
@@ -94,6 +134,143 @@ def test_verified_empty_steward_is_not_missing_authorization_and_does_not_inheri
     transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
     assert collect_manager_turn_context(runtime.registry_path, session, store.root.parent, runtime.manager_scope_resolver)["warnings"] == ["external_authorization_unavailable"]
     assert transport.admit("steward-app", provider.event("steward-app", "revoked", "more"))["status"] == "audience_rejected"
+
+
+def test_steward_reads_every_registration_across_pages_and_future_goals(steward):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+    store, runtime, _, transport, binding, _, _ = steward
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    saved = transport.bindings.resolve(binding_id=binding["binding_id"], **source)["context"]
+    goals = [{"id": f"work-{i:03d}", "coordination": {"registered_agents": ["builder", "reviewer"]}}
+             for i in range(150)]
+    goals[-1]["activation_state"] = "stopped"
+    runtime.registry_path.write_text(json.dumps({"goals": goals}))
+    inspection = ManagerInspection(context={"scope": "external_authorized", "goals": []},
+        registry_path=runtime.registry_path, runtime_root=getattr(runtime, "coordination_runtime_root", store.root.parent),
+        owner_scope=False, scope_valid=lambda: True, record=lambda result: None,
+        channel_id=transport.bindings.session_context(saved)["channel_id"],
+        discovery_scope=lambda: transport.bindings.session_context(saved)["context"]["goal_ids"])
+
+    def read_all(include_stopped=False):
+        rows, offset = [], 0
+        while True:
+            page = inspection.read(TOOL_NAME, {"view": "agents", "limit": 12, "offset": offset,
+                                    "include_stopped": include_stopped})
+            assert page["ok"] and not page["unknown"]
+            rows.extend(page["rows"])
+            if page["next_offset"] is None:
+                return {(row["goal_id"], row["agent_id"]) for row in rows}
+            offset = page["next_offset"]
+
+    expected = {(goal["id"], agent) for goal in goals for agent in ["builder", "reviewer"]}
+    assert read_all(True) == expected
+    assert read_all() == {(goal, agent) for goal, agent in expected if goal != "work-149"}
+    goals.append({"id": "future-work", "coordination": {"registered_agents": ["new-worker"]}})
+    runtime.registry_path.write_text(json.dumps({"goals": goals}))
+    assert read_all(True) == expected | {("future-work", "new-worker")}
+    assert transport.bindings.read()["bindings"][1]["goal_ids"] == []
+    assert store.list_sessions() == []
+    with pytest.raises(ValueError, match="audience"):
+        transport.bindings.resolve(binding_id=binding["binding_id"], **{**source, "sender_ref": "b" * 24})
+
+
+def test_steward_admission_configures_delivery_once_and_explicit_upgrade_preserves_blocks(steward):
+    from loopx.capabilities.manager_context import configure_delivery_scope
+    from loopx.control_plane.collaboration.inbox import _root
+    store, runtime, provider, transport, binding, _, _ = steward
+    transport.admit("steward-app", provider.event("steward-app", "scope-before", "/status"))
+    policy_path = _root(runtime.coordination_runtime_root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    channel = next(iter(policy["sources"]))
+    assert policy["sources"][channel]["local_delivery_scope"] == "all_registered"
+    policy["sources"][channel]["blocked_targets"] = [{"goal_id": "maintenance", "agent_id": "reviewer"}]
+    policy_path.write_text(json.dumps(policy))
+    configure_delivery_scope(runtime.coordination_runtime_root, channel=channel,
+        local_delivery_scope="selected", execute=True)
+    transport.admit("steward-app", provider.event("steward-app", "scope-repeat", "/status"))
+    assert json.loads(policy_path.read_text())["sources"][channel]["local_delivery_scope"] == "selected"
+    transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward", goal_scope="all_registered")
+    upgraded = json.loads(policy_path.read_text())["sources"][channel]
+    assert upgraded["local_delivery_scope"] == "all_registered"
+    assert upgraded["blocked_targets"] == [{"goal_id": "maintenance", "agent_id": "reviewer"}]
+    transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+    assert json.loads(policy_path.read_text())["sources"][channel]["local_delivery_scope"] == "selected"
+    assert json.loads(policy_path.read_text())["sources"][channel]["blocked_targets"] == upgraded["blocked_targets"]
+    with pytest.raises(ValueError, match="scope"):
+        configure_delivery_scope(runtime.coordination_runtime_root, channel=channel,
+            local_delivery_scope="invalid", execute=True)
+    before = transport.bindings.path.read_bytes()
+    policy_path.write_text("{}")
+    with pytest.raises(ValueError, match="invalid manager policy"):
+        transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="codex", context_kind="steward", goal_scope="all_registered")
+    assert transport.bindings.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure_at", ["first_policy", "second_policy", "binding"])
+def test_scope_upgrade_io_failure_keeps_old_binding_and_explicit_retry_converges(steward, monkeypatch, failure_at):
+    from copy import deepcopy
+    from loopx.capabilities import manager_context
+    from loopx.capabilities.native_chat import conversation_bindings
+    store, runtime, provider, transport, binding, _, _ = steward
+    transport.admit("steward-app", provider.event("steward-app", "before-upgrade", "/status"))
+    transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+    policy_path = manager_context._root(runtime.coordination_runtime_root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    channel = next(iter(policy["sources"]))
+    second = transport.bindings.resolve(binding_id=binding["binding_id"], source_ref="b" * 24,
+        sender_ref=binding["operator_ref"], private_human_message=True)["channel_id"]
+    source = policy["sources"][channel]
+    source["blocked_targets"] = [{"goal_id": "maintenance", "agent_id": "reviewer"}]
+    policy["sources"][second] = deepcopy(source)
+    policy_path.write_text(json.dumps(policy))
+    before_binding = transport.bindings.path.read_bytes()
+    unrelated = deepcopy(transport.bindings.read()["bindings"][0])
+    original_policy, original_binding = manager_context._write, conversation_bindings._atomic_write_json
+    writes = 0
+
+    def write_policy(path, value):
+        nonlocal writes
+        writes += 1
+        if writes == {"first_policy": 1, "second_policy": 2}.get(failure_at):
+            raise OSError("synthetic policy publication failure")
+        original_policy(path, value)
+
+    def write_binding(path, value):
+        if path == transport.bindings.path and failure_at == "binding":
+            raise OSError("synthetic binding publication failure")
+        original_binding(path, value)
+
+    def upgrade():
+        return transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="codex", context_kind="steward", goal_scope="all_registered")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(manager_context, "_write", write_policy)
+        fault.setattr(conversation_bindings, "_atomic_write_json", write_binding)
+        with pytest.raises(OSError, match="publication failure"):
+            upgrade()
+    assert transport.bindings.path.read_bytes() == before_binding
+    # Normal admission retains the old, honest scope and never rewrites a
+    # source policy to compensate for a failed operator configuration command.
+    transport.admit("steward-app", provider.event("steward-app", "after-failure", "/status"))
+    assert transport.bindings.read()["bindings"][1]["goal_scope"] == "selected"
+    if failure_at == "first_policy":
+        assert all(row["local_delivery_scope"] == "selected"
+                   for row in json.loads(policy_path.read_text())["sources"].values())
+    upgraded = upgrade()
+    assert upgraded["binding_id"] == binding["binding_id"] and upgraded["goal_scope"] == "all_registered"
+    for row in json.loads(policy_path.read_text())["sources"].values():
+        assert row["local_delivery_scope"] == "all_registered"
+        assert row["blocked_targets"] == source["blocked_targets"]
+        assert row["sender_ids"] == source["sender_ids"]
+    assert transport.bindings.read()["bindings"][0] == unrelated
+    state = transport.bindings.read()
+    assert upgrade() == upgraded and transport.bindings.read() == state
+    assert store.list_sessions() == []
 
 
 def test_confirmed_commission_runs_native_goal_returns_result_and_extends_same_session(steward):

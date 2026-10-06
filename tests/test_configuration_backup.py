@@ -10,9 +10,12 @@ import venv
 
 import pytest
 
-from loopx.configuration_backup import capture_configuration_backup, restore_configuration_backup
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 from loopx.capabilities.machine_configuration.store import read_machine_configuration
+from loopx.capabilities.configuration_backup import (
+    capture_configuration_backup,
+    restore_configuration_backup,
+)
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime

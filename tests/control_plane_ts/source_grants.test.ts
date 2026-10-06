@@ -1,12 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { configureSourceRecipient, resolveSourceRecipients } from "../../loopx/control_plane/collaboration/source_grants.ts";
+import { configureSourceRecipient, configureSourceScope, resolveSourceRecipients, sourceExecutionBindings } from "../../loopx/control_plane/collaboration/source_grants.ts";
 
 const worker = { goal_id: "research", agent_id: "worker" };
 const peer = { goal_id: "research", agent_id: "peer" };
 const other = { goal_id: "other", agent_id: "worker" };
 const available = [worker, peer, other];
 const source = { local_delivery_scope: "selected", sender_ids: ["owner"], targets: [{ goal_id: "research" }] };
+
+test("execution needs an independent exact grant, current sender and both registered identities", () => {
+  const binding = {...worker, binding_id: "review", requester_agent_id: "peer"};
+  const params = {source, sender_id: "owner", available};
+  assert.deepEqual(sourceExecutionBindings(params), {bindings: []});
+  const granted = {...source, execution_bindings: [binding]};
+  assert.deepEqual(sourceExecutionBindings({...params, source: granted}), {bindings: [binding]});
+  assert.deepEqual(sourceExecutionBindings({...params, source: granted, available: [worker]}), {bindings: []});
+  assert.deepEqual(sourceExecutionBindings({...params, source: {...granted, blocked_targets: [worker]}}), {bindings: []});
+  assert.throws(() => sourceExecutionBindings({...params, source: granted, sender_id: "other"}));
+  for (const bad of [null, {}, [binding, binding], [{...binding, requester_agent_id: "worker"}],
+    [{...binding, workspace: "/injected"}], [{...binding, binding_id: "../escape"}]]) {
+    assert.throws(() => sourceExecutionBindings({...params, source: {...source, execution_bindings: bad}}));
+  }
+});
+
+test("operator scope repair shares the existing source policy and preserves revocations", () => {
+  const policy = {...source, blocked_targets: [peer], evidence_goal_ids: ["research"]};
+  const result = configureSourceScope({source: policy, local_delivery_scope: "all_registered"});
+  assert.deepEqual(resolveSourceRecipients({sender_id: "owner", source: result.source, available}), {targets: [other, worker]});
+  assert.deepEqual((result.source as typeof policy).evidence_goal_ids, policy.evidence_goal_ids);
+  assert.equal(configureSourceScope({source: result.source, local_delivery_scope: "all_registered"}).would_change, false);
+  for (const bad of [{local_delivery_scope: "all"}, {source: {...policy, sender_ids: []}},
+    {source: {...policy, sender_ids: [" "]}}, {source: {...policy, blocked_targets: null}}]) {
+    assert.throws(() => configureSourceScope({source: policy, local_delivery_scope: "all_registered", ...bad}));
+  }
+});
 
 test("a selected managed Goal includes current and future registered Agents, never another Goal", () => {
   assert.deepEqual(resolveSourceRecipients({ sender_id: "owner", source, available: [worker, other] }), { targets: [worker] });

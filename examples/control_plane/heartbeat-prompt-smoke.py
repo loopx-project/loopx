@@ -587,7 +587,7 @@ def main() -> int:
         "current quota claim/lease and workspace contract plus repository rules",
         "Within authority/budget, deliver verifiable results",
         "Task-scoped coordination grants no authority over other agents",
-        "Keep scope in the heartbeat prompt, not todo metadata",
+        "Keep scope in this prompt, not todo metadata",
         "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
         "use selection_command when required",

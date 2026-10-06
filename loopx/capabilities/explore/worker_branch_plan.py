@@ -33,6 +33,7 @@ from .speculative_scheduler import (
 from .todo_branch_plan import (
     DEFAULT_BRANCH_WIDTH,
     MAX_BRANCH_WIDTH,
+    TOKEN_PATTERN,
     _branch_confidence,
     _branch_expected_evidence_units,
     _branch_score,
@@ -276,7 +277,6 @@ COMMON_TOPIC_TOKENS = {
     "with",
     "without",
 }
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_:\-]{3,}")
 
 
 def worker_harness_profile_names() -> tuple[str, ...]:

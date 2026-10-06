@@ -193,6 +193,11 @@ CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{20,}")
 CREDENTIAL_VARIABLE_REFERENCE_PATTERN = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)\]}]"
 )
+CREDENTIAL_BASIC_VARIABLE_REFERENCE_PATTERN = re.compile(
+    r"Basic\s+\{[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\}"
+    r"(?:\\[rnt])*[\"'`]?\s*$",
+    re.I,
+)
 
 
 def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
@@ -211,6 +216,10 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
     if CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN.match(value):
         return True
     if CREDENTIAL_PLACEHOLDER_PATTERN.match(value):
+        return True
+    # A whole Basic variable template contains no encoded credential. Anchoring
+    # the complete value keeps mixed templates and literal payloads blocked.
+    if CREDENTIAL_BASIC_VARIABLE_REFERENCE_PATTERN.fullmatch(value):
         return True
     if CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN.match(value):
         return False

@@ -10,7 +10,7 @@ import {
   type GoalConfigurationPreview,
   type GoalConfigurationPartialWrite,
 } from "../../data/chat";
-import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../../data/capability-configuration";
+import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
@@ -74,13 +74,13 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   useEffect(() => {
     setEditorMode("guided");
     setJsonDraft("");
+    const current = (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
+      ?? selected?.effective_configuration?.configuration ?? selected?.default;
     setMutation({
       busy: null,
       draft: projectEditableCapabilityConfiguration(
         selected?.configuration_editor ?? { fields: [] },
-        (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
-        ?? selected?.effective_configuration?.configuration
-        ?? selected?.default,
+        selected?.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current) : current,
         selected?.default,
       ),
       partialWrite: null,

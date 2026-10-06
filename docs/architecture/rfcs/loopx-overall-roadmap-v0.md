@@ -78,7 +78,7 @@ P0 blocks correctness or continuity in the current user journey. P1 enables repe
 | **S3 Goal planning and multi-Agent collaboration · P0/P1** | Vision/replan, peer frontiers, claim/lease, directory, manager_context and explicit continuation exist; general handoff/shared amendment remain incomplete | R2 proves peer dependency; R3 closes parallel joins, pipelines, help/review, continuation and automatic return; R4 delivers one intent-preserving amendment class. Cover cycles, invalidated inputs, rejection/deferral, lease transfer, competing bases and aggregate acceptance |
 | **S4 Runtime/host/daemon · P0/P1** | Attached/managed, Turn, broker, runtime connectors and Desktop repairs exist; registration does not establish executable capacity | Qualify multi-Turn supervision for one real supported combination; restart/cancel/drain/stop retain work and fence old executors. Then expand host parity, unique service-profile ownership, clean installation and upgrades; show unsupported adapter capabilities |
 | **S5 Frontend, Lark and human interaction · P0/P1** | Local chat, settings, proposals and partial Goal Channel verticals exist; shared audience/session/work readback needs qualification | One journey spans settings, work graph, handoff, blockers, cost, corrections, artifacts and return. Shared typed projections; reconnect/repeated-click/stale/original-route cases. Realtime IM reuses Chat/Turn: isolate independent conversations on one listener, then qualify ordinary DM onboarding, explicit role selection, busy-session admission, provisional progress, media and exact permission callbacks through [the shared operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). [Live team workspace](live-team-workspace-v0.md) makes exchange, revision and original-coordinator continuation visible. Its [Work-scale map track](live-team-workspace-v0.md#11-delivery-order-and-relationship-to-aggressive-r2-progress) draws each Goal's typed Todo relations first (W1), then live state and outputs on the same nodes. Then intelligent review, keyboard accessibility, bilingual terminology, actionable errors and offline degradation; interrupt only for actual decisions |
-| **S6 Materials, evidence, memory and learning · P1** | Authority registry, material lifecycle/frontier, decision context, reward memory and turn recall exist; direction baseline and parts of attribution remain proposed | Connect material revision→same-Agent read→decision reference→artifact/outcome. Expose expiry/revocation/source loss and forgetting policy. Handoff preserves decision-relevant summaries and authorized artifacts; qualify OpenViking/Obelisk as optional providers. Prove causal utility with controls, not relevance alone |
+| **S6 Materials, evidence, memory and learning · P1** | Authority registry, material lifecycle/frontier, decision context, reward memory and turn recall exist; explicit project material packets and source-verifier gates are implemented, while private source initialization/Core binding and ordinary-conversation adoption remain unqualified; direction baseline and parts of attribution remain proposed | Connect material revision→same-Agent read→decision reference→artifact/outcome. Expose expiry/revocation/source loss and forgetting policy. Handoff preserves decision-relevant summaries and authorized artifacts; qualify OpenViking/Obelisk as optional providers. Prove causal utility with controls, not relevance alone |
 | **S7 Budget, scheduling and fleet scale · P0 observation/P1–P2 expansion** | Quota/scheduler and partial usage aggregates exist; full provider cost, distributed reservations and hundred-Agent concurrency need evidence | Separate configured budget, admission, consumption and estimates; unknown is not zero and replay cannot double-charge. R7 pagination/bounded summaries and [complete-history transport](typescript-control-plane-migration-v0.md), including refresh/replay/single-debit evidence beyond the RPC limit; provider/host limits, fairness, backpressure, event wake and isolation; report registration/activity/throughput and cost per accepted outcome separately |
 | **S8 Capabilities, extensions and domain integration · P1/P2** | Capability catalog, extension lifecycle, hooks, engineering/research/content/office capabilities and computer-use contracts exist | First exercise the shared control plane with existing issue-fix/PR-review and material/research callers. Every provider has readiness/version/permissions/default-off/uninstall/rollback/isolation and real-entry evidence. New domain effects start with one simulated operation, not a marketplace or workflow DSL |
 | **S9 Identity, authority, privacy and trust · continuous P0/P1–P2 remote** | Public/private scope, capability gates, fencing and confirmation contracts belong to existing owners | R1/R3 cover sender/audience/artifact scope and stale authority; R6 authenticates tenant/Goal/actor/host, rotation/revocation and least privilege. Qualify credential custody, untrusted tool/document inputs, dependency supply chain, audit retention/deletion and vulnerability response through real paths; roles/messages/memory mint no write authority |
@@ -107,6 +107,8 @@ These directly determine whether a long-running team is usable. A directory or R
 | [Public adoption](../../product/public-adoption-loop.md), [scenario gaps](../../product/scenario-capability-gap-map.md), [SaaS assessment](../../product/roadmaps/saas-opportunity-assessment.md), [licensing](../../project/licensing.md), [governance](../../../.github/GOVERNANCE.md) | S12/S13 | Traceable public outcomes/failure feedback; independently qualify commercial hypotheses; existing license/credit/community-authority policies remain authoritative |
 
 [Lark personal follow-through](../../product/use-cases/office-operations/personal-follow-through.md) applies the [manager RFC](capable-manager-semantic-handoff-v0.md) to S1/S5/S6/S8/S9. Common grants, continuation and return use manager acceptance; the profile retains source interpretation and evaluation. The independent proposal is consolidated; the installed private desktop journey remains unqualified and closes no existing gate.
+
+The bounded S6/S8 source-reading slice provides a [read-only MCP adapter for an existing Ego Page](../../integrations/ego-source-reader.md): rendered text, image indices and one indexed rendered image region within configured origins and an exact URL fence. It creates no Session, material authority or browser service. Native Bot single-image consumption has been observed; original-channel delivery needs independent qualification. One image proves neither all images, a complete article nor its referenced primary post. Source capture, verification walls, truncation, unloaded images and optional provider setup keep their separate acceptance boundaries; this slice does not close the materials journey.
 
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 
@@ -784,6 +786,13 @@ callback; neither may appear as work completed or a second user-visible reply.
 This uses the R3 collaboration owner and current managed Turn wake instead of
 a separate steward scheduler.
 
+Readable R2/R3 answers reuse shared adaptive authoring guidance across ordinary
+project Chat, steward context and the collaboration return tool. This narrows
+routine protocol noise without cutting substantive answers or judging
+acceptance; it does not close sustained worker, steering or original-route
+return qualification. Private Markdown delivery is already owned by the
+existing Lark transport and is unchanged here.
+
 For App continuity in GQ07–GQ09, qualify chosen Manager/Goal view restoration
 through reload and browser Back/Forward using the existing typed route and
 draft owner. Keep source/Goal identity and prove navigation causes no work
@@ -796,6 +805,16 @@ trigger semantics; Lark supplies provider identity and the existing inbox owns
 deduplication and return. App settings select and read back the trigger per
 connection. External host-tool permission and sender-bound delegation remain
 separate gaps; receiving a request does not establish execution authority.
+
+An external steward can now select an operator-granted existing task binding
+from its exact source catalog and submit the handoff through the same governed
+delegation/Turn owner. Durable context receipt, bounded launch, receiver
+adoption, task acceptance and original-audience return remain distinct. No
+identity, task, runtime policy or scheduler is provisioned by the handoff. Local
+file/SQLite fixtures qualify dispatch, independent acceptance and return;
+provider/model routing, new-task allocation, operator UI discovery and complete
+stop/result presentation remain separate R3 gates. See
+[bound inbox execution](../../../loopx/capabilities/manager_context/README.md#executing-already-bound-work).
 
 Resolve source context before routing: a short reply retains the exact
 same-conversation parent, with missing and truncated material explicit. TS owns the bounded context projection;

@@ -481,6 +481,7 @@ def autonomous_replan_obligation_from_runs(
     agent_todos: dict[str, Any] | None,
     agent_id: str | None = None,
     external_progress_review: dict[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     from .control_plane.status.autonomous_replan_projection import (
         autonomous_replan_obligation_from_runs as _autonomous_replan_obligation_from_runs,
@@ -491,6 +492,7 @@ def autonomous_replan_obligation_from_runs(
         agent_todos=agent_todos,
         agent_id=agent_id,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
     )
 
 
@@ -1155,6 +1157,7 @@ def build_attention_queue(
             source_registry_shadow_findings=SOURCE_REGISTRY_SHADOW_FINDINGS,
             monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
             external_progress_review_context=external_progress_review_context,
+            registry_path=registry_path,
         ),
         runtime_root=runtime_root,
         include_task_graph=include_task_graph,

@@ -1568,3 +1568,47 @@ test("fails closed on a settlement event schema mismatch", async () => {
     /settlement readback line 2 is malformed/,
   );
 });
+
+// The cadence consumer must adopt the same quota owner, including its instance
+// and lock lifecycle; independently reading the alias history is insufficient.
+test("effective cadence scopes settlement and ACKs to its admitted Goal instance", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const ref = { goal_id: goalId, goal_instance_id: instanceA };
+  const root = await fixture({ writeback: true, spend: true, completion: true, goalRef: ref });
+  const cadence = (binding: Record<string, unknown>, threshold = 1) => ({
+    schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: threshold, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: { monitors: [], advancements: [], resume: null },
+    settlement_source: { runtime_root: root, goal_id: goalId, ...binding },
+    runs: [
+      { goal_ref: {...ref, goal_instance_id: instanceB}, agent_id: agentId,
+        public_agent_id: agentId, monitor_agent_id: agentId, turn_id: "retired-ack",
+        classification: "state_refreshed", generated_at: "later", observed_at: 2,
+        accepted_ack: true, progress: null, monitor: {} },
+      { goal_ref: ref, agent_id: agentId, public_agent_id: agentId,
+        monitor_agent_id: agentId, turn_id: turnId,
+        classification: "state_refreshed", generated_at: "earlier", observed_at: 1,
+        accepted_ack: false, progress: null, monitor: {} },
+    ],
+  });
+  try {
+    assert.equal((await projectSettledReplanHistory(cadence({}))).trigger, null);
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const borrowed = {...binding, borrow_source_admission: true};
+      const result = await projectSettledReplanHistory(cadence(borrowed));
+      assert.equal(requireJsonObject(result.trigger, "trigger").run_count, 1);
+      assert.equal((await projectSettledReplanHistory(cadence(borrowed, 2))).trigger, null);
+      // The caller still owns both locks and can perform its next read/commit.
+      assert.equal((await readQuotaSettlement(request(root, borrowed))).found, true);
+    });
+    await assert.rejects(withSourceAdmission(root, instanceA, instanceB,
+      binding => projectSettledReplanHistory(cadence(binding))), /stale_goal_instance/);
+    await assert.rejects(projectSettledReplanHistory(cadence({goal_ref: ref})),
+      /must be supplied together/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

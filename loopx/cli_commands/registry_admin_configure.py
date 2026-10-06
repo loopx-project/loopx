@@ -54,6 +54,14 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--execution-replan-after-turns", type=int, choices=range(1, 6),
+        help="Review direction after this many settled work Turns, independently of Todo completion (explicit opt-in).",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-replan-after-turns", action="store_true",
+        help="Remove the Goal effective-Turn override and restore device/default inheritance.",
+    )
+    configure_goal_parser.add_argument(
         "--quota-compute",
         type=float,
         help="Per-goal quota compute multiplier. 0 hard-pauses the whole Goal (all automatic agent turns stop); negative values are rejected.",

@@ -110,6 +110,21 @@ selected paths fail before either plist is replaced. The resolved registry is
 passed verbatim, including when its filename differs from the default global
 registry filename.
 
+For an existing Chat service with an explicit `--runtime-root`, set
+`LOOPX_CHAT_RUNTIME_ROOT` to that same absolute directory at its first managed
+install. Optional `LOOPX_CHAT_IDLE_TIMEOUT_SECONDS` and
+`LOOPX_CHAT_HARD_TIMEOUT_SECONDS` preserve its positive execution timeouts.
+The helper records these selections in the Chat plist and retains them on
+later installs when overrides are omitted, including legacy explicit command
+arguments. Without a selection, the CLI defaults remain in effect.
+
+The Chat root is independent of the global status registry. Selecting it does
+not copy sessions, grant workspace access or change the status service's root.
+Invalid selections fail before either plist changes. Quiesce the previous owned
+Chat listener before switching to launchd, and read back the original Sessions
+and one consumer per App. A generated plist alone does not qualify recovery
+after logout or reboot.
+
 Snapshot identities retain their release id and source revision. A non-editable
 wheel instead exposes an additive `package_fingerprint` in the existing
 `loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package

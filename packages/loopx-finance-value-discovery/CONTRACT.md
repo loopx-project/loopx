@@ -399,3 +399,67 @@ their prior view shape. To roll back this surface, omit the field and republish
 the previous projection, or install/enable the prior extension revision through
 the existing extension lifecycle. Rendering a Lark card is read-only and does
 not change the Goal Channel or send an external message.
+# Signed cash reconciliation
+
+`finance_cash_reconciliation_input_v1` has exactly `schema_version`,
+`subject_ref`, `column_ref`, `unit`, `period`, and `facts`. The Finance extension
+owns this local domain contract and its metric/state vocabularies. It reuses
+the existing numeric-accuracy, period and canonical-input-digest owners; it
+introduces no capability catalog entry or control-plane authority.
+
+`facts` contains exactly one row for each metric:
+
+| Metric | Signed amount convention |
+| --- | --- |
+| `operating_cash_flow` | Reported signed operating cash flow |
+| `gross_capex` | Nonpositive cash spent on property, plant and equipment |
+| `asset_sale_proceeds` | Nonnegative cash proceeds |
+| `government_incentive_proceeds` | Nonnegative cash proceeds |
+| `net_capex` | Reported signed sum of gross capex and those two proceeds |
+| `adjusted_free_cash_flow` | Reported operating cash flow plus net capex |
+
+Each row has exactly `metric`, `state`, `measurement_kind`, `value`, `unit`,
+`source_refs`, and `accuracy`. `state` is `observed`, `missing` or `conflict`;
+missing/conflict retain null value and accuracy rather than becoming zero.
+An observed row needs one source reference; a conflict needs two. A reference
+has `digest` (exact `sha256:`), `locator`, `column_ref`, and original `label`.
+Every reference must bind to the root source digest and source column. This
+checks declarations, not the retained document's actual labels or table layout.
+
+`measurement_kind` is `reported_cash_flow`, `stock`, `commitment`, `forecast`,
+or `rounded_display`. Only reported cash flow can enter this calculation.
+The producer must verify this classification; a renamed stock/display value
+cannot be detected from its numeric string alone. Extra gate booleans or final
+financial-admission fields are rejected rather than used as operands.
+
+`unit` is null (unknown) or `{ "currency": "USD", "scale": 6 }`: currency is a
+bounded producer literal, not inferred ISO identity, and scale is the decimal
+power 0, 3, 6 or 9. All row units must match the root exactly. Amounts are finite
+numeric strings, at most 128 characters, with decimal exponent and adjusted
+exponent within ±64. Calculation uses bounded Decimal arithmetic, not binary
+float. `accuracy` is the existing `decimals`/`precision` declaration or null;
+unknown measurement accuracy remains unknown even when the lexical sum is exact.
+
+`period` is one existing period operand: `source_digest`, `context` and
+`economic_period`. The existing period owner assesses this same declared axis
+on both sides. It does not independently compare six extracted contexts.
+Arithmetic can reconcile a labelled column whose finite context is unknown;
+the nested `period_evidence_eligible` stays false. A consumer must require its
+own period/PIT/lifecycle admission before financial use.
+
+The `finance_cash_reconciliation_assessment_v1` result distinguishes
+`consistent` (zero lexical residuals), `conflict` (nonzero residual),
+`incomplete` (missing/conflicting facts) and `ineligible` (sign/unit/reference/
+measurement-kind failures). The latter two omit calculation. Result facts
+retain lexical values, labels, references and numeric-accuracy assessments.
+Signed net capex remains signed in the one/two-decimal billion display; display
+is not a new observation. Repeat assessment of a frozen input returns the same
+result and canonical input digest. This is calculation replay, not current
+source-lifecycle validation.
+
+Source authenticity, lifecycle, distributable cash, financial admission and
+trading remain false. No collection, account access or effects are performed.
+The direct `assess-cash --input-json` command and schema-selected stdin runtime
+call the same assessment. Malformed input fails with the existing error packet;
+well-formed incomplete/ineligible/conflicting results are successful assessments
+with `ok: true`, not successful financial admission.

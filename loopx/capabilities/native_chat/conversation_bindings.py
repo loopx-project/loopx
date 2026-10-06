@@ -43,7 +43,9 @@ class ChatConversationBindings:
 
     def configure(self, *, transport_ref: str, project_ref: str,
                   executor_endpoint_id: str, context_kind: str = "project",
-                  project_grant: str | None = None) -> dict[str, Any]:
+                  project_grant: str | None = None, goal_scope: str | None = None) -> dict[str, Any]:
+        if goal_scope is not None and (context_kind != "steward" or goal_scope not in {"selected", "all_registered"}):
+            raise ValueError("select a supported steward Goal scope")
         if project_grant is None:
             project_grant = self.projects.workspace_grant if context_kind == "project" and executor_endpoint_id == "codex" else "workspace_read"
         if project_grant not in {"workspace_read", "workspace_write"} or (context_kind != "project" and project_grant != "workspace_read"):
@@ -56,7 +58,7 @@ class ChatConversationBindings:
             "context_kind": context_kind, "project_ref": project_ref,
             "executor_endpoint_id": executor_endpoint_id,
             "grant": project_grant if context_kind == "project" else "portfolio_read", "enabled": True,
-            **({"goal_ids": []} if context_kind == "steward" else {}),
+            **({"goal_ids": [], "goal_scope": goal_scope or "all_registered"} if context_kind == "steward" else {}),
         }
         with exclusive_file_lock(self.path, operation="configure_chat_conversation_binding"):
             current = self.read()
@@ -67,16 +69,34 @@ class ChatConversationBindings:
             if (context_kind == "steward" and previous and all(previous.get(key) == candidate.get(key)
                     for key in ["context_kind", "project_ref", "executor_endpoint_id", "provider_ref", "operator_ref"])):
                 candidate["goal_ids"] = previous["goal_ids"]
+                # Existing installations retain their exact audience and scope
+                # until the local operator explicitly changes it.
+                if goal_scope is None:
+                    candidate.pop("goal_scope", None)
+                    if "goal_scope" in previous:
+                        candidate["goal_scope"] = previous["goal_scope"]
+                candidate["binding_id"] = previous["binding_id"]
             result = self._core("collaboration.conversation.binding", {
                 "current": current, "expected_revision": current.get("revision"), "operation": "configure",
                 "binding": candidate, "observation": observation, "available_projects": self.projects.available(),
             })
+            proposed = next(row for row in result["state"]["bindings"] if row["transport_ref"] == transport_ref)
+            channels = self.delivery_channels(proposed) if goal_scope is not None else []
+            for channel in channels:
+                self.ensure_delivery_scope({"binding": proposed, "channel_id": channel}, execute=False)
+            # Publish the advertised scope only after every known source policy
+            # has applied and verified. On IO failure the old binding remains;
+            # retrying the explicit scope operation converges any earlier source
+            # writes without making ordinary admission undo a manual restriction.
+            for channel in channels:
+                self.ensure_delivery_scope({"binding": proposed, "channel_id": channel}, if_absent=False)
             if result["changed"]:
                 _atomic_write_json(self.path, result["state"])
             readback = self.read()
             if readback != result["state"]:
                 raise OSError("conversation binding publication did not verify")
-            return next(row for row in readback["bindings"] if row["transport_ref"] == transport_ref)
+            binding = next(row for row in readback["bindings"] if row["transport_ref"] == transport_ref)
+            return binding
 
     def disconnect(self, binding_id: str, *, expected_revision: int) -> dict[str, Any]:
         with exclusive_file_lock(self.path, operation="disconnect_chat_conversation_binding"):
@@ -96,12 +116,48 @@ class ChatConversationBindings:
         row = next((item for item in current.get("bindings", []) if item.get("binding_id") == binding_id), None)
         if row is None:
             raise ValueError("conversation binding is no longer authorized")
+        registry_scope = {}
+        if row.get("goal_scope") == "all_registered":
+            registry_scope["available_goal_ids"] = self.goal_scope_ids(row)
         return self._core("collaboration.conversation.bound_context", {
             "current": current, "binding_id": binding_id, "source_ref": source_ref, "sender_ref": sender_ref,
             "private_human_message": private_human_message, "observation": self.observe(row["transport_ref"]),
             "available_projects": self.projects.available(),
+            **registry_scope,
             **({"session_context": session_context} if session_context is not None else {}),
         })
+
+    def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
+        if binding.get("goal_scope") != "all_registered":
+            return list(binding.get("goal_ids", []))
+        from ...registry import load_registry
+        if self.controller is None or self.controller.registry_path is None:
+            raise ValueError("the steward registry is unavailable")
+        return [goal["id"] for goal in load_registry(self.controller.registry_path).get("goals", [])]
+
+    def delivery_channels(self, binding: dict[str, Any]) -> list[str]:
+        if self.controller is None:
+            return []
+        from ..manager_context import POLICY_SCHEMA, _root
+        path = _root(self.controller.coordination_runtime_root) / "policy.json"
+        if not path.exists():
+            return []
+        policy = _read_json(path)
+        if policy.get("schema_version") != POLICY_SCHEMA or not isinstance(policy.get("sources"), dict):
+            raise ValueError("invalid manager policy")
+        prefix = f"manager.external.native.{binding['binding_id']}."
+        return [channel for channel, source in policy["sources"].items()
+                if channel.startswith(prefix) and isinstance(source, dict)
+                and binding["operator_ref"] in source.get("sender_ids", [])]
+
+    def ensure_delivery_scope(self, selected: dict[str, Any], *, if_absent: bool = True, execute: bool = True) -> None:
+        binding = selected["binding"]
+        if binding.get("goal_scope") not in {"all_registered", "selected"} or self.controller is None:
+            return
+        from ..manager_context import configure_delivery_scope
+        configure_delivery_scope(self.controller.coordination_runtime_root,
+            channel=selected["channel_id"], local_delivery_scope=binding["goal_scope"],
+            sender_id=binding["operator_ref"], execute=execute, if_absent=if_absent)
 
     def session_context(self, saved: dict[str, Any]) -> dict[str, Any]:
         return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],

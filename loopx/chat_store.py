@@ -1053,6 +1053,7 @@ class ChatSessionStore(ChatIngressStore):
         *,
         client_turn_id: str,
         message: str,
+        attachments: list[dict[str, Any]] | None = None,
         goal_instance_id: str | None = None,
         ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
@@ -1061,6 +1062,10 @@ class ChatSessionStore(ChatIngressStore):
         """Persist one bounded follow-up without replacing the active Turn."""
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
+        from .chat_attachments import normalize_chat_image_attachments, validate_chat_turn_envelope
+        normalized_attachments = normalize_chat_image_attachments(attachments) or None
+        if normalized_attachments:
+            validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})
         session_path = self._session_path(session_id)
         with self._session_lock(session_id):
             with exclusive_file_lock(
@@ -1075,6 +1080,7 @@ class ChatSessionStore(ChatIngressStore):
                         identity="client_turn_id",
                         request={
                             "message": str(message),
+                            "attachments": normalized_attachments,
                             "origin": _opaque_id(origin, field="origin"),
                             "external_agent_target": external_agent_target,
                         },
@@ -1111,6 +1117,7 @@ class ChatSessionStore(ChatIngressStore):
                     "status": "queued",
                     **({"external_agent_target": external_agent_target} if external_agent_target is not None else {}),
                     "message": str(message),
+                    **({"attachments": normalized_attachments} if normalized_attachments else {}),
                     "origin": _opaque_id(origin, field="origin"),
                     "upstream_turn_id": None,
                     "response": None,
@@ -1143,6 +1150,7 @@ class ChatSessionStore(ChatIngressStore):
                 text=message,
                 turn_id=turn_id,
                 origin=origin,
+                attachments=normalized_attachments,
             )
             self.append_event(
                 session_id,

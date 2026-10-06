@@ -1003,12 +1003,12 @@ function readQuotaSettlementFromRequest(
     );
   }
   const explicitAgentId = normalizeAgentId(request.agent_id);
-  const ownerRuns = snapshot.runs.filter((run) =>
-    quotaOwnerOwnsProjection(request.owner, run.goal_ref)
-  );
-  const ownerEvents = snapshot.events.filter((event) =>
-    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
-  );
+  // Only latest-Turn inference needs the full run history. Explicit readback
+  // must use the existing Turn indexes before applying the Goal owner fence;
+  // otherwise a batch over N Turns repeatedly scans all N receipts.
+  const ownerRuns = request.infer_turn_instance_id
+    ? snapshot.runs.filter((run) => quotaOwnerOwnsProjection(request.owner, run.goal_ref))
+    : [];
   const explicitEvents = !request.infer_turn_instance_id &&
       explicitAgentId !== null && request.turn_instance_id !== null
     ? indexedEvents(
@@ -1019,7 +1019,7 @@ function readQuotaSettlementFromRequest(
     ).filter((event) =>
       quotaOwnerOwnsProjection(request.owner, event.goal_ref)
     )
-    : ownerEvents;
+    : snapshot.events.filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
   const identityResult = resolveIdentity(
     request,
     explicitEvents,

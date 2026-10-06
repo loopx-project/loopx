@@ -31,7 +31,7 @@ export function projectConversationIdentity(input: Record<string, unknown>): Rec
 }
 
 export function normalizeStewardGoalScope(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length > 128
+  if (!Array.isArray(value)
       || value.some(g => typeof g !== "string" || !/^[A-Za-z0-9._-]{1,160}$/.test(g)
         || [".", "..", "loopx-manager"].includes(g))) throw new Error("invalid steward Goal scope");
   return [...new Set(value as string[])].sort();

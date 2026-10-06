@@ -1036,10 +1036,13 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
     path = runner.path("analysis-platform")
     record = runner._host_process_record(path)
     record.parent.mkdir(parents=True, exist_ok=True)
+    # The caller may itself lead a live group; use a genuinely exited Host.
+    with subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True) as finished_host:
+        finished_host.wait(timeout=10)
     record.write_text(json.dumps({
         "schema_version": host_process_transport.HOST_PROCESS_RECORD_SCHEMA_VERSION,
         "host": lock_holder_host_label(), "supervises": "host", "supervision": "direct", "phase": "finished",
-        "bridge_pid": os.getpid(), "process_group": os.getpid(),
+        "bridge_pid": finished_host.pid, "process_group": finished_host.pid,
     }))
 
     # A persisted finished Host record still needs platform drain capability.

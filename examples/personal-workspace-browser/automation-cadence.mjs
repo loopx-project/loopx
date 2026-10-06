@@ -10,10 +10,10 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 
 // The packaged UI writes to the actual HTTP handler and typed file authority.
 // Only the surrounding workspace directory remains the shared browser fixture.
-async function startCadenceAuthority() {
+export async function startCadenceAuthority() {
   const root = await mkdtemp(resolve(tmpdir(), "loopx-cadence-browser-"));
   await writeFile(resolve(root, "registry.json"), JSON.stringify({
-    schema_version: "0.1", goals: [{ id: "multi-agent-projection" }],
+    schema_version: "0.1", common_runtime_root: resolve(root, "runtime"), goals: [{ id: "multi-agent-projection" }],
   }));
   const child = spawn(resolveTestPython(), ["-u", "-c", `
 from pathlib import Path
@@ -22,6 +22,11 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
 server.registry_path = Path(sys.argv[1]) / "registry.json"
 server.runtime_root = Path(sys.argv[1]) / "runtime"
+# Goal writes use their registry's route, not only the HTTP server runtime.
+from loopx.control_plane.goals.configure_goal_service import resolve_configure_goal_sync_target
+route = resolve_configure_goal_sync_target(registry_path=server.registry_path,
+    goal_id="multi-agent-projection", runtime_root_override=None)
+assert Path(route["target_runtime_root"]).resolve() == server.runtime_root.resolve()
 server.verbose = False
 print(server.server_address[1], flush=True)
 server.serve_forever()

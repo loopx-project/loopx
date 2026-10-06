@@ -81,6 +81,10 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
                     "command",
                     "path",
                 } & set(tool.inputSchema.get("properties", {}))
+            returned = next(tool for tool in tools.tools if tool.name == "return_result")
+            assert "conclusion to the original requester" in returned.description
+            assert "Preserve requested substantive detail" in returned.description
+            assert "State material gaps" in returned.description
             result = await session.call_tool(
                 "request_peer",
                 {
@@ -147,6 +151,10 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
         "inputs": [], "acceptance": ["Return the verified outcome"], "return_requirement": "Result",
     }
     rid = request(root, registry, "goal-a", "agent-b", "agent-a", "existing-work", brief)["request_id"]
+    conclusion = "Existing work needs its verification; not complete.\n\n" + (
+        "- [Source](https://example.org/reference)\n"
+        "- Run the reproducible comparison before acceptance.\n" * 59
+        + "- Run the reproducible comparison before acceptance.")
 
     async def exercise():
         params = StdioServerParameters(command=sys.executable, args=[
@@ -182,7 +190,7 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
             assert [(t["todo_id"], t["title"], t["status"]) for t in resumed["linked_todos"]] == [
                 (own, "Current accepted work", "open")
             ]
-            await call("return_result", {"request_id": rid, "text": "Existing work needs its verification; not complete."})
+            await call("return_result", {"request_id": rid, "text": conclusion})
             assert (await call("read_context", {}))["items"] == []
             # A short factual answer requires neither a fabricated task nor a link.
             quick = request(root, registry, "goal-a", "agent-b", "agent-a", "short-answer", brief)["request_id"]
@@ -203,4 +211,5 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
     asyncio.run(exercise())
     received = read_inbox(root, registry, "goal-a", "agent-b")["peer_returns"]["items"]
     assert len(received) == 2
+    assert next(item for item in received if item["request_id"] == rid)["text"] == conclusion
     assert len(cli("todo", "list", "--goal-id", "goal-a")["todos"]) == 2

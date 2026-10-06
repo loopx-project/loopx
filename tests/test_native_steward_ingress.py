@@ -125,7 +125,9 @@ def test_native_steward_uses_separate_sender_target_grants_and_exact_return_rout
     session = store.load_session(row["session_id"])
     turn = store.load_turn(row["session_id"], row["turn_id"])
     root = store.root.parent
-    assert authority(root, runtime.registry_path, session, turn)["targets"] == []
+    # The verified owner's default covers registered recipients; an explicit
+    # selected source still needs a separate delivery grant below.
+    assert authority(root, runtime.registry_path, session, turn)["targets"] == [target]
     policy = {"schema_version": POLICY_SCHEMA, "sources": {session["channel_id"]: {
         "sender_ids": [binding["operator_ref"]], "local_delivery_scope": "selected", "targets": [],
     }}}

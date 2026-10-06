@@ -143,6 +143,15 @@ separate terminal review selection and eager declaration sequencing are removed.
 This closes a T1/T2/L2 terminal caller family, not the remaining leased metadata,
 executor fences or T4 retirement. [Semantics, crossings and rollback](../../reference/canonical-terminal-review.md).
 
+The canonical supersede CLI/facade now forwards existing-successor links to that
+same terminal owner. One commit links already declared replacement work, retires
+the predecessor and releases its original lease, replacing the earlier
+link-update then supersede sequence. Receipt recovery, source/actor/lease fences
+and one-way display delivery remain with their existing owners. No new Python
+decision owner or writer is introduced; unpromoted Markdown's new direct-link
+option fails closed. This narrows a T1/T2 recovery cost, not T4 retirement,
+default-provider qualification or a new frontend lifecycle journey.
+
 Linked User completion now has one typed owner, `todos/user_completion.ts`.
 The terminal transaction commits exact-target scope consumption, reject/cancel
 outcomes and conditional resume with its own completion/receipt; the Markdown

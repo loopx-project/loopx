@@ -323,10 +323,13 @@ def _peer_work_requires_isolated_workspace(
     agent_todo_summary: dict[str, Any] | None,
     *,
     selected_todo: dict[str, Any] | None = None,
+    local_goal_workspace: bool = False,
 ) -> bool:
     explicit = workspace_guard_policy.get("peer_independent_worktree_required")
     if explicit is not None:
         return explicit is True
+    if local_goal_workspace:
+        return False
     candidate = (
         selected_todo
         if isinstance(selected_todo, dict) and selected_todo
@@ -344,6 +347,39 @@ def _peer_work_requires_isolated_workspace(
     )
 
 
+def observe_goal_local_workspace(
+    goal: dict[str, Any],
+    selected_todo: dict[str, Any] | None,
+    allowed_write_scopes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Reuse the registered workspace identity and project its existing grants."""
+    empty: dict[str, Any] = {}
+    if not selected_todo or selected_todo.get("task_repository"):
+        return empty
+    repo = goal.get("repo") or goal.get("project") or goal.get("root")
+    goal_id = goal.get("goal_id") or goal.get("id")
+    if not repo or not goal_id:
+        return empty
+    root = Path(str(repo)).expanduser()
+    if not root.is_absolute():
+        return empty
+    snapshot = capture_delivery_workspace(
+        root, local_goal_id=str(goal_id), local_project_root=root
+    )
+    if not snapshot or snapshot.get("identity_kind") != "local_goal":
+        return empty
+    boundary = goal.get("coordination") or {}
+    raw_scopes = boundary.get("write_scope") if isinstance(boundary, dict) else None
+    scopes = allowed_write_scopes if allowed_write_scopes is not None else raw_scopes
+    if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
+        return empty
+    from ..quota.settlement_workspace_causality import project_goal_write_scopes
+
+    # Physical identity is resolved above. Scope authority stays relative to the
+    # registered spelling, including an explicit symlink alias of that root.
+    return {"workspace": snapshot, **project_goal_write_scopes(str(root), scopes)}
+
+
 def build_agent_workspace_guard(
     goal: dict[str, Any],
     agent_identity: dict[str, Any] | None,
@@ -351,6 +387,7 @@ def build_agent_workspace_guard(
     agent_todo_summary: dict[str, Any] | None = None,
     selected_todo: dict[str, Any] | None = None,
     current_path: Path | None = None,
+    local_workspace: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(agent_identity, dict):
         return None
@@ -361,18 +398,27 @@ def build_agent_workspace_guard(
     )
     if len(agent_identity.get("registered_agents") or []) <= 1:
         return None
-    if not _peer_work_requires_isolated_workspace(
-        workspace_guard_policy,
-        agent_todo_summary,
-        selected_todo=selected_todo,
-    ):
-        return None
     current_path = current_path or Path.cwd()
     candidate = (
         selected_todo
         if isinstance(selected_todo, dict) and selected_todo
         else next(iter(_peer_candidate_items(agent_todo_summary)), {})
     )
+    local = (
+        local_workspace
+        if local_workspace is not None
+        else observe_goal_local_workspace(goal, candidate)
+    )
+    # Local declarations are relative to the registered Goal target, not the
+    # caller cwd. Causal accounting still names the actual delivery workspace.
+    local_admitted = (local.get("workspace") or {}).get("identity_kind") == "local_goal"
+    if not _peer_work_requires_isolated_workspace(
+        workspace_guard_policy,
+        agent_todo_summary,
+        selected_todo=selected_todo,
+        local_goal_workspace=local_admitted,
+    ):
+        return None
     task_repository = normalize_todo_task_repository(candidate.get("task_repository"))
     current_workspace = ""
     repository_source = "goal.repo"

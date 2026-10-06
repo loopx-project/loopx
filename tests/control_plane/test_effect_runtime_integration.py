@@ -302,6 +302,44 @@ def test_pre_send_connection_failure_does_not_remove_live_locator(
     assert json.loads(info_path.read_text(encoding="utf-8")) == info
 
 
+def test_pre_send_connection_failure_waits_for_retiring_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fingerprint = "c" * 64
+    retiring = {"token": "retiring"}
+    replacement = {"token": "replacement"}
+    observations = iter([retiring, retiring, None, None])
+    requests = []
+
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_read_info",
+        lambda *_args, **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_start_runtime",
+        lambda **_kwargs: replacement,
+    )
+    monkeypatch.setattr(effect_runtime.time, "sleep", lambda _seconds: None)
+
+    def request(info: object, **_kwargs: object) -> dict:
+        requests.append(info)
+        if info == retiring:
+            raise ConnectionRefusedError("fixture retired before send")
+        return {"result": {"ready": True}}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", request)
+
+    assert effect_runtime.effect_runtime_result("runtime.ping", {}) == {"ready": True}
+    assert requests == [retiring, replacement]
+
+
 def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundary(
     tmp_path: Path,
     monkeypatch,

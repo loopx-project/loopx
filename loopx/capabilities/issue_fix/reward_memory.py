@@ -20,6 +20,7 @@ from ..reward_memory.experiment import resolve_reward_memory_surface_config
 from ..reward_memory.runtime_hooks import (
     run_reward_memory_automatic_recall_hook,
 )
+from ..reward_memory.scoped_feedback import _GUARD_FIELDS, _REASONING_FIELDS, _SOURCE_FIELDS
 from ..semantic_preference.reward_memory import run_semantic_preference_reward_memory
 
 
@@ -63,13 +64,6 @@ _EVENT_FIELDS = {
     "guard_context",
     "requested_action_scopes",
     "raw_content_captured",
-}
-_SOURCE_FIELDS = {"source_kind", "source_ref", "actor_ref", "actor_role"}
-_REASONING_FIELDS = {"summary", "confidence"}
-_GUARD_FIELDS = {
-    "source_freshness",
-    "conflict_state",
-    "current_artifact_verified",
 }
 
 

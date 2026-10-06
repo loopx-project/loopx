@@ -89,6 +89,15 @@ def _exhausted_action(
     )
 
 
+def _explore_context_action(
+    request: Mapping[str, object],
+) -> ScriptedExecToolAction:
+    read = _latest_quota_packet(request)["required_reads"][0]
+    assert read["kind"] == "explore_turn_context"
+    assert read["ordering"] == "before_work"
+    return ScriptedExecToolAction(command=read["command"])
+
+
 def _composition_successor_action(
     request: Mapping[str, object],
 ) -> ScriptedExecToolAction:
@@ -426,6 +435,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     transport = ScriptedDoubaoExecTransport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
+            _explore_context_action,
             ScriptedExecToolAction(command="cat replan-frontier.json"),
             ScriptedExecToolAction(command="cat fixture/permission-config.json"),
             _composition_successor_action,
@@ -443,6 +453,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     assert receipt["qualification_passed"] is True, receipt
     assert receipt["observed_tool_sequence"] == [
         "quota_should_run",
+        "explore_turn_context",
         "workspace_read",
         "workspace_read",
         "replan_successor_create",
@@ -466,6 +477,40 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     assert quota_packet["replan_action_packet"]["bounded_frontier"][
         "experiment_node_ref"
     ] == selected_gap["experiment_node_ref"]
+
+
+@pytest.mark.parametrize("attempt", ["omit", "repeat", "wrong_scope"])
+def test_composition_read_obligation_cannot_be_skipped_replayed_or_retargeted(
+    tmp_path: Path, attempt: str,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle", composition_frontier=True)
+    actions = [ScriptedExecToolAction(command=fixture.quota_guard_command)]
+    if attempt == "omit":
+        actions.append(ScriptedExecToolAction(command="cat replan-frontier.json"))
+    elif attempt == "repeat":
+        actions.extend([_explore_context_action, _explore_context_action])
+    else:
+        def wrong_scope(request: Mapping[str, object]) -> ScriptedExecToolAction:
+            action = _explore_context_action(request)
+            return ScriptedExecToolAction(
+                command=action.command.replace(
+                    "--goal-id replan-semantic-action-fixture", "--goal-id another-goal"
+                )
+            )
+        actions.append(wrong_scope)
+    receipt = DoubaoReplanSemanticActionBehaviorActor(
+        api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport(actions),
+    ).qualify(
+        qualification_id=f"composition-read-{attempt}",
+        fixture_root=tmp_path / "actor", composition_frontier=True,
+    )
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == (
+        "repeated_explore_turn_context"
+        if attempt == "repeat" else "required_explore_turn_context_missing"
+    )
+    assert receipt["semantic_action_accepted"] is False
+    assert "replan_successor_create" not in receipt["observed_tool_sequence"]
 
 
 def test_action_outside_observed_frontier_is_rejected(tmp_path: Path) -> None:

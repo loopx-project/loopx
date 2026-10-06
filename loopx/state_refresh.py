@@ -7,6 +7,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from .control_plane.work_items.replan_history_codec import effective_turn_cadence_context
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.runtime.time import chronology_key, now_local_iso
 from .control_plane.goals.state_resolution import resolve_goal_state as resolve_goal_state
 from .control_plane.runtime.run_artifacts import run_file_stem as run_file_stem
@@ -123,7 +125,6 @@ from .control_plane.turn_driver.delivery_continuity import (
 
 DEFAULT_REFRESH_CLASSIFICATION = "state_refreshed"
 GOAL_PROGRESS_SCOPE = "goal"
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 PROGRESS_SCOPE_CHOICES = (GOAL_PROGRESS_SCOPE, AGENT_LANE_PROGRESS_SCOPE)
 BULLET_PREFIX_RE = re.compile(r"^(?:[-*]\s+|\d+[.)]\s+)")
 CHECKBOX_PREFIX_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+")
@@ -1055,6 +1056,11 @@ def refresh_state_run(
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
             registry_goal=registry_goal,
+            effective_turn_cadence=effective_turn_cadence_context(
+                registry_goal or {"id": safe_goal_id}, runtime_root,
+                registry_path=registry_path, goal_ref=goal_ref,
+                source_admission=source_admission,
+            ),
             # The acknowledgement is judged against the same sentinel-derived
             # obligation that status shows; `off` loads nothing.
             external_progress_review=external_progress_review_context(

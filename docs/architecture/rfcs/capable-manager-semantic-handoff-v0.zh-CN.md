@@ -659,6 +659,11 @@ portfolio 可见性。共享改动归[对话入口 RFC](app-conversation-and-asy
 不另建 Bot 执行或审批权威。跨主机替换受租户控制的 App 时，使用重新授权的新 App；
 凭据、来源会话和权限绑定不作为装机备份迁移。
 
+**普通可写项目提示 checkpoint（S5）：** 项目 Turn 使用已授权工作区、AGENTS 和
+skills，不再附带管家的 Goal 发现、草稿或 context delegation 指令。Session、grants
+和现有响应 envelope 保持原契约；管家和执行模式的提示保持原样。原生 fake-host 测试
+验证指令路由与连续性，不能证明来源读取、模型延迟或安装态持续运行已达标。
+
 按 M1/M3 和已有 S5 旅程交付，不新增平行里程碑，不把周期 heartbeat 当实时传输：
 
 | 次序 | 用户可感知出口 | 既有 owner 与验收 |
