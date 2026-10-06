@@ -303,7 +303,12 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 尚未验收，8 KiB 目标和交付时增长检查保持不变。见
 [TurnEnvelope](../../reference/protocols/turn-envelope-v0.md)。
 
-现有 R5 CLI 支持在展示投影前显式保存完整决策（`quota should-run --decision-output-dir`，要求明确 Turn id）。每次调用使用新的私有目录；读取观察不重跑 guard，选择 Todo 或变更 lease 后仍须重新准入。Python 仅适配文件传输，复用共享决策与 TypeScript envelope owner。本阶段解决显式调用方遭遇输出截断后的读回，不代表 worker 已采用、normal/replan 上下文自动选择或模型效率已验收。参见 [TurnEnvelope 捕获契约](../../reference/protocols/turn-envelope-v0.md)。
+共享结算命令 renderer 现在在生成的步骤子命令前加入全局 JSON 输出选项，包含
+写回后的恢复命令。App heartbeat、外部 CLI 和 visible Goal 无需由调用者补插
+参数；真实 CLI 测试覆盖完整包/短包一致、写回前拒绝和重放只扣费一次。这是
+传输修正，不代表 R5 模型上下文效率已验收，也不改变类型化结算规则。
+
+现有 R5 CLI 保存完整决策后再投影短包；每次 guard 使用独立私有目录，补读不重跑准入。默认关闭的 heartbeat renderer/shared worker 接入现已覆盖明确的 host-owned Turn：同轮选择保留捕获入口，真实 CLI 验证重入和一次结算。Python 仅适配文件与命令传输，复用 TypeScript 决策 owner。原生 Goal 自动 begin-Turn、安装态 App/Lark/UI、模型 token/IO 与决策质量仍未验收；不据此变更现有实验。参见 [TurnEnvelope 捕获契约](../../reference/protocols/turn-envelope-v0.md)。
 
 ### 还缺什么
 

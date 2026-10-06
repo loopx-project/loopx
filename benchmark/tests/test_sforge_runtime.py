@@ -337,6 +337,93 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("exec timeout")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry
+@pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('cadence', [None, 2])
+def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, cadence):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', '/private-credential')
+    async def installed(self, environment):
+        pass  # Transport only; the real renderer/guard test runs without a solver.
+    monkeypatch.setattr(BenchmarkCodex, 'install', installed)
+    worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
+                          profile=profile, cwd='/task', turn_envelope=enabled,
+                          replan_after_turns=cadence)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    env = worker.runtime._worker_env(cwd='/task')
+    assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
+    assert worker.runtime.execution.turn_envelope is enabled
+    assert worker.runtime.replan_after_turns == cadence
+    receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
+    assert receipt.get('turn_envelope') is (True if enabled else None)
+    if not enabled:
+        assert 'turn_envelope' not in receipt
+    from types import SimpleNamespace
+    context = SimpleNamespace()
+    worker.runtime._populate_context(context)
+    assert context.metadata.get('turn_envelope') is (True if enabled else None)
+    if not enabled:
+        assert 'turn_envelope' not in context.metadata
+    # The opt-in only changes context transport, not resume or model settings.
+    assert env['LOOPX_ITERATION_CONTEXT'] == 'resume'
+    assert env['REASONING_EFFORT'] == 'xhigh'
+
+
+@pytest.mark.parametrize('profile', ['official', 'single', 'native-goal'])
+def test_envelope_rejects_incompatible_sforge_worker(profile):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    with pytest.raises(ValueError, match='heartbeat worker'):
+        SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
+                     profile=profile, cwd='/task', turn_envelope=True)
+
+
+def test_edgebench_rejects_envelope_before_creating_trial(tmp_path):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from benchmark.edgebench.run import main
+    with pytest.raises(SystemExit) as error:
+        main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+              '--run-id', 'invalid', '--worker', 'native-goal', '--model', 'fixture',
+              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', '--turn-envelope'])
+    assert error.value.code == 2
+    assert not (tmp_path / 'runs').exists()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_edgebench_receipt_records_only_enabled_treatment(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.edgebench import run
+
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
+    (tmp_path / "fixture.json").write_text("{}")
+    monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
+    monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
+        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False))
+    monkeypatch.setattr(run, "SForgeWorker", lambda *a, **k: SimpleNamespace(resume_cmd="resume"))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    def stop_before_solver(**kwargs):
+        raise RuntimeError("synthetic launch failure")
+    monkeypatch.setattr(run, "run_agent", stop_before_solver)
+    args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+            "--run-id", "receipt", "--worker", "heartbeat-resume", "--model", "fixture",
+            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
+    with pytest.raises(RuntimeError, match="synthetic launch failure"):
+        run.main(args + (["--turn-envelope"] if enabled else []))
+    receipt = json.loads((tmp_path / "runs/receipt/fixture/runtime-receipt.json").read_text())
+    assert ("turn_envelope" in receipt) is enabled
+    if enabled:
+        assert receipt["turn_envelope"] is True
+    assert receipt["status"] == "runner_failed"
 
 
 @pytest.mark.parametrize("value", [0, 6, True, 2.5, "3"])

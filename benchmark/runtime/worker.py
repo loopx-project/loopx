@@ -55,6 +55,15 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool) -> s
     ]
     if not native_goal:
         command += ["--turn-instance-id", turn_id]
+    if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
+    if env.get("LOOPX_TURN_ENVELOPE") == "1":
+        if native_goal:
+            raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
+        # Wake identity comes from this worker, never from model-authored text.
+        root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
+        root.mkdir(mode=0o700, exist_ok=False)
+        command += ["--decision-output-root", str(root)]
     result = subprocess.run(
         command,
         cwd=env["LOOPX_PROJECT"],
@@ -231,6 +240,8 @@ def native_command(env, execution, stage, wake, session_wake):
 
 
 def run_once(env: dict[str, str]) -> dict:
+    if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT", "fresh"),
@@ -239,6 +250,7 @@ def run_once(env: dict[str, str]) -> dict:
                          if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY", "seeded-todo"),
+        turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
     )
     stage = env.get("LOOPX_TASK_STAGE", "execute")
     if stage not in {"plan", "execute"} or (stage == "plan" and execution.task_entry != "loopx-planned"):
@@ -255,6 +267,7 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
+        **({"turn_envelope": True} if execution.turn_envelope else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,

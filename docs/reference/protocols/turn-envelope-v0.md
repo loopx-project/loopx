@@ -27,7 +27,7 @@ cat ./guard-001/decision.json
 symlinks, and atomically publishes `decision.json` (0600 on POSIX) before printing
 the result. The file contains the unprojected decision and its original receipt;
 it excludes display-only host poll metadata. It can contain private Goal context:
-keep it out of public artifacts. No capture is created without this option.
+keep it out of public artifacts. No capture is created without a capture option.
 
 If a tool truncates the displayed JSON, read this file instead of rerunning the
 guard merely to recover the observation. The file is **not fresh authority**:
@@ -58,10 +58,41 @@ unchanged. This opt-in detail link does not change action-signature coverage.
 为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
 文件损坏或丢失不能自动重跑，选 Todo、lease 变化等仍需按原契约重新准入。
 
-This is a CLI transport primitive under the existing quota/context owner, not a
-new capability or Python decision rule. It does not automatically switch workers
-to compact packets, select replan history, or qualify model efficiency. The
-frontend and Lark do not consume these local files; their entrypoints are unchanged.
+For repeated host-owned guards, `--decision-output-root ./private-decisions`
+allocates a unique child directory per invocation below an **existing** directory.
+It is mutually exclusive with `--decision-output-dir`; both require an explicit
+Turn ID. The returned Todo selection command retains the root and requested
+`--turn-envelope` projection, so choosing work never overwrites the first read.
+Other repair/replan guard commands still require the caller to retain those
+transport flags. A saved decision is not permission to skip revalidation.
+
+The heartbeat renderer can opt into the same transport:
+
+```bash
+mkdir -m 700 ./private-decisions
+loopx --format json heartbeat-prompt --thin --runtime-profile generic_cli \
+  --goal-id <goal-id> --agent-id <agent-id> --turn-instance-id <turn-id> \
+  --decision-output-root ./private-decisions
+```
+
+Execute its guard, read the short action/contract/writeback fields, and use
+`detail_ref.full_decision` to read the **same invocation** when selection, replan,
+capability context or truncation requires detail. Replan history remains with the
+existing owner; this option neither invents another history store nor chooses a
+strategy. The renderer rejects full/compact/brief modes, missing Turn identity,
+native Goal-owned Turns and invalid roots. Stable bootstrap prompts cannot pin a
+Turn. Omit the capture option to return to the unchanged full-decision dispatcher.
+
+This is Python filesystem/command transport under the existing quota/context
+owner, not a new capability or Python decision rule. The shared benchmark
+heartbeat worker has a separate default-off `turn_envelope` option documented in
+[its runtime guide](../../../benchmark/runtime/RUNTIME.md). Native `/goal`, Turn
+driver, installed App automations, frontend and Lark are not switched by this
+research-runner setting. Real local worker/renderer/selection/settlement tests
+qualify transport; model token/IO costs, decision quality and long-run adoption
+still require a separately pinned experiment. Capture grants no additional
+read/write/lease authority. Keep captures private; disable the option in the
+next run and use ordinary file management to remove unneeded records.
 
 The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the

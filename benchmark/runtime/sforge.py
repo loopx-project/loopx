@@ -82,10 +82,16 @@ class SForgeWorker(CodexAgent):
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
                  blind_prompt: str | None = None,
                  task_entry: str = "seeded-todo",
+                 turn_envelope: bool = False,
                  replan_after_turns: int | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
+        if not isinstance(turn_envelope, bool) or (
+            turn_envelope and profile not in {"heartbeat-resume", "heartbeat-explore"}
+        ):
+            raise ValueError("turn_envelope requires a heartbeat worker")
+        self.turn_envelope = turn_envelope
         if timeout_seconds <= 160:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
@@ -165,6 +171,7 @@ class SForgeWorker(CodexAgent):
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
+                turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
             )
             asyncio.run(self.runtime.install(self.environment))
@@ -177,6 +184,7 @@ class SForgeWorker(CodexAgent):
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "stop_hook": self.profile == "official",
+            **({"turn_envelope": True} if self.turn_envelope else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
