@@ -25,6 +25,8 @@ EXTENSION_ID = "loopx-finance-value-discovery"
 OPERATION = "evaluate_finance_position_guard"
 REQUEST_SCHEMA = "position_guard_request_v0"
 RESULT_SCHEMA = "position_guard_result_v0"
+PARTIAL_REQUEST_SCHEMA = "position_guard_partial_request_v1"
+PARTIAL_RESULT_SCHEMA = "position_guard_partial_result_v1"
 KINDS = ("position", "orders", "fills", "monitor")
 
 
@@ -36,7 +38,7 @@ def _time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def _validator(name: str) -> Draft202012Validator:
     # Optional finance operations must not break legacy --doctor/import paths.
     from jsonschema import Draft202012Validator, FormatChecker
@@ -69,6 +71,11 @@ def _cash_amount(value: Decimal) -> str:
 
 
 def evaluate_finance_position_guard(request: object) -> dict[str, Any]:
+    if isinstance(request, dict) and request.get("schema_version") == PARTIAL_REQUEST_SCHEMA:
+        _validate(request, "position-guard-partial.schema.json")
+        result = _evaluate_partial(request)
+        _validate(result, "position-guard-partial.schema.json")
+        return result
     _validate(request, "position-guard-request.schema.json")
     assert isinstance(request, dict)
     with localcontext() as context:
@@ -76,6 +83,95 @@ def evaluate_finance_position_guard(request: object) -> dict[str, Any]:
         result = _evaluate(request)
     _validate(result, "position-guard-response.schema.json")
     return result
+
+
+def _evaluate_partial(request: dict[str, Any]) -> dict[str, Any]:
+    """Project a caller's unresolved episode without inventing full receipts.
+
+    Digest binding proves supplied-input consistency, never source authenticity.
+    This path cannot authenticate a new deadline, financial facts or closure.
+    """
+    payload = request["input"]
+    episode = payload["episode"]
+    position = payload["position"]
+    decision = _time(payload["decision_at"])
+    runtime = _utc_now()
+    if decision > runtime or runtime - decision > timedelta(seconds=300):
+        raise ValueError("position guard decision clock is not current")
+    if episode["trade_id"] != episode["target_key"]:
+        raise ValueError("position guard requires a stable episode target key")
+    parts = {"episode": episode, "position": position,
+             "decision": payload["decision"], "execution": payload["execution"]}
+    expected = sorted(
+        (kind, value["source_ref"], canonical_digest(value))
+        for kind, value in parts.items() if value is not None and value["source_ref"] is not None
+    )
+    actual = sorted((r["kind"], r["ref"], r["digest"]) for r in request["context_refs"])
+    if actual != expected:
+        raise ValueError("position guard partial digest binding mismatch")
+    deadline_reached = decision >= _time(episode["max_hold_until"])
+    quantity = None
+    source_state = "missing"
+    asset_matches = None
+    gaps = set(payload["evidence_gaps"])
+    if position is not None:
+        if position["quantity"] is not None:
+            quantity = _amount(_number(position["quantity"]))
+            if "." in quantity:
+                quantity = quantity.rstrip("0").rstrip(".")
+        observed = _time(position["observed_at"])
+        source_state = "available_unverified" if (
+            observed <= decision and decision - observed <= timedelta(seconds=payload["max_age_seconds"])
+        ) else "stale_or_future"
+        if position["asset"] is not None:
+            asset_matches = position["asset"] == episode["asset"]
+        if asset_matches is False:
+            gaps.add("source_conflict")
+    gaps = sorted(gaps)
+    reasons = ["partial_evidence_unverified"]
+    if deadline_reached:
+        reasons.append("maximum_hold_reached")
+    if source_state != "available_unverified":
+        reasons.append("position_readback_" + source_state)
+    if asset_matches is False:
+        reasons.append("receipt_identity_mismatch")
+    # Semantic identity excludes poll/receipt clocks, invocation ids and repeated
+    # capture digests. Freshness class still changes when evidence becomes stale.
+    material = {
+        "trade_id": episode["trade_id"], "asset": episode["asset"],
+        "original_episode_digest": episode["source_digest"],
+        "maximum_hold_until": episode["max_hold_until"], "deadline_reached": deadline_reached,
+        "decision": payload["decision"]["disposition"],
+        "execution": payload["execution"]["disposition"],
+        "observed_quantity": quantity, "position_source_state": source_state,
+        "observed_asset": position["asset"] if position is not None else None,
+        "quantity_unit": position["quantity_unit"] if position is not None else None,
+        "position_asset_matches": asset_matches,
+        "evidence_gaps": gaps, "pending": True,
+    }
+    return {
+        "schema_version": PARTIAL_RESULT_SCHEMA, "extension_id": EXTENSION_ID,
+        "operation": OPERATION, "invocation_id": request["invocation_id"],
+        "trade_id": episode["trade_id"], "target_key": episode["target_key"],
+        "evaluated_at": payload["decision_at"], "request_digest": canonical_digest(request),
+        "state": "exit_review_required" if deadline_reached else "attention_required",
+        "urgent": deadline_reached, "reasons": reasons,
+        "next_action": "verify_position_for_human_exit_review" if deadline_reached else "refresh_or_repair_readback",
+        "observed_quantity": quantity, "position_verified": False,
+        "risk_estimate": None, "protection_coverage": None, "exit_draft": None,
+        "obligation": {"maximum_hold_until": episode["max_hold_until"],
+                       "deadline_reached": deadline_reached,
+                       "deadline_authority_verified": False,
+                       "decision": payload["decision"]["disposition"],
+                       "execution": payload["execution"]["disposition"],
+                       "closeout_verified": False, "pending": True},
+        "source_projections": {k: dict(v) if v is not None else None for k, v in parts.items()},
+        "evidence_gaps": gaps,
+        "material_projection": material, "material_digest": canonical_digest(material),
+        "monitor_projection": {"keep_monitor_open": True},
+        "effects": {"financial_mutations": False, "monitor_mutations": False, "scheduler_created": False},
+        "privacy": "private_account_material",
+    }
 
 
 def _evaluate(request: dict[str, Any]) -> dict[str, Any]:

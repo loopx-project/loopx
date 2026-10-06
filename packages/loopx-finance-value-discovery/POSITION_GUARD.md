@@ -42,7 +42,7 @@ authenticity of a provider declaration or an atomic venue snapshot.
 保护有效或已平仓。这些检查证明一致性，不能认证 provider 的声明真实性，
 也不能把分次读回变成交易所原子快照。
 
-### Holding deadline precedence (0.8.7 candidate) / 持有期限优先级
+### Holding deadline precedence (0.8.7) / 持有期限优先级
 
 At or after `max_hold_until`, reported open exposure always returns
 `exit_review_required`. A later `next_due_at`, missing costs, incomplete orders
@@ -113,6 +113,78 @@ M1 仅接受线性 quote-cash 损益、base-asset 数量、单位乘数 1，且�
 调用前须证明归一化有效。风险估计不保证亏损上限：跳空、滑点、资金费或场所
 故障可能超过止损估计。本操作不写订单或监控；退出到期时仅输出需用户核对、
 重新取得场所预览的草案，不输出可执行订单或签名权限。
+
+## Explicit partial readback (0.8.8) / 显式缺证读回
+
+The same operation accepts an opt-in `position_guard_partial_request_v1` and
+returns `position_guard_partial_result_v1`. Keep using the strict v0 request
+for financial protection, cost estimates and verified closure. The partial
+schema is not a relaxation of v0: it represents an unresolved episode when a
+source adapter cannot supply four complete receipts. A null position and a
+null displayed quantity are admitted without manufacturing account facts.
+
+同一操作显式接受 `position_guard_partial_request_v1`，返回独立的 v1 结果。
+保护、成本估计及可核验结案仍使用严格 v0。缺证路径单独表示尚未解决的周期，
+允许仓位或显示数量为 null，不伪造四类完整回执。
+
+The request retains four distinct source projections: the original episode
+and holding deadline, an optional observed position, the decision disposition,
+and execution disposition. Bind each non-null source reference to its component's
+canonical digest in `context_refs`; retain the original source digest and clock.
+This binding checks supplied-input consistency, not source authenticity. Neither
+the caller's deadline nor an observed flat quantity becomes trusted authority.
+A source adapter must retain the original episode and separately authenticate any
+human-admitted extension; changing its poll schedule cannot extend that deadline.
+
+输入分别保留原周期/期限、可选仓位观察、裁决及执行状态，按组件 canonical
+摘要绑定来源。原来源摘要与时钟继续保留；绑定仅证明输入一致，不能认证
+来源、期限或显示的零仓位。适配器须保留原周期，人工延期另行认证，轮询
+频率变化不能延长期限。
+
+At or after the supplied original deadline, the result is `exit_review_required`
+and urgent even when quantity is missing or unchanged. Every partial result
+keeps `pending=true`, `closeout_verified=false`, `position_verified=false` and
+`deadline_authority_verified=false`; risk, protection and exit draft are null.
+`partial_exit_observed` and `flat_observed_unverified` preserve that obligation.
+A mismatched observed asset adds `source_conflict` without masking stale reads.
+The decision clock must be current, while the observation's original clock stays
+unchanged and may be classified stale. Private source references never authorize
+an order, monitor closure, installation or a new timer.
+
+到达原期限后，即使数量缺失或相同，也输出紧急退出复核；所有缺证结果均
+保留待处理义务，并明确仓位、期限与结案未经认证。风险、保护及退出草稿
+为 null；部分退出或未核验零仓位不能结案。资产不符与时点失效分别呈现。
+决策时钟须当前，观察时钟不能刷新成现在。来源引用不授予交易、关监控、
+安装或新定时任务权限。
+
+`material_projection` and its digest omit poll timestamps, invocation IDs and
+repeated capture digests, but retain the original episode digest, deadline phase,
+normalized observed quantity/unit/asset, source freshness class, decision,
+execution and evidence gaps. Pass this material observation to the existing Core
+followthrough owner. A repeated equivalent capture is quiet; crossing a deadline,
+partial execution or a changed gap is material. The reducer writes no monitor or
+Todo and does not perform that consumer adoption itself.
+
+材料摘要排除轮询时钟、调用 nonce 及重复采集摘要，保留原周期摘要、期限
+阶段、归一化显示数量/单位/资产、新鲜度类别、裁决、执行与缺证。调用者将
+该材料交给已有 Core followthrough；相同采集保持安静，跨期限、部分执行或
+缺证变化属于实质变化。本 reducer 不写监控/Todo，也不代替消费者采用。
+
+Use the existing CLI and enabled extension entry points shown below, with a
+request whose `schema_version` explicitly selects v1. The combined
+[`position-guard-partial.schema.json`](src/loopx_finance_value_discovery/schemas/position-guard-partial.schema.json)
+is the input and output contract. Do not put this private result on the existing
+public-safe research dashboard. The private source producer, App and Lark receipt
+consumers still require their own integration and delivery acceptance. To fall
+back, keep the original strict v0 request; disable/restore the extension using
+its existing lifecycle owner. A v1 request sent to an older package must fail
+admission, not silently lose the obligation. Rollback preserves private episode
+and execution evidence instead of overwriting it with an earlier capture.
+
+用下方既有 CLI/extension 入口，输入版本明确选择 v1；同一 schema 定义输入与
+结果。结果保持私有，不能放入公开研究 Dashboard。私有来源生产者、App 与
+Lark 消费/投递须各自验收。回退沿用严格 v0 和既有 extension 生命周期；旧包
+应拒绝 v1，不能静默丢掉义务。回滚保留后续周期/执行证据，不用旧采集覆盖。
 
 ## Existing entry points / 已有入口
 

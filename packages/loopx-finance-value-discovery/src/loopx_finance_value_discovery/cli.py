@@ -42,6 +42,7 @@ from .operation_request import (
     build_finance_transaction_approval_packet,
 )
 from .position_guard import REQUEST_SCHEMA as POSITION_GUARD_INPUT_SCHEMA
+from .position_guard import PARTIAL_REQUEST_SCHEMA as POSITION_GUARD_PARTIAL_INPUT_SCHEMA
 from .position_guard import evaluate_finance_position_guard
 from .period_semantics import (
     FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
@@ -202,7 +203,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 FINANCE_PERIOD_COMPARISON_INPUT_V2_SCHEMA_VERSION,
             }:
                 packet = assess_period_comparison(payload)
-            elif schema_version == POSITION_GUARD_INPUT_SCHEMA:
+            elif schema_version in {POSITION_GUARD_INPUT_SCHEMA, POSITION_GUARD_PARTIAL_INPUT_SCHEMA}:
                 packet = evaluate_finance_position_guard(payload)
             elif schema_version == FINANCE_CASE_INPUT_SCHEMA_VERSION:
                 packet = build_finance_case_evaluation(payload)

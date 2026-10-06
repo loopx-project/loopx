@@ -73,6 +73,148 @@ def close(request):
     )
 
 
+def partial_example():
+    return bind_partial({
+        "schema_version": guard.PARTIAL_REQUEST_SCHEMA, "extension_id": guard.EXTENSION_ID,
+        "operation": guard.OPERATION, "invocation_id": "partial-synthetic",
+        "input": {
+            "decision_at": NOW, "max_age_seconds": 120,
+            "episode": {"trade_id": "episode-1", "target_key": "episode-1", "asset": "DEMO",
+                        "max_hold_until": NOW, "source_ref": "original-plan", "source_digest": SCOPE},
+            "position": {"quantity": "10.000", "asset": "DEMO", "quantity_unit": "DEMO", "observed_at": NOW,
+                         "source_ref": "visible-position", "source_digest": "sha256:" + "b" * 64},
+            "decision": {"disposition": "exit_under_original_time_limit", "source_ref": None, "source_digest": None},
+            "execution": {"disposition": "awaiting_owner_execution", "source_ref": None, "source_digest": None},
+            "evidence_gaps": ["account_identity", "order_ids", "opening_fills", "costs"],
+        },
+    })
+
+
+def bind_partial(request):
+    request["context_refs"] = [
+        {"kind": kind, "ref": value["source_ref"], "digest": guard.canonical_digest(value)}
+        for kind in ["episode", "position", "decision", "execution"]
+        if (value := request["input"][kind]) is not None and value["source_ref"] is not None
+    ]
+    return request
+
+
+@pytest.mark.parametrize("deadline,expected", [
+    ("2026-01-03T12:00:01Z", "attention_required"),
+    (NOW, "exit_review_required"),
+    ("2026-01-03T11:59:59Z", "exit_review_required"),
+])
+def test_explicit_partial_path_preserves_deadline_without_full_receipts(deadline, expected):
+    r = partial_example()
+    r["input"]["episode"]["max_hold_until"] = deadline
+    original = deepcopy(bind_partial(r))
+    out = guard.evaluate_finance_position_guard(r)
+    assert out["state"] == expected
+    assert out["obligation"]["pending"] and not out["obligation"]["closeout_verified"]
+    assert not out["obligation"]["deadline_authority_verified"]
+    assert out["exit_draft"] is None and out["risk_estimate"] is None
+    assert not out["position_verified"] and not any(out["effects"].values())
+    assert out["monitor_projection"]["keep_monitor_open"]
+    assert r == original
+
+
+@pytest.mark.parametrize("quantity,execution", [
+    (None, "awaiting_owner_execution"), ("4", "partial_exit_observed"),
+    ("0", "flat_observed_unverified"),
+])
+def test_partial_unknown_partial_exit_and_visible_flat_cannot_close(quantity, execution):
+    r = partial_example()
+    r["input"]["position"]["quantity"] = quantity
+    r["input"]["execution"]["disposition"] = execution
+    out = guard.evaluate_finance_position_guard(bind_partial(r))
+    assert out["state"] == "exit_review_required"
+    assert out["obligation"]["execution"] == execution
+    assert out["obligation"]["pending"] and out["exit_draft"] is None
+
+
+def test_partial_semantic_material_changes_at_deadline_not_each_poll(monkeypatch):
+    r = partial_example()
+    r["input"]["decision_at"] = "2026-01-03T11:59:59Z"
+    r["input"]["position"]["observed_at"] = r["input"]["decision_at"]
+    before = guard.evaluate_finance_position_guard(bind_partial(r))
+    r["input"]["decision_at"] = NOW
+    equal = guard.evaluate_finance_position_guard(bind_partial(r))
+    assert before["material_digest"] != equal["material_digest"]
+    r["input"]["decision_at"] = "2026-01-03T12:00:01Z"
+    r["input"]["position"].update(quantity="10.0", observed_at=r["input"]["decision_at"], source_digest="sha256:" + "c" * 64)
+    r["invocation_id"] = "later-poll"
+    monkeypatch.setattr(guard, "_utc_now", lambda: datetime(2026, 1, 3, 12, 0, 1, tzinfo=UTC))
+    after = guard.evaluate_finance_position_guard(bind_partial(r))
+    assert after["material_digest"] == equal["material_digest"]
+    assert after["request_digest"] != equal["request_digest"]
+    r["input"]["execution"]["disposition"] = "partial_exit_observed"
+    r["input"]["position"]["quantity"] = "4"
+    assert guard.evaluate_finance_position_guard(bind_partial(r))["material_digest"] != after["material_digest"]
+
+
+@pytest.mark.parametrize("observed", ["2026-01-03T11:50:00Z", "2026-01-03T12:00:01Z", None])
+def test_partial_stale_future_missing_source_keeps_original_pending(observed):
+    r = partial_example()
+    if observed is None:
+        r["input"]["position"] = None
+    else:
+        r["input"]["position"]["observed_at"] = observed
+    out = guard.evaluate_finance_position_guard(bind_partial(r))
+    assert out["state"] == "exit_review_required" and out["urgent"]
+    assert out["material_projection"]["position_source_state"] != "available_unverified"
+    assert out["obligation"]["pending"] and out["exit_draft"] is None
+
+
+def test_partial_binding_fences_and_exact_decimal_precision():
+    r = partial_example()
+    r["input"]["episode"]["max_hold_until"] = "2027-01-01T00:00:00Z"
+    with pytest.raises(ValueError, match="digest binding"):
+        guard.evaluate_finance_position_guard(r)
+    # Even consistently supplied future clocks never authenticate an extension
+    # or close a native obligation; its applier must retain the original source.
+    out = guard.evaluate_finance_position_guard(bind_partial(r))
+    assert out["obligation"]["pending"] and not out["obligation"]["deadline_authority_verified"]
+    r["input"]["position"]["quantity"] = "123456789012345678901234.123456789012345678"
+    assert guard.evaluate_finance_position_guard(bind_partial(r))["observed_quantity"] == r["input"]["position"]["quantity"]
+
+
+def test_partial_wrong_asset_keeps_identity_conflict_visible_without_draft():
+    r = partial_example()
+    r["input"]["position"]["asset"] = "OTHER"
+    out = guard.evaluate_finance_position_guard(bind_partial(r))
+    assert out["material_projection"]["position_asset_matches"] is False
+    assert "source_conflict" in out["evidence_gaps"]
+    assert out["state"] == "exit_review_required" and out["exit_draft"] is None
+    out["source_projections"]["episode"]["max_hold_until"] = "2027-01-01T00:00:00Z"
+    assert r["input"]["episode"]["max_hold_until"] == NOW
+
+
+@pytest.mark.parametrize("field,value", [
+    ("decision", {"disposition": "extend_deadline", "source_ref": None, "source_digest": None}),
+    ("execution", {"disposition": "closed_verified", "source_ref": None, "source_digest": None}),
+    ("evidence_gaps", []),
+])
+def test_partial_cannot_claim_verified_closure_or_extension(field, value):
+    r = partial_example()
+    r["input"][field] = value
+    with pytest.raises(ValueError, match="schema admission"):
+        guard.evaluate_finance_position_guard(bind_partial(r))
+
+
+def test_partial_actual_stdin_and_direct_cli_and_generic_private_error(monkeypatch, capsys, tmp_path):
+    r = partial_example()
+    expected = guard.evaluate_finance_position_guard(r)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(r)))
+    assert run([]) == 0 and json.loads(capsys.readouterr().out) == expected
+    p = tmp_path / "partial.json"
+    p.write_text(json.dumps(r))
+    assert run(["evaluate-position", "--input-json", str(p)]) == 0
+    assert json.loads(capsys.readouterr().out) == expected
+    r["input"]["credential"] = "private-sentinel-do-not-reflect"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(r)))
+    assert run([]) == 1 and "private-sentinel" not in capsys.readouterr().out
+
+
 def test_full_alternative_legs_cover_once_without_authority():
     out = evaluate(example())
     assert out["state"] == "protected_open"

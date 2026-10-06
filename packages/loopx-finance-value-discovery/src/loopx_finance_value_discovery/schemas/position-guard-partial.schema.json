@@ -1,0 +1,689 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopx.dev/schemas/finance/position-guard-partial-v1",
+  "description": "Explicit unverified partial request/result for an unresolved episode. No source authentication, deadline extension, financial verification or closure authority.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/result"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "quantity": {
+      "type": "string",
+      "maxLength": 50,
+      "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+    },
+    "episode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trade_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_key": {
+          "$ref": "#/$defs/id"
+        },
+        "asset": {
+          "$ref": "#/$defs/id"
+        },
+        "max_hold_until": {
+          "$ref": "#/$defs/time"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/id"
+        },
+        "source_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "trade_id",
+        "target_key",
+        "asset",
+        "max_hold_until",
+        "source_ref",
+        "source_digest"
+      ]
+    },
+    "position": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "quantity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "observed_at": {
+              "$ref": "#/$defs/time"
+            },
+            "source_ref": {
+              "$ref": "#/$defs/id"
+            },
+            "source_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "asset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "quantity_unit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "quantity",
+            "observed_at",
+            "source_ref",
+            "source_digest",
+            "asset",
+            "quantity_unit"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "not_decided",
+            "exit_under_original_time_limit"
+          ]
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_digest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "disposition",
+        "source_ref",
+        "source_digest"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "source_ref": {
+              "type": "null"
+            },
+            "source_digest": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "source_ref": {
+              "type": "string"
+            },
+            "source_digest": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "awaiting_owner_execution",
+            "partial_exit_observed",
+            "flat_observed_unverified"
+          ]
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_digest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "disposition",
+        "source_ref",
+        "source_digest"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "source_ref": {
+              "type": "null"
+            },
+            "source_digest": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "source_ref": {
+              "type": "string"
+            },
+            "source_digest": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "gaps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "account_identity",
+          "position_completeness",
+          "order_ids",
+          "reduce_only",
+          "opening_fills",
+          "exit_fills",
+          "costs",
+          "funding_sign",
+          "monitor_binding",
+          "source_conflict"
+        ]
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "enum": [
+            "position_guard_partial_request_v1"
+          ]
+        },
+        "extension_id": {
+          "enum": [
+            "loopx-finance-value-discovery"
+          ]
+        },
+        "operation": {
+          "enum": [
+            "evaluate_finance_position_guard"
+          ]
+        },
+        "invocation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "context_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "episode",
+                  "position",
+                  "decision",
+                  "execution"
+                ]
+              },
+              "ref": {
+                "$ref": "#/$defs/id"
+              },
+              "digest": {
+                "$ref": "#/$defs/digest"
+              }
+            },
+            "required": [
+              "kind",
+              "ref",
+              "digest"
+            ]
+          }
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "decision_at": {
+              "$ref": "#/$defs/time"
+            },
+            "max_age_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "episode": {
+              "$ref": "#/$defs/episode"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "decision": {
+              "$ref": "#/$defs/decision"
+            },
+            "execution": {
+              "$ref": "#/$defs/execution"
+            },
+            "evidence_gaps": {
+              "$ref": "#/$defs/gaps"
+            }
+          },
+          "required": [
+            "decision_at",
+            "max_age_seconds",
+            "episode",
+            "position",
+            "decision",
+            "execution",
+            "evidence_gaps"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "extension_id",
+        "operation",
+        "invocation_id",
+        "context_refs",
+        "input"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "enum": [
+            "position_guard_partial_result_v1"
+          ]
+        },
+        "extension_id": {
+          "enum": [
+            "loopx-finance-value-discovery"
+          ]
+        },
+        "operation": {
+          "enum": [
+            "evaluate_finance_position_guard"
+          ]
+        },
+        "invocation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "trade_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_key": {
+          "$ref": "#/$defs/id"
+        },
+        "evaluated_at": {
+          "$ref": "#/$defs/time"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "state": {
+          "enum": [
+            "exit_review_required",
+            "attention_required"
+          ]
+        },
+        "urgent": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "partial_evidence_unverified",
+              "maximum_hold_reached",
+              "position_readback_missing",
+              "position_readback_stale_or_future",
+              "receipt_identity_mismatch"
+            ]
+          }
+        },
+        "next_action": {
+          "enum": [
+            "verify_position_for_human_exit_review",
+            "refresh_or_repair_readback"
+          ]
+        },
+        "observed_quantity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/quantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "position_verified": {
+          "const": false
+        },
+        "risk_estimate": {
+          "type": "null"
+        },
+        "protection_coverage": {
+          "type": "null"
+        },
+        "exit_draft": {
+          "type": "null"
+        },
+        "obligation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maximum_hold_until": {
+              "$ref": "#/$defs/time"
+            },
+            "deadline_reached": {
+              "type": "boolean"
+            },
+            "deadline_authority_verified": {
+              "const": false
+            },
+            "decision": {
+              "enum": [
+                "not_decided",
+                "exit_under_original_time_limit"
+              ]
+            },
+            "execution": {
+              "enum": [
+                "awaiting_owner_execution",
+                "partial_exit_observed",
+                "flat_observed_unverified"
+              ]
+            },
+            "closeout_verified": {
+              "const": false
+            },
+            "pending": {
+              "const": true
+            }
+          },
+          "required": [
+            "maximum_hold_until",
+            "deadline_reached",
+            "deadline_authority_verified",
+            "decision",
+            "execution",
+            "closeout_verified",
+            "pending"
+          ]
+        },
+        "source_projections": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "episode": {
+              "$ref": "#/$defs/episode"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "decision": {
+              "$ref": "#/$defs/decision"
+            },
+            "execution": {
+              "$ref": "#/$defs/execution"
+            }
+          },
+          "required": [
+            "episode",
+            "position",
+            "decision",
+            "execution"
+          ]
+        },
+        "evidence_gaps": {
+          "$ref": "#/$defs/gaps"
+        },
+        "material_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "trade_id": {
+              "$ref": "#/$defs/id"
+            },
+            "asset": {
+              "$ref": "#/$defs/id"
+            },
+            "original_episode_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "maximum_hold_until": {
+              "$ref": "#/$defs/time"
+            },
+            "deadline_reached": {
+              "type": "boolean"
+            },
+            "decision": {
+              "enum": [
+                "not_decided",
+                "exit_under_original_time_limit"
+              ]
+            },
+            "execution": {
+              "enum": [
+                "awaiting_owner_execution",
+                "partial_exit_observed",
+                "flat_observed_unverified"
+              ]
+            },
+            "observed_quantity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "position_source_state": {
+              "enum": [
+                "missing",
+                "available_unverified",
+                "stale_or_future"
+              ]
+            },
+            "evidence_gaps": {
+              "$ref": "#/$defs/gaps"
+            },
+            "pending": {
+              "const": true
+            },
+            "observed_asset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "quantity_unit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "position_asset_matches": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "trade_id",
+            "asset",
+            "original_episode_digest",
+            "maximum_hold_until",
+            "deadline_reached",
+            "decision",
+            "execution",
+            "observed_quantity",
+            "position_source_state",
+            "evidence_gaps",
+            "pending",
+            "observed_asset",
+            "quantity_unit",
+            "position_asset_matches"
+          ]
+        },
+        "material_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "monitor_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "keep_monitor_open": {
+              "const": true
+            }
+          },
+          "required": [
+            "keep_monitor_open"
+          ]
+        },
+        "effects": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "financial_mutations": {
+              "const": false
+            },
+            "monitor_mutations": {
+              "const": false
+            },
+            "scheduler_created": {
+              "const": false
+            }
+          },
+          "required": [
+            "financial_mutations",
+            "monitor_mutations",
+            "scheduler_created"
+          ]
+        },
+        "privacy": {
+          "enum": [
+            "private_account_material"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "extension_id",
+        "operation",
+        "invocation_id",
+        "trade_id",
+        "target_key",
+        "evaluated_at",
+        "request_digest",
+        "state",
+        "urgent",
+        "reasons",
+        "next_action",
+        "observed_quantity",
+        "position_verified",
+        "risk_estimate",
+        "protection_coverage",
+        "exit_draft",
+        "obligation",
+        "source_projections",
+        "evidence_gaps",
+        "material_projection",
+        "material_digest",
+        "monitor_projection",
+        "effects",
+        "privacy"
+      ]
+    }
+  }
+}
