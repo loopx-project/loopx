@@ -133,7 +133,9 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
     const indexed = new Set(indexBytes(join(runsDir, "index.jsonl")).toString("utf8").split(/\r?\n/)
       .filter(line => line.trim()).map(line => jsonObject(JSON.parse(line).settlement_identity)?.effect_id));
     for (const name of names.filter(name => name.endsWith(".json") && BARE_SHA256_PATTERN.test(name.slice(0, -5)))) {
-      const other = requireJsonObject(JSON.parse(readFileSync(join(contexts, name), "utf8")), "read receipt");
+      let other: JsonObject;
+      try { other = requireJsonObject(JSON.parse(readFileSync(join(contexts, name), "utf8")), "read receipt"); }
+      catch { unknown("checkpoint read receipt is unavailable; preserve original Turn artifacts before retrying"); }
       const owner = jsonObject(other.identity);
       if (other.purpose === "first_delivery" && other.commit_attempt != null && owner?.effect_id !== identity.effect_id &&
           owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id && !indexed.has(owner?.effect_id)) {

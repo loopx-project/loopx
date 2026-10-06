@@ -7,6 +7,11 @@ import {normalizeVisionUnchangedReason} from "../goals/vision_checkpoint.ts";
 export function evaluateFirstDelivery(value: unknown): JsonObject {
   const request = requireJsonObject(value, "first delivery");
   if (request.phase === "project") {
+    if (request.observation_unavailable === true) {
+      return {schema_version: "first_delivery_progress_v0", stage: "observation_unavailable",
+        goal_completion_certified: false,
+        next_action: "Inspect unavailable checkpoint observations before resuming the affected Turn."};
+    }
     const stage = request.unknown === true ? "operation_unknown"
       : request.direction_committed !== true ? "direction_pending"
       : request.settlement_complete === true ? "settled" : "settlement_pending";

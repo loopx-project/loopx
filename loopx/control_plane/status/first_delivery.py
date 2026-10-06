@@ -15,7 +15,7 @@ def attach_first_delivery_status(payload: dict[str, Any], *, runtime_root: Path,
         if progress is None:
             continue
         item["first_delivery_progress"] = progress
-        if quota_item_is_paused(item) or item.get("requires_user_action") is True:
+        if not progress.get("settlement_identity") or quota_item_is_paused(item) or item.get("requires_user_action") is True:
             continue
         action = progress["next_action"]
         item["recommended_action"] = action

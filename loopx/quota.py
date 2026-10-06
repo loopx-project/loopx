@@ -963,7 +963,7 @@ def build_quota_should_run(
         if delivery_progress is not None:
             payload["first_delivery_progress"] = delivery_progress
             # Observation cannot grant work or override an owner pause/health hold.
-            if payload.get("ok") and payload.get("state") != "paused":
+            if delivery_progress.get("settlement_identity") and payload.get("ok") and payload.get("state") != "paused":
                 payload["recommended_action"] = delivery_progress["next_action"]
     return payload
 

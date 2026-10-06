@@ -486,6 +486,15 @@ status mirror recovery text into the existing next-action field used by the
 dashboard and channel projections. These receipt observations are neither new
 workflow authority nor a Goal completion signal.
 
+Malformed or unreadable historical receipts are reported as scoped
+`observation_errors`, never as proof that no recovery is pending. If the damaged
+receipt cannot be attributed to a Turn, `observation_unavailable` retains the
+Goal-scoped warning while leaving unrelated lanes' next actions intact. An
+enrolled Turn whose original readback is uncertain stays `operation_unknown`;
+recovery writes remain blocked until the original artifacts can be reconciled.
+Observation reuses one complete canonical Todo snapshot across the discovered
+identities; it does not truncate older pending work.
+
 After a lost response, retry the original request. `checkpoint-context` for its
 first-delivery identity verifies an indexed direction and artifacts before
 returning `committed`. A proved empty append can retry after freshness validation.

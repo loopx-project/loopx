@@ -61,11 +61,18 @@ def _receipt_path(root: Path, identity: SettlementIdentity, purpose: str = "supp
     return root / "goals" / identity.goal_id / "checkpoint-contexts" / f"{digest}.json"
 
 
+def _read_context_receipt(path: Path) -> dict[str, Any]:
+    receipt = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(receipt, dict):
+        raise ValueError("checkpoint receipt must be an object")
+    return receipt
+
+
 def first_delivery_context_enrolled(root: Path, identity: SettlementIdentity) -> bool:
     """Read the persisted protocol selection; enrollment survives caller restart."""
     for purpose in ("first_delivery", "delivery_result"):
         try:
-            receipt = json.loads(_receipt_path(root, identity, purpose).read_text(encoding="utf-8"))
+            receipt = _read_context_receipt(_receipt_path(root, identity, purpose))
         except FileNotFoundError:
             continue
         if receipt.get("purpose") == purpose:
@@ -84,28 +91,38 @@ def _inspect_attempt(root: Path, identity: SettlementIdentity) -> dict[str, Any]
     return result
 
 
-def first_delivery_progress(root: Path, readback: Any) -> dict[str, Any] | None:
+def first_delivery_progress(
+    root: Path, readback: Any, *, canonical_todos: list[dict[str, Any]] | None = None,
+    observation_unknown: bool = False,
+) -> dict[str, Any] | None:
     """Observe protocol receipts for quota consumers; this grants no write authority.
 
     A snapshot may lag a concurrent writer. Ambiguity is displayed as unknown;
     only the locked replay path can resolve it or admit another operation.
     """
     identity = readback.identity.value
-    if identity is None or not first_delivery_context_enrolled(root, identity):
+    if identity is None:
         return None
     from ..coordination.local_authority import read_canonical_todos_if_promoted
 
     committed = False
-    unknown = False
+    unknown = observation_unknown
     try:
-        canonical = read_canonical_todos_if_promoted(runtime_root=root, goal_id=identity.goal_id)
-        selected = next((todo for todo in (canonical or {}).get("todos", []) if todo["todo_id"] == identity.todo_id), {})
+        if not first_delivery_context_enrolled(root, identity):
+            return None
+    except (ValueError, OSError):
+        unknown = True
+    try:
+        if canonical_todos is None:
+            canonical = read_canonical_todos_if_promoted(runtime_root=root, goal_id=identity.goal_id)
+            canonical_todos = (canonical or {}).get("todos", [])
+        selected = next((todo for todo in canonical_todos if todo["todo_id"] == identity.todo_id), {})
         committed = selected.get("status") == "done" and selected.get("completion_turn_key") in {identity.effect_id, identity.turn_instance_id}
         direction_path = _receipt_path(root, identity)
-        direction = json.loads(direction_path.read_text(encoding="utf-8")) if direction_path.exists() else {}
+        direction = _read_context_receipt(direction_path) if direction_path.exists() else {}
         checkpoint = (readback.writeback_run or {}).get("vision_checkpoint", {})
         direction_committed = checkpoint.get("satisfied") is True and checkpoint.get("read_context", {}).get("purpose") == "first_delivery"
-        unknown = bool(direction.get("commit_attempt")) and not direction_committed
+        unknown = unknown or (bool(direction.get("commit_attempt")) and not direction_committed)
     except (ValueError, OSError):
         direction_committed = False
         unknown = True
@@ -118,21 +135,66 @@ def first_delivery_progress(root: Path, readback: Any) -> dict[str, Any] | None:
 
 
 def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | None = None) -> dict[str, Any] | None:
-    """Bounded to this Agent's enrolled local Turns; readback, never admission."""
+    """Isolate historical observation faults; admission still uses strict reads.
+
+    An unreadable digest cannot be assigned to an Agent. Keep that Goal-scoped
+    uncertainty visible without replacing another lane's normal next action.
+    """
+    from ..coordination.local_authority import read_canonical_todos_if_promoted
+
     identities = {}
+    errors = []
     for path in (root / "goals" / goal_id / "checkpoint-contexts").glob("*.json"):
-        receipt = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            receipt = _read_context_receipt(path)
+        except (ValueError, OSError):
+            errors.append({"scope": "goal", "code": "checkpoint_receipt_unavailable", "receipt": path.stem})
+            continue
         binding = receipt.get("identity", {})
-        if receipt.get("purpose") in {"first_delivery", "delivery_result"} and (agent_id is None or binding.get("agent_id") == agent_id):
-            identities[binding["effect_id"]] = binding
+        if receipt.get("purpose") not in ("first_delivery", "delivery_result"):
+            continue
+        observed_agent = binding.get("agent_id") if isinstance(binding, dict) else None
+        if isinstance(observed_agent, str) and observed_agent and agent_id is not None and observed_agent != agent_id:
+            continue
+        try:
+            identity = SettlementIdentity.from_runtime_payload(binding)
+            if (receipt.get("schema_version") != "checkpoint_read_context_v2" or identity.goal_id != goal_id
+                    or path != _receipt_path(root, identity, receipt["purpose"])):
+                raise ValueError("checkpoint receipt binding mismatch")
+        except (ValueError, RuntimeError):
+            errors.append({"scope": "goal", "code": "checkpoint_receipt_invalid", "receipt": path.stem})
+            continue
+        identities[identity.effect_id] = identity.as_dict()
+    # Share the complete current authority snapshot across observed identities.
+    # Do not cap the historical scan or silently lose older pending work.
+    canonical_todos = None
+    if identities:
+        try:
+            canonical = read_canonical_todos_if_promoted(runtime_root=root, goal_id=goal_id)
+            canonical_todos = (canonical or {}).get("todos", [])
+        except (ValueError, OSError):
+            errors.append({"scope": "goal", "code": "checkpoint_authority_unavailable"})
     for binding in reversed(list(identities.values())):
-        readback = read_heartbeat_settlement(root, goal_id=goal_id, agent_id=binding["agent_id"],
-            todo_id=binding.get("todo_id"), replan_obligation_id=binding.get("replan_obligation_id"),
-            turn_instance_id=binding["turn_instance_id"])
-        if readback is not None:
-            progress = first_delivery_progress(root, readback)
-            if progress is not None and progress["stage"] != "settled":
-                return {**progress, "settlement_identity": binding}
+        try:
+            identity = SettlementIdentity.from_runtime_payload(binding)
+            observation_unknown = any(error.get("receipt") in {
+                _receipt_path(root, identity, purpose).stem for purpose in ("first_delivery", "delivery_result")
+            } for error in errors)
+            readback = read_heartbeat_settlement(root, goal_id=goal_id, agent_id=binding["agent_id"],
+                todo_id=binding.get("todo_id"), replan_obligation_id=binding.get("replan_obligation_id"),
+                turn_instance_id=binding["turn_instance_id"])
+            if readback is None or canonical_todos is None:
+                raise ValueError("enrolled checkpoint readback unavailable")
+            progress = first_delivery_progress(root, readback, canonical_todos=canonical_todos,
+                observation_unknown=observation_unknown)
+        except (ValueError, OSError):
+            progress = effect_runtime_result("turn.first_delivery.evaluate", {"phase": "project", "unknown": True})
+        if progress is not None and progress["stage"] != "settled":
+            return {**progress, "settlement_identity": binding, **({"observation_errors": errors} if errors else {})}
+    if errors:
+        return {**effect_runtime_result("turn.first_delivery.evaluate", {
+            "phase": "project", "observation_unavailable": True}),
+            "goal_id": goal_id, "agent_id": agent_id, "observation_errors": errors}
     return None
 
 
