@@ -650,6 +650,21 @@ def _codex_command(
     return command
 
 
+def _checked_codex_session_id(planned_action: str, binding: Mapping[str, Any] | None) -> str | None:
+    """Keep executable session admission together before starting the process."""
+    if planned_action == "resume" and binding is None:
+        raise RuntimeError("Codex CLI resume binding disappeared after planning")
+    if planned_action == "start_new" and binding is not None:
+        raise RuntimeError("Codex CLI session binding changed after planning")
+    if planned_action not in {"resume", "start_new"}:
+        raise ValueError("Codex CLI host request has no executable session action")
+    if binding and binding.get("operation_transport"):
+        raise ValueError(
+            "operation-equipped session requires its original managed transport; select a fresh iteration explicitly to change it"
+        )
+    return str(binding.get("session_id")) if binding else None
+
+
 def run_codex_cli_host(
     request: Mapping[str, Any],
     *,
@@ -711,17 +726,7 @@ def run_codex_cli_host(
         )
         if not approved_write_resume:
             require_codex_session_profile(binding, profile_digest)
-    if planned_action == "resume" and binding is None:
-        raise RuntimeError("Codex CLI resume binding disappeared after planning")
-    if planned_action == "start_new" and binding is not None:
-        raise RuntimeError("Codex CLI session binding changed after planning")
-    if planned_action not in {"resume", "start_new"}:
-        raise ValueError("Codex CLI host request has no executable session action")
-    session_id = str(binding.get("session_id")) if binding else None
-    if binding and binding.get("operation_transport"):
-        raise ValueError(
-            "operation-equipped session requires its original managed transport; select a fresh iteration explicitly to change it"
-        )
+    session_id = _checked_codex_session_id(planned_action, binding)
     goal_ref = request.get("goal_ref")
     exact_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
 
