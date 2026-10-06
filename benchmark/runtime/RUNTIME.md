@@ -5,6 +5,13 @@ LHTB, SWE-Marathon and other Harbor tasks use
 `PYTHONPATH`. This research runner is not another installed product package.
 Native tasks, environment, phases, feedback, verifier and scores stay in Harbor.
 
+The shared adapter reads `PATH` from the task container before installing its
+isolated profile. Worker and login shells retain those task toolchain directories;
+LoopX modes prepend their staged Node and CLI. No operator-host PATH or other
+ambient environment variables are copied. A missing/unreadable task PATH fails
+installation. This changes tool discovery for newly installed trials only; keep
+existing trials pinned when comparing runner versions.
+
 ## Configure the native job
 
 Use this agent in the benchmark's existing job config, retaining its dataset
