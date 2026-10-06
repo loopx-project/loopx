@@ -476,13 +476,14 @@ const image={alt:'figure',currentSrc:'https://example.com/image.png',
  getBoundingClientRect(){return {left:0,top:0,width:2,height:2};}};
 const spinner={getClientRects(){return [1];}};
 const root={get innerText(){return readiness?.startsWith('image_')?'':loaded?text:'Navigation Loading';},
+ getClientRects(){return [1];},
  getAttribute(){return (readiness==='busy'&&!loaded)||readiness==='main_busy_with_readable_article'?'true':null;},
  closest(selector){return selector==='[aria-busy="true"]'&&this.getAttribute('aria-busy')==='true'?this:null;},
  querySelectorAll(selector){if(selector==='article')return articles;
- if(selector==='img')return [image];
- return readiness==='sidebar_busy_inside_main'?[sidebar]:loaded?[]:[spinner];}};
+ if(selector==='img')return readiness?.startsWith('navigation_')&&!loaded?[]:[image];
+ return readiness?.startsWith('navigation_')?[]:readiness==='sidebar_busy_inside_main'?[sidebar]:loaded?[]:[spinner];}};
 spinner.closest=()=>null;
-const article={innerText:text,getAttribute(){return null;},closest(){return null;},
+const article={innerText:text,getAttribute(){return null;},closest(){return null;},getClientRects(){return [1];},
  querySelectorAll(selector){return selector==='img'?[image]:[];}};
 const emptyArticle={innerText:'',getAttribute(){return null;},closest(){return null;},querySelectorAll(){return [];}};
 const sidebar={innerText:'Loading sidebar',getAttribute(){return 'true';},
@@ -499,6 +500,12 @@ if(readiness==='article_busy_with_main_chrome'){
  articles=[sidebar];sidebar.closest=selector=>selector==='[aria-busy="true"]'?sidebar:null;
 }
 const doc=new Proxy({title:'Article',body:root,
+ createRange(){return {selectNodeContents(){},getClientRects(){return [1];}};},
+ createTreeWalker(node){
+  const chromeOnly=readiness?.startsWith('navigation_')&&!loaded;
+  const parent=chromeOnly?{closest(){return {};},getClientRects(){return [1];}}:node;
+  let visited=false;return {nextNode(){if(visited)return null;visited=true;
+   return {textContent:node.innerText,parentElement:parent};}};},
  querySelectorAll(selector){return selector==='main,[role="main"]'?[root]:[...articles,...(sidebarFixture?[sidebar]:[])];},
  querySelector(selector){if(readiness==='article_with_sidebar')return selector==='article'?article:root;
  if(readiness==='empty_sibling_article')return selector==='article'?emptyArticle:root;
@@ -508,7 +515,7 @@ const doc=new Proxy({title:'Article',body:root,
  {get(target,key){domReads++;return target[key];}});
 const page={async goto(url){href=new URL(redirect||url).href;},
  async evaluate(fn,arg){return vm.runInNewContext('('+fn.toString()+')(arg)',
- {URL,location:{href},document:doc,arg,scrollX:0,scrollY:0,
+ {URL,location:{href},document:doc,arg,scrollX:0,scrollY:0,NodeFilter:{SHOW_TEXT:4},
  getComputedStyle(){return {visibility:'visible'};}});},
  async waitForFunction(fn,arg){
   if(typeof arg==='string'&&readiness){
@@ -516,7 +523,7 @@ const page={async goto(url){href=new URL(redirect||url).href;},
    if(readiness==='article_with_sidebar'||sidebarFixture||readiness==='empty_sibling_article'){if(!initial)throw Error('readable content delayed by sidebar');loaded=true;}
    else{
     if(initial)throw Error('loading content accepted');
-    if(readiness==='timeout'||readiness==='image_timeout'||readiness==='main_busy_with_readable_article'||readiness==='article_busy_with_main_chrome')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
+    if(readiness==='timeout'||readiness==='image_timeout'||readiness==='navigation_timeout'||readiness==='main_busy_with_readable_article'||readiness==='article_busy_with_main_chrome')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
     if(readiness==='user_control')throw Error('User took control');
     loaded=true;
    }
@@ -606,6 +613,21 @@ def test_busy_sidebar_article_does_not_block_primary_content(configured, tmp_pat
     )
     assert result["ok"]
     assert observation["captures"] == int(image)
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness,ok", [("navigation_loading", True), ("navigation_timeout", False)])
+def test_navigation_text_does_not_make_empty_content_ready(configured, tmp_path, image, readiness, ok):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness,
+    )
+    assert result["ok"] is ok
+    assert observation["captures"] == int(image and ok)
+    if ok and not image:
+        assert result["text"] == "Source evidence"
+    if not ok:
+        assert result["error"] == "source_content_not_ready"
 
 
 @pytest.mark.parametrize("image", [False, True])
