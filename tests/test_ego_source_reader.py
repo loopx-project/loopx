@@ -467,19 +467,41 @@ def run_generated_script(config, url, image, path, *, redirect=None, readiness=N
               else reader._script(config, url))
     harness = """
 const vm=require('node:vm'),fs=require('node:fs');
-let href='',domReads=0,captures=0,loaded=!readiness;
+let href='',domReads=0,captures=0,loaded=!readiness||readiness.startsWith('sidebar_busy');
 const image={alt:'figure',currentSrc:'https://example.com/image.png',
  get complete(){return !readiness?.startsWith('image_')||loaded;},
  naturalWidth:2,naturalHeight:2,scrollIntoView(){},
+ closest(){return null;},
  getClientRects(){return [1];},
  getBoundingClientRect(){return {left:0,top:0,width:2,height:2};}};
 const spinner={getClientRects(){return [1];}};
 const root={get innerText(){return readiness?.startsWith('image_')?'':loaded?text:'Navigation Loading';},
- getAttribute(){return readiness==='busy'&&!loaded?'true':null;},
- querySelectorAll(selector){return selector==='img'?[image]:loaded?[]:[spinner];}};
-const article={innerText:text,getAttribute(){return null;},querySelectorAll(){return [];}};
+ getAttribute(){return (readiness==='busy'&&!loaded)||readiness==='main_busy_with_readable_article'?'true':null;},
+ closest(selector){return selector==='[aria-busy="true"]'&&this.getAttribute('aria-busy')==='true'?this:null;},
+ querySelectorAll(selector){if(selector==='article')return articles;
+ if(selector==='img')return [image];
+ return readiness==='sidebar_busy_inside_main'?[sidebar]:loaded?[]:[spinner];}};
+spinner.closest=()=>null;
+const article={innerText:text,getAttribute(){return null;},closest(){return null;},
+ querySelectorAll(selector){return selector==='img'?[image]:[];}};
+const sidebar={innerText:'Loading sidebar',getAttribute(){return 'true';},
+ closest(selector){return selector==='[aria-busy="true"]'?this:{};},
+ querySelectorAll(){return [spinner];},getClientRects(){return [1];}};
+const sidebarFixture=readiness?.startsWith('sidebar_busy');
+let articles=readiness==='article_with_sidebar'?[article]:[];
+if(sidebarFixture)articles=readiness==='sidebar_busy_inside_main'?[sidebar]:[];
+if(readiness==='sidebar_busy_with_primary_article')articles=[sidebar,article];
+if(readiness==='main_busy_with_readable_article'){
+ articles=[article];article.closest=selector=>selector==='[aria-busy="true"]'?root:null;
+}
+if(readiness==='article_busy_with_main_chrome'){
+ articles=[sidebar];sidebar.closest=selector=>selector==='[aria-busy="true"]'?sidebar:null;
+}
 const doc=new Proxy({title:'Article',body:root,
+ querySelectorAll(selector){return selector==='main,[role="main"]'?[root]:[...articles,...(sidebarFixture?[sidebar]:[])];},
  querySelector(selector){if(readiness==='article_with_sidebar')return selector==='article'?article:root;
+ if(sidebarFixture||readiness==='article_busy_with_main_chrome')return selector==='article'?sidebar:root;
+ if(readiness==='main_busy_with_readable_article')return selector==='article'?article:root;
  return readiness&&selector!=='article'?root:null;},images:[image]},
  {get(target,key){domReads++;return target[key];}});
 const page={async goto(url){href=new URL(redirect||url).href;},
@@ -489,10 +511,10 @@ const page={async goto(url){href=new URL(redirect||url).href;},
  async waitForFunction(fn,arg){
   if(typeof arg==='string'&&readiness){
    const initial=await this.evaluate(fn,arg);
-   if(readiness==='article_with_sidebar'){if(!initial)throw Error('readable article delayed');loaded=true;}
+   if(readiness==='article_with_sidebar'||sidebarFixture){if(!initial)throw Error('readable content delayed by sidebar');loaded=true;}
    else{
     if(initial)throw Error('loading content accepted');
-    if(readiness==='timeout'||readiness==='image_timeout')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
+    if(readiness==='timeout'||readiness==='image_timeout'||readiness==='main_busy_with_readable_article'||readiness==='article_busy_with_main_chrome')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
     if(readiness==='user_control')throw Error('User took control');
     loaded=true;
    }
@@ -568,6 +590,30 @@ def test_image_only_content_is_readable_after_pixels_load(configured, tmp_path, 
     assert observation["captures"] == int(ok)
     if not ok:
         assert result["error"] == "source_content_not_ready"
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness", [
+    "sidebar_busy_before_main", "sidebar_busy_inside_main", "sidebar_busy_with_primary_article",
+])
+def test_busy_sidebar_article_does_not_block_primary_content(configured, tmp_path, image, readiness):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness, text="" if image else "Primary content",
+    )
+    assert result["ok"]
+    assert observation["captures"] == int(image)
+
+
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("readiness", ["main_busy_with_readable_article", "article_busy_with_main_chrome"])
+def test_primary_busy_state_cannot_be_bypassed_by_readable_chrome(configured, tmp_path, image, readiness):
+    result, observation = run_generated_script(
+        reader.ReaderConfig.from_environment(), URL, image, tmp_path / "image.png",
+        readiness=readiness,
+    )
+    assert result == {"ok": False, "error": "source_content_not_ready"}
+    assert observation["captures"] == 0
 
 
 @pytest.mark.parametrize("image", [False, True])
