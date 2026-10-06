@@ -793,6 +793,11 @@ removing their authority or fields would change those consumers' contract.
 The revised regression ceilings are 12,500 / 11,000 (393 / 802 characters of
 headroom on that workload). This preserves the original failure and fixture,
 does not change the thin task-body budget, and is not a frozen SLO qualification.
+The thin Markdown diagnostics also repeat full routes in the generator-input
+view: the standard differential fixture emitted 5,438 characters on both the
+unchanged base and candidate, exceeding 5,100. Its Markdown regression ceiling
+is 6,000 (562 characters of headroom); thin JSON and the 3,000-character task-body
+budget remain unchanged. Distinct execution commands remain directly runnable.
 
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
