@@ -44,6 +44,23 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 内部删除必要但不充分，不能忽略公开 CLI/import 和序列化契约。保留公共行为测试，
 只删没有消费者的旧实现专属 characterization。删的是代码，不是用户状态、回执和备份。
 
+### 永久文档 IO 解耦
+
+原 `todos/active_state_editing.py` 的三个持久化文本函数原样移入
+`runtime/document_io.py`。这保留 Python Host IO，不新增语义 owner，也不计入
+Python 退役收益。调用方清单如下：
+
+| 调用家族 | 保留义务 |
+| --- | --- |
+| Canonical Todo 投影、completion validation store、team plan | 完整文档／声明落盘、排他重建和持久化重试；权威决策仍由 typed owner 负责 |
+| Project registry、source-session registration／registry／Turn effects、supervisor 日志 | 原身份／重试契约下的原子发布及文件／目录持久化 |
+| Bootstrap、runtime shadow writer、feedback、旧状态迁移 | 现有源／叙述写入和升级恢复；受支持的源 writer 仍可达 |
+
+故障注入转向新 owner，包括嵌入的真实恢复 probe。真实 File／SQLite 投影／重放
+和源 writer 测试继续保留权威、崩溃和副作用不重复的断言。删除三个旧定义不删除
+编辑模块仍活跃的读取／编辑函数。回退本包只改变代码归属，无需数据转换。
+最后源 writer／outbox 退出、安装采用、D2 和发布默认资格仍分别验收。
+
 ### 已合入的 T4 切片：已无调用方的 Python lease／handoff facade
 
 在 `e240730ec` 核对调用方后，#5395 已于 `8474c8d86` 合入，退役了下列

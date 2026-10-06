@@ -49,6 +49,26 @@ public CLI/import or serialized contracts. Retain public behavior tests; remove
 only characterization scaffolding whose retired implementation has no consumer.
 Deletion is code retirement, not deletion of users' state, receipts or backups.
 
+### Permanent document IO separation
+
+The durable text effects formerly defined in `todos/active_state_editing.py`
+now live unchanged in `runtime/document_io.py`. This is retained Python Host IO,
+not a new semantic owner or a Python-retirement count. The caller inventory is:
+
+| Caller family | Retained obligation |
+| --- | --- |
+| Canonical Todo projection, completion validation store, team plan | Complete document/declaration publication, exclusive rebuild and durable retry; authority decisions remain typed |
+| Project registry, source-session registration/registry/Turn effects, supervisor log | Atomic publication and file/directory durability with original identity/retry contracts |
+| Bootstrap, runtime shadow writer, feedback, legacy state migration | Existing source/prose effects and upgrade recovery; supported source writers remain reachable |
+
+Failure injection targets the new owner, including the embedded real recovery
+probe. Real File/SQLite projection/replay and source writer tests retain their
+authority, crash and no-duplicate-effect assertions. Removing the old three
+definitions does not remove the editor's live read/edit helpers. Reverting this
+package changes code ownership only, without a state conversion. Last source
+writer/outbox exits, installed adoption, D2 and release-default qualification
+remain separate acceptance boundaries.
+
 ### Merged T4 slice: unused Python lease/handoff facades
 
 The caller audit at `e240730ec` led to #5395, merged at `8474c8d86`.

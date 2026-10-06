@@ -300,6 +300,25 @@ transport plumbing; the TS edit decoder/materializer is no longer owned only
 by the ordinary update transaction. Permanent rendering and private command
 execution still have real Python callers and are not retirement candidates.
 
+Durable text publication is owned by
+`control_plane/runtime/document_io.py`, independently of Todo editing.
+`atomic_write_state_text`, `verify_state_text_durable` and
+`fsync_state_directory` keep their existing locking precondition, exact UTF-8
+newlines, permissions, exclusive create, atomic replace and durability barriers.
+Canonical projections and validator declarations, registry/session publication,
+supervisor logs, feedback, migration and team-plan adapters use that same Host IO
+owner. The old definitions in `todos/active_state_editing.py` are removed;
+its live source editing/read helpers remain. Publication or readback failure
+still propagates to the caller's existing recovery contract. This changes no
+provider, default, format, authority policy or supported legacy upgrade route.
+
+永久文本落盘由 `control_plane/runtime/document_io.py` 负责，解除与 Todo 编辑
+模块的依赖。三个原函数保留锁前提、UTF-8 换行字节、权限、排他创建、原子替换和
+文件／目录持久化屏障；投影、验证声明、registry/session、supervisor 日志、
+feedback、迁移和 team-plan 调用方复用同一 Host IO owner。旧编辑模块只删除这
+三个定义，仍活跃的源编辑／读取函数保留。故障仍进入原调用方恢复契约，不切换
+provider、默认值、格式或权威策略，也不强制旧 Goal 升级。
+
 Canonical Todo creation, update, completion, supersession and archive do not
 import the Markdown line writer or source Todo capture producers during CLI
 registration. Bootstrap loads capture producers only for a source-state write;
