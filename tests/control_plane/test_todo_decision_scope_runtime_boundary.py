@@ -38,7 +38,6 @@ def _response(value: object) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("invoke", "value"),
     [
-        (lambda: decision_scope.decision_scope_covers(SCOPE, SCOPE), 1),
         (
             lambda: decision_scope.build_required_decision_scope_consistency(
                 {"first_open_items": [AGENT_ITEM]},
@@ -53,14 +52,6 @@ def _response(value: object) -> dict[str, object]:
                 agent_id="agent-a",
             ),
             {"schema_version": "wrong_standing_v0"},
-        ),
-        (
-            lambda: decision_scope.decision_scope_gate_relation(GATE, AGENT_ITEM),
-            {"schema_version": "todo_gate_relation_v0"},
-        ),
-        (
-            lambda: decision_scope.exact_todo_gate_relation(GATE, AGENT_ITEM),
-            {"schema_version": "decision_scope_relation_v0"},
         ),
         (
             lambda: decision_scope.todo_gate_relation(GATE, AGENT_ITEM),
@@ -123,7 +114,7 @@ def test_outer_runtime_envelope_fails_closed(
     )
 
     with pytest.raises(TypeError, match="invalid typed decision scope projection"):
-        decision_scope.decision_scope_covers(SCOPE, SCOPE)
+        decision_scope.todo_gate_relation(GATE, AGENT_ITEM)
 
 
 def test_nullable_operations_still_accept_explicit_null(
@@ -135,8 +126,6 @@ def test_nullable_operations_still_accept_explicit_null(
         lambda *_args, **_kwargs: _response(None),
     )
 
-    assert decision_scope.decision_scope_gate_relation(GATE, AGENT_ITEM) is None
-    assert decision_scope.exact_todo_gate_relation(GATE, AGENT_ITEM) is None
     assert decision_scope.todo_gate_relation(GATE, AGENT_ITEM) is None
     assert decision_scope.select_scoped_gate_fallback(
         [GATE], [AGENT_ITEM], agent_id="agent-a", allow_unrelated_gate=True,
