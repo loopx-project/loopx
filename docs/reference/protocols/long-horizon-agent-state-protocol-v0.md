@@ -69,6 +69,20 @@ existing agent interaction. The former Todo `--from` and `--trigger` options
 are removed; `--limit` retains its existing `todo list` meaning. No persisted
 Todo, journal or provider state migration is required.
 
+### Internal decision-scope adapter retirement
+
+The unused Python helpers `decision_scope_covers`,
+`decision_scope_gate_relation`, `exact_todo_gate_relation`, and
+`todo_gate_relation_blocks_agent` are retired. Active consumers use the
+existing relation, batch, consistency, and gate-scope adapters backed by the
+TypeScript decision-scope owner. The unused Python blocking-state constant
+is removed with its predicate.
+
+The typed wire operations and their schema validation remain supported.
+This internal cleanup changes no CLI command, persisted decision, approval
+authority, provider selection, or recovery format. It does not retire the
+remaining Markdown writer or import/export and backup recovery paths.
+
 ## Projection Protocol
 
 Projection protocol fields are read-only views. They may summarize, rank, and

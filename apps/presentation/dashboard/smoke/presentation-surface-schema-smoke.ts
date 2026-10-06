@@ -331,6 +331,14 @@ async function verifyProjectionFetchContract() {
     }
     assert(mismatchRejected, "projection identity mismatch must fail closed");
 
+    let wrongGoalRejected = false;
+    try {
+      await fetchPresentationProjection("http://127.0.0.1:8765/extension-projection", {
+        ...matchingSurface, goal_id: "another-goal",
+      });
+    } catch (error) {wrongGoalRejected = String(error).includes("does not match");}
+    assert(wrongGoalRejected, "matching revision/hash must not authorize another Goal’s result");
+
     let publicHostRejected = false;
     requestedUrl = "";
     try {

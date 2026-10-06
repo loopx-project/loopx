@@ -243,6 +243,30 @@ a separate readiness rule. 中文：该命令只生成卡片、不发消息；�
 `loopx extension disable loopx-finance-value-discovery --execute`；若只回退
 期次指标，删除可选字段并重新发布旧 view 即可。
 
+The Goal's **Files & Outputs** tab loads the published research only when
+opened. Chat and `serve-status` expose the same extension index and exact
+revision/hash readback. Only a public-safe view belonging to that Goal is
+rendered; refresh clears previous content when the read fails or the extension
+is disabled. Research availability does not certify an economic conclusion.
+
+`render-lark-card` includes the canonical adjudication, original evidence
+clocks, exact metric strings, counterevidence, event review conditions and
+artifact references, even when no source-period metrics exist. It rejects a
+research card exceeding 18,000 UTF-8 bytes rather than silently cutting its
+review basis. The existing source-period-only Python renderer remains available.
+For an exact published receipt, render its Core-validated `view` with
+`build_decision_research_lark_card`; rebuilding an input is not publication
+readback, and preparing a card is not sending or adopting a method.
+
+中文：Goal 的“成果”页按需读取已发布的研究，绑定当前 Goal、扩展版本和内容摘要；
+读取失败或停用时清除旧内容。通知卡保留研究结论、反证、未知、原始时点和下一步，
+没有期次指标也可显示；超过容量时拒绝裁切。卡片准备、外部送达和方法采用分别验收。
+
+Public synthetic examples: [desktop results](../../docs/assets/personal-workspace/research-results-desktop.png)
+and [mobile results](../../docs/assets/personal-workspace/research-results-mobile.png).
+The expired review warning is intentional; these screens do not represent a
+live financial account or an externally delivered notification.
+
 ## Worked Method: How PayPal Surfaced
 
 The historical PayPal exercise started with a fresh de-beta scout, not a
@@ -356,6 +380,31 @@ loopx extension run loopx-finance-value-discovery \
   --input-json packages/loopx-finance-value-discovery/examples/software-metric-pack-v1.json \
   --execute \
   --format json
+```
+
+Extension 0.8.5 also dispatches `finance_period_comparison_input_v1` to the
+existing period assessment. For the same frozen input, the managed provider
+result matches the direct `assess-period` result:
+
+```bash
+loopx-finance-value-discovery assess-period \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v1.json \
+  --execute --format json
+```
+
+The example is synthetic. `period_evidence_eligible` applies only to the period
+axis; source authentication, lifecycle, financial admission and trading remain
+false. Missing declarations produce ineligible results; malformed inputs fail
+with an error packet. Version 0.8.3 supports the direct API/CLI but does not route
+these inputs through managed stdin. Qualify the exact binary/manifest/input
+pair before opting in, and retain the old pair for rollback.
+
+Run the provider dispatch regression cases from the repository root:
+
+```bash
+uv run --extra test pytest packages/loopx-finance-value-discovery/tests/test_period_dispatch.py
 ```
 
 Developers can inspect or replay a frozen evaluation directly:

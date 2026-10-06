@@ -242,7 +242,124 @@ class StatusHTTPServer(ThreadingHTTPServer):
         super().__init__(*args, **kwargs)
 
 
-class StatusRequestHandler(BaseHTTPRequestHandler):
+class ExtensionPresentationRequestMixin:
+    """Shared read-only extension routes for loopback status and Chat surfaces."""
+
+    server: Any
+
+    def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
+        raise NotImplementedError
+
+    def _handle_extension_projection(self, query: dict[str, list[str]]) -> None:
+        if not is_loopback_host(str(self.server.server_address[0])):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "extension projection reads require a loopback status server",
+                },
+                status=403,
+            )
+            return
+        if not is_loopback_origin(self.headers.get("Origin")):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "extension projection reads only accept loopback browser origins",
+                },
+                status=403,
+            )
+            return
+        extension_id = (query.get("extension_id") or [""])[0].strip()
+        surface_id = (query.get("surface_id") or [""])[0].strip()
+        extension_revision = (query.get("extension_revision") or [""])[0].strip()
+        payload_sha256 = (query.get("payload_sha256") or [""])[0].strip()
+        if not (extension_id and surface_id and extension_revision and payload_sha256):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": (
+                        "extension_id, surface_id, extension_revision, and "
+                        "payload_sha256 are required"
+                    ),
+                },
+                status=400,
+            )
+            return
+        try:
+            registry = load_registry(self.server.registry_path)
+            runtime_root = resolve_runtime_root(
+                registry,
+                self.server.runtime_root_override,
+                registry_path=self.server.registry_path,
+            )
+            envelope = read_extension_projection(
+                state_file=default_extension_state_file(runtime_root),
+                extension_id=extension_id,
+                surface_id=surface_id,
+                extension_revision=extension_revision,
+                payload_sha256=payload_sha256,
+            )
+        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
+            self._send_json(
+                {
+                    "ok": False,
+                    "extension_id": extension_id,
+                    "surface_id": surface_id,
+                    "error": str(exc),
+                },
+                status=400,
+            )
+            return
+        self._send_json({"ok": True, "projection": envelope})
+
+    def _handle_extension_presentation_surfaces(self) -> None:
+        if not is_loopback_host(str(self.server.server_address[0])):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": (
+                        "extension presentation surfaces require a loopback "
+                        "status server"
+                    ),
+                },
+                status=403,
+            )
+            return
+        if not is_loopback_origin(self.headers.get("Origin")):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": (
+                        "extension presentation surfaces only accept loopback "
+                        "browser origins"
+                    ),
+                },
+                status=403,
+            )
+            return
+        try:
+            registry = load_registry(self.server.registry_path)
+            runtime_root = resolve_runtime_root(
+                registry,
+                self.server.runtime_root_override,
+                registry_path=self.server.registry_path,
+            )
+            surfaces = collect_active_extension_presentation_surfaces(
+                state_file=default_extension_state_file(runtime_root),
+            )
+        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                },
+                status=400,
+            )
+            return
+        self._send_json({"ok": True, "presentation_surfaces": surfaces})
+
+
+class StatusRequestHandler(ExtensionPresentationRequestMixin, BaseHTTPRequestHandler):
     server: StatusHTTPServer
 
     def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
@@ -766,114 +883,6 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             )
             return
         self._send_json(payload)
-
-    def _handle_extension_projection(self, query: dict[str, list[str]]) -> None:
-        if not is_loopback_host(str(self.server.server_address[0])):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": "extension projection reads require a loopback status server",
-                },
-                status=403,
-            )
-            return
-        if not is_loopback_origin(self.headers.get("Origin")):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": "extension projection reads only accept loopback browser origins",
-                },
-                status=403,
-            )
-            return
-        extension_id = (query.get("extension_id") or [""])[0].strip()
-        surface_id = (query.get("surface_id") or [""])[0].strip()
-        extension_revision = (query.get("extension_revision") or [""])[0].strip()
-        payload_sha256 = (query.get("payload_sha256") or [""])[0].strip()
-        if not (extension_id and surface_id and extension_revision and payload_sha256):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": (
-                        "extension_id, surface_id, extension_revision, and "
-                        "payload_sha256 are required"
-                    ),
-                },
-                status=400,
-            )
-            return
-        try:
-            registry = load_registry(self.server.registry_path)
-            runtime_root = resolve_runtime_root(
-                registry,
-                self.server.runtime_root_override,
-                registry_path=self.server.registry_path,
-            )
-            envelope = read_extension_projection(
-                state_file=default_extension_state_file(runtime_root),
-                extension_id=extension_id,
-                surface_id=surface_id,
-                extension_revision=extension_revision,
-                payload_sha256=payload_sha256,
-            )
-        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
-            self._send_json(
-                {
-                    "ok": False,
-                    "extension_id": extension_id,
-                    "surface_id": surface_id,
-                    "error": str(exc),
-                },
-                status=400,
-            )
-            return
-        self._send_json({"ok": True, "projection": envelope})
-
-    def _handle_extension_presentation_surfaces(self) -> None:
-        if not is_loopback_host(str(self.server.server_address[0])):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": (
-                        "extension presentation surfaces require a loopback "
-                        "status server"
-                    ),
-                },
-                status=403,
-            )
-            return
-        if not is_loopback_origin(self.headers.get("Origin")):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": (
-                        "extension presentation surfaces only accept loopback "
-                        "browser origins"
-                    ),
-                },
-                status=403,
-            )
-            return
-        try:
-            registry = load_registry(self.server.registry_path)
-            runtime_root = resolve_runtime_root(
-                registry,
-                self.server.runtime_root_override,
-                registry_path=self.server.registry_path,
-            )
-            surfaces = collect_active_extension_presentation_surfaces(
-                state_file=default_extension_state_file(runtime_root),
-            )
-        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                },
-                status=400,
-            )
-            return
-        self._send_json({"ok": True, "presentation_surfaces": surfaces})
 
     def _handle_periodic_report_index(self, query: dict[str, list[str]]) -> None:
         if not is_loopback_host(

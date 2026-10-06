@@ -330,7 +330,11 @@ def test_chat_status_forwards_valid_goal_activation_scope(monkeypatch) -> None:
         payload = json.loads(response.read().decode("utf-8"))
 
         assert response.status == 200
+        api = payload.pop("local_dashboard_api")
         assert payload == {"ok": True, "scope": "active"}
+        assert api["source"] == "chat"
+        assert api["presentation_surfaces_url"] == "/extension-presentation-surfaces"
+        assert api["presentation_detail_url"] == "/extension-projection"
         assert calls[0]["activation_state_filter"] == "active"
         assert calls[0]["include_goal_subagent_configuration"] is True
     finally:

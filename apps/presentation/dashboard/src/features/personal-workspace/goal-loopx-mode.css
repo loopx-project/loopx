@@ -139,7 +139,7 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-results p { font-size: 12px; line-height: 1.7; color: var(--pw-muted); }
 .goal-team-results [role="alert"] { color: var(--pw-red, #b42318); }
 .goal-team-results button, .goal-team-results select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; background: var(--pw-surface, #fff); color: inherit; font: inherit; cursor: pointer; }
-.goal-managed-results > header button { flex-shrink: 0; white-space: nowrap; }
+.goal-managed-results > header button, .goal-research-results > header button { flex-shrink: 0; white-space: nowrap; }
 .goal-team-results button[aria-pressed="true"] { border-color: var(--pw-text); }
 .goal-team-results button:disabled { opacity: .5; cursor: default; }
 .goal-team-results summary { cursor: pointer; padding: 12px 0; font-size: 12px; min-height: 44px; }

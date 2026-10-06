@@ -1296,6 +1296,13 @@ export const typedActionsScenario = {
       const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
       await reviewUnit.waitFor({ state: "visible" });
       await reviewCount.waitFor({ state: "visible" });
+      // Visibility precedes hydration of the persisted cadence into the v1 editor.
+      await page.waitForFunction(() => {
+        const labels = [...document.querySelectorAll(".personal-capability-detail label")];
+        const unit = labels.find((label) => label.innerText.includes("复核计数依据"))?.querySelector("select");
+        const count = labels.find((label) => label.innerText.includes("两次复核间的数量"))?.querySelector("input[type=number]");
+        return unit?.value === "completed_todos" && count?.value === "3";
+      });
       assert.equal(await reviewUnit.inputValue(), "completed_todos");
       assert.equal(await reviewCount.inputValue(), "3");
       assert.deepEqual(await reviewUnit.locator("option").evaluateAll((options) => options.map((option) => option.value).filter(Boolean)), ["completed_todos", "effective_turns"]);

@@ -34,6 +34,7 @@ import {
   fetchPeriodicReportIndex,
   fetchPeriodicReportProjection,
   periodicReportApiUrls,
+  presentationApiUrls,
   resolveLocalStatusUrl,
   scopedStatusUrl,
 } from "../data/local-status-query";
@@ -1303,6 +1304,8 @@ function PersonalGoalHome({
     ? { kind: "project", projectRef: selectedWorkspaceRef }
     : selectedGoal ? { kind: "goal", goalId: selectedGoal.goalId } : { kind: "manager" };
   const selectedPayload = progress?.snapshots[selectedGoalId] ?? payload;
+  const researchSource = resolveLocalStatusUrl(statusSourceControl.activeSource.statusUrl, window.location.href);
+  const researchUrls = researchSource.source ? presentationApiUrls(selectedPayload, researchSource.source) : null;
   const [periodicReport, setPeriodicReport] = useState<PeriodicReportProjection | null>(null);
   const [periodicReportError, setPeriodicReportError] = useState<string | null>(null);
   const [periodicReportLoading, setPeriodicReportLoading] = useState(false);
@@ -3076,6 +3079,10 @@ function PersonalGoalHome({
         conversationSupportsSteering={steeringSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         conversationHistoryState={conversationHistory}
         model={workspaceModel}
+        researchApi={researchUrls?.indexUrl && researchUrls.detailUrl ? {
+          indexUrl: researchUrls.indexUrl, detailUrl: researchUrls.detailUrl,
+          goals: selectedPayload.run_history.goals,
+        } : undefined}
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}
         selectedGoalId={selectedGoal?.goalId ?? null}
