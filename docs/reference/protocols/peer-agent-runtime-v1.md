@@ -72,6 +72,15 @@ workspace isolation only: it is not an agent scope, write scope, permission
 grant, or replacement for claim/lease and goal-boundary checks. Without the
 field, the goal repository remains authoritative.
 
+Accountable refresh applies Git isolation to Git delivery. A registered non-Git
+Goal can instead record the existing path-free `local_goal_workspace` receipt
+for peer research or material work. Capture must occur inside that Goal root;
+an explicit Git task repository or owner isolation requirement cannot use this
+route. Completion validation remains independent, and in-flight writeback and
+spend leave the Todo open. Do not reclassify a local deliverable as
+`same_agent_non_delivery` to settle it. `--evidence` records a local pointer;
+`--result-file` requires approved Goal acceptance criteria bound to the Todo.
+
 ## Task-Scoped Coordination
 
 When bounded multi-agent orchestration is enabled, LoopX hashes the canonical

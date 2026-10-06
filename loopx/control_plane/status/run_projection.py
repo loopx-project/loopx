@@ -12,12 +12,10 @@ from ..agents.agent_lane_recommendation import (
     latest_agent_lane_run as _latest_agent_lane_run,
     latest_run_recommended_action_for_projection as _latest_run_recommended_action_for_projection,
 )
+from ..progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.run_history import latest_run as _latest_run
 from ..runtime.time import parse_timestamp
-
-
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 
 
 def is_status_neutral_run(run: dict[str, Any]) -> bool:

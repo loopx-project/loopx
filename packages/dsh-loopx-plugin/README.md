@@ -51,22 +51,24 @@ copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that
 enforce PEP 668; the plugin does not use `--break-system-packages`.
-The published plugin requires LoopX 0.5.4 or newer. Although 0.5.3 carried the
-workflow-skill files, 0.5.4 is the first release that discovers them after the
-plugin's Linux `pip --target` managed-runtime install.
+This version requires LoopX 1.2.4 or newer, the published release that
+includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
+version floor; an older global or managed CLI is upgraded or rejected before
+business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
+owner. Older plugin releases retain their original CLI requirements.
 Install the prebuilt release into the web profile:
 
 ```bash
 dsh plugin --profile web add \
-  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.5/dsh-loopx-plugin-0.1.1-beta.5.tgz"
+  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz"
 ```
 
-The prebuilt release above retains its original DSH compatibility. This source
-checkout targets DSH 0.1.5-rc.1 or newer within the 0.1.x line; it does not
-publish a new plugin release. The exported legacy RPC registration remains
-available to explicit callers, but plugin startup always uses the shared API.
+The beta.6 package targets the qualified DSH 0.2.0-rc.2 API and retains the
+qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
+RPC registration remains available to explicit callers, but plugin startup
+always uses the shared API.
 
-For the DSH 0.1.5 source build, use:
+For a compatible DSH source build, use:
 
 ```bash
 cd packages/dsh-loopx-plugin
@@ -142,17 +144,30 @@ never opens a browser or configures a model provider.
 
 ## Maintainer release and marketplace handoff
 
-A DSH plugin release is complete only after its immutable GitHub asset exists
-and an update pull request has been opened against the upstream
+A DSH plugin release needs an immutable prebuilt GitHub asset, a qualified
+marketplace install channel, and an update pull request against the upstream
 [`awesome-dsh-plugin`](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 marketplace. Marketplace maintainers retain merge authority; publishing a
-LoopX release does not grant authority over that catalog.
+LoopX release does not grant authority over that catalog. Released DSH Hub
+[v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14) supports
+pinned GitHub release packages, so this route does not require publishing the
+LoopX plugin on npm. Its installed-state matcher still needs
+[Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) to be merged
+and released. Qualification must read the online catalog back, select the
+pinned package, install it, recognize the installed row, update it and remove
+it successfully. The optional npm channel retains its separate account and
+trusted-publisher requirements.
 
 For every DSH plugin release:
 
 1. Update the package version and this README's pinned install URL. Run the
    typecheck, tests, and the built, packed, runtime, profile, and Docker smokes
-   listed above.
+   listed above, plus `pnpm smoke:registry --tarball <packed-package.tgz>`.
+   The registry smoke serves the real packed bytes on loopback and invokes
+   DSH's unversioned package-name installer; it publishes nothing. CI repeats
+   this installation and removal on Linux and Windows.
+   Qualification uses pnpm 10.33.0; use that version for reproducible source
+   and isolated-registry checks.
 2. Prepare complete bilingual GitHub release notes. Run
    `examples/release/release-readiness-doc-smoke.py` with one `--surface` for
    every optional capability changed by the release.
@@ -160,14 +175,40 @@ For every DSH plugin release:
    publish both the version tag and `dsh-loopx-plugin-<version>.tgz` asset.
 4. Read the remote release body back and rerun the release-readiness smoke.
    Download the remote asset and verify that its SHA-256 matches the local
-   package before advertising it.
+   package before advertising it. For the npm channel, publish that **same
+   tarball**, including its compiled Host, Client, Driver and initializer:
+
+   ```bash
+   npm whoami
+   npm publish ./dsh-loopx-plugin-VERSION.tgz --access public --tag latest
+   node scripts/verify-distribution.mjs --tarball ./dsh-loopx-plugin-VERSION.tgz
+   ```
+
+   `latest` intentionally names the qualified plugin candidate, because the
+   marketplace installs its unversioned npm name. Do not substitute a
+   beta-only tag or publish the monorepo root. The readback checks metadata,
+   tag, downloaded bytes and the repository search used by DSH Hub. A missing
+   package, wrong artifact or search-index delay fails verification; publishing
+   alone does not complete marketplace recovery. npm account authentication
+   or configured trusted publishing belongs to the release operator.
+
+   For token-free CI publication, configure the package's npm Trusted Publisher
+   with organization `loopx-project`, repository `loopx`, and workflow filename
+   `dsh-plugin-publish.yml`, permitting `npm publish`. Then dispatch **Publish
+   DSH Plugin to npm** on the existing published plugin tag, using that same tag
+   for the `release_tag` input. This keeps npm provenance on the artifact's commit.
+   The workflow requires a merged tag, consumes its GitHub asset without
+   rebuilding, and verifies npm bytes and discovery. It neither creates a
+   GitHub release nor replaces npm account ownership or the release guide gate.
 5. In a clean fork branch of `awesome-dsh-plugin`, update only
-   `data/plugins/huangruiteng__loopx--packages-dsh-loopx-plugin.yml` to the new
+   `data/plugins/loopx-project__loopx--packages-dsh-loopx-plugin.yml` to the new
    immutable asset URL. Confirm the URL resolves, then run
    `node scripts/generate-readme.mjs --check` and `git diff --check`.
 6. Open an upstream marketplace pull request and link it from the release
    closeout. Do not describe the release as marketplace-published until that
-   pull request is merged by the upstream maintainers.
+   pull request is merged by the upstream maintainers and the installed
+   marketplace resolves the released package. A catalog listing alone does
+   not prove that its installer consumes the pinned release command.
 
 ## Shadow observer (default off)
 
@@ -260,7 +301,7 @@ The repair command has no arguments. Extra input returns a usage error before an
 model work or CLI probe. A valid invocation queues a bounded start followup on
 the exact receiving Agent, then probes the current LoopX installation. When the
 CLI is missing or lacks the DSH-native skill contract, it runs exactly one
-fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=0.5.4'`, writes a
+fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=1.2.4'`, writes a
 small managed Python launcher beside that target, then uses that same
 interpreter and launcher to install and read back the skills. Driver and
 GoalBar resolve this same managed runtime, including after an explicit repair.
@@ -350,15 +391,27 @@ source and never satisfy a Driver reservation.
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2 candidate. It excludes DSH 0.2 and other, unqualified
-prerelease tuples. A 0.1.x range alone does not admit every 0.1.x prerelease.
+qualified 0.1.7-rc.2 and 0.2.0-rc.2 candidates. It excludes earlier 0.2 candidates,
+0.2.1 alpha builds and other, unqualified prerelease tuples. A stable-version
+range alone does not admit every prerelease.
 The immutable beta.5 download above contains the earlier integration; building
 this checkout produces beta.6. A source build is not a published beta.6 release.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing
 `git+https://github.com/loopx-project/loopx.git` cannot select the nested, built
-plugin. Use a compatible prebuilt plugin tarball, or build this package and
+plugin. The marketplace's npm route requires a published `dsh-loopx-plugin`
+whose repository points here and whose keywords include `dsh-plugin`; otherwise
+older Hubs fall back to that invalid Git target.
+[Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14)
+also installs the catalog’s fixed GitHub release package without an npm
+publication. Upgrade the Hub with `dsh plugin --profile web add dsh-plugin`;
+the catalog still selects beta.5, and release-URL installed-state readback
+needs a further upstream repair. After the release operator completes
+the registry readback above, the platform-independent install command is
+`dsh plugin --profile web add dsh-loopx-plugin`. Replace `web` with `desktop`
+when that is your selected profile. Until publication is verified, use a
+compatible prebuilt plugin tarball, or build this package and
 install it with your supported DSH executable:
 
 ```bash
@@ -390,6 +443,14 @@ establish recovery of the original Windows network failure. Before upgrading,
 retain the previous compatible tarball for the rollback below. Marketplace
 catalog correction, release publication, browser qualification, and native
 Windows verification remain distinct delivery steps.
+
+On Windows, the same `dsh plugin ... add` command accepts a local `.tgz` file;
+the Bash source installer is optional. Use `--profile desktop` for a desktop
+profile and `--profile web` for a web profile throughout install, readback and
+removal. The old beta.5 asset is not a 0.2 compatibility claim. To build the
+current source using native PowerShell, run `pnpm install --frozen-lockfile
+--ignore-scripts` and `npm pack` in this package, then add the resulting `.tgz`
+with the native DSH command.
 
 For release qualification, run `pnpm smoke:install` with `DSH_BIN` pointing to
 each supported host executable. To qualify an upgrade rather than a fresh

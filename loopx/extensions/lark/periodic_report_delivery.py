@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from ...capabilities.periodic_report.adapters import PeriodicReportAdapterRegistry
 from ...capabilities.periodic_report.bindings import (
+    DELIVERY_INTENT_SCHEMA,
     GENERATION_BUNDLE_SCHEMA,
     build_periodic_report_generation_bundle,
 )
@@ -48,7 +49,6 @@ GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA = (
     "periodic_report_goal_channel_delivery_request_v0"
 )
 GOAL_CHANNEL_DELIVERY_RESULT_SCHEMA = "periodic_report_goal_channel_delivery_result_v0"
-DELIVERY_INTENT_SCHEMA = "periodic_report_delivery_intent_v0"
 ANNOUNCEMENT_IDEMPOTENCY_SCHEMA = "periodic_report_goal_channel_announcement_v1"
 _ANNOUNCEMENT_KINDS = ("hosted_report", "lark_document")
 _ANNOUNCEMENT_FOOTER = "LoopX periodic report · Goal Channel"

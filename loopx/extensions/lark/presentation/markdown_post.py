@@ -1,8 +1,9 @@
 """Lark post presentation; shared by all inbox reply callers.
 
 This is provider formatting, not conversation state or effect authority. The
-post's CommonMark parser rejects closing strong delimiters between punctuation
-and a following word. Move that trailing punctuation outside the emphasis;
+post renderer rejects some closing strong delimiters between punctuation and
+a following word or non-ASCII symbol (for example a fullwidth separator). Move
+that trailing punctuation outside the emphasis;
 visible text is unchanged and inline/fenced code remains authored.
 """
 
@@ -16,7 +17,7 @@ from typing import Any
 
 
 def normalize_lark_markdown_emphasis(text: str) -> str:
-    """Repair paired strong spans at punctuation/word boundaries only.
+    """Repair paired strong spans at provider punctuation boundaries only.
 
     This deliberately is not a new Markdown parser. The provider still owns
     Markdown rendering. Escapes, code, link destinations, unmatched markers and
@@ -107,7 +108,13 @@ def _normalize_strong_line(line: str) -> str:
                 and suffix > opening
                 and not line[suffix - 1].isspace()
                 and end < len(line)
-                and line[end].isalnum()
+                and (
+                    line[end].isalnum()
+                    or (
+                        not line[end].isascii()
+                        and unicodedata.category(line[end]).startswith("S")
+                    )
+                )
             ):
                 edits.append((suffix, end, "**" + line[suffix:cursor]))
             opening = None

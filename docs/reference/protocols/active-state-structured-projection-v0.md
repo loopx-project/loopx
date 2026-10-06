@@ -226,11 +226,14 @@ title still fails parity, even when its first 500 characters match. This is not
 permission to accept malformed records or to shorten an already committed Todo
 to repair its display.
 
-Status, `todo list` (including an exact ID), dashboard and chat attention views
-keep their existing bounded summaries. The canonical provider and regenerated
-active state retain the complete source; a display summary is not an input to
-source serialization. No new frontend setting, Lark command or parallel state
-store is introduced. This change stays in the permanent Python Markdown/legacy
+Status, unfiltered `todo list`, `todo list --thin` (including an exact ID),
+dashboard and chat attention views keep their existing bounded summaries.
+An exact `todo list --todo-id ID` without `--thin` returns the complete current
+or retained request text through the existing Task detail reader. The canonical
+provider and regenerated active state retain the complete source; a display
+summary is not an input to source serialization. No new frontend setting, Lark
+command or parallel state store is introduced. This change stays in the
+permanent Python Markdown/legacy
 I/O adapter; the TypeScript authority, admission and delivery-confirmation
 owners are unchanged.
 
@@ -354,6 +357,14 @@ renderer/write failure leaves typed `pending` delivery
 evidence without reversing or hiding the canonical commit. A later successful
 mutation, committed `refresh-state` (including same-Turn replay), or
 `todo project-markdown --execute` replays the current head idempotently. This is projection recovery, not a second authority path.
+Canonical creation selects that route from the existing durable writer fence;
+it does not prefetch the entire Todo source into Python before the native create
+transaction. The fence grants no write authority: the transaction still checks
+the complete current head, source and actor. Original-operation replay remains
+a historical receipt, and validated-create recovery still checks the current
+validator digest before publishing its private declaration. Post-commit display
+delivery retains its complete-source read and durable confirmation. Unpromoted
+creation keeps the existing Markdown writer.
 The ordinary state writer and projection writer share durable atomic publication.
 Missing-display recovery uses create-only publication and cannot overwrite a
 concurrently restored document. When bytes already match, execution still syncs

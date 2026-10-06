@@ -1,6 +1,7 @@
 """Offline Codex staging shared by Harbor benchmark adapters."""
 
 import os
+import shlex
 from pathlib import Path
 
 from harbor.agents.installed.codex import Codex
@@ -89,6 +90,7 @@ class CodexOffline(Codex):
                 "fi; "
                 f"rm -rf {_STAGE_DIR}; "
                 "mkdir -p /logs/agent; "
+                f"chown {shlex.quote(str(environment.default_user or 'root'))} /logs/agent; "
                 "{ /usr/local/bin/codex --version; "
                 "  md5sum /usr/local/bin/codex /usr/local/bin/codex-code-mode-host; "
                 "} > /logs/agent/codex_version.txt 2>&1; "

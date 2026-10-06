@@ -18,8 +18,10 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
   const { t } = useWorkspaceI18n();
   const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
   useEffect(() => setPreview({ status: "idle" }), [item.goalId, item.todoId]);
-  // Hard-lease Goals attribute the write to the Agent the request unblocks.
-  const agentId = item.details?.blocksAgent ?? fallbackAgentId;
+  // User actions bind their actor through bound_agent; gates use blocks_agent.
+  // The native owner still validates registration and the exact Todo binding.
+  const agentId = (item.details?.interaction === "user_action"
+    ? item.details.boundAgent : item.details?.blocksAgent) ?? fallbackAgentId;
   const context = { goal_id: item.goalId, kind: "todo", todo_id: item.todoId };
   const key = (suffix: string) => `workspace-attention-${item.todoId}-${suffix}-${Date.now().toString(36)}`;
 

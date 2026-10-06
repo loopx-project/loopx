@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
@@ -147,6 +147,7 @@ function turnEndEvent(
 
 interface AppliedDriverRuntime {
   emitSessionEvent(session: Agent['session'], event: SessionEvent): void
+  announceAgent(event: 'agent/created' | 'agent/session-start'): void
   dispose(): Promise<void>
 }
 
@@ -177,6 +178,11 @@ function appliedDriverRuntime(
   } as unknown as Context
   applyDriver(ctx)
   return {
+    announceAgent(event) {
+      for (const handler of handlers.get(event) ?? []) {
+        handler({ agent: liveAgent, source: 'resume' })
+      }
+    },
     emitSessionEvent(session, event) {
       for (const handler of handlers.get('session/event') ?? []) {
         handler(session, event)
@@ -297,7 +303,7 @@ function runnerFixture(options: {
     runner: async (_file, args) => {
       calls.push([...args])
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('resolve-agent-thread')) {
         const threadIdIndex = args.indexOf('--thread-id')
@@ -602,6 +608,10 @@ describe('same-session LoopX driver', () => {
       sessionEvent('user/message', {
         ...userMessage('LoopX initialization finished.'),
         source: { kind: 'plugin', plugin: 'dsh-loopx-plugin/init-command' },
+      }),
+      sessionEvent('user/message', {
+        ...userMessage('LoopX initialization finished.'),
+        source: { kind: 'loopx-initialization', plugin: 'dsh-loopx-plugin/init-command' },
       }),
       sessionEvent('user/message', {
         ...userMessage('Continue through LoopX.'),
@@ -1484,6 +1494,25 @@ describe('same-session LoopX driver', () => {
 })
 
 describe('GoalBar exact-Session Driver bridge', () => {
+  it.each(['agent/created', 'agent/session-start'] as const)(
+    'resets resumed Session state on %s without activating an uninvoked Session',
+    async event => {
+      const host = fakeAgent()
+      const reset = vi.spyOn(LoopXContinuationDriver.prototype, 'onSessionStart')
+      const runtime = appliedDriverRuntime(host.agent, false)
+      try {
+        runtime.announceAgent(event)
+        expect(reset).toHaveBeenCalledExactlyOnceWith(host.agent)
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        expect(host.maintenanceCalls).toBe(0)
+        expect(host.nextTurn).toHaveLength(0)
+      } finally {
+        reset.mockRestore()
+        await runtime.dispose()
+      }
+    },
+  )
+
   it('publishes the committed event seq before Driver state and activation gates', async () => {
     for (const initiallyObserved of [false, true]) {
       const host = fakeAgent()

@@ -293,10 +293,11 @@ def test_terminal_event_preserves_failed_turn_status() -> None:
     assert turn.turn_status == "failed"
 
 
-def test_goal_runtime_waits_for_automatic_continuation_until_terminal() -> None:
+@pytest.mark.parametrize("timeout", [None, 1])
+def test_goal_runtime_waits_for_automatic_continuation_until_terminal(timeout) -> None:
     transport = ContinuationTransport()
 
-    turn = run_native_goal_until_terminal(transport, _config(), timeout_sec=1)
+    turn = run_native_goal_until_terminal(transport, _config(), timeout_sec=timeout)
 
     methods = [method for method, _ in transport.calls]
     assert methods.count("turn/start") == 1
@@ -492,8 +493,9 @@ def test_process_cwd_can_differ_from_goal_thread_cwd(tmp_path: Path) -> None:
     assert turn.terminal_event_observed is True
 
 
+@pytest.mark.parametrize("timeout", [None, 2])
 def test_real_stdio_process_waits_until_native_goal_is_terminal(
-    tmp_path: Path,
+    tmp_path: Path, timeout,
 ) -> None:
     fake_server = tmp_path / "fake-continuing-codex"
     _write_fake_app_server(fake_server)
@@ -512,7 +514,7 @@ def test_real_stdio_process_waits_until_native_goal_is_terminal(
         process_command=[sys.executable, str(fake_server)],
         process_env=process_env,
         response_timeout_sec=2,
-        goal_timeout_sec=2,
+        goal_timeout_sec=timeout,
     )
 
     assert turn.post_goal_status == "complete"

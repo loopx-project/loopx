@@ -81,7 +81,7 @@ def test_stale_binding_cannot_replan_another_agents_work_or_disabled_contract():
 
 def test_stale_binding_reaches_quota_frontier_projection():
     context = build_goal_frontier_projection_context_from_status(
-        goal_id="goal-a", agent_id="agent-a", status_payload={}, item={},
+        goal_id="goal-a", agent_id="agent-a", status_payload={"run_history": {"goals": []}}, item={},
         project_asset=None, user_todo_summary={"open_count": 0},
         agent_todo_summary=_summary(), agent_todo_source_items=_source(),
         work_lane_contract={"lane": "advancement_task", "must_attempt_work": True},
@@ -106,6 +106,7 @@ def test_older_vision_ack_cannot_suppress_newer_binding_hold(state):
         "delta_contract": {"delta_kinds": ["goal_vision_patch"]},
         "semantic_delta": {
             "accepted": True,
+            "outcomes": ["new_runnable_successor"],
             "trigger_kinds": [kind],
             "trigger_checkpoints": [{
                 "kind": kind,
@@ -132,6 +133,8 @@ def test_older_vision_ack_cannot_suppress_newer_binding_hold(state):
                                       "trigger_checkpoints": [{"kind": kind,
                                                                "frontier_revision": "other-todo"}]}}) is not None
     assert derive({**old_ack, "generated_at": "2026-09-23T08:03:00Z"}) is None
+    assert derive({**old_ack, "generated_at": "2026-09-23T08:03:00Z",
+                   "semantic_delta": {**old_ack["semantic_delta"], "outcomes": []}}) is not None
 
 
 def test_unbound_binding_routes_to_replan_without_granting_execution():

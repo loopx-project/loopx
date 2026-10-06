@@ -22,6 +22,7 @@ GENERATION_BUNDLE_SCHEMA = "periodic_report_generation_bundle_v0"
 GENERATION_RECEIPT_SCHEMA = "periodic_report_generation_receipt_v0"
 SINK_BINDING_SCHEMA = "periodic_report_sink_binding_v0"
 EXTENSION_READINESS_SCHEMA = "periodic_report_extension_readiness_v0"
+DELIVERY_INTENT_SCHEMA = "periodic_report_delivery_intent_v0"
 DELIVERY_RECEIPT_SCHEMA = "periodic_report_delivery_receipt_v0"
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")

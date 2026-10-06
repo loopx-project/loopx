@@ -87,10 +87,16 @@ export async function restoreConfigurationBackup(value: unknown): Promise<JsonOb
     const receipt = {...verification, status: "restored", written: true,
       live_configuration_changed: false, configuration_files: files.map(([name]) => name)};
     await durableWriteJson(join(staging, "restore-receipt.json"), receipt);
-    // Exclusive reservation prevents a competing restore from being overwritten.
-    await mkdir(destination, {mode: 0o700});
-    try { await rename(staging, destination); }
-    catch (error) { await rmdir(destination); throw error; }
+    if (process.platform === "win32") {
+      // Windows refuses a directory rename into an existing destination,
+      // so the absent-target rename publishes the complete checkpoint.
+      await rename(staging, destination);
+    } else {
+      // POSIX can replace an empty directory; reserve the name exclusively.
+      await mkdir(destination, {mode: 0o700});
+      try { await rename(staging, destination); }
+      catch (error) { await rmdir(destination); throw error; }
+    }
     return receipt;
   } finally { await rm(staging, {recursive: true, force: true}); }
 }

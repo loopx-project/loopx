@@ -446,8 +446,9 @@ async function assertDshDiscovery(root) {
   assert.deepEqual(record.entry.inject, clientInject)
   // The initial row revision is an opaque allocation, and the composed combo
   // URL is what carries it as the HMR cache-buster.
-  assert.equal(record.entry.rev, 'artifact-smoke-nonce-0')
-  assert(record.entry.url.includes(`rev=artifact-smoke-nonce-0`))
+  assert.equal(typeof record.entry.rev, 'string')
+  assert(record.entry.rev.length > 0, 'DSH omitted the client revision')
+  assert.equal(new URL(record.entry.url, 'http://localhost').searchParams.get('rev'), record.entry.rev)
 }
 
 async function assertHostExports(root) {

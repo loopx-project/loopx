@@ -167,7 +167,10 @@ async function assertClientDiscovery(installed, manifest) {
   assert.equal(resolved.meta.clientPath, join(installed, 'lib', 'client.js'))
   assert.deepEqual(resolved.meta.inject, manifest.dsh.client.inject)
   assert.equal(registry.processOne(packageId, error => { throw error }), true)
-  assert.equal(registry.table.get(packageId)?.entry.rev ?? '', 'profile-smoke-nonce-0')
+  const entry = registry.table.get(packageId)?.entry
+  assert.equal(typeof entry?.rev, 'string')
+  assert(entry.rev.length > 0, 'DSH omitted the client revision')
+  assert.equal(new URL(entry.url, 'http://localhost').searchParams.get('rev'), entry.rev)
   const client = await readFile(join(installed, 'lib', 'client.js'), 'utf8')
   assert(client.startsWith('window.__ModuleLoader__.load({'))
   assert(client.includes('id: "dsh-loopx-plugin"'))
@@ -204,7 +207,7 @@ async function exerciseInstalled(installed) {
         throw new hostModule.LoopXCliError('aborted', 'cancelled', false)
       }
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx smoke\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         return {
@@ -269,7 +272,7 @@ async function exerciseInstalled(installed) {
   assert.equal(followups.length, 1)
   assert.equal(followups[0].role, 'user')
   assert.deepEqual(followups[0].source, {
-    kind: 'plugin',
+    kind: 'loopx-initialization',
     plugin: 'dsh-loopx-plugin/init-command',
   })
   assert.notDeepEqual(followups[0].source, {

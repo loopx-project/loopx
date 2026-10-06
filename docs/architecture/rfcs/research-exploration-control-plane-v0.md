@@ -144,6 +144,7 @@ milestone status.
 | Explore evidence | Explore owns append-only nodes, edges, findings, and bounded public-safe projections. |
 | Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
+| Evidence in turn context | Planning-mode turn-start reads retain bounded explicit Todo/node evidence diagnostics and existing exploring frontier nodes. Findings are resolved before recent-history truncation. This delivers decision input, not the §11.5 adoption gate or proof of model behavior. |
 | Model behavior qualification | Real function-tool conversations can test whether a model reads an actual packet and selects a real semantic writeback. |
 
 ### 5.2 What is missing
@@ -154,6 +155,7 @@ milestone status.
 | No exact obligation/Todo/result lineage | A research receipt is not proof of an authorized Todo transition or accepted Goal closure. |
 | Cold shadow not adopted by hot status/frontier | The existing #3173 projection remains behavior-compatible; canonical research obligations still need M3 integration. |
 | No dismissal or deferral contract | Evidence invalidation is visible, but typed candidate retirement and resumption remain unimplemented. |
+| No experiment-result adoption gate | Negative evidence can be recorded without proving that the next bound decision used its scope, validity or uncertainty. Proposed single-experiment integration is defined in §11.5; current cold receipts do not enforce it. |
 | Live qualification incomplete | Deterministic and real CLI/file-log tests establish state semantics, not model selection quality or scientific truth; no live Lark sync is qualified by projection tests. |
 | No promotion evidence for inferred combinations | Shared constraints are not known to be precise enough to trigger obligations. |
 
@@ -600,6 +602,119 @@ turn discovering which evidence command satisfies a protocol ceremony. A
 delivery receipt proves that context arrived; the observation proves whether
 the next action used it.
 
+### 11.5 Evidence-conditioned experiment decisions (proposed refinement)
+
+This 2026-10-04 proposal refines M3 before M4 portfolio selection. It does not
+claim a shipped experiment controller or change ordinary replan defaults.
+[Decision checkpoints](hierarchical-agent-stride-control-v0.md#75-long-running-work-and-decision-checkpoints-proposed-refinement)
+determine when a result needs attention; this section defines what a research
+decision must retain. Explore is the nearest capability owner. Native
+measurement, statistical interpretation and job/artifact handling stay with
+the domain or benchmark provider. Generic kernel rules do not interpret scores
+or infer research truth from Todo churn.
+
+#### Bind a question and the scope of its evidence
+
+For the first real caller, compose an explicit versioned Explore attachment;
+do not add unknown fields to research observation v0. Its conceptual data are:
+
+| Data | Owning meaning |
+|---|---|
+| Hypothesis and declared mechanism family | Stable Explore node/revision and explicit relation to a family node. Similar names/prose do not prove equivalence; a family is a scoped mechanism claim, not a kernel-inferred taxonomy. |
+| Probe and applicability | Planned intervention, candidate/input fingerprints, comparison, environment/data/evaluator revision, scope, resource/stop bounds. The provider declares what would support, contradict or leave the claim unresolved. |
+| Result and validity | Exact provider result revision/evidence, comparison and uncertainty/guardrail assessment. Failed, missing or incomparable measurements remain distinct from valid negative evidence. |
+| Decision and adoption | Exact input/result fingerprints, existing `continue`/`no_change`/`replan` path outcome, evidence refs and bound task step or grounded successor. A repeat needs a new discriminating question or an explicit replication/uncertainty reason and budget. |
+
+This is a design inventory, not an accepted wire schema or new global enum.
+Explore owns the future TS codec/reducer; compute/capture providers adapt it
+without a parallel decision owner. Reuse nodes, findings, `supports`/`refutes`,
+closure and input-fingerprint semantics. Compose a versioned decision
+attachment with the existing Goal path delta and Todo-bound recommendation
+receipts, rather than add another Next Action or settlement store. An ML
+adapter can map its existing hypothesis ledger's weakened/retired states;
+that vocabulary does not become a generic progress result class.
+
+| Evidence | Legal decision basis |
+|---|---|
+| Build or measurement failed | Repair the prerequisite or record the blocker; do not assert scientific refutation. |
+| One valid candidate is worse | Preserve the incumbent and bind evidence to this candidate/probe scope. Continue another probe, replicate or replan with reasons; do not automatically retire the family. |
+| Effect is within uncertainty or measurements conflict | Preserve unresolved/contradictory evidence; choose a bounded discriminating probe or justified replication. A small score decline is not drift. |
+| Declared coverage contradicts a hypothesis | Close/revise that exact claim with its closure basis. A successor cites the exclusion and what changes; a same-mechanism probe addressing an uncovered condition remains legal. |
+| Coverage supports family retirement | Retire only the declared family/scope with attributable evidence. New input, evaluator or applicability can reopen investigation; retirement never settles Goal acceptance by itself. |
+
+Rejecting one parameter setting can leave a family open; demonstrating failure
+to meet a declared constraint under covered conditions can justify a different
+family. The kernel validates attribution and transitions, not causal truth or
+experiment quality. Renaming identifiers or allocating a new evidence id for
+an unchanged measurement is not novelty. No fixed failure count forces a pivot.
+
+#### Make result adoption observable at the existing decision boundary
+
+1. Record/read back the validated result on the exact experiment node with
+   provider provenance and current input fingerprints. A launch receipt alone
+   is not research evidence.
+2. Under an explicit per-Goal opt-in, project one compact pending decision for
+   its bound experiment/Todo: question, incumbent, applicable exclusions,
+   uncertainty/invalidity, input/result refs and remaining budget. Building the
+   projection needs neither a full log nor a new reasoning-model call.
+3. The normal admitted Agent decides. Continuing is legal if it states what
+   new information the next probe should obtain and why the exclusion does not
+   already answer it. A pivot names the changed question/mechanism and its
+   evidence through the existing grounded successor path.
+4. Explore's typed reducer qualifies the decision attachment. The shared write
+   gate joins it to the exact Todo/replan/Turn and current input revisions,
+   committing it with the normal task-step or successor receipt. Generic
+   replan keeps its existing legal outcomes. A record/read, stale citation or
+   unrelated Todo cannot discharge this opt-in decision duty.
+5. Re-offer pending results after a crash; acknowledge only durable adoption.
+   Replay recovers existing decision receipts; same-Turn settlement remains
+   idempotent, while a newly admitted recovery Turn settles normally. Changed
+   inputs or results invalidate pending decisions; historical facts remain
+   available.
+
+The required relation is **result -> interpretation -> adopted action**.
+Binding is not proof of quality. Operational validity, new research information,
+native outcome improvement and Goal acceptance are separate observations. A
+useful negative result can be delivery without a score gain; a series of
+negative experiments must still expose changed knowledge and remaining frontier.
+
+#### Smallest usable path and qualification
+
+Start with the existing **benchmark-toolkit admitted-run monitor/closeout**
+seam, composed with an Explore experiment node. Its
+[`benchmark_runtime_observation_v0` and continuity reducers](../../../loopx/capabilities/benchmark_toolkit/README.md)
+already separate runtime liveness, attributable terminal results and launch
+generation. They classify provider facts; they neither run experiments nor
+establish result validity. A controlled provider must execute and recover one
+bounded build/evaluation trial, validate its result, deliver the pending
+decision, adopt an evidence-linked continuation/successor and read it back.
+Initially use a complete trial result; intermediate training checkpoints need
+their own provider postcondition and qualification. A preview-only domain
+pack is not an execution backend. This bounded M3
+prerequisite need not wait for inferred composition, a new multi-agent
+scheduler or M4 ranking, and does not close the remaining M3 composition work.
+
+First shadow-capture actual decisions against negative, inconclusive, failed
+and invalidated inputs without changing scheduling. Enforcement is a separate,
+reversible per-Goal opt-in in the existing Explore configuration owner.
+Default-off shared surfaces retain current behavior. Disabling stops new
+decision duties, preserves evidence and completes owed settlement; it does
+not delete job/result history or waive existing replan/authority obligations.
+
+The enforcing slice includes the existing frontend task/Explore journey:
+question, candidate/incumbent, waiting/result state, scoped negative evidence,
+proposed next action and reason; an authorized decision and its readback,
+including stale-result recovery. Optional Lark consumes the same projection
+and authority. A CLI-only prerequisite remains partial until the packaged
+interaction is qualified.
+
+Qualify real provider process and canonical state, revision/lease fences,
+duplicate/lost delivery, stop/revocation, missing and contradictory results,
+unjustified replay/renaming, over-retirement, changed inputs reopening a scope,
+valid same-family probes and default-off parity. Then independently qualify
+model adoption and scientific utility under matched total budgets. Lower
+control cost must not come from hiding useful negative evidence.
+
 ## 12. Write-Time Enforcement
 
 The write gate must reuse the same current goal-frontier and Explore gap
@@ -804,7 +919,7 @@ control-plane failures.
 | M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Accepted design |
 | M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Implemented evidence/CLI slice; live research qualification remains separate |
 | M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partial: #3173 legacy quota/successor; canonical binary cold shadow in CLI/Lark projection; hot status adoption and live Lark qualification remain |
-| M3 | Goal-frontier obligation, exact Todo/experiment lineage, and shared write-time gate | State/replay matrix and premerge canary pass | Not started |
+| M3 | Goal-frontier obligation, exact Todo/experiment lineage, shared write-time gate; proposed §11.5 single-experiment result/adoption prerequisite | State/replay matrix, real provider/state readback, default-off parity and packaged journey before enforcement | Not started; §11.5 is a design proposal, not delivered runtime |
 | M4 | Bounded multi-candidate cards, `composition_selection_v0`, real model-tool behavior qualification, and repeated live shadow | Model autonomously selects a legal semantic action from the delivered candidate set; selection quality is no worse than the declared fallback; compact receipts only | Not started |
 | M5 | Shared-constraint candidate ranking in shadow mode | Precision and cost evidence; no automatic trigger | Not started |
 | M6 | Optional inferred trigger | Explicit maintainer decision and measured promotion thresholds | Deferred |
@@ -829,7 +944,11 @@ composition-frontier/result-layer checks. It covers canonical reverse pairs,
 terminal coverage, attribution, replay, invalidated inputs, stale experiment
 lineage and real CLI/file-log readback. Projection tests do not establish live
 remote effects or model-selected research behavior. Delivery is tracked in
-[#5214](https://github.com/loopx-project/loopx/issues/5214); the issue remains open.
+[#5214](https://github.com/loopx-project/loopx/issues/5214), now closed. Its closure
+does not supply missing live/M3 qualification. Remaining research direction is
+tracked by [#4391](https://github.com/loopx-project/loopx/issues/4391) and
+[#3243](https://github.com/loopx-project/loopx/issues/3243); preserve the explicit
+milestone gaps here rather than create a parallel task tree.
 
 M3 is the first behavior-changing slice. It should be a separate PR so the
 obligation and write gate can be reviewed and reverted independently from the
@@ -918,6 +1037,18 @@ This is a living RFC, not an append-only diary.
 |---|---|
 | 2026-08-13 | Adopt Explore as the canonical research-topology owner; choose explicit-only composition candidates for v0; represent joint work as an experiment node; defer shared-constraint inference to shadow qualification. |
 | 2026-08-13 | Separate eligibility from ranking: the control plane owns a legal bounded candidate set, while the model autonomously prioritizes among multiple eligible candidates. A selection receipt proves a scheduling choice, not research truth. Defer the protocol to M4 rather than adding it to the #3173 runtime slice. |
+| 2026-10-04 | Propose §11.5 as a bounded M3 prerequisite: exact result -> scoped interpretation -> adopted task step/successor. Reuse Explore and task/replan receipts; keep Turn settlement, native scoring and scientific qualification independent. This RFC update delivers no automatic policy. |
+
+The Explore Harness product entry now groups evidence-only and evidence-with-planning
+modes under the existing `explore` capability. The typed configuration owner retains
+legacy storage and flags; planning includes the graph without granting spawn or
+publication authority. A turn-start hook requests bounded evidence and branch context
+through the existing hook contract. This is an M3 entry/adoption prerequisite, not
+qualification of experiment selection, result interpretation or scientific benefit.
+CLI/file-state and packaged settings verify mode changes, stale-preview recovery and
+feature-off behavior; live long-horizon trajectories must still establish actual
+model adoption and continuation. The mode vocabulary is local to Explore configuration,
+not a new kernel lifecycle or scheduler contract.
 
 ## 20. Acceptance Criteria for the RFC
 

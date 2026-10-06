@@ -451,7 +451,7 @@ def test_a_deviating_provider_is_named_in_the_profile_line():
         module_probe=_RUNTIME,
     )
 
-    assert binding["execution_profile"] == "fixture-provider/deepseek-v4-flash@high"
+    assert binding["execution_profile"] == "fixture-provider/deepseek-flash@high"
 
 
 def test_unconfigured_non_managed_hosts_carry_no_execution_profile():
@@ -519,7 +519,7 @@ def test_an_unsupported_effort_fails_closed_before_launch():
 
     # The refused effort is visible next to the typed verdict, so a reader does
     # not have to re-derive which configured value the endpoint rejected.
-    assert binding["execution_profile"] == "deepseek-v4-flash@turbo"
+    assert binding["execution_profile"] == "deepseek-flash@turbo"
     assert binding["available"] is False
     assert binding["unavailable_reason"] == INVALID_REASONING_EFFORT
 
@@ -534,7 +534,7 @@ def test_a_missing_launch_fact_still_outranks_the_profile_verdict():
     # One typed reason per readback: the missing credential is the fact that
     # decides whether this executor launches at all.
     assert binding["unavailable_reason"] == OPERATOR_CREDENTIAL_UNCONFIGURED
-    assert binding["execution_profile"] == "deepseek-v4-flash@turbo"
+    assert binding["execution_profile"] == "deepseek-flash@turbo"
 
 
 def test_the_agent_facing_profile_line_stays_one_bounded_line():

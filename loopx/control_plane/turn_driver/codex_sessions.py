@@ -10,8 +10,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ...boundary_authority import normalize_checkpointed_boundary_authority_entries
 from ...file_lock import exclusive_file_lock
 from ...runtime import validate_goal_id_path_segment
+from ..projects.registry_codec import (
+    load_project_registry,
+    require_runtime_compatible_project_registry,
+)
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .driver import selected_turn_todo, session_identity_fields
 
@@ -333,3 +338,56 @@ def require_codex_session_profile(binding: Mapping[str, Any], digest: str) -> No
         raise ValueError(
             "Codex session profile changed; explicitly select fresh or use a new runtime"
         )
+
+
+def approved_codex_workspace_write_resume(
+    registry_path: Path | None, *, lineage: Mapping[str, str], project: Path,
+) -> bool:
+    """Read current, scoped operator approval; session memory grants nothing.
+
+    workspace-write exposes the whole working directory, so approval for a
+    single file or a sibling directory cannot authorize this transition.
+    """
+    if registry_path is None:
+        return False
+    try:
+        registry = load_project_registry(registry_path)
+        require_runtime_compatible_project_registry(
+            registry, operation="Codex workspace-write session resume"
+        )
+        goals = [goal for goal in registry.get("goals", [])
+                 if goal.get("id") == lineage["goal_id"] and goal.get("status") == "active"]
+        if len(goals) != 1:
+            return False
+        goal = goals[0]
+        coordination = goal.get("coordination") or {}
+        if lineage["agent_id"] not in coordination.get("registered_agents", []):
+            return False
+        raw_authority = coordination.get("checkpointed_boundary_authority")
+        if isinstance(raw_authority, dict):
+            raw_authority = raw_authority.get("entries")
+        entries = normalize_checkpointed_boundary_authority_entries(raw_authority)
+        root = Path(goal.get("repo") or "").expanduser()
+        if not root.is_absolute():
+            return False
+        root = root.resolve()
+        workspace = project.resolve()
+        if not workspace.is_relative_to(root):
+            return False
+        scopes = [scope for entry in entries if entry.get("active") is True
+                  for scope in entry.get("write_scope", [])]
+        for scope in scopes:
+            if scope == "**":
+                return True
+            if not scope.endswith("/**"):
+                continue
+            directory = scope[:-3]
+            if (Path(directory).is_absolute() or ".." in Path(directory).parts
+                    or any(char in directory for char in "*?[]")):
+                continue
+            approved = (root / directory).resolve()
+            if approved.is_relative_to(root) and workspace.is_relative_to(approved):
+                return True
+    except (OSError, TypeError, ValueError, KeyError, AttributeError):
+        return False
+    return False

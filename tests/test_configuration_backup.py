@@ -10,9 +10,12 @@ import venv
 
 import pytest
 
-from loopx.configuration_backup import capture_configuration_backup, restore_configuration_backup
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 from loopx.capabilities.machine_configuration.store import read_machine_configuration
+from loopx.capabilities.configuration_backup import (
+    capture_configuration_backup,
+    restore_configuration_backup,
+)
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -40,8 +43,15 @@ def environment(tmp_path, monkeypatch):
 
 
 def cli(*args):
+    environment = {**os.environ, "LOOPX_USAGE_PING": "0"}
+    if os.name == "nt":
+        # Exercise native Windows locale decoding even if pytest uses -X utf8.
+        environment["PYTHONUTF8"] = "0"
+        # Keep captured CLI JSON decodable when the parent pytest uses UTF-8.
+        environment["PYTHONIOENCODING"] = "utf-8"
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *map(str, args)],
-        env={**os.environ, "LOOPX_USAGE_PING": "0"}, capture_output=True, text=True, timeout=60)
+        env=environment, capture_output=True, text=True,
+        encoding="utf-8" if os.name == "nt" else None, timeout=60)
     return result.returncode, json.loads(result.stdout)
 
 
@@ -67,8 +77,11 @@ def test_cli_export_verify_restore_and_occupied_target(environment, tmp_path):
     code, exported = cli(*arguments, "export", "--output", output, "--execute")
     assert code == 0 and exported["goal_count"] == 1
     original = output.read_bytes()
+    assert "完整".encode("utf-8") in original
     assert cli(*arguments, "export", "--output", output, "--execute")[0] == 1
-    assert output.read_bytes() == original and output.stat().st_mode & 0o777 == 0o600
+    assert output.read_bytes() == original
+    if os.name != "nt":
+        assert output.stat().st_mode & 0o777 == 0o600
     assert cli(*arguments, "verify", "--input", output)[0] == 0
     restore = (*arguments, "restore", "--input", output, "--expected-sha256", exported["sha256"], "--destination", tmp_path / "restored")
     assert cli(*restore)[1]["written"] is False
@@ -141,10 +154,18 @@ def test_live_http_download_recovery_and_negative_digest(environment):
         status, response = post("restore", body)
         assert status == 200, response
         assert response["status"] == "preview"
-        assert not (runtime / "backups/configuration").exists()
-        assert post("restore", {**body, "execute": True})[1]["status"] == "restored"
+        checkpoint = runtime / "backups/configuration" / exported["sha256"]
+        assert not checkpoint.exists()
+        assert post("restore", {**body, "expected_sha256": "changed", "execute": True})[0] == 400
+        assert not checkpoint.exists()
+        status, restored = post("restore", {**body, "execute": True})
+        assert status == 200 and restored["status"] == "restored"
+        assert restored["checkpoint_ref"] == f"backups/configuration/{exported['sha256']}"
+        saved = (checkpoint / "configuration-backup.json").read_bytes()
+        assert json.loads(saved.decode("utf-8")) == exported["backup"]
+        assert "完整".encode("utf-8") in saved
         assert post("restore", {**body, "execute": True})[0] == 400
-        assert post("restore", {**body, "expected_sha256": "changed"})[0] == 400
+        assert (checkpoint / "configuration-backup.json").read_bytes() == saved
     finally:
         server.shutdown()
         server.server_close()

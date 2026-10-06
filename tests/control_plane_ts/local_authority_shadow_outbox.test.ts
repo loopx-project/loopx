@@ -32,6 +32,76 @@ const GOAL_B = {
   goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 };
 
+test("released Todo manifests replay without rewriting history and allow the next capture", async (t) => {
+  for (const absent of [
+    ["completion_receipt_id"],
+    ["completion_receipt_id", "completion_result"],
+    ["completion_receipt_id", "completion_result", "completion_validation_revision", "completion_validation_revision_history"],
+  ]) {
+    const f = await fixture(t);
+    const commit = f.store.commitAuthority.bind(f.store);
+    // Write a real File transaction using a released writer's field manifest.
+    f.store.commitAuthority = async (input) => {
+      const next = structuredClone(input.next_projection);
+      const model = next.todo_read_model as JsonObject;
+      model.contract_fields = (model.contract_fields as string[]).filter((field) => !absent.includes(field));
+      return commit({...input, next_projection: next});
+    };
+    const request = await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]});
+    const result = await commitLocalAuthorityShadowEntry(request, {openStore: () => f.store});
+    assert.equal(result.outcome, "delivered");
+    f.store.commitAuthority = commit;
+    await settleFiles(f, request, result);
+    const before = await readFile(f.store.path);
+    const read = await readLocalAuthorityShadow({schema_version: schemas.LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
+      runtime_root: f.root, goal_id: "goal-a", scan_limit: 10});
+    assert.equal(read.status, "loaded", JSON.stringify(read));
+    assert.deepEqual(await readFile(f.store.path), before);
+    const next = await pendingEntry(f, 2, {handoff_mode: "hard_lease", todos: [todo("todo_one", "done")]},
+      {writeClass: "todo_update"});
+    assert.equal((await commitLocalAuthorityShadowEntry(next)).outcome, "delivered");
+    const history = await f.store.scanCommitted(null, 10);
+    assert.equal(history.status, "page");
+    if (history.status !== "page") continue;
+    assert.equal(history.transactions.length, 3);
+    assert.equal(((history.transactions[1]!.projection.todo_read_model as JsonObject).contract_fields as string[])
+      .includes("completion_receipt_id"), false);
+    assert.equal(((history.transactions[2]!.projection.todo_read_model as JsonObject).contract_fields as string[])
+      .includes("completion_receipt_id"), true);
+  }
+});
+
+test("historical replay still rejects malformed manifests, record proofs and unrelated metadata", async (t) => {
+  const mutations: ((head: JsonObject) => void)[] = [
+    (head) => { (head.todo_read_model as JsonObject).contract_fields = ["todo_id"]; },
+    (head) => { ((head.todo_read_model as JsonObject).contract_fields as string[]).reverse(); },
+    (head) => { (head.todo_read_model as JsonObject).records_sha256 = "0".repeat(64); },
+    (head) => { (head.todo_read_model as JsonObject).todo_count = 999; },
+    (head) => { (head.todo_read_model as JsonObject).unrecognized = true; },
+    (head) => { head.unrecognized = true; },
+    (head) => {
+      const model = head.todo_read_model as JsonObject;
+      model.contract_fields = (model.contract_fields as string[]).filter((field) => field !== "completion_receipt_id");
+      (head.todos as JsonObject[])[0]!.completion_receipt_id = "unavailable-in-this-revision";
+    },
+  ];
+  for (const mutate of mutations) {
+    const f = await fixture(t);
+    const commit = f.store.commitAuthority.bind(f.store);
+    f.store.commitAuthority = async (input) => {
+      const next = structuredClone(input.next_projection); mutate(next);
+      return commit({...input, next_projection: next});
+    };
+    const request = await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]});
+    assert.equal((await commitLocalAuthorityShadowEntry(request, {openStore: () => f.store})).outcome, "delivered");
+    const before = await readFile(f.store.path);
+    const read = await readLocalAuthorityShadow({schema_version: schemas.LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
+      runtime_root: f.root, goal_id: "goal-a", scan_limit: 10});
+    assert.equal(read.status, "failed");
+    assert.deepEqual(await readFile(f.store.path), before);
+  }
+});
+
 test("one primary entry commits exactly once after a complete baseline", async (t) => {
   const f = await fixture(t);
   const request = await pendingEntry(f, 1, { handoff_mode: "hard_lease", todos: [todo()] });

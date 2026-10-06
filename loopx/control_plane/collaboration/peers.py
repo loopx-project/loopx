@@ -33,6 +33,7 @@ from .goal_instance_scope import (
 from ...agent_registry import registered_agent_ids_for_goal
 from ...thread_agent_binding import resolve_thread_agent_binding
 from ..projects.registry_codec import load_project_registry
+from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN
 
 PEER_INSTRUCTION = (
@@ -535,7 +536,9 @@ def _input_readiness_for_goal(
                 and Path(alias["canonical_project"]).resolve() == goal_workspace
             ):
                 selected = Path(workspace).resolve()
-    workspace = selected
+    # Resolve native addresses before checking workspace confinement, including
+    # deep Windows junctions that cross the workspace boundary.
+    workspace = windows_extended_path(selected).resolve()
     result = []
     for item in brief.get("inputs", []):
         path = (workspace / item["ref"]).resolve()
@@ -546,9 +549,8 @@ def _input_readiness_for_goal(
             try:
                 # Nonblocking open plus fstat prevents a FIFO/device reference
                 # from hanging the worker's entire Inbox read.
-                with os.fdopen(
-                    os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)), "rb"
-                ) as stream:
+                flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+                with os.fdopen(os.open(path, flags), "rb") as stream:
                     if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                         raise OSError("input is not a regular file")
                     content = stream.read(4 * 1024 * 1024 + 1)

@@ -21,10 +21,22 @@ agents:
       iteration_context: fresh
       reasoning_effort: max
       codex_sandbox: danger-full-access
-      turn_timeout_sec: 4700
+      turn_timeout_sec: null
       scheduler_timeout_sec: 5080
       replan_after_todos: 3
 ```
+
+For an explicitly selected **heartbeat-only** context experiment, add
+`turn_envelope: true` to `kwargs` (default `false`). Each wake creates a private
+capture root and asks the product renderer for a short TurnEnvelope dispatcher.
+Full decisions remain available through `detail_ref.full_decision` from the same
+guard invocation. Selection/reentry still evaluate current authority; generated
+selection commands retain the capture root. When enabled, the setting appears in install,
+execution and wake receipts as `turn_envelope: true`. When disabled, the field
+and worker environment override are absent, preserving the pre-opt-in shape. Invalid native-Goal/plain/Turn-driver combinations
+fail before execution. Set it back to `false` for the next run to roll back;
+do not change a running trial's treatment. Captures contain private Goal context.
+Transport tests do not establish lower token cost or better model decisions.
 
 | Mode | Execution/continuation | LoopX skills and state |
 | --- | --- | --- |
@@ -67,11 +79,18 @@ validator protection remains the environment owner's responsibility.
 - `seeded-todo` (the compatibility default) writes a generic execution Todo.
   Follow-up phases update that Todo while it remains live and owned by this
   agent; completed or deferred work gets a new Todo. Updates preserve blocked
-  state. The agent can still plan and replan during execution.
+  state. The agent can still plan and replan during execution. The seed asks the
+  worker to read, implement and validate the task. It leaves task decomposition
+  to the worker and the existing task protocol. This removes the previous
+  unconditional successor instruction for newly seeded or updated phases.
 - `loopx-planned` runs the installed `$loopx` skill against the public
   `loopx todo plan` checkpoint before execution. The checkpoint shares the
   product's planner and continuation-aware Todo delta; it creates no planning
   Todo and starts no host loop. Select it only for heartbeat, Turn or LoopX Goal.
+
+For a task-entry comparison, pin the same source and vary only `task_entry`;
+keep task inputs, scoring, model, budget and evaluation windows fixed. Include
+planning time in the common run budget.
 
 The model writes or reuses actual task Todos through the public CLI. The worker
 reads the product packet again and checks the input digest, identity, Todo ids
@@ -79,6 +98,9 @@ and runnable/blocked state. A fabricated id, changed input, wrong owner, failed
 planning process or missing result fails the entry; it never falls back to a
 generic Todo. A blocked entry retains the referenced blockers and starts no
 execution driver. Readback proves state and ownership, not semantic plan quality.
+It makes no claim about a future execution session. For heartbeat and Turn,
+compare the native IDs in the planning and execution wake receipts' `session`
+fields to verify continuity; the context policy alone is not observation evidence.
 
 Planning follows the chosen context policy for heartbeat and Turn. With
 `resume`, planning and execution share the same conversation, including later
@@ -99,7 +121,11 @@ another phase can replace its task input. These wait/recovery rules apply to
 both entry policies; they correct the earlier unconditional phase reset.
 Every scheduler wake caps its host timeout against the remaining phase budget
 before opening an execution. If only startup and settlement reserve remains,
-it records a budget-exhausted no-op without creating a pending Turn.
+it records a budget-exhausted no-op without creating a pending Turn. In the
+heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
+configured shell worker stops normally. It does not re-admit empty wakes, mark
+the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
+for normal budget exhaustion.
 The deadline uses the task environment's clock, including remote Harbor backends.
 
 To compare entry policies, hold the execution mode, session policy, model,
@@ -111,7 +137,7 @@ kwargs:
   task_entry: loopx-planned
   planning_timeout_sec: 300
   iteration_context: fresh
-  turn_timeout_sec: 4700
+  turn_timeout_sec: null
   scheduler_timeout_sec: 5080
 ```
 
@@ -201,3 +227,47 @@ Install the intended Harbor version for the adapter tests. Real qualification
 also needs installed Codex, the native Harbor backend and independently checked
 task output. Unit tests establish no score or model-uplift claim. Validate small
 jobs through each benchmark's native configuration before launching a study.
+
+By default, worker calls have no independent turn deadline. Harbor derives their available time from the remaining total phase budget, reserving cleanup and settlement time. An explicit `turn_timeout_sec` remains supported as an operator override.
+
+### Native SForge task entry
+
+The EdgeBench runner accepts `--task-entry seeded-todo|loopx-planned` for
+`heartbeat-resume` and `heartbeat-explore`; the default remains `seeded-todo`.
+Official, single and native-Goal profiles reject planned entry before creating
+an attempt. Select only this flag for a task-entry ablation and keep all other
+inputs fixed. Runtime/profile receipts record the selected entry.
+
+Planned entry uses the existing public planning worker inside SForge's timed,
+network-isolated execution process, so it inherits the same API-only proxy and
+counts toward the persisted phase deadline. Setup hooks do not invoke a model.
+A verified initial planning receipt is reused after an abnormal process resume;
+its task identity and Todo lineage are checked again. A failed, missing, stale
+or blocked plan cannot start execution. Reusing the receipt does not bypass the
+ordinary scheduler's quota, claim, blocker or settlement checks. Retain receipts
+and native sessions when comparing planning cost; no active attempt is changed
+by selecting this option for a new run.
+
+
+### Explicit effective-Turn cadence
+
+Harbor `BenchmarkCodex` accepts `replan_after_turns: 3`; the native EdgeBench
+launcher accepts `--replan-after-turns 3` for `heartbeat-resume` and
+`heartbeat-explore`. This passes the existing Goal option
+`--execution-replan-after-turns` and verifies the persisted
+`replan_after_effective_turns` value before execution. The shared TypeScript
+control plane still owns which settled work Turns count; adapters do not count
+records or completed Todos themselves.
+
+Omitting the option preserves the legacy three-completed-Todo setting. Harbor
+rejects simultaneous explicit Todo and Turn settings. To roll back, omit the
+Turn option in a new trial or select `replan_after_todos` in Harbor; do not alter
+an active matched trial. Receipts name the selected unit. Values must be integers
+from one through five, and non-LoopX profiles reject the option. No task, scoring,
+feedback, spawn permission, or total-budget change is implied. This adapter
+option alone does not enable SForge planned task entry.
+
+The two options are independent: `--task-entry` selects where the initial Todo
+comes from, while `--replan-after-turns` selects which cadence the shared control
+plane uses afterwards. A trial may set either, both, or neither; receipts record
+both selections so a comparison keeps every other input fixed.

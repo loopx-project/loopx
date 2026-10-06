@@ -142,16 +142,17 @@ def render_peer_agent_scope_instruction(
         "--claimed-by <agent_id> --agent-id <agent_id>"
     )
     peer_rule = (
-        "You are an equal peer agent: claim or lease in-scope work; use an independent worktree "
-        "for repository writes; follow todo continuation policy. PR review is "
+        "You are an equal peer agent: follow the current quota claim/lease and workspace "
+        "contract plus repository rules; follow todo continuation policy. PR review is "
         "user_action with a runnable successor; gate only exact merge/release/launch "
         "authority. Task-scoped coordination grants no authority over other agents."
     )
     if thin:
         return (
-            f"Equal peer `{identity}` (peer_v1); scope: {scope_text}. Claim/lease first; "
-            "independent repo worktree; todo continuation; no cross-agent authority; "
-            "no scope in todo metadata."
+            f"Equal peer `{identity}` (peer_v1); scope: {scope_text}. Follow the current quota "
+            "claim/lease and workspace contract plus repository rules. Follow todo "
+            "continuation policy. Task-scoped coordination grants no authority over "
+            "other agents. Keep scope in this prompt, not todo metadata."
         )
     if compact:
         return (

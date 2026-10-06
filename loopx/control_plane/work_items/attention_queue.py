@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AbstractSet, Any, Callable, Optional
 
+from .replan_history_codec import effective_turn_cadence_context
+
 from ..goals.legacy_event_source import RetiredTodoEventSourceError
 
 
@@ -44,6 +46,7 @@ class AttentionQueueContext:
     autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None]
     source_registry_shadow_findings: AbstractSet[str]
     monitor_signal_waiting_on: str
+    registry_path: Path | None = None
     external_progress_review_context: Optional[Callable[..., dict[str, Any] | None]] = None
 
 
@@ -282,6 +285,7 @@ def build_attention_queue(
                     next_action_projection_warning=context.next_action_projection_warning,
                     autonomous_replan_obligation_from_runs=context.autonomous_replan_obligation_from_runs,
                     external_progress_review=external_progress_review,
+                    effective_turn_cadence=effective_turn_cadence_context(goal, runtime_root, registry_path=context.registry_path),
                 )
                 item["quota"] = context.quota_status(
                     goal,

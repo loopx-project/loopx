@@ -122,11 +122,18 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     assert state.read_text() == rendered and _read(runtime) == before
 
     code, listed = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"])
-    # The CLI remains a bounded attention view, not source serialization.
+    # Exact cold reads preserve the current request; attention views remain bounded.
     summary_text = normalize_todo_text(text)
-    assert code == 0 and listed["todo"]["text"] == summary_text, listed
+    assert code == 0 and listed["todo"]["text"] == text, listed
     assert listed["todo"]["title"] == todo_priority_parts(summary_text)[1]
     assert listed["authority_read"]["provider_revision"] == before["provider_revision"]
+    code, thin = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"], "--thin")
+    assert code == 0 and thin["todo"]["todo_id"] == record["todo_id"], thin
+    assert len(thin["todo"]["text"]) <= 500
+    assert "retain the final obligation" not in thin["todo"]["text"]
+    code, hot = _cli(registry, "list", "--goal-id", "goal-a")
+    assert code == 0 and hot["todos"][0]["text"] == summary_text, hot
+    assert _read(runtime) == before
     manager = read_manager_goal_details(registry, runtime, "goal-a", owner_scope=True)
     assert manager["status"] == "read" and manager["coverage"]["active"] == 1
     assert manager["authority_revision"] == before["provider_revision"]

@@ -146,9 +146,25 @@ or Lark transport is introduced.
 `todo supersede --turn-instance-id <original-turn>` now accepts the same exact
 Goal/Agent/Todo/Turn guard identity as ordinary completion. It validates that
 identity before the existing terminal authority admits retirement; lease,
-actor and unchanged-intent recovery rules still apply. Link an existing future
-Monitor with `todo update --successor-todo-id` before superseding rather than
-manufacturing another replacement.
+actor and unchanged-intent recovery rules still apply. For promoted canonical
+authority, pass `--successor-todo-id <existing-id>` directly to `todo supersede`.
+The existing typed transaction links the successor, retires the original Todo
+and releases its original lease in one commit. The successor keeps its declared
+scope, owner, status and due time; the command neither rewrites leased work
+requirements nor creates another replacement. Multiple existing links are
+accepted, but cannot be mixed with `--next-agent-todo` or `--next-user-todo`.
+Missing, other-Goal and self links fail before mutation. Exact replay recovers
+the original receipt; changed intent is rejected. A fresh terminal operation
+cannot append a new successor to an already retired Todo.
+
+Compared with `todo update --successor-todo-id` followed by `todo supersede`,
+the direct path removes the intermediate canonical mutation and CLI round trip.
+It does not promise a provider-wide latency improvement. The old prelinked and
+generated-successor paths remain supported. Unpromoted Markdown Goals reject
+the new direct-link option with migration guidance; omitting the option keeps
+their existing behavior. This extends the CLI and public lifecycle facade using
+the existing transaction, without changing Chat/Lark actions or adding a
+configuration switch.
 
 Once that scoped retirement, the original durable writeback and one original
 quota spend all exist, same-Turn `quota should-run` returns

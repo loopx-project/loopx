@@ -151,8 +151,11 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
       capabilityId: "todo_replan_cadence",
       displayName: "Goal review cadence",
       editorScopes: ["machine", "goal"],
-      defaultConfiguration: { completed_todos: 5 },
-      fields: [{ key: "completed_todos", label: "Completed Todos between Goal reviews", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 }],
+      defaultConfiguration: { count_unit: "completed_todos", count: 5 },
+      fields: [
+        { key: "count_unit", label: "Count between reviews", description: "", input_kind: "select", required: true, options: ["completed_todos", "effective_turns"] },
+        { key: "count", label: "Review interval", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 },
+      ],
     }),
     periodicReportCapability(),
     goalCapability({
@@ -479,6 +482,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    todoRequestTexts: new Map(),
+    todoRequestReads: [],
     decidedGateTodoIds: new Set(),
     // Applied User action outcomes, so the needs-you projection reads back like canonical status.
     userActionOutcomes: new Map(),
@@ -570,7 +575,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const userItems = [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }];
       if (userActionAttention) {
         const outcome = state.userActionOutcomes.get("todo-browser-user-action");
-        userItems.unshift({ done: Boolean(outcome), status: outcome ?? "open", goal_id: first.goal_id, index: 1, role: "user", task_class: "user_action",
+        userItems.unshift({ done: Boolean(outcome), status: outcome ?? "open", goal_id: first.goal_id, index: 1, role: "user", task_class: "user_action", bound_agent: "codex-delivery",
           text: "在桌面 App 中手动创建剩余的 3 个角色会话", note: "这是一项不阻塞 Agent 的用户操作提醒，而不是批准请求。", todo_id: "todo-browser-user-action", updated_at: "2026-08-13T00:00:00Z" });
         userItems.push({ done: false, status: "open", goal_id: first.goal_id, index: 2, role: "user", task_class: "user_action", text: "核对本机备份目录是否可写" });
       }
@@ -736,6 +741,15 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           goal_ids: ["multi-agent-projection"], last_activity_at: "2026-08-24T15:00:00+08:00", next_action: "Continue projected todo todo-latest-lane.", state: "running",
         },
       );
+    }
+    for (const goal of fixture.attention_queue.items) {
+      for (const todo of goal.agent_todos?.items ?? []) {
+        if (todo.todo_id) {
+          const key = JSON.stringify([goal.goal_id, todo.todo_id]);
+          if (!state.todoRequestTexts.has(key)) state.todoRequestTexts.set(key, todo.text);
+          todo.text = state.todoRequestTexts.get(key).slice(0, 500);
+        }
+      }
     }
     for (const [goalId, activity] of Object.entries(state.hostThreadActivity)) {
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
@@ -909,6 +923,16 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/chat/todo/detail") {
+      const goalId = url.searchParams.get("goal_id");
+      const todoId = url.searchParams.get("todo_id");
+      state.todoRequestReads.push({ goalId, todoId });
+      const text = state.todoRequestTexts.get(JSON.stringify([goalId, todoId]));
+      await route.fulfill({ json: text === undefined ? { ok: false, error: "Task not found" } : {
+        ok: true, goal_id: goalId, todo_id: todoId, text, status: "open", archive_state: "active", updated_at: null,
+      } });
+      return;
+    }
     if (url.pathname === "/api/chat/completed-todos") {
       const total = url.searchParams.get("goal_id") === "progress-projection" ? 4087 : 0;
       const offset = Number(url.searchParams.get("cursor") || 0);
@@ -922,6 +946,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           completion_validation_revision_history: index === 0 ? [{ revision: 3, previous_declaration_sha256: "b".repeat(64), declaration_sha256: "a".repeat(64), actor_agent_id: "example-reviewer", revised_at: "2026-08-01T00:00:00Z" }] : [],
         };
       });
+      for (const item of items) state.todoRequestTexts.set(JSON.stringify([url.searchParams.get("goal_id"), item.todo_id]), item.text);
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }
@@ -1010,7 +1035,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             namespace: "todo_replan_cadence",
             title: "Goal review cadence",
             description: "Live review threshold without added turns, quota, or authority.",
-            schema_versions: ["todo_replan_cadence_machine_defaults_v0"],
+            schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,
             template_status: "ready",
           },

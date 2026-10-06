@@ -1229,6 +1229,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {goal_acceptance_guard: acceptance}, "decision_rejection");
   }
   const acceptanceRequirements = acceptanceCompletionRequirements(completionHead, input.goal_id, input.todo_id);
+  if (input.completion_result != null && acceptanceRequirements === null) {
+    return terminalFailure("completion_result_rejected",
+      "--result-file requires Goal acceptance criteria bound to this Todo; a Todo validator alone does not establish Goal acceptance. " +
+      "Use --evidence for a local artifact pointer, or bind approved Goal acceptance criteria before retrying --result-file.",
+      {next_action: "Keep the same Todo/Turn and complete with --evidence, or configure approved bound Goal acceptance criteria."},
+      "decision_rejection");
+  }
   const acceptanceBinding = acceptanceRequirements === null ? null
     : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
   let acceptanceEvidence: JsonObject | null = null;
@@ -1416,18 +1423,19 @@ export async function executeCoordinationTodoTerminalLifecycle(
   }
 
   if (authority.outcome === "no_change" && (edit === null || !edit.changed) && terminalUpgradeReceipt === null) {
-    if (input.successor_intents.length > 0) {
-      return terminalFailure(
-        "todo_terminal_successor_intent_after_completion",
-        "an already terminal Todo cannot accept a new generated successor intent",
-        {},
-        "decision_rejection",
-      );
-    }
     const existingSuccessorIds = Array.isArray(todo.successor_todo_ids)
       ? todo.successor_todo_ids.map((value, index) =>
         requireAuthorityStoreId(value, `todo.successor_todo_ids[${index}]`))
       : [];
+    if (input.successor_intents.length > 0 ||
+        input.linked_successor_todo_ids.some(id => !existingSuccessorIds.includes(id))) {
+      return terminalFailure(
+        "todo_terminal_successor_intent_after_completion",
+        "an already terminal Todo cannot accept a new successor intent",
+        {},
+        "decision_rejection",
+      );
+    }
     return commitTerminalResult(store, input, requestSha, head, {
       todo_id: input.todo_id,
       command: input.command,
@@ -1597,6 +1605,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_identity_source:
       completion === null ? null : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
+    completion_receipt_id: target.todo.completion_receipt_id ?? null,
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     // A preview that omits this would show an unconditional close for work the

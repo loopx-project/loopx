@@ -384,3 +384,179 @@ def test_candidate_intake_rejects_unsafe_proposal_and_readback() -> None:
 
     with pytest.raises(ValueError, match="local path"):
         apply(UnsafeReadbackProvider())
+
+
+class AuthorizedProjectProvider(FakeCandidateProvider):
+    """Source-owner fixture resolves refs; packet metadata is not permission."""
+
+    def __init__(self):
+        super().__init__()
+        self.write_allowed = True
+        self.revoke_after_stage = False
+
+    def verify_project_scope(self, *, project_scope, store_id, owner_gate_ref, observed_at):
+        self.calls.append('verify-project')
+        return (
+            self.write_allowed
+            and project_scope == {
+                'project_ref': 'project:alpha',
+                'source_profile_ref': 'profile:materials',
+                'workspace_grant_ref': 'grant:workspace-write',
+            }
+            and store_id == 'store:materials'
+            and owner_gate_ref == 'gate:material-input'
+        )
+
+    def stage_candidate(self, **kwargs):
+        result = super().stage_candidate(**kwargs)
+        if self.revoke_after_stage:
+            self.write_allowed = False
+        return result
+
+
+def project_proposal(**scope_changes):
+    from loopx.capabilities.material_lifecycle import MaterialProjectScope
+    scope = {
+        'project_ref': 'project:alpha',
+        'source_profile_ref': 'profile:materials',
+        'workspace_grant_ref': 'grant:workspace-write',
+        **scope_changes,
+    }
+    return build_material_candidate_intake_proposal(
+        project_scope=MaterialProjectScope(**scope),
+        proposal_id='proposal:project-input', store_id='store:materials',
+        source_authority_revision='revision:42', material_ref='material:A43',
+        source_ref='source:paper-43', source_revision='source-revision:7',
+        exact_read_ref='exact-read:paper-43', content_digest=CONTENT_DIGEST,
+        content_size_bytes=len(CONTENT), observed_at=OBSERVED_AT,
+    )
+
+
+def apply_project(provider, intake_proposal=None, gate='gate:material-input'):
+    return apply_material_candidate_intake(
+        provider=provider, provider_id=provider.provider_id,
+        intake_proposal=intake_proposal or project_proposal(), content=CONTENT,
+        owner_gate_ref=gate, receipt_id='receipt:project-intake', observed_at=OBSERVED_AT,
+    )
+
+
+def test_project_intake_and_rollback_keep_scope_without_a_goal():
+    provider = AuthorizedProjectProvider()
+    candidate = project_proposal()
+    receipt = apply_project(provider, candidate)
+    assert 'goal_id' not in candidate and 'goal_id' not in receipt
+    assert receipt['project_scope'] == candidate['project_scope']
+    assert receipt['capability']['scope'] == 'project'
+    assert provider.calls.count('verify-project') == 2
+    restored = rollback_material_candidate_intake(
+        provider=provider, provider_id=provider.provider_id, apply_receipt=receipt,
+        owner_gate_ref='gate:material-input', receipt_id='receipt:project-rollback',
+        observed_at=OBSERVED_AT,
+    )
+    assert restored['project_scope'] == candidate['project_scope']
+    assert 'goal_id' not in restored
+    assert restored['capability']['scope'] == 'project'
+    assert provider.authority_revision == 'revision:42'
+
+
+def test_project_intake_requires_a_source_verifier_before_provider_access():
+    provider = FakeCandidateProvider()
+    with pytest.raises(ValueError, match='source authorization verifier'):
+        apply_project(provider)
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize('field,value', [
+    ('project_ref', 'project:other'),
+    ('source_profile_ref', 'profile:other'),
+    ('workspace_grant_ref', 'grant:read-only'),
+])
+def test_project_scope_selectors_cannot_borrow_other_authority(field, value):
+    provider = AuthorizedProjectProvider()
+    with pytest.raises(ValueError, match='authorization was not verified'):
+        apply_project(provider, project_proposal(**{field: value}))
+    assert provider.calls == ['verify-project']
+    assert provider.authority_revision == 'revision:42'
+
+
+def test_project_gate_must_match_the_exact_source_operation():
+    provider = AuthorizedProjectProvider()
+    with pytest.raises(ValueError, match='authorization was not verified'):
+        apply_project(provider, gate='gate:unrelated')
+    assert provider.calls == ['verify-project']
+
+
+def test_project_revocation_after_staging_blocks_authority_cutover():
+    provider = AuthorizedProjectProvider()
+    provider.revoke_after_stage = True
+    with pytest.raises(ValueError, match='authorization was not verified'):
+        apply_project(provider)
+    assert provider.authority_revision == 'revision:42'
+    assert provider.calls.count('verify-project') == 2
+    assert 'switch' not in provider.calls
+
+
+def test_revoked_project_scope_blocks_rollback_before_provider_access():
+    provider = AuthorizedProjectProvider()
+    receipt = apply_project(provider)
+    provider.write_allowed = False
+    provider.calls.clear()
+    with pytest.raises(ValueError, match='authorization was not verified'):
+        rollback_material_candidate_intake(
+            provider=provider, provider_id=provider.provider_id, apply_receipt=receipt,
+            owner_gate_ref='gate:material-input', receipt_id='receipt:project-rollback',
+            observed_at=OBSERVED_AT,
+        )
+    assert provider.calls == ['verify-project']
+    assert provider.authority_revision == 'revision:43'
+
+
+@pytest.mark.parametrize('goal_id,scope', [
+    (None, None),
+    ('goal:manager', {'project_ref': 'project:alpha', 'source_profile_ref': 'profile:materials',
+                      'workspace_grant_ref': 'grant:workspace-write'}),
+    (None, {'project_ref': 'project:alpha'}),
+    (None, {'project_ref': 'project:alpha', 'source_profile_ref': 'https://example.test/private',
+            'workspace_grant_ref': 'grant:workspace-write'}),
+])
+def test_material_owner_requires_one_complete_public_safe_scope(goal_id, scope):
+    from loopx.capabilities.material_lifecycle.ownership import material_owner_fields
+    with pytest.raises((ValueError, TypeError)):
+        material_owner_fields(goal_id=goal_id, project_scope=scope)
+
+
+def test_project_metadata_cannot_reuse_a_goal_capability_declaration():
+    provider = AuthorizedProjectProvider()
+    candidate = project_proposal()
+    candidate['capability']['scope'] = 'goal'
+    with pytest.raises(ValueError, match='project capability scope'):
+        apply_project(provider, candidate)
+    assert provider.calls == []
+
+
+
+def test_project_rollback_rejects_a_mismatched_capability_before_provider_access():
+    provider = AuthorizedProjectProvider()
+    receipt = apply_project(provider)
+    receipt['capability']['scope'] = 'goal'
+    provider.calls.clear()
+    with pytest.raises(ValueError, match='project capability scope'):
+        rollback_material_candidate_intake(
+            provider=provider, provider_id=provider.provider_id, apply_receipt=receipt,
+            owner_gate_ref='gate:material-input', receipt_id='receipt:project-rollback',
+            observed_at=OBSERVED_AT,
+        )
+    assert provider.calls == []
+    assert provider.authority_revision == 'revision:43'
+
+
+def test_project_verifier_must_return_true_rather_than_a_truthy_value():
+    class TruthyProvider(AuthorizedProjectProvider):
+        def verify_project_scope(self, **kwargs):
+            super().verify_project_scope(**kwargs)
+            return 1
+
+    provider = TruthyProvider()
+    with pytest.raises(ValueError, match='authorization was not verified'):
+        apply_project(provider)
+    assert provider.calls == ['verify-project']

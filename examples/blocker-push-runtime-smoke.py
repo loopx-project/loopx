@@ -218,7 +218,8 @@ def main() -> int:
         # current compact sentence instead of the retired per-shell phrasing.
         assert "reuse the value on retries" in compact_prompt, prompt
         assert "guard; 2 stalls->replan" in compact_prompt, prompt
-        assert "no-change=surface_only/no spend" in compact_prompt, prompt
+        assert "Exact monitor settlement=no refresh/spend" in compact_prompt, prompt
+        assert "Admitted work: settlement_plan even if artifacts unchanged" in compact_prompt, prompt
         # The shipped writeback sentence moved to the mixed-language form in the
         # same change that updated examples/control_plane/heartbeat-prompt-smoke.py;
         # this assertion keeps the blocker-runtime path pinned to the same text.

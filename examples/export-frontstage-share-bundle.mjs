@@ -396,11 +396,25 @@ async function collectTextFiles(rootDir) {
   return files;
 }
 
-async function scanPublicBoundary(outDir) {
+// Verified public source citations are exceptions only to the organization-name
+// probe, never to path, host or credential checks. Exact hrefs cannot exempt
+// nearby prose, another repository, a query string or an internal URL.
+const publicSourceHrefs = new Set([
+  "https://github.com/ByteDance-Seed/EdgeBench",
+  "https://github.com/ByteDance-Seed/EdgeBench/pull/14",
+]);
+
+function withoutPublicSourceHrefs(text) {
+  return text.replace(/\bhref=(["'])(https:\/\/[^"'<>\s]+)\1/g, (attribute, quote, href) =>
+    publicSourceHrefs.has(href) ? `href=${quote}${quote}` : attribute,
+  );
+}
+
+export async function scanPublicBoundary(outDir) {
   const patterns = [
     { label: "macOS user path", pattern: /\/Users\// },
     { label: "private temp path", pattern: /\/private\// },
-    { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i") },
+    { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i"), publicSourceException: true },
     { label: "internal doc host", pattern: new RegExp("lark" + "office", "i") },
     { label: "private goal state", pattern: new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness") },
     { label: "raw internal key", pattern: new RegExp("raw_" + "internal_note") },
@@ -410,8 +424,8 @@ async function scanPublicBoundary(outDir) {
   const leaks = [];
   for (const path of await collectTextFiles(outDir)) {
     const text = await readFile(path, "utf8");
-    for (const { label, pattern } of patterns) {
-      if (pattern.test(text)) {
+    for (const { label, pattern, publicSourceException } of patterns) {
+      if (pattern.test(publicSourceException ? withoutPublicSourceHrefs(text) : text)) {
         leaks.push(`${relative(outDir, path)}: ${label}`);
       }
     }
@@ -480,7 +494,9 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

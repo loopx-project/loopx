@@ -108,6 +108,48 @@ def test_lifecycle_only_registry_cannot_supply_context_recipients(
     assert not _root(root).exists()
 
 
+@pytest.mark.parametrize("strict_envelope", [False, True])
+@pytest.mark.parametrize("other_goal", [
+    {"goal_instance_id": "ginst_" + "b" * 32},
+    {},
+    {"goal_instance_id": "invalid"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "id": "unsafe/alias"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "activation_state": "stopped"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "activation_state": "invalid"},
+])
+def test_source_session_catalog_keeps_only_current_instantiated_recipients(
+    fixture, strict_envelope, other_goal
+):
+    from loopx.control_plane.projects import registry_codec
+
+    root, registry, session, turn, request = fixture
+    payload = json.loads(registry.read_text())
+    payload["profile_id"] = registry_codec.SOURCE_SESSION_PROFILE_ID
+    payload["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+    payload["goals"][1].update(other_goal)
+    source_registry = registry.with_name("source-session-registry.json")
+    if strict_envelope:
+        with registry_codec.source_session_registry_transaction(
+            source_registry,
+            operation="create context catalog fixture",
+            create=lambda: payload,
+        ) as transaction:
+            transaction.commit(payload)
+    else:
+        source_registry.write_text(json.dumps(payload))
+    before = source_registry.read_bytes()
+    expected = [request]
+    if other_goal == {"goal_instance_id": "ginst_" + "b" * 32}:
+        expected.insert(0, {"goal_id": "other", "agent_id": "peer"})
+    result = authority(root, source_registry, session, turn)
+    assert result["mode"] == "context_only"
+    assert result["targets"] == expected
+    goal_session = {**session, "channel_id": "goal.research", "goal_id": "research"}
+    assert authority(root, source_registry, goal_session, turn)["targets"] == [request]
+    assert source_registry.read_bytes() == before
+    assert not _root(root).exists()
+
+
 def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     root, registry, session, turn, request = fixture
     assert request in authority(root, registry, session, turn)["targets"]

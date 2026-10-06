@@ -37,6 +37,7 @@ from ..extensions.lark.presentation.kanban import (
 from ..extensions.lark.presentation.explore_results import (
     sync_issue_fix_explore_on_material_change,
 )
+from ..extensions.lark.presentation.sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITIES
 from ..extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
@@ -211,8 +212,8 @@ def register_lark_kanban_commands(
     projection.add_argument("--source-id", help="Stable source namespace used in synthetic row ids.")
     projection.add_argument(
         "--sink-visibility",
-        choices=["owner-only", "shared"],
-        default="owner-only",
+        choices=sorted(SINK_VISIBILITIES),
+        default=SINK_VISIBILITY_OWNER_ONLY,
         help="Use shared to redact local paths, private links, and external ids before writing projection rows.",
     )
     projection.add_argument("--include-done", action="store_true")

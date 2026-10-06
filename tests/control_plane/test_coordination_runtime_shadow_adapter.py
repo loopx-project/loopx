@@ -11,12 +11,10 @@ from loopx.control_plane.coordination.runtime_shadow import (
     RUNTIME_SHADOW_BOOTSTRAP_METHOD,
     RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
     RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION,
-    RUNTIME_SHADOW_METHOD,
     RUNTIME_SHADOW_ROLLBACK_METHOD,
     RUNTIME_SHADOW_ROLLBACK_REQUEST_SCHEMA_VERSION,
     bootstrap_coordination_runtime_shadow,
     build_todo_runtime_shadow_projection,
-    dispatch_coordination_runtime_shadow,
     inspect_coordination_runtime_shadow,
     load_task_lease_runtime_shadow_records,
     qualify_coordination_runtime_shadow,
@@ -101,35 +99,6 @@ def test_runtime_shadow_todo_read_candidate_is_default_off_and_typed(
     assert matched["read_candidate_qualified"] is True
     assert calls[0][0] == "coordination.runtime_shadow.todo_read_candidate"
     assert calls[0][1]["todo_id"] == "todo_one"
-
-
-def _dispatch(
-    tmp_path: Path,
-    goal: dict[str, object],
-    runtime_invoker,
-) -> dict[str, object]:
-    return dispatch_coordination_runtime_shadow(
-        goal=goal,
-        runtime_root=tmp_path,
-        goal_id="goal-a",
-        operation_id="todo:goal-a:todo_one:v1",
-        event_kind="todo_claim",
-        source_version="state:1",
-        projection={"schema_version": "projection_v0", "todos": []},
-        runtime_invoker=runtime_invoker,
-    )
-
-
-def test_runtime_shadow_is_zero_call_default_off(tmp_path: Path) -> None:
-    calls: list[object] = []
-
-    result = _dispatch(tmp_path, {"id": "goal-a"}, lambda *args: calls.append(args))
-
-    assert result["status"] == "disabled"
-    assert result["reason_code"] == "configuration_absent"
-    assert result["primary_writeback_preserved"] is True
-    assert result["decision_read_from_shadow"] is False
-    assert calls == []
 
 
 def test_runtime_shadow_bootstrap_is_explicit_default_off_and_typed(
@@ -252,70 +221,18 @@ def test_runtime_shadow_requires_complete_explicit_file_opt_in(tmp_path: Path) -
         },
     }
 
-    result = _dispatch(tmp_path, goal, lambda *args: calls.append(args))
+    result = bootstrap_coordination_runtime_shadow(
+        goal=goal, runtime_root=tmp_path, goal_id="goal-a",
+        operation_id="bootstrap:goal-a:invalid-config", source_version="state:1",
+        projection={"schema_version": "projection_v0", "todos": []},
+        goal_ref=None,
+        runtime_invoker=lambda *args: calls.append(args),
+    )
 
     assert result["status"] == "disabled"
     assert result["reason_code"] == "schema_mismatch"
     assert calls == []
     assert resolve_coordination_runtime_shadow_config(goal).enabled is False
-
-
-def test_runtime_shadow_dispatches_exact_typed_request_after_opt_in(
-    tmp_path: Path,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def invoke(method: str, params: dict[str, object]) -> dict[str, object]:
-        captured["method"] = method
-        captured["params"] = params
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_result_v0",
-            "status": "applied",
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-
-    goal = {
-        "id": "goal-a",
-        "coordination": {
-            "runtime_shadow": {
-                "enabled": True,
-                "schema_version": RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION,
-                "provider": "file_v0",
-            }
-        },
-    }
-    result = _dispatch(tmp_path, goal, invoke)
-
-    assert result["status"] == "applied"
-    assert captured["method"] == RUNTIME_SHADOW_METHOD
-    params = captured["params"]
-    assert isinstance(params, dict)
-    assert params["runtime_root"] == str(tmp_path.resolve())
-    assert params["operation_id"] == "todo:goal-a:todo_one:v1"
-
-
-def test_runtime_shadow_failure_never_changes_primary_truth(tmp_path: Path) -> None:
-    goal = {
-        "id": "goal-a",
-        "coordination": {
-            "runtime_shadow": {
-                "enabled": True,
-                "schema_version": RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION,
-                "provider": "file_v0",
-            }
-        },
-    }
-
-    def fail(*_args) -> object:
-        raise RuntimeError("runtime unavailable")
-
-    result = _dispatch(tmp_path, goal, fail)
-
-    assert result["status"] == "failed"
-    assert result["reason_code"] == "shadow_runtime_unavailable"
-    assert result["primary_writeback_preserved"] is True
-    assert result["decision_read_from_shadow"] is False
 
 
 def test_runtime_shadow_inspection_is_default_off_and_forwards_compact_projection(

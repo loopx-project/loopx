@@ -13,7 +13,6 @@ from ..capabilities.pr_review_queue import (
     DEFAULT_REVIEW_PRIORITY,
     build_pull_request_review_queue_observation,
     normalize_fresh_audit_exact_heads,
-    normalize_review_priority,
 )
 from ..capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
@@ -47,6 +46,9 @@ from ..pr_review_merge_readiness import (
 )
 from ..registry import atomic_write_json, find_registry_goal
 from ..capabilities.pr_review_queue.goal_configuration import resolve_configuration
+from ..capabilities.pr_review_queue.order import configuration as order_configuration
+from ..thread_agent_binding import resolve_thread_agent_binding
+from ._host_thread import ambient_host_thread_id
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -154,12 +156,10 @@ def register_pr_review_command(
         "--review-priority",
         choices=("other-developers-first", "owner-first"),
         default=None,
-        help=(
-            "Scheduling preference for actionable PRs. Defaults to the configured "
-            "pull_request_review machine capability (other-developers-first when "
-            "unset); use owner-first to prioritize the authenticated reviewer's own PRs."
-        ),
+        help="Deprecated alias: other-developers-first maps to forward; owner-first maps to reverse (complete actionable queue).",
     )
+    parser.add_argument("--review-order", choices=("forward", "reverse"), help="Override this call's configured review direction. Reverse inverts the complete actionable forward queue.")
+    parser.add_argument("--agent-id", help="Registered Goal Agent whose capability direction is used; a bound Codex App thread is resolved automatically.")
     parser.add_argument(
         "--since",
         help="Only include PRs active since this ISO timestamp or YYYY-MM-DD date.",
@@ -264,7 +264,19 @@ def handle_pr_review_command(
             goal = find_registry_goal(load_registry(registry_path), goal_id)
             if goal is None:
                 raise ValueError("PR review Goal was not found: " + goal_id)
-        review_configuration = resolve_configuration(goal, machine_configuration)
+        review_agent_id = getattr(args, "agent_id", None)
+        if review_agent_id and goal is None:
+            raise ValueError("--agent-id requires --goal-id")
+        thread = ambient_host_thread_id("codex-app")
+        if goal is not None and thread:
+            binding = resolve_thread_agent_binding(goal, host_surface="codex-app", thread_id=thread)
+            if binding["status"] == "conflict":
+                raise ValueError("PR review thread has conflicting Agent bindings")
+            if binding["status"] == "bound":
+                if review_agent_id and review_agent_id != binding["agent_id"]:
+                    raise ValueError("PR review --agent-id conflicts with the current thread binding")
+                review_agent_id = binding["agent_id"]
+        review_configuration = resolve_configuration(goal, machine_configuration, review_agent_id)
         wait_for_ci = review_configuration["wait_for_ci"]
         ci_options: dict[str, Any] = {"wait_for_ci": False} if not wait_for_ci else {}
         if getattr(args, "check_approval_closeout", None):
@@ -456,10 +468,13 @@ def handle_pr_review_command(
                 "cannot be combined with --since"
             )
         explicit_review_priority = getattr(args, "review_priority", None)
-        if explicit_review_priority is not None:
-            resolved_review_priority = normalize_review_priority(explicit_review_priority)
-        else:
-            resolved_review_priority = normalize_review_priority(review_configuration["review_priority"])
+        explicit_review_order = getattr(args, "review_order", None)
+        if explicit_review_priority is not None and explicit_review_order is not None:
+            raise ValueError("--review-order and legacy --review-priority cannot be combined")
+        selected_order = order_configuration({"action": "normalize", "configuration":
+            {"review_order": explicit_review_order} if explicit_review_order is not None else
+            {"review_priority": explicit_review_priority} if explicit_review_priority is not None else
+            {"review_order": review_configuration["review_order"]}})["review_order"]
         previous_observation = None
         checkpoint_digest = None
         if args.observation_state_file:
@@ -577,11 +592,19 @@ def handle_pr_review_command(
             fresh_audit_exact_heads=args.fresh_audit_exact_head,
             target_exact_heads=target_exact_heads,
             review_priority=resolved_review_priority,
+            review_order=selected_order,
+            owner_logins=review_configuration.get("owner_logins", []),
             wait_for_ci=wait_for_ci,
             readiness_observations=readiness_observations,
         )
         payload["request"]["goal_id"] = goal_id
         payload["request"]["review_configuration"] = review_configuration
+        payload["request"]["agent_id"] = review_agent_id
+        payload["request"]["review_order"] = selected_order
+        # Retained for readers of the old packet, while review_order is the
+        # execution authority and reverses time/ties as well as author tiers.
+        payload["request"]["review_priority"] = "owner-first" if selected_order == "reverse" else "other-developers-first"
+        payload["request"]["review_order_source"] = "command_override" if explicit_review_order is not None or explicit_review_priority is not None else review_configuration["order_source"]
         payload["request"]["readiness_observation_count"] = len(
             readiness_observations
         )
@@ -595,6 +618,8 @@ def handle_pr_review_command(
                 projected_exact_heads=args.projected_exact_head,
                 authenticated_developer_login=reviewer_login,
                 review_priority=resolved_review_priority,
+                review_order=selected_order,
+                owner_logins=payload["scheduling_policy"].get("owner_logins", []),
             )
             payload["autonomous_review"] = autonomous_review
             payload["request"]["autonomous_observation"] = True
@@ -636,7 +661,7 @@ def handle_pr_review_command(
             "request": {
                 "schema_version": "loopx_pr_review_command_request_v0",
                 "command": "/loopx-pr-review",
-                "cli_command": "loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open|merged|all] [--review-priority other-developers-first|owner-first] [--since ISO]",
+                "cli_command": "loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open|merged|all] [--goal-id GOAL --agent-id AGENT] [--review-order forward|reverse] [--since ISO]",
                 "repository": args.repo,
                 "limit": max(1, args.limit),
                 "state_filter": resolved_state_filter,

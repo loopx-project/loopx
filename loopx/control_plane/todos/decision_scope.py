@@ -296,35 +296,6 @@ def build_required_decision_scope_repair_hint(
     return result
 
 
-def decision_scope_covers(gate_scope: Any, required_scope: Any) -> bool:
-    gate = normalize_todo_decision_scope(gate_scope)
-    required = normalize_todo_decision_scope(required_scope)
-    if not gate or not required:
-        return False
-    result = _evaluate("covers", gate_scope=gate, required_scope=required)
-    if not isinstance(result, bool):
-        raise TypeError("invalid typed decision scope covers projection")
-    return result
-
-
-def decision_scope_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
-    return _projection(
-        "scope_relation",
-        _evaluate("scope_relation", gate=_facts(gate), item=_facts(agent_item)),
-        schema_versions=frozenset({DECISION_SCOPE_RELATION_SCHEMA_VERSION}),
-        nullable=True,
-    )
-
-
-def exact_todo_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
-    return _projection(
-        "exact_relation",
-        _evaluate("exact_relation", gate=_facts(gate), item=_facts(agent_item)),
-        schema_versions=frozenset({TODO_GATE_RELATION_SCHEMA_VERSION}),
-        nullable=True,
-    )
-
-
 def todo_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
     return _optional_relation(
         "relation",

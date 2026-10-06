@@ -17,7 +17,6 @@ from loopx.control_plane.coordination.runtime_shadow import (
     RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION,
     bootstrap_coordination_runtime_shadow,
     build_runtime_shadow_source_snapshot,
-    dispatch_coordination_runtime_shadow,
     inspect_coordination_runtime_shadow,
     read_coordination_runtime_shadow_todo_candidate,
     rollback_coordination_runtime_shadow,
@@ -303,6 +302,44 @@ def test_pre_send_connection_failure_does_not_remove_live_locator(
     assert json.loads(info_path.read_text(encoding="utf-8")) == info
 
 
+def test_pre_send_connection_failure_waits_for_retiring_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fingerprint = "c" * 64
+    retiring = {"token": "retiring"}
+    replacement = {"token": "replacement"}
+    observations = iter([retiring, retiring, None, None])
+    requests = []
+
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_read_info",
+        lambda *_args, **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_start_runtime",
+        lambda **_kwargs: replacement,
+    )
+    monkeypatch.setattr(effect_runtime.time, "sleep", lambda _seconds: None)
+
+    def request(info: object, **_kwargs: object) -> dict:
+        requests.append(info)
+        if info == retiring:
+            raise ConnectionRefusedError("fixture retired before send")
+        return {"result": {"ready": True}}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", request)
+
+    assert effect_runtime.effect_runtime_result("runtime.ping", {}) == {"ready": True}
+    assert requests == [retiring, replacement]
+
+
 def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundary(
     tmp_path: Path,
     monkeypatch,
@@ -319,8 +356,8 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         },
     }
     request = {
-        "goal": goal,
-        "runtime_root": tmp_path / "state",
+        "schema_version": "loopx_coordination_runtime_shadow_commit_v0",
+        "runtime_root": str(tmp_path / "state"),
         "goal_id": "shadow-goal",
         "operation_id": "todo-shadow:cross-runtime",
         "event_kind": "todo_claim",
@@ -339,8 +376,12 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         },
     }
 
-    applied = dispatch_coordination_runtime_shadow(**request)
-    replayed = dispatch_coordination_runtime_shadow(**request)
+    applied = effect_runtime.effect_runtime_result(
+        "coordination.runtime_shadow.commit", request,
+    )
+    replayed = effect_runtime.effect_runtime_result(
+        "coordination.runtime_shadow.commit", request,
+    )
     read_candidate = read_coordination_runtime_shadow_todo_candidate(
         goal=goal,
         runtime_root=tmp_path / "state",
@@ -349,10 +390,11 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         projection=request["projection"],
     )
 
-    assert applied["status"] == "failed"
-    assert applied["reason_code"] == "legacy_lineage_read_only"
-    assert replayed["status"] == "failed"
-    assert replayed["reason_code"] == "legacy_lineage_read_only"
+    for result in (applied, replayed):
+        assert result["status"] == "failed"
+        assert result["reason_code"] == "legacy_lineage_read_only"
+        assert result["primary_writeback_preserved"] is True
+        assert result["decision_read_from_shadow"] is False
     assert read_candidate["read_candidate_qualified"] is False
     assert read_candidate["decision_read_from_shadow"] is False
     assert not (tmp_path / "state/authority-shadow/file-v0").exists()
@@ -777,6 +819,52 @@ def test_dead_startup_lock_is_reclaimed_without_waiting_for_age_timeout(
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
+def test_live_startup_lock_is_not_reclaimed_after_age_threshold(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "f" * 64
+    info_path = runtime_dir / "runtime.json"
+    lock = runtime_dir / f"start-{fingerprint[:16]}.lock"
+    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    stale = time.time() - 11
+    os.utime(lock, (stale, stale))
+    clock = {"monotonic": 0.0}
+
+    def unexpected_launch(*_args, **_kwargs):
+        raise AssertionError("a live startup lock owner must not be replaced")
+
+    def sleep(seconds: float) -> None:
+        clock["monotonic"] += seconds
+
+    monkeypatch.setattr(effect_runtime, "_node_executable", lambda: "node")
+    monkeypatch.setattr(effect_runtime.subprocess, "Popen", unexpected_launch)
+    monkeypatch.setattr(effect_runtime, "STARTUP_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(effect_runtime, "STARTUP_POLL_SECONDS", 0.005)
+    monkeypatch.setattr(
+        effect_runtime,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock["monotonic"],
+            sleep=sleep,
+            time=time.time,
+        ),
+    )
+
+    with pytest.raises(
+        effect_runtime.EffectRuntimeStartupError,
+        match="startup lock timed out",
+    ):
+        effect_runtime._start_runtime(
+            fingerprint=fingerprint,
+            info_path=info_path,
+        )
+
+    assert lock.read_text(encoding="utf-8") == f"{os.getpid()}\n"
+
+
 def test_runtime_ready_budget_starts_after_start_lock_acquisition(
     tmp_path: Path,
     monkeypatch,
@@ -840,6 +928,65 @@ def test_runtime_ready_budget_starts_after_start_lock_acquisition(
         == ready_info
     )
     assert clock["monotonic"] == 1.5
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        # Windows rejects replacement of an occupied directory with EPERM/EACCES;
+        # preserve that platform's shared permission diagnostic rather than
+        # requiring the Unix EISDIR classification.
+        ("directory", "io_permission_denied" if os.name == "nt" else "io_is_directory"),
+        ("live_lock", "mutation_lock_timeout"),
+    ],
+)
+def test_locator_publication_failure_surfaces_safe_typed_startup_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+    failure: str,
+    expected_code: str,
+) -> None:
+    marker = "private-locator-fixture"
+    runtime_dir = tmp_path / marker
+    runtime_dir.mkdir(mode=0o700)
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    lock_path = Path(f"{info_path}.ts-effect.lock")
+    lock_owner = {"pid": os.getpid(), "token": "private-lock-token-fixture"}
+    if failure == "directory":
+        info_path.mkdir()
+    else:
+        lock_path.write_text(json.dumps(lock_owner), encoding="utf-8")
+
+    captures: list[bytes] = []
+    read_stderr = effect_runtime._read_startup_stderr
+
+    def capture(stream):
+        raw = read_stderr(stream)
+        captures.append(raw)
+        return raw
+
+    monkeypatch.setattr(effect_runtime, "_read_startup_stderr", capture)
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as raised:
+        effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+
+    assert raised.value.diagnostic_code == expected_code
+    assert "could not publish its startup locator" in str(raised.value)
+    assert len(captures) == 1
+    envelope = json.loads(captures[0])
+    assert envelope == {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION,
+        "code": expected_code,
+        "message": str(raised.value),
+    }
+    assert marker not in captures[0].decode()
+    assert lock_owner["token"] not in captures[0].decode()
+    assert not list(runtime_dir.glob("start-*.lock"))
+    if failure == "directory":
+        assert info_path.is_dir(), "startup diagnostics must not repair a foreign locator"
+    else:
+        assert not info_path.exists(), "a failed publisher must not claim readiness"
+        assert json.loads(lock_path.read_text()) == lock_owner
 
 
 def test_early_runtime_exit_surfaces_stable_startup_diagnostic(

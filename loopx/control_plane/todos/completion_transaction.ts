@@ -502,6 +502,15 @@ export function reduceTodoCompletionTransaction(
     metadataResult.updates,
     "completion metadata updates",
   );
+  // Checkpoint the committed phase, not its clock tick. Persisting this id
+  // lets crash recovery and later reads retain the original hook identity.
+  updates.completion_receipt_id = `tcw_${canonicalAuthoritySha256({
+    goal_id: request.goal_id,
+    todo_id: request.todo_id,
+    completion_identity_key: identity.key,
+    continuation: completionStateResult.continuation,
+    recovery: completionStateResult.recovery,
+  })}`;
   const completionPolicy = evaluateCompletionPolicy(
     request.completion_policy_request,
   );

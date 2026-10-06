@@ -401,6 +401,95 @@ def test_composition_retry_journal_append_is_idempotent_and_terminal(
     assert len(rows) == 3
 
 
+def test_append_composition_retry_receipt_survives_a_torn_journal_tail(
+    tmp_path: Path,
+) -> None:
+    journal_path = composition_retry_receipt_log_path(tmp_path, "goal-1")
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    journal_path.write_bytes(b'{"interrupted":')
+    receipt = build_composition_retry_receipt(
+        goal_id="goal-1",
+        event_kind="todo_complete",
+        identity=_identity(),
+        state_version="vision-revision-2",
+        committed_at="2026-09-06T00:00:00Z",
+        hook_identities=[],
+        error_code="dispatch_failed",
+    )
+
+    appended, changed = append_composition_retry_receipt(journal_path, receipt)
+
+    assert changed is True
+    assert appended == receipt
+    assert pending_composition_retry_receipts(tmp_path, "goal-1") == [receipt]
+
+
+def test_append_composition_retry_receipt_separates_a_valid_unterminated_row(
+    tmp_path: Path,
+) -> None:
+    journal_path = composition_retry_receipt_log_path(tmp_path, "goal-1")
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    first = build_composition_retry_receipt(
+        goal_id="goal-1",
+        event_kind="todo_complete",
+        identity=_identity(),
+        state_version="vision-revision-1",
+        committed_at="2026-09-06T00:00:00Z",
+        hook_identities=[],
+        error_code="dispatch_failed",
+    )
+    second_identity = {**_identity(), "effect_id": "goal-1:agent-1:todo-1:turn-2"}
+    second = build_composition_retry_receipt(
+        goal_id="goal-1",
+        event_kind="todo_complete",
+        identity=second_identity,
+        state_version="vision-revision-2",
+        committed_at="2026-09-06T00:01:00Z",
+        hook_identities=[],
+        error_code="dispatch_failed",
+    )
+    journal_path.write_text(
+        json.dumps(first, sort_keys=True, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    append_composition_retry_receipt(journal_path, second)
+
+    assert pending_composition_retry_receipts(tmp_path, "goal-1") == [first, second]
+
+
+def test_settle_composition_retry_receipt_survives_a_torn_journal_tail(
+    tmp_path: Path,
+) -> None:
+    journal_path = composition_retry_receipt_log_path(tmp_path, "goal-1")
+    receipt = build_composition_retry_receipt(
+        goal_id="goal-1",
+        event_kind="todo_complete",
+        identity=_identity(),
+        state_version="vision-revision-2",
+        committed_at="2026-09-06T00:00:00Z",
+        hook_identities=[],
+        error_code="dispatch_failed",
+    )
+    append_composition_retry_receipt(journal_path, receipt)
+    with journal_path.open("ab") as handle:
+        handle.write(b'{"interrupted":')
+
+    settled, changed = settle_composition_retry_receipt(
+        journal_path,
+        goal_id="goal-1",
+        event_kind="todo_complete",
+        identity=_identity(),
+        state_version="vision-revision-2",
+        committed_at="2026-09-06T00:00:00Z",
+        hook_identities=[],
+    )
+
+    assert changed is True
+    assert settled["status"] == "settled"
+    assert pending_composition_retry_receipts(tmp_path, "goal-1") == []
+
+
 def test_settle_without_pending_receipt_is_a_noop(tmp_path: Path) -> None:
     journal_path = composition_retry_receipt_log_path(tmp_path, "goal-1")
     settled, appended = settle_composition_retry_receipt(

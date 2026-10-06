@@ -425,7 +425,7 @@ def manager_turn_context(
     }
     owner_scope = conversation["private_conversation"]
     scope = conversation["goal_ids"] if owner_scope else authorized_goal_ids
-    if not owner_scope and not scope:
+    if not owner_scope and not scope and not (conversation.get("bound_steward") is True and scope == []):
         return unavailable_manager_context(
             "external_authorization_unavailable",
             evidence_window=_evidence_window(
@@ -583,6 +583,8 @@ def manager_turn_context(
     ).hexdigest()
     if not owner_scope:
         result["authorization_scope_id"] = manager_authorization_scope_id(scope or [], runtime_root=runtime_root, channel_id=session.get("channel_id"))
+    if conversation.get("bound_steward") is True:
+        result["bound_steward"] = {"authorized": True, "goal_count": len(scope or []), "empty": scope == []}
     return result
 
 

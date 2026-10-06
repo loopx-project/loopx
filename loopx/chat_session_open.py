@@ -10,7 +10,9 @@ channel publishes:
   -- its explicit configuration, else its shipped default -- and its transcript
   is one conversation across whatever executor it currently resolves;
 * a Goal-scoped channel runs on ``DEFAULT_GOAL_AGENT_ID`` when the caller makes
-  no explicit pick.
+  no explicit pick;
+* an ordinary project channel resolves an exact host workspace reference through
+  Core and shares its managed Session without creating a Goal or steward scope.
 
 An explicit pick is the caller's own choice and always travels.
 """
@@ -31,11 +33,12 @@ def open_chat_session(
     *,
     controller: Any,
     context_kind: str,
-    goal_id: str,
+    goal_id: str | None,
     work_dir: Path,
     objective: str,
     mode: str,
     requested_endpoint: str = "",
+    project_ref: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Return ``(session, resumed)`` for one entry-point request."""
 
@@ -47,6 +50,15 @@ def open_chat_session(
             executor_endpoint_id=requested_endpoint or None,
             mode=mode,
         )
+    if context_kind == "project":
+        if goal_id is not None or not project_ref:
+            raise ValueError("ordinary project conversation requires project_ref and no Goal")
+        return controller.open_session(
+            goal_id=None, agent_id=requested_endpoint or DEFAULT_GOAL_AGENT_ID,
+            work_dir=work_dir, objective=objective, mode=mode, project_ref=project_ref,
+        )
+    if context_kind != "goal":
+        raise ValueError("unknown conversation context")
     return controller.open_session(
         goal_id=goal_id,
         agent_id=requested_endpoint or DEFAULT_GOAL_AGENT_ID,

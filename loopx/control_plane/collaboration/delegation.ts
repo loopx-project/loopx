@@ -55,8 +55,15 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
       "Todo without canonical validation authority cannot supply a declaration");
     if (requirements === null) return unavailable("independent_delegation_validation_required");
   }
-  return {todo_id: todo.todo_id, state: "ready",
-    source: requirements === null ? "todo_validation" : "goal_acceptance",
+  const source = requirements === null ? "todo_validation" : "goal_acceptance";
+  // Definition identity, not a stored success or independent-verifier receipt.
+  // Host validation must pass before exposing this path-free current observation.
+  const observation = {source,
+    basis_sha256: canonicalAuthoritySha256({todo_id: todo.todo_id, requirements, effects}),
+    check_count: effects.length,
+    pinned_file_count: effects.reduce((count, effect) => count
+      + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0)};
+  return {todo_id: todo.todo_id, state: "ready", source, observation,
     effects, canonical_done: todo.done === true && todo.status === "done"};
 }
 export function selectDelegationBinding(params: JsonObject): JsonObject {

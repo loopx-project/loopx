@@ -7,6 +7,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from .control_plane.work_items.replan_history_codec import effective_turn_cadence_context
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.runtime.time import chronology_key, now_local_iso
 from .control_plane.goals.state_resolution import resolve_goal_state as resolve_goal_state
 from .control_plane.runtime.run_artifacts import run_file_stem as run_file_stem
@@ -27,6 +29,7 @@ from .control_plane.work_items.delivery_outcome import (
 from .control_plane.agents.workspace_guard import (
     capture_delivery_workspace,
 )
+from .control_plane.agents.delivery_workspace import qualify_delivery_workspace_isolation
 from .control_plane.quota.refresh_external_delivery import (
     finish_external_delivery_refresh, refresh_recovery_payload,
 )
@@ -122,7 +125,6 @@ from .control_plane.turn_driver.delivery_continuity import (
 
 DEFAULT_REFRESH_CLASSIFICATION = "state_refreshed"
 GOAL_PROGRESS_SCOPE = "goal"
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 PROGRESS_SCOPE_CHOICES = (GOAL_PROGRESS_SCOPE, AGENT_LANE_PROGRESS_SCOPE)
 BULLET_PREFIX_RE = re.compile(r"^(?:[-*]\s+|\d+[.)]\s+)")
 CHECKBOX_PREFIX_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+")
@@ -943,10 +945,6 @@ def refresh_state_run(
         explicit_peer_worktree_requirement = workspace_guard_policy.get(
             "peer_independent_worktree_required"
         )
-        peer_independent_worktree_required = multi_agent_goal and (
-            explicit_peer_worktree_requirement is None
-            or explicit_peer_worktree_requirement is True
-        )
         if normalized_agent_id and known_agents and normalized_agent_id not in known_agents:
             raise ValueError(
                 f"agent_id {normalized_agent_id!r} is not registered for goal {safe_goal_id!r}"
@@ -1058,6 +1056,11 @@ def refresh_state_run(
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
             registry_goal=registry_goal,
+            effective_turn_cadence=effective_turn_cadence_context(
+                registry_goal or {"id": safe_goal_id}, runtime_root,
+                registry_path=registry_path, goal_ref=goal_ref,
+                source_admission=source_admission,
+            ),
             # The acknowledgement is judged against the same sentinel-derived
             # obligation that status shows; `off` loads nothing.
             external_progress_review=external_progress_review_context(
@@ -1160,7 +1163,7 @@ def refresh_state_run(
         ):
             delivery_workspace = capture_delivery_workspace(
                 current_path=delivery_workspace_path,
-                peer_independent_worktree_required=peer_independent_worktree_required,
+                peer_independent_worktree_required=False,
                 local_goal_id=safe_goal_id,
                 local_project_root=resolved_project,
                 repository_source=(
@@ -1168,6 +1171,24 @@ def refresh_state_run(
                     if delivery_workspace_path is not None
                     else None
                 ),
+            )
+            selected_contract = {}
+            if settlement_identity is not None and settlement_identity.todo_id:
+                workspace_todo_fields = todo_fields
+                if workspace_todo_fields is None:
+                    workspace_todo_fields = parse_active_state_todos(
+                        state_text, goal=registry_goal, state_path=resolved_state_file,
+                        preferred_todo_ids={settlement_identity.todo_id},
+                        rollout_events=planning_events, item_limit=None,
+                    )
+                selected_contract = next((
+                    item for item in workspace_todo_fields.get("agent_todos", {}).get("items", [])
+                    if item.get("todo_id") == settlement_identity.todo_id
+                ), {})
+            delivery_workspace, peer_independent_worktree_required = qualify_delivery_workspace_isolation(
+                delivery_workspace, multi_agent_goal=multi_agent_goal,
+                explicit_peer_worktree_requirement=explicit_peer_worktree_requirement,
+                task_repository=selected_contract.get("task_repository"),
             )
             if (
                 peer_independent_worktree_required
@@ -1182,10 +1203,13 @@ def refresh_state_run(
                     "git worktree that produced it, or name that worktree with "
                     "--delivery-workspace-path"
                 )
-            if delivery_workspace_path is not None and delivery_workspace is None:
+            if delivery_workspace is None:
                 raise ValueError(
-                    "--delivery-workspace-path must identify the registered local goal "
-                    "workspace or a git checkout with a credential-free origin repository"
+                    "delivery workspace could not be verified; registered local Goal "
+                    f"workspace: {str(resolved_project)!r}. If this delivery belongs to "
+                    "that workspace, retry from it or pass it with --delivery-workspace-path. "
+                    "For a selected repository delivery, use the actual producing worktree; "
+                    "the registered Goal workspace does not replace that requirement."
                 )
         if checkpoint_supplement:
             # The supplemental row must not reattribute the original delivery to

@@ -79,10 +79,16 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl(
+    path: Path, *, raise_on_error: bool = False,
+) -> list[dict[str, Any]]:
     try:
         lines = path.read_bytes().split(b"\n")
+    except FileNotFoundError:
+        return []
     except OSError:
+        if raise_on_error:
+            raise
         return []
     rows: list[dict[str, Any]] = []
     for line in lines:
@@ -194,7 +200,7 @@ class ChatSessionStore(ChatIngressStore):
         self._session_locks: WeakValueDictionary[str, threading.Lock] = WeakValueDictionary()
         self._event_lock = threading.RLock()
         self._event_cache = ChatEventCache(self._event_lock)
-        self._event_pending: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
@@ -232,7 +238,7 @@ class ChatSessionStore(ChatIngressStore):
     def create_session(
         self,
         *,
-        goal_id: str,
+        goal_id: str | None,
         goal_instance_id: str | None = None,
         agent_id: str,
         adapter_kind: str,
@@ -245,6 +251,8 @@ class ChatSessionStore(ChatIngressStore):
         host_surface: str | None = None,
         attached_capabilities: dict[str, bool] | None = None,
         codex_home: str | None = None,
+        project_context: dict[str, Any] | None = None,
+        steward_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         token = _opaque_id(session_id or uuid.uuid4().hex, field="session_id")
@@ -270,7 +278,22 @@ class ChatSessionStore(ChatIngressStore):
             if str(key)
             in {"live_steering", "session_queue", "claim_wait", "reply_readback"}
         }
-        normalized_goal_id = _opaque_id(goal_id, field="goal_id")
+        if project_context is not None:
+            from .control_plane.effect_runtime import effect_runtime_result
+            selected = effect_runtime_result("collaboration.project.session_identity", {"context": project_context})
+            if goal_id is not None or goal_instance_id is not None or channel_id != selected["channel_id"] or normalized_mode != CHAT_SESSION_MODE_MANAGED:
+                raise ValueError("ordinary project Sessions require their exact channel and no Goal")
+            project_context = selected["context"]
+        if steward_context is not None:
+            from .control_plane.effect_runtime import effect_runtime_result
+            selected = effect_runtime_result("collaboration.steward.session_identity", {"context": steward_context})
+            if (project_context is not None or goal_id != "loopx-manager" or goal_instance_id is not None
+                    or channel_id != selected["channel_id"] or normalized_mode != CHAT_SESSION_MODE_MANAGED):
+                raise ValueError("bound steward Sessions require their exact role and audience")
+            steward_context = selected["context"]
+        normalized_goal_id = _opaque_id(goal_id, field="goal_id") if goal_id is not None else None
+        if normalized_goal_id is None and project_context is None:
+            raise ValueError("goal_id is required outside ordinary project Sessions")
         normalized_agent_id = _opaque_id(agent_id, field="agent_id")
         normalized_executor_endpoint_id = _opaque_id(
             executor_endpoint_id or agent_id,
@@ -290,6 +313,8 @@ class ChatSessionStore(ChatIngressStore):
             "schema_version": CHAT_SESSION_SCHEMA_VERSION,
             "session_id": token,
             "goal_id": normalized_goal_id,
+            **({"project_context": project_context} if project_context is not None else {}),
+            **({"steward_context": steward_context} if steward_context is not None else {}),
             **(
                 {
                     "goal_instance_id": _opaque_id(
@@ -346,6 +371,7 @@ class ChatSessionStore(ChatIngressStore):
                     "codex_home",
                     "manager_context_version",
                     "coordination_context_version",
+                    "external_conversation_binding_id",
                     "loopx_mode",
                     "loopx_tools", "loopx_executor",
                     "loopx_deliveries",
@@ -363,6 +389,11 @@ class ChatSessionStore(ChatIngressStore):
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "external_conversation_binding_id" in changes:
+                    identity = _opaque_id(changes["external_conversation_binding_id"], field="external_conversation_binding_id")
+                    if payload.get("session_mode") != CHAT_SESSION_MODE_ATTACHED or payload.get("external_conversation_binding_id") not in {None, identity}:
+                        raise ValueError("an attached Session cannot change its external audience")
+                    changes["external_conversation_binding_id"] = identity
                 if "coordination_context_version" in changes:
                     version = changes["coordination_context_version"]
                     if type(version) is not int or version < 1:
@@ -561,6 +592,12 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> dict[str, Any] | None:
+        """Return the newest resumable session row on one explicit channel.
+
+        Omitting ``channel_id`` pins the exact ``goal.<goal_id>`` channel:
+        a single namespace key, not a search over that goal's recorded
+        conversations. Use ``list_sessions`` for intentional discovery.
+        """
         candidates = self.resumable_session_candidates(
             goal_id=goal_id,
             agent_id=agent_id,
@@ -575,7 +612,12 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return matching storage facts without deciding Goal identity."""
+        """Return matching storage facts without deciding Goal identity.
+
+        Omitting ``channel_id`` pins the exact ``goal.<goal_id>`` channel:
+        a single namespace key, not a search over that goal's recorded
+        conversations. Use ``list_sessions`` for intentional discovery.
+        """
 
         return [
             candidate
@@ -594,7 +636,14 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return matching Session records without lifecycle filtering."""
+        """Return matching Session records without lifecycle filtering.
+
+        Omitting ``channel_id`` pins the exact ``goal.<goal_id>`` channel:
+        a single namespace key, not a search over that goal's recorded
+        conversations. Use ``list_sessions`` for intentional discovery.
+        Raises ``ValueError`` when ``channel_id`` and ``goal_id`` are both
+        omitted.
+        """
 
         if goal_id is None and channel_id is None:
             raise ValueError("channel_id is required when goal_id is omitted")
@@ -1004,13 +1053,19 @@ class ChatSessionStore(ChatIngressStore):
         *,
         client_turn_id: str,
         message: str,
+        attachments: list[dict[str, Any]] | None = None,
         goal_instance_id: str | None = None,
         ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
+        external_agent_target: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Persist one bounded follow-up without replacing the active Turn."""
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
+        from .chat_attachments import normalize_chat_image_attachments, validate_chat_turn_envelope
+        normalized_attachments = normalize_chat_image_attachments(attachments) or None
+        if normalized_attachments:
+            validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})
         session_path = self._session_path(session_id)
         with self._session_lock(session_id):
             with exclusive_file_lock(
@@ -1025,7 +1080,9 @@ class ChatSessionStore(ChatIngressStore):
                         identity="client_turn_id",
                         request={
                             "message": str(message),
+                            "attachments": normalized_attachments,
                             "origin": _opaque_id(origin, field="origin"),
+                            "external_agent_target": external_agent_target,
                         },
                     )
                     return existing, False
@@ -1058,7 +1115,9 @@ class ChatSessionStore(ChatIngressStore):
                     ),
                     "client_turn_id": client_id,
                     "status": "queued",
+                    **({"external_agent_target": external_agent_target} if external_agent_target is not None else {}),
                     "message": str(message),
+                    **({"attachments": normalized_attachments} if normalized_attachments else {}),
                     "origin": _opaque_id(origin, field="origin"),
                     "upstream_turn_id": None,
                     "response": None,
@@ -1091,6 +1150,7 @@ class ChatSessionStore(ChatIngressStore):
                 text=message,
                 turn_id=turn_id,
                 origin=origin,
+                attachments=normalized_attachments,
             )
             self.append_event(
                 session_id,
@@ -1169,6 +1229,7 @@ class ChatSessionStore(ChatIngressStore):
         *,
         host_claim_id: str | None = None,
         admitted_goal_instance_id: str | None = None,
+        admission_validator: Any | None = None,
     ) -> dict[str, Any] | None:
         """Atomically make the oldest live queued Turn active for its Session."""
 
@@ -1201,6 +1262,12 @@ class ChatSessionStore(ChatIngressStore):
                             raise ValueError(
                                 "active Turn Goal instance admission is invalid"
                             )
+                        # A committed claim is replayed to the exact host that
+                        # already owns it: the matching host claim id and the
+                        # Goal lifetime fence above are the authority. Fresh
+                        # audience eligibility is checked only when a queued
+                        # Turn is first admitted, so a revoked grant cannot
+                        # strand an execution the original host already owns.
                         return active
                     return None
                 for turn in self._settle_expired_queued_turns(
@@ -1208,6 +1275,12 @@ class ChatSessionStore(ChatIngressStore):
                     now=datetime.now(timezone.utc),
                 ):
                     turn_id = str(turn["turn_id"])
+                    if admission_validator is not None:
+                        try:
+                            admission_validator(turn)
+                        except (ValueError, OSError, KeyError):
+                            self.update_turn(session_id, turn_id, status="failed", error_code="external_agent_grant_unavailable", completed_at=utc_now())
+                            continue
                     if admitted_goal_instance_id is not None and (
                         turn.get("goal_instance_id") != admitted_goal_instance_id
                     ):
@@ -1643,7 +1716,7 @@ class ChatSessionStore(ChatIngressStore):
             "payload": payload,
         }
         with self._event_lock:
-            self._event_pending.setdefault(key, []).append(event)
+            self._event_pending.setdefault(key, []).append((event, uuid.uuid4().hex))
         if not buffered:
             self.flush_events(session_id, turn_id)
         return event
@@ -1662,24 +1735,79 @@ class ChatSessionStore(ChatIngressStore):
                     return flushed
                 try:
                     with exclusive_file_lock(path, agent_id="loopx-chat", operation="append_chat_events"):
-                        rows = self._event_rows_locked(session_id, turn_id)
-                        # Allocate after the last persisted sequence and append under the
-                        # same file lock: row order stays strictly increasing by sequence.
-                        # Compaction preserves this order but may leave sequence gaps.
-                        sequence = int(rows[-1].get("sequence") or 0) if rows else 0
-                        for event in pending:
-                            sequence += 1
-                            event["event_id"] = str(sequence)
-                            event["sequence"] = sequence
-                        _append_jsonl_rows(path, pending)
-                        if any(row["kind"] in TERMINAL_EVENT_KINDS for row in pending):
-                            self._event_cache.drop(key)
-                        else:
-                            self._event_cache.put(key, self._event_revision(path), [*rows, *pending])
+                        append_started = False
+                        try:
+                            uncertain = any("sequence" in event for event, _ in pending)
+                            rows = (
+                                _read_jsonl(path, raise_on_error=True)
+                                if uncertain
+                                else self._event_rows_locked(session_id, turn_id)
+                            )
+                            # A failed append may already have persisted all or part of
+                            # its batch. Match only this store's stable append ids; two
+                            # otherwise identical events are still separate writes.
+                            durable = (
+                                {
+                                    row["_append_id"]: row
+                                    for row in rows
+                                    if isinstance(row.get("_append_id"), str)
+                                }
+                                if uncertain
+                                else {}
+                            )
+                            # Allocate after the last persisted sequence under the same
+                            # file lock. Compaction may leave gaps; another writer may
+                            # have appended after a partial failed batch.
+                            sequence = int(rows[-1].get("sequence") or 0) if rows else 0
+                            to_append: list[dict[str, Any]] = []
+                            for event, append_id in pending:
+                                committed = durable.get(append_id)
+                                if committed is not None:
+                                    event["event_id"] = committed["event_id"]
+                                    event["sequence"] = committed["sequence"]
+                                    continue
+                                sequence += 1
+                                event["event_id"] = str(sequence)
+                                event["sequence"] = sequence
+                                to_append.append({**event, "_append_id": append_id})
+                            append_started = True
+                            _append_jsonl_rows(path, to_append)
+                            if any(event["kind"] in TERMINAL_EVENT_KINDS for event, _ in pending):
+                                self._event_cache.drop(key)
+                            else:
+                                self._event_cache.put(key, self._event_revision(path), [*rows, *to_append])
+                        except Exception:
+                            if not append_started:
+                                raise
+                            # Confirm visible writes before releasing the file lock:
+                            # another store may compact old events before our retry.
+                            try:
+                                written = {
+                                    row["_append_id"]: row
+                                    for row in _read_jsonl(path, raise_on_error=True)
+                                    if isinstance(row.get("_append_id"), str)
+                                }
+                            except OSError:
+                                pass  # Keep all uncertain events for a later retry.
+                            else:
+                                remaining = []
+                                for event, append_id in pending:
+                                    committed = written.get(append_id)
+                                    if committed is None:
+                                        remaining.append((event, append_id))
+                                    else:
+                                        event["event_id"] = committed["event_id"]
+                                        event["sequence"] = committed["sequence"]
+                                pending = remaining
+                            raise
                 except Exception:
+                    self._event_cache.drop(key)
                     with self._event_lock:
                         later = self._event_pending.get(key, [])
-                        self._event_pending[key] = [*pending, *later]
+                        if pending or later:
+                            self._event_pending[key] = [*pending, *later]
+                        else:
+                            self._event_pending.pop(key, None)
                     raise
                 flushed += len(pending)
 
@@ -1702,7 +1830,10 @@ class ChatSessionStore(ChatIngressStore):
         result = rows[start:]
         if rows and rows[-1].get("kind") in TERMINAL_EVENT_KINDS:
             self._event_cache.retain_terminal(key, rows)
-        return result
+        return [
+            {field: value for field, value in row.items() if field != "_append_id"}
+            for row in result
+        ]
 
     def compact_completed_events(self, *, older_than_hours: float = 24.0) -> int:
         """Drop replay-only deltas after the durable final message is old enough."""
@@ -1771,6 +1902,7 @@ class ChatSessionStore(ChatIngressStore):
                 else {}
             ),
             "channel_id": _session_channel(payload),
+            "project_ref": (payload.get("project_context") or {}).get("project_ref"),
             "manager_runtime": (
                 {
                     "schema_version": "manager_runtime_session_readback_v0",

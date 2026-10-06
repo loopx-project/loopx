@@ -12,6 +12,7 @@ from ..quota.turn_envelope import (
     ACTION_SIGNATURE_COVERAGE_V2,
     ACTION_SIGNATURE_COVERAGE_V3,
     ACTION_SIGNATURE_COVERAGE_V4,
+    ACTION_SIGNATURE_COVERAGE_V5,
 )
 
 
@@ -276,6 +277,22 @@ def _reward_memory_outcome_prompt_allowance(
     return 0
 
 
+def _heartbeat_peer_admission_migration_allowance(
+    row_id: str, base: dict[str, Any], candidate: dict[str, Any], metric: Metric,
+) -> int:
+    # Readable peer admission adds 117 chars on the same CLI fixture. Admit
+    # this reviewed transition once; ordinary growth limits resume at v1.
+    if (
+        row_id.startswith("surface/heartbeat_prompt_thin/")
+        and base.get("heartbeat_peer_admission_prompt_revision") is None
+        and candidate.get("heartbeat_peer_admission_prompt_revision")
+        == "heartbeat_peer_admission_v1"
+        and metric in {"chars", "utf8_bytes", "compact_payload_chars"}
+    ):
+        return 160
+    return 0
+
+
 def _heartbeat_user_language_migration_allowance(
     row_id: str,
     base: Mapping[str, Any],
@@ -402,6 +419,11 @@ def _action_signature_migration(
         (ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V4),
         (ACTION_SIGNATURE_COVERAGE_V2, ACTION_SIGNATURE_COVERAGE_V4),
         (ACTION_SIGNATURE_COVERAGE_V3, ACTION_SIGNATURE_COVERAGE_V4),
+        (ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V2, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V3, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V4, ACTION_SIGNATURE_COVERAGE_V5),
     }
     if not (
         isinstance(base_coverages, list)
@@ -763,6 +785,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 candidate,
                 metric,
             ),
+            _heartbeat_peer_admission_migration_allowance(row_id, base, candidate, metric),
             _heartbeat_user_language_migration_allowance(
                 row_id,
                 base,

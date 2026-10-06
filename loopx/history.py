@@ -19,6 +19,7 @@ from .control_plane.goals.activation import (
     normalize_goal_activation_state,
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
@@ -69,7 +70,6 @@ STATUS_NEUTRAL_CLASSIFICATIONS = {
     QUOTA_MONITOR_POLL_CLASSIFICATION,
     *PROMOTION_READINESS_CLASSIFICATIONS,
 }
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 REGISTRY_STATUS_FIELDS = (
     "waiting_on",
     "attention_status",
@@ -430,9 +430,7 @@ def collect_history(
             "adapter_kind": adapter.get("kind"),
             "adapter_status": adapter.get("status"),
             "coordination": meta.get("coordination") if isinstance(meta.get("coordination"), dict) else None,
-            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"))
-            if isinstance(meta.get("explore_graph"), dict)
-            else None,
+            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"), (meta.get("spawn_policy") or {}).get("explore_harness")) if meta.get("explore_graph") is not None or (meta.get("spawn_policy") or {}).get("explore_harness") else None,
             "spawn_policy": meta.get("spawn_policy") if isinstance(meta.get("spawn_policy"), dict) else None,
             "execution_profile": compact_execution_profile(meta.get("execution_profile")) if registry_member else None,
             "control_plane": compact_control_plane_policy(meta.get("control_plane")) if registry_member else None,

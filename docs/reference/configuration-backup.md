@@ -91,6 +91,9 @@ summary or dropping unknown fields.
 The HTTP restore path uses the existing 64 MiB local-snapshot budget, without
 changing the 64 kB ordinary request budget. Oversize or invalid envelopes reject
 without partial recovery; CLI/effect transport keeps its existing bounds.
-Restored files use owner-only permissions. POSIX checkpoint tests and the
-packaged browser journey do not qualify native Windows execution, provider
-promotion, a destination machine or long-duration SQLite operation.
+Restored checkpoint files use owner-only POSIX modes. Windows ACL behavior
+has not been independently qualified; choose a private destination directory.
+Native Windows tests cover the configuration-only CLI export/verify/restore and
+local HTTP checkpoint with UTF-8 values. The packaged browser journey, full
+state backup, provider promotion, a destination machine and long-duration SQLite
+operation remain separate qualifications.

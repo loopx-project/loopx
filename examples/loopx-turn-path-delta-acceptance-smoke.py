@@ -27,7 +27,7 @@ MARKER = "docs/path-delta-route.txt"
 def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
-    workspace = root / "workspace"
+    workspace = project
     runtime.mkdir(parents=True)
     (workspace / "docs").mkdir(parents=True)
 
@@ -257,7 +257,7 @@ def main() -> int:
         routine = next(
             record
             for record in records
-            if record.get("classification") == "fixture_routine_replan"
+            if record.get("classification") == "replan_noop"
         )
         path_delta = material["agent_vision"]["path_delta"]
         assert path_delta["schema_version"] == "goal_path_delta_v0", path_delta

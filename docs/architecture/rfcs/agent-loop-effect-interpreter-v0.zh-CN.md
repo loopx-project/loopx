@@ -296,6 +296,20 @@ M7 只有在至少产生一个下列最终 effect 时才有理由存在：
 
 配额收尾适配现在消费 TS readback 按回执归约的结算进度，不再独立把存在 spend run 当作已结算。正常刷新、重放和扣款响应共享该投影；可执行命令绑定原 Agent 和路由。补回执复用现有幂等 writer。这是有界的 M7.4 接入，没有增加共享 executor 或 authority store，也不证明 Todo 终态或 Goal 验收完成。
 
+R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity、带条件的步骤顺序和
+宿主交接。签名覆盖 v5 能检测计划被删除或修改；没有计划的输入保留原覆盖版本。
+真实 CLI 验证覆盖提前扣额度被拒绝、原 Turn 写回和结算一次，以及幂等重放。
+这补上了投影缺口；同 Turn 缓存详情、普通轮与 replan 上下文选择、模型行为收益
+尚未验收，8 KiB 目标和交付时增长检查保持不变。见
+[TurnEnvelope](../../reference/protocols/turn-envelope-v0.md)。
+
+共享结算命令 renderer 现在在生成的步骤子命令前加入全局 JSON 输出选项，包含
+写回后的恢复命令。App heartbeat、外部 CLI 和 visible Goal 无需由调用者补插
+参数；真实 CLI 测试覆盖完整包/短包一致、写回前拒绝和重放只扣费一次。这是
+传输修正，不代表 R5 模型上下文效率已验收，也不改变类型化结算规则。
+
+现有 R5 CLI 保存完整决策后再投影短包；每次 guard 使用独立私有目录，补读不重跑准入。默认关闭的 heartbeat renderer/shared worker 接入现已覆盖明确的 host-owned Turn：同轮选择保留捕获入口，真实 CLI 验证重入和一次结算。Python 仅适配文件与命令传输，复用 TypeScript 决策 owner。原生 Goal 自动 begin-Turn、安装态 App/Lark/UI、模型 token/IO 与决策质量仍未验收；不据此变更现有实验。参见 [TurnEnvelope 捕获契约](../../reference/protocols/turn-envelope-v0.md)。
+
 ### 还缺什么
 
 - 通用共享 executor 被有意保留为空。当前 adapter 共享 plan/receipt algebra，却拥有不同的执行边界，因此 M7.3 应以 no-follow-up 关闭，而不是用推测性 framework 填充。

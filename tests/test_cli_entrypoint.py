@@ -195,6 +195,41 @@ assert "loopx.cli" not in sys.modules
 	assert completed.returncode == 0, completed.stderr
 
 
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+def test_command_reference_does_not_require_default_runtime_route(
+	tmp_path: Path, module: str,
+) -> None:
+	home = tmp_path / "home"
+	for root in (home / ".loopx", home / ".codex" / "loopx"):
+		(root / "owned-state").mkdir(parents=True)
+	cwd = tmp_path / "cwd"
+	cwd.mkdir()
+	script = f"""
+import contextlib
+import io
+import json
+import os
+
+os.environ["HOME"] = {str(home)!r}
+os.environ["LOOPX_USAGE_PING"] = "0"
+os.chdir({str(cwd)!r})
+
+from {module} import main
+
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    exit_code = main(["commands", "--format", "json"])
+
+assert exit_code == 0
+payload = json.loads(output.getvalue())
+assert payload["schema_version"] == "loopx_command_reference_v0"
+assert payload["groups"]
+"""
+	completed = run_isolated_script(script)
+
+	assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
 	("argv", "registration_module", "handler_module"),
 	[

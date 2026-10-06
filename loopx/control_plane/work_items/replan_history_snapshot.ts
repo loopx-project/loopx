@@ -8,11 +8,11 @@ import { isAbsolute } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
-import { projectReplanHistory } from "./replan_history.ts";
+import { projectSettledReplanHistory } from "./replan_history_settlement.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export async function projectReplanHistorySnapshot(value: unknown): Promise<JsonObject> {
-  return projectReplanHistory(await readReplanSnapshot(value));
+  return projectSettledReplanHistory(await readReplanSnapshot(value));
 }
 
 /** Shared local transport; the requesting typed owner still interprets the facts. */

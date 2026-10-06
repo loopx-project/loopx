@@ -74,5 +74,4 @@ def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
         "agent_id": after["agent_id"],
         "state_readback_verified": True,
         "execution_owner": "caller",
-        "planning_session_reused_for_execution": False,
     }

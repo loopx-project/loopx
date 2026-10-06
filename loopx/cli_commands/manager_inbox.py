@@ -6,6 +6,7 @@ from ..agent_registry import registered_agent_ids_for_goal
 from ..capabilities.manager_context import (
     acknowledge,
     configure_delivery_target,
+    configure_delivery_scope,
     configure_evidence_scope,
 )
 from ..control_plane.projects.registry_codec import load_project_registry
@@ -28,6 +29,7 @@ def register_manager_inbox(subparsers, add_format):
             "report",
             "status",
             "configure-read-scope",
+            "configure-delivery-scope",
             "configure-ssh-read-scope",
             "grant-delivery-target",
             "revoke-delivery-target",
@@ -54,6 +56,8 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--channel-id")
     parser.add_argument("--ssh-host")
     parser.add_argument("--read-goal-id", action="append", default=[])
+    parser.add_argument("--local-delivery-scope", choices=("all_registered", "selected"))
+    parser.add_argument("--sender-id", help="For configuring a new delivery source: its independently verified sender.")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--request-id")
     parser.add_argument(
@@ -74,6 +78,16 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        local_delivery_scope = getattr(args, "local_delivery_scope", None)
+        sender_id = getattr(args, "sender_id", None)
+        if args.manager_inbox_action != "configure-delivery-scope" and (local_delivery_scope is not None or sender_id is not None):
+            raise ValueError("--local-delivery-scope and --sender-id are only supported for configure-delivery-scope")
+        if args.manager_inbox_action == "configure-delivery-scope":
+            result = configure_delivery_scope(runtime_root, channel=args.channel_id or "",
+                local_delivery_scope=local_delivery_scope or "", sender_id=sender_id,
+                execute=args.execute)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if getattr(args, "update_id", None) is not None and args.manager_inbox_action != "report":
             raise ValueError("--update-id is only supported for report")
         if getattr(args, "result_key", None) is not None and args.manager_inbox_action != "acknowledge-return":

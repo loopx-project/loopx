@@ -386,6 +386,7 @@ def handle_support_control_command(
                 visible_goal_host=args.visible_goal_host,
                 turn_granularity=turn_granularity,
                 turn_instance_id=args.turn_instance_id,
+                decision_output_root=args.decision_output_root,
                 reward_memory_enabled=reward_memory_enabled,
             )
             if args.bootstrap and payload.get("ok"):
@@ -622,6 +623,8 @@ def handle_support_control_command(
             if bool(getattr(args, "replace_existing_loopx_chat", False)):
                 replace_existing_loopx_chat(args.host, args.port)
             serve_chat(
+                project_workspace_grant=args.project_workspace_grant,
+                private_reactions=not getattr(args, "no_private_reactions", False),
                 registry_path=chat_registry_path,
                 runtime_root_override=args.runtime_root,
                 scan_roots=scan_roots,

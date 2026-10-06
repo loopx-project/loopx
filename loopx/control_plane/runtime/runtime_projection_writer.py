@@ -9,6 +9,22 @@ from ...history import load_index, reserve_unique_run_paths
 from .time import now_local_iso
 
 
+def _matches_complete_projection(
+    item: dict[str, Any],
+    *,
+    marker_field: str,
+    identity_fields: tuple[str, ...],
+    identity: tuple[Any, ...],
+) -> bool:
+    marker = item.get(marker_field)
+    return (
+        isinstance(marker, dict)
+        and tuple(marker.get(field) for field in identity_fields) == identity
+        and item.get("json_exists") is True
+        and item.get("markdown_exists") is True
+    )
+
+
 def write_compact_runtime_projection(
     *,
     target_runtime_root: Path,
@@ -47,10 +63,12 @@ def write_compact_runtime_projection(
     with exclusive_run_index_lock(index_path, operation="runtime_projection_append"):
         existing, _ = load_index(index_path)
         for item in existing:
-            item_marker = item.get(marker_field)
-            if not isinstance(item_marker, dict):
-                continue
-            if tuple(item_marker.get(field) for field in identity_fields) == identity:
+            if _matches_complete_projection(
+                item,
+                marker_field=marker_field,
+                identity_fields=identity_fields,
+                identity=identity,
+            ):
                 result.update(
                     {
                         "status": "already_current",
@@ -79,9 +97,12 @@ def write_compact_runtime_projection(
 
         rows, _ = load_index(index_path)
         readback_verified = any(
-            isinstance(item.get(marker_field), dict)
-            and tuple(item[marker_field].get(field) for field in identity_fields)
-            == identity
+            _matches_complete_projection(
+                item,
+                marker_field=marker_field,
+                identity_fields=identity_fields,
+                identity=identity,
+            )
             for item in rows
         )
         if not readback_verified:

@@ -200,7 +200,10 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file.name,
-                        "adapter": {"kind": "harness_self_improvement"},
+                        "adapter": {
+                            "kind": "harness_self_improvement",
+                            "status": "connected-read-only",
+                        },
                         "quota": {
                             "compute": 1.0,
                             "window_hours": 24,
@@ -464,7 +467,10 @@ def test_real_mcp_terminal_completion_closes_out_after_spend(
 
 
 @pytest.mark.parametrize("lost_after", ["lifecycle", "writeback", "spend"])
-def test_real_mcp_completion_recovers_a_lost_mutation_response(tmp_path, lost_after):
+def test_real_mcp_completion_recovers_a_lost_mutation_response(
+    tmp_path: Path,
+    lost_after: str,
+) -> None:
     """The real write commits, but its caller sees a failure: retry must not pay twice."""
     registry, _ = _write_fixture(tmp_path)
     added = add_goal_todo(
@@ -521,7 +527,9 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(tmp_path, lost_af
     assert status["quota"]["spent_slots"] == 1
 
 
-def test_real_mcp_links_existing_successor_without_creating_another_todo(tmp_path):
+def test_real_mcp_links_existing_successor_without_creating_another_todo(
+    tmp_path: Path,
+) -> None:
     registry, state_file = _write_fixture(tmp_path)
     ids = [str(add_goal_todo(
         registry_path=registry, goal_id=GOAL_ID, role="agent", text=text,

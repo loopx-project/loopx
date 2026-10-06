@@ -12,6 +12,7 @@ export type AttentionDetails = {
   reason: string | null;
   evidence: string | null;
   blocksAgent: string | null;
+  boundAgent: string | null;
   unblocksTodoId: string | null;
   decisionScope: { kind: string; granularity: string; scopeKey: string } | null;
   supersededBy: string | null;
@@ -39,6 +40,7 @@ export function attentionDetails(todo: Record<string, unknown>): AttentionDetail
     reason: text(todo.note),
     evidence: text(todo.evidence),
     blocksAgent: text(todo.blocks_agent),
+    boundAgent: text(todo.bound_agent),
     unblocksTodoId: text(todo.unblocks_todo_id),
     decisionScope: kind && granularity && scopeKey ? { kind, granularity, scopeKey } : null,
     supersededBy,

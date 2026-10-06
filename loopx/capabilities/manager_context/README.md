@@ -23,6 +23,64 @@ Keep the policy private (0600); do not commit it. A read grant without a sender
 grant is insufficient. This does not grant remote delivery, evidence reads,
 worker launch, Todo/lease changes or protected operations.
 
+### Executing already bound work
+
+An operator may separately authorize an external audience to select existing
+governed task bindings. Add an `execution_bindings` list to that exact private
+`sources[channel]` row (retain its independently verified `sender_ids`):
+
+```json
+{"execution_bindings":[{"goal_id":"research","agent_id":"worker",
+  "requester_agent_id":"lead","binding_id":"review"}]}
+```
+
+The Goal must already point at its operator-owned `.loopx/config/` binding file
+through `loopx configure-goal --goal-id research --subagent-execution-config
+.loopx/config/delegations.json --execute`. Provision its real task, validation,
+registered requester, workspace and host using the existing
+[local delegation interface](../../../docs/reference/local-delegation.md).
+Neither registration, a sender grant, read access nor a context brief creates
+this execution grant. No task, role, profile or schedule is provisioned here.
+
+Chat exposes only the authorized Goal/Agent/binding/Todo identities in
+`context_execution.bindings`. For requested work covered by that current task,
+the model may select `execution_binding_id` in its semantic `context_handoff`.
+Assessment-only handoffs omit it. The host rechecks provider provenance, source
+revocation, active membership, Goal configuration, the original Turn and
+canonical preflight, then uses `Delegations.start`. Commands, roots, requester
+identity and host policy cannot come from the model. An unprobed runtime retains
+`runtime_unverified`; it may attempt the existing bounded execution, and is never
+reported as ready, running or complete. Known unavailability or refused task
+admission does not launch. Retry preserves `context-<original-receipt-id>` and
+does not resume, reset or replace a stopped/completed operation.
+
+The original brief and its field/encoded-byte limits remain unchanged. The trusted
+host binds the original inbox request in the existing operation identity and
+receiver bootstrap instructions, outside user-authored fields. Replay preserves
+that binding; it cannot substitute another request.
+
+The receiver independently reads/adopts the original inbox request and returns
+an audience-safe conclusion with the existing `manager-inbox report` path, in
+addition to its peer result. Launch submission, receiver conclusion, canonical
+acceptance and provider delivery remain separate evidence. The existing return
+service replies to the original conversation; it does not start another model
+thread. Plain inbox delivery now says that execution has not started.
+The native postcondition entry retires only its exact operation-owned temporary
+host input before checking a clean delivery worktree; unrelated files and actual
+artifact changes still fail canonical validation. Validation recovery resumes the
+original Turn after its retained host result, without invoking the model again.
+An external conversation is not a native Goal wake owner. The typed wake owner
+settles that separate intent as `no_wake_owner`; the exact original inbox return
+still carries the receiver's conclusion, without a hidden Goal or retry loop.
+
+Remove that source's exact execution grant to prevent later launches/replays.
+Already launched work keeps its original lifecycle: inspect and stop its exact
+operation with `loopx delegation`, rather than assuming `/stop` of the manager
+also stops an independently governed worker. Existing private configuration and
+journals remain local. Automatic allocation of new tasks, operator UI discovery,
+general inbox activation, cross-host readiness and live result/stop presentation
+are still separate product work; this path only selects already configured work.
+
 The existing local operator commands preview, apply and verify exceptions:
 
 ```sh
@@ -52,6 +110,23 @@ adds no separate configuration page. Remove the sender/source grant to disable
 external delivery, including future replay. Existing inbox records are retained.
 Provider ingress receipts bind message digest, channel and sender; a model cannot
 create or widen that provenance through its response.
+
+Native steward private conversations record that provenance before the canonical
+Turn can start, using this App's independently verified opaque `operator_ref`.
+Use the exact Session channel `manager.external.native.<binding-ref>.<source-ref>`
+and that owner reference in the private source policy. The same read-scope and
+delivery-target commands accept this exact channel alongside legacy channels;
+partial channels and wildcards are rejected. Native admission and crash replay
+retain the original Session, request and message. An App's portfolio read grant
+alone does not grant context delivery, and inbox delivery does not launch a worker.
+Provenance uses the controller's resolved coordination runtime root when present,
+so a separate Chat store cannot split it from the recipient policy and inbox.
+The exact execution catalog and handoff dispatch use that same resolved root;
+private Session/Turn files remain in the existing Chat store.
+Controllers predating that root retain the existing Chat-parent layout.
+Messages outside the shared inbox's source-context bounds remain intact in
+ordinary Chat, but cannot be handed off as inline context; use a scoped artifact
+for larger material. Image content is not transferred by this text ingress record.
 
 The existing worker turn-start hook exposes only a bounded pending count and
 required read command, without copying private content into status projections.
@@ -351,6 +426,21 @@ It waits until the initial reply is acknowledged, revalidates authority before
 sending, and never retargets a closed/replaced conversation. An offline transport
 retries the persisted answer rather than rerunning the worker. Ambiguous external
 writes remain `verification_required` and are not blindly resent.
+
+Core-bound private stewards use their existing independently verified App/owner
+binding and original admitted source, without requiring a legacy Goal-channel
+binding. Sending and saved-attempt verification both revalidate the steward
+context, portfolio scope, source sender and canonical Session/Turn correlation.
+An opaque native request reference resolves its provider message only through
+those original correlation records; it is never used as a provider message id.
+Revocation or changed provenance blocks the return; a later conversation cannot
+receive it. The same Inbox and manager-context receipt owners handle delivery
+and recovery; ordinary private replies and legacy Goal-channel routes retain
+their existing behavior.
+When Chat storage and the coordination runtime are separate, original Inbox
+ACK lookup, provider preview/send and saved-attempt verification use the Chat
+transport's own project root. Grants and result receipts remain in the canonical
+coordination runtime; neither root is moved and path containment stays enforced.
 
 When the provider returned a trustworthy message locator before readback failed,
 the same background pump persists that private attempt and later performs a

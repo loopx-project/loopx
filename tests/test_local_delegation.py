@@ -391,6 +391,13 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     (root / "release").touch()
     result = wait(reconnected)
     assert result["status"] == "accepted", result
+    validation = result["validation"]
+    assert validation["source"] == "goal_acceptance"
+    # The fixture rule pins the validator, oracle module and source material.
+    assert validation["check_count"] == 1 and validation["pinned_file_count"] == 3
+    assert len(validation["basis_sha256"]) == 64
+    assert set(validation) == {"source", "check_count", "pinned_file_count", "basis_sha256"}
+    assert reconnected.read("analysis-1")["validation"] == validation
     assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
     assert not (root / "analyst" / "initial" / "DELEGATION.json").exists()
     assert demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
@@ -964,10 +971,13 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
     path = runner.path("analysis-platform")
     record = runner._host_process_record(path)
     record.parent.mkdir(parents=True, exist_ok=True)
+    # The caller may itself lead a live group; use a genuinely exited Host.
+    with subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True) as finished_host:
+        finished_host.wait(timeout=10)
     record.write_text(json.dumps({
         "schema_version": host_process_transport.HOST_PROCESS_RECORD_SCHEMA_VERSION,
         "host": lock_holder_host_label(), "supervises": "host", "supervision": "direct", "phase": "finished",
-        "bridge_pid": os.getpid(), "process_group": os.getpid(),
+        "bridge_pid": finished_host.pid, "process_group": finished_host.pid,
     }))
 
     # A persisted finished Host record still needs platform drain capability.

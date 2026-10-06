@@ -102,6 +102,13 @@ receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 p
 这闭合 T1/T2/L2 的一组真实终结 caller，剩余 leased metadata、executor fence 和 T4
 仍未完成。[语义、调用次数与回滚](../../reference/canonical-terminal-review.zh-CN.md)。
 
+Canonical supersede 的 CLI/facade 现在把已有后继关联交给同一个 terminal owner。
+一次提交关联已声明的替代工作、退役原任务并释放原租约，取代先更新关联再 supersede
+的序列。回执恢复、source/actor/lease fence 和单向显示交付仍由既有 owner 负责。
+不新增 Python 决策 owner 或 writer；未晋级 Markdown 的新直接关联选项明确拒绝。
+这缩小 T1/T2 的恢复成本，不代表 T4 退役、默认 provider 验收或新前端 lifecycle
+流程完成。
+
 Canonical create/claim/update/Monitor poll/terminal 事务现共用
 `coordination/authority_source.ts`；Python adapter 经 `authority_registry_source`
 在注册/grant 投影前后校验来源。外部验证结束后保留原 witness，在新 effect/提交前
@@ -304,6 +311,13 @@ promotion gate。
 换数据库但保留不断增长的 head，或只通过加速容量测试，都不证明十天连续性。
 本地晋升等待容量与自然时间双重资格化，不等待 PostgreSQL 服务，也不在第十天使
 receipt 过期。
+
+调用方恢复的有界切片现有 [claim 参数指引](../../reference/source-cli-entrypoint.md#claim-argument-recovery--claim-参数恢复)：
+一次拒绝同时列出缺失／非法参数，保留原 argv 绑定，不猜 executor 或改变 source/lease
+准入。语法／展示归现有 CLI adapter，claim 权威保留在 TypeScript。真实
+Legacy/File/SQLite 重试与负例只验收这个边界。较大错误与省掉 help 的取舍、实际模型
+token／重试成本、source-mode 修复和常规短上下文／replan 完整历史仍是分别待验证的
+问题；不代表长目标或 provider 性能验收完成。
 
 ### 交付语义：先修正规则，再迁移
 
@@ -851,6 +865,31 @@ codec；较大的完整事实快照通过私有临时文件和摘要绑定的引
 内存，也不证明分布式执行。游标/checkpoint 归约保留为以测量驱动、完整源语义一致
 为前提的后续工作，不再造 Python 规则。见[历史决策证据](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.zh-CN.md)。
 
+**Checkpoint 恢复编写契约。** 现有 TS vision owner 只能投影校验器接受的恢复
+选项：没有持久 vision 时，缺失的 checkpoint 必须提交 vision patch；有该基线时
+才提供 unchanged reason。Authoring 契约复用校验器的 `todo_delta` 限制：保留前
+八项，每个保留项至多 80 字符。隔离的真实 CLI 恢复必须保持原结算身份和 replay
+约束。这闭合恢复指引的正确性缺口，不代表上下文、IO 或延迟成本已降低。
+
+**Checkpoint 读取上下文的传输边界。** 完整 Goal prose 和已归档 Todo 事实可能
+同时超过 2 MiB 请求与响应边界。Checkpoint 来源读取、归约、重放检查和提交显式
+使用同 UID 私有文件及字节数、SHA-256 摘要绑定；其他 effect 的默认传输边界不变。
+文件缺失、改变、权限不符或超过 64 MiB 时拒绝。Handler 可能已经提交后，无法验证
+的响应仍按不明确结果处理，要求精确回执回读，不能自动重试写入。
+
+来源读取和 read/check 归约现在在一次 TypeScript 请求内完成。上下文读取与提交前
+检查各从两次 checkpoint 请求降为一次，完整权威事实不再先返回 Python 再传回 TS。
+复用原 reducer、完整 basis 回执、来源锁及最终 provider 围栏提交；乐观读取释放
+provider 围栏后再归约，最终提交仍在自己的围栏内重读。Python 保留本地来源 IO 和
+回执持久化。来源专用、独立 evaluate effect 及其适配调用一并退役；commit 与 replay
+仍各使用一次请求。这消除中间完整事实往返，不代表多 MiB basis 的组装和返回成本
+已经消失，也不改变 File/SQLite、legacy Markdown 的回执、权限或 provider 默认值。
+
+剩余以测量驱动的 T3 工作是提供有版本的 manifest 与有界展示分页。每页绑定同一
+来源 head，并说明省略部分；回执仍须哈希完整相关 Todo/依赖、User Todo、Goal prose、
+acceptance 和 vision。展示限制不能变成结算限制。在 legacy、File、SQLite 上完成
+语义一致性与 stale-head 恢复验证前，保留当前完整读取路径。
+
 **恢复边界（2026-09-22）。** [authority archive 命令](../../reference/authority-archive.md)
 由现有 TS coordination owner 负责历史校验、状态 delta 重建和可重入恢复；Python
 只解析 CLI 路径、传递请求并展示紧凑结果。复用 state-log codec，避免各 provider
@@ -961,6 +1000,13 @@ handler 不会新增 server。
 如果 authority daemon 已拥有某个 registry/workspace，CLI 必须连接它，而不能
 绕过它再打开第二个直接 writer。Runtime discovery 与启动全自动；用户无需配置
 端口或守护进程。
+
+对 managed loopback runtime，可见的 locator 只是发现证据；请求分派和成功回复
+必须等 locator 发布及其清理锁全部完成，idle retirement 也从这之后开始计时。
+即使首次回复后进程立刻退出，也不能让未写完的清理 claim 阻止替代 runtime 在
+原有锁预算内启动。真实 Node 发布反例覆盖首次 ping 与类型化写入，随后强制退出
+并验证替代 runtime 写入和回执重放；锁的 stale age、启动预算、认证、writer 权限
+和重试分类均保持不变。这只关闭该发布顺序缺口，不代表长期运维或跨平台资格完成。
 
 ### 2.3 TypeScript 拥有已迁 effect
 

@@ -35,61 +35,146 @@ owner submitting a directory entry.
   establish production availability, failover, or multi-owner operation.
   The separate metadata-runtime promotion gate
   [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) remains open.
+  Its seed-routing helper [PR #4724](https://github.com/loopx-project/loopx/pull/4724)
+  is merged, while the companion ladder
+  [PR #4726](https://github.com/loopx-project/loopx/pull/4726) remains open;
+  the helper merge alone does not close that promotion gate.
   **Status: qualification tooling merged, with separate acceptance still open**.
   This is concrete integration work beyond the README relationship below,
-  not proof that NoKV runs LoopX in production. Checked September 30, 2026.
-- **GoTry** (Danceiny) — uses LoopX goals, Codex task bindings and heartbeats
-  for multiple development lanes. [Issue #18](https://github.com/Danceiny/gotry/issues/18)
-  records setup; [PR #187](https://github.com/Danceiny/gotry/pull/187), merged,
-  records delivery validation. **Status: reported development-workflow use**;
-  this does not establish a LoopX dependency in the travel application's runtime.
-- **mimofan** (XiaomingX) — organizes UI/engine repairs through LoopX Todos.
-  [PR #738](https://github.com/XiaomingX/mimofan/pull/738) explicitly names that
-  workflow and is merged. **Status: development-workflow evidence**.
+  not proof that NoKV runs LoopX in production. NoKV's
+  [current README evidence boundary](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md#evidence-and-qualification)
+  separately marks full-surface native CLI and installed Python wheel acceptance
+  against real services as not qualified. The historical single-node stack
+  result does not establish those current, broader acceptances.
+  Checked October 4, 2026.
+- **GoTry** (Danceiny) — [issue #18](https://github.com/Danceiny/gotry/issues/18),
+  opened August 28, 2026, reports LoopX goals, Codex task bindings and initial
+  heartbeat acknowledgements. A [September 19 follow-up](https://github.com/Danceiny/gotry/issues/18#issuecomment-5740371337)
+  reports continued engineering automation and independent worktree delivery.
+  [PR #187](https://github.com/Danceiny/gotry/pull/187) merged September 7; its
+  reported local checks and [successful exact-head CI](https://github.com/Danceiny/gotry/actions/runs/34110550580)
+  concern a product delivery slice, whose body still lists real-inventory UAT
+  as open. Merge and CI success do not close that acceptance.
+  The [October 2 checkpoint](https://github.com/Danceiny/gotry/issues/18#issuecomment-5950941798)
+  retains real-user evidence gates; issues [#20](https://github.com/Danceiny/gotry/issues/20),
+  [#22](https://github.com/Danceiny/gotry/issues/22) and
+  [#142](https://github.com/Danceiny/gotry/issues/142) remain open at review.
+  **Status: dated, author-reported development-workflow use**. This does not
+  establish a LoopX dependency in the travel application's runtime, independently
+  reproduce the scheduler, or prove product acceptance. Checked October 5, 2026.
+- **mimofan** (XiaomingX) — [PR #738](https://github.com/XiaomingX/mimofan/pull/738),
+  merged August 10, 2026, attributes UI/engine repairs to LoopX Todos. The changes
+  fix `/monitor` persistence, `/balance` readback and `/freeze` false success;
+  the PR's build/test results are author-reported. The checked main
+  [monitor implementation](https://github.com/XiaomingX/mimofan/blob/000c0417ee5db8ce43eeb476b22aa83fae17780b/crates/tui/src/commands/groups/core/issue_monitor.rs)
+  retains the application's own `MonitorStore` path. **Status: dated, author-reported
+  development workflow; UI fixes merged**. This does not establish a LoopX
+  dependency in mimofan's runtime; ongoing LoopX use, scheduler behavior and
+  current-version compatibility were not independently verified. Checked October 5, 2026.
 - **Meta-RLR** (hk20013106) — [PR #17](https://github.com/hk20013106/RLR/pull/17),
-  merged, adds a CLI/JSON maintenance boundary. LoopX owns maintenance
-  goal/todo/evidence/monitor/replan state while `research_loop` owns scientific
-  state. **Status: maintenance integration merged**; later auto-wake
-  [PR #26](https://github.com/hk20013106/RLR/pull/26) is closed unmerged.
-- **LoopX Console** (xielixing) — a third-party BitFun MiniApp uses the local
-  LoopX CLI, `quota should-run` and host Agent execution for GitHub issue repair.
-  [Source and installation](https://github.com/xielixing/loopx-console) and
-  [releases](https://github.com/xielixing/loopx-console/releases) are public.
-  **Status: independently published**; OpenBitFun upstream inclusion is a
-  separate proposal below.
-- **zyra** (BingruL) — its [packaging configuration](https://github.com/BingruL/zyra/blob/fix/execution-timeouts-and-diagnostics/pyproject.toml)
-  includes an embedded LoopX runtime and CLI entry points.
-  **Status: source and packaging integration observed**; deployment and
-  sustained runtime use were not verified.
+  merged August 13, 2026, adds the external CLI/JSON maintenance boundary;
+  scientific state remains owned by `research_loop`. Closed, unmerged
+  [PR #26](https://github.com/hk20013106/RLR/pull/26) was superseded by
+  [PR #34](https://github.com/hk20013106/RLR/pull/34), merged August 23, 2026.
+  The checked main [root entry point](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/research_loop_v04.py)
+  composes an outer maintenance adapter. Its [activation and failure boundary](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake.py)
+  requires explicit `RLR_META_RLR_AUTOWAKE_CONFIG`, classifies eligible failures
+  and resolves verified repair provenance; the [adapter](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake_adapter.py)
+  preserves the original failure if maintenance is unavailable. The
+  [LoopX boundary](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/loopx_cli.py)
+  uses external JSON CLI calls. [Windows test jobs](https://github.com/hk20013106/RLR/actions/runs/32649860637)
+  succeeded at PR #34's exact head; its continuous failure/repair/resume scenario
+  remains an author-reported result. **Status: optional maintenance and auto-wake
+  integration merged**. Current LoopX compatibility and sustained research use
+  were not independently reproduced. Checked October 5, 2026.
+- **LoopX Console** (xielixing) — a third-party BitFun MiniApp for GitHub issue
+  repair. Independent [v3.9.29](https://github.com/xielixing/loopx-console/releases/tag/v3.9.29)
+  was published August 18, 2026, with a MiniApp ZIP asset.
+  The [checked main worker](https://github.com/xielixing/loopx-console/blob/dca7883ea5d4e2a0d48c0af5a1764c51a5023b53/source/worker.js)
+  calls the local LoopX CLI and `quota should-run` using the `outer_controller`
+  profile; its fallback source installation pins LoopX **v0.2.13**.
+  The [same snapshot's README](https://github.com/xielixing/loopx-console/blob/dca7883ea5d4e2a0d48c0af5a1764c51a5023b53/README.md)
+  assigns scheduling and execution to the MiniApp/BitFun host and describes
+  human approval before PR publication. **Status: independently published,
+  historical CLI integration observed**. Release metadata and current source
+  are separate evidence; the ZIP, real host execution, current LoopX compatibility
+  and sustained use were not independently tested. OpenBitFun upstream inclusion
+  remains a separate proposal below. Checked October 5, 2026.
+- **zyra** (BingruL) — the checked default branch is
+  `fix/execution-timeouts-and-diagnostics`, pinned here to the September 19, 2026
+  [source snapshot](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/pyproject.toml).
+  Packaging includes the embedded LoopX modules and CLI entry points. Its
+  [source manifest](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/loopx_runtime/SOURCE-MANIFEST.json)
+  pins **LoopX v0.2.13**; the listed source files match the upstream tag's tree.
+  The [runtime resolver](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/zyra_integrations/loopx/runtime/resolver.py)
+  requires the embedded source or a Zyra-owned installed distribution, without
+  an archive fallback. **Status: pinned source and packaging integration observed**.
+  No GitHub release or tag was listed at review; this does not establish whether
+  a package was published elsewhere. Wheel installation, live Web/API execution,
+  compatibility with current LoopX and sustained use were not independently
+  verified. Checked October 5, 2026.
 - **Hufu** (Blicae8917) — [PR #70](https://github.com/Blicae8917/hufu/pull/70),
-  merged, adds an opt-in LoopX v0.5.2 RunOnce Consumer. The deployment provider
-  supplies the real transport and Host invocation; [issue #76](https://github.com/Blicae8917/hufu/issues/76)
-  remains open for status projection. **Status: bounded integration merged,
-  companion work remains**.
+  merged August 23, 2026, adds an opt-in LoopX v0.5.2 RunOnce Consumer.
+  The checked main snapshot [exports the consumer and its ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts);
+  its [compatibility record](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/docs/COMPATIBILITY.md)
+  retains the exact v0.5.2 baseline and no bundled LoopX dependency.
+  The deployment provider supplies real transport and Host invocation.
+  [Issue #76](https://github.com/Blicae8917/hufu/issues/76) reports an owner-local
+  pilot with committed/replayed RunOnce receipts, while general status projection
+  remains incomplete; the issue is still open. **Status: bounded integration
+  merged, local pilot reported, companion projection open**. That report was not
+  independently reproduced and does not establish current-version compatibility
+  or sustained deployment. Checked October 4, 2026.
 - **benjamin-plugins** (Yidada) — [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1),
-  merged, adds a Codex plugin calling the official LoopX kernel. The author
-  reports a source-checkout CLI contract smoke; PyPI installation was not
-  verified and background scheduling remains host-owned.
-  **Status: plugin merged**.
+  merged September 5, 2026, adds a Codex plugin calling the official LoopX kernel.
+  The checked main [marketplace entry](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/.agents/plugins/marketplace.json)
+  still registers the plugin. Its [source record](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/SOURCE.md)
+  pins CLI qualification to a LoopX 0.5.4 checkout; the PR reports one independent
+  model status scenario, with other scenarios structurally checked only.
+  The [preflight implementation](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/skills/loopx/scripts/preflight.py)
+  locates an executable and reads registry shape without executing LoopX;
+  it explicitly leaves runtime and driver verification false.
+  **Status: plugin merged, source-checkout validation reported**. PyPI installation,
+  actual background execution and current-version compatibility were not verified;
+  scheduling remains host-owned. Checked October 4, 2026.
 - **Adaptive-Agent-Orchestration-Protocol** (YuemingHub) —
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41),
-  merged, registers LoopX as an optional execution-continuity provider.
-  [Issue #42's pilot report](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5249833699)
-  reports a bounded Linux CLI recovery/gate test; [later readback](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
-  does not establish ongoing adoption. **Status: protocol integration and
-  non-production pilot**, not default production adoption.
+  merged August 11, 2026, registers LoopX as an optional execution-continuity
+  provider. The [pinned pilot report](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/docs/LOOPX_PILOT_EVIDENCE.md)
+  reports Linux direct-CLI/custom-runner tests against LoopX v0.4.3: fresh-process
+  recovery, validation and human gates, bounded handoff, accounting and rollback.
+  The linked [consumer Actions run](https://github.com/YuemingHub/mingos-foundation/actions/runs/31465474613)
+  succeeded at the recorded consumer head; this does not independently reproduce
+  every reported assertion. The [August 14 follow-up](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
+  explicitly leaves LoopX unadopted, rather than promoting the pilot to ongoing
+  adoption. AAOP is now archived; its [retirement record](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/RETIREMENT.md),
+  effective September 25, 2026, retains frozen research and releases without
+  ongoing compatibility or support promises. **Status: historical optional
+  integration and bounded pilot in a retired project**. Current LoopX compatibility,
+  Windows/WSL and production host/session restart behavior remain unqualified;
+  AAOP's retirement is not a demonstrated failure of LoopX. Checked October 5, 2026.
 
 ## 2. Mechanism Borrowing
 
 These projects explicitly credit LoopX ideas. Native implementations and
 accepted design documents are distinct from depending on the LoopX runtime.
 
-- **surogates** (invergent-ai) — [comparison and adoption plan](https://github.com/invergent-ai/surogates/blob/master/docs/superpowers/plans/2026-08-03-loopx-adoption.md)
-  selects durable grants, objective budgets and evaluator memory, while
-  retaining its own storage and runtime. [PR #188](https://github.com/invergent-ai/surogates/pull/188),
+- **surogates** (invergent-ai) — the [pinned comparison and adoption plan](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/docs/superpowers/plans/2026-08-03-loopx-adoption.md)
+  selects durable grants, objective budgets and evaluator memory while retaining
+  its own storage and runtime. [PR #188](https://github.com/invergent-ai/surogates/pull/188),
   [#190](https://github.com/invergent-ai/surogates/pull/190) and
-  [#191](https://github.com/invergent-ai/surogates/pull/191) are merged.
-  **Status: code-level borrowing**; live PR status supersedes the plan's older table.
+  [#191](https://github.com/invergent-ai/surogates/pull/191) merged August 3, 2026,
+  implementing scoped approval grants, mission token allowances and prior-verdict
+  memory. Current pinned [MissionStore](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/surogates/missions/store.py)
+  derives spend from its own session/task records; the [evaluator](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/surogates/missions/evaluator.py)
+  checks the allowance and includes its previous verdict and stagnation count.
+  PR #191 explicitly declines to port LoopX's progress-granularity lattice;
+  the current stagnation prompt steers the judge rather than enforcing a verdict.
+  **Status: code-level borrowing**; live PR status supersedes the plan's older
+  table. The author reports passing focused PostgreSQL tests and 28 existing
+  unit-suite failures; neither result was independently reproduced. This evidence
+  does not qualify LoopX runtime integration, current compatibility or sustained
+  use. Checked October 5, 2026.
 - **future-os** (futuregene) — [PR #253](https://github.com/futuregene/future-os/pull/253)
   and [#255](https://github.com/futuregene/future-os/pull/255), merged, implement
   selected multi-agent and goal-frontier mechanisms in Rust with explicit
@@ -124,8 +209,13 @@ accepted design documents are distinct from depending on the LoopX runtime.
   Goal/Todo state and execution gates; the Bot supplies the worker, model
   and tools. The author reports real CLI tests with a model substitute;
   real-model end-to-end acceptance and Docker build validation remain open.
+  The proposal's [pinned packaging](https://github.com/volcengine/OpenViking/blob/406827d73594fda9def251912be64bf06b013773/pyproject.toml)
+  places `loopx==1.0.5` in the optional `longtask` extra;
+  [current main packaging](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/pyproject.toml)
+  does not declare that extra. These are proposal and main snapshots,
+  not an instruction to install an unreleased extra.
   **Status: runtime integration proposed, not merged or released**.
-  Checked September 30, 2026.
+  Checked October 4, 2026.
 - **Opensiro VSM harness index** — merged
   [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) records
   a feasibility stop for a frozen LoopX comparison; a subsequent
@@ -140,7 +230,9 @@ accepted design documents are distinct from depending on the LoopX runtime.
   is open and replaces closed, unmerged #2382. The maintainer
   [prioritizes beta stability before evaluating the larger feature](https://github.com/GCWing/OpenBitFun/pull/2836#issuecomment-5613986161).
   **Status: upstream integration proposed**, separate from the published
-  third-party LoopX Console.
+  third-party LoopX Console. Neither the independent release nor the author's
+  reported local checks establishes an upstream merge or release.
+  Checked October 5, 2026.
 - **codexia** — upstream [PR #71](https://github.com/milisp/codexia/pull/71)
   was closed unmerged after the author explained it targeted the wrong repository;
   downstream [PR #1](https://github.com/connorodea/codexia-task-management/pull/1)
@@ -199,10 +291,10 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - **NAVER fe-news** — the [September 2026 newsletter](https://github.com/naver/fe-news/blob/master/issues/2026-09.md)
   explains LoopX and its installation path in Korean. **Status: editorial coverage**,
   not a NAVER deployment claim.
-- **OpenViking / NoKV** — [OpenViking's README](https://github.com/volcengine/OpenViking/blob/main/README.md)
-  lists LoopX; [NoKV's README](https://github.com/NoKV-Lab/NoKV/blob/main/README.md)
+- **OpenViking / NoKV** — [OpenViking's README](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/README.md)
+  lists LoopX; [NoKV's README](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md)
   names an active open-source collaboration. **Status: public project relationships**;
-  these listings alone do not establish a runtime dependency.
+  these listings alone do not establish a runtime dependency. Checked October 4, 2026.
 - **loopx-book / loopx-book-labs** (cocolord) — a bilingual, protocol-first
   [developer book](https://github.com/cocolord/loopx-book) and
   [runnable labs](https://github.com/cocolord/loopx-book-labs) cover onboarding,
@@ -260,3 +352,14 @@ accepted design documents are distinct from depending on the LoopX runtime.
   GitHub-Michelin and the michaelx1993/foolzzz fork family. Current issue/PR
   states, later comments and pinned source files were checked; this update
   adds no confirmed runtime adopter and does not revalidate the rest of the table.
+- Scoped update: **2026-10-04–05**, rechecking OpenViking, NoKV, Hufu and
+  benjamin-plugins against current public PR/issue states and pinned source files.
+  AAOP's historical pilot/retirement and LoopX Console's independent release,
+  historical CLI pin, zyra's default branch and embedded source pin, and the separate
+  OpenBitFun proposal were reconciled on October 5. GoTry's dated workflow reports
+  were separated from its open product acceptance. Meta-RLR's merged auto-wake
+  successor and current source wiring were reconciled with its historical PRs.
+  mimofan's dated workflow attribution was separated from its application runtime.
+  This distinguishes proposal packaging, historical tooling and pilots, plugin
+  registration and current acceptance limits. No live integration was
+  independently reproduced and other entries were not revalidated.

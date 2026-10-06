@@ -269,10 +269,14 @@ CASES.extend([
     Case("source_binding_outside_lock", ((COORDINATION + "legacy_writer_fence.py",
          move_guard_outside_lock("require_registry_source_write_allowed")),),
          WRITER_TEST + "test_waiting_override_writer_rechecks_registry_binding_inside_shared_state_lock"),
-    Case("remove_refresh_cas", (("loopx/state_refresh.py", replacement(
-        "if current_state_text != expected_write_state_text:",
-        "if False:  # DELIBERATE MUTANT: bypass stale-state rejection.")),),
-         WRITER_TEST + "test_concurrent_public_refresh_preserves_the_newer_owned_paragraph"),
+    Case("remove_refresh_source_recheck", (("loopx/state_refresh.py", replacement(
+        "            if normalized_next_action:",
+        "            if False and normalized_next_action:  # DELIBERATE MUTANT: bypass source recheck.")),),
+         "tests/control_plane/test_next_action_writeback.py::test_final_commit_rechecks_relevant_source_facts[task]"),
+    Case("public_refresh_writes_owned_paragraph", (("loopx/state_refresh.py", replacement(
+        "if not dry_run:\n                runs_dir.mkdir(parents=True, exist_ok=True)\n                json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)",
+        "if not dry_run:\n                resolved_state_file.write_text(\n                    current_text + \"\\n- \" + normalized_next_action, encoding=\"utf-8\"\n                )\n                runs_dir.mkdir(parents=True, exist_ok=True)\n                json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)")),),
+         WRITER_TEST + "test_public_refresh_step_does_not_write_owned_paragraph"),
     Case("fence_unshared_state_lock", ((COORDINATION + "legacy_writer_fence.ts", replacement(
         "withFileMutationLock(statePath, () =>",
         'withFileMutationLock(statePath + ".mutant-unshared", () =>')),),
@@ -420,7 +424,11 @@ def main() -> int:
                 log = mutant.stdout + mutant.stderr
                 # Pytest assertion rewriting can render rich comparisons as
                 # "E   assert ..." without spelling the exception class.
-                assertion = "AssertionError" in log or re.search(r"^E\s+assert ", log, re.MULTILINE) is not None
+                assertion = (
+                    "AssertionError" in log
+                    or "Failed: DID NOT RAISE" in log
+                    or re.search(r"^E\s+assert ", log, re.MULTILINE) is not None
+                )
                 killed = (mutant.returncode == 1 and assertion
                           and any(token in log for token in ("1 failed", "fail 1"))
                           and not any(token in log for token in ("SyntaxError", "ImportError", "ModuleNotFoundError")))

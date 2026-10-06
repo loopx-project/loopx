@@ -142,11 +142,7 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
             optional=True,
         ),
         no_followup=bool(call.get("no_followup")) if complete else False,
-        successor_todo_ids=(
-            require_completion_successor_todo_ids(call.get("successor_todo_ids"))
-            if complete
-            else []
-        ),
+        successor_todo_ids=require_completion_successor_todo_ids(call.get("successor_todo_ids")),
         claimed_by=call.get("claimed_by") if complete else None,
         clear_claim=bool(call.get("clear_claim")) if complete else False,
         next_agent_todo=next_agent_todo,
@@ -531,7 +527,10 @@ def terminal_canonical_todo_if_promoted(
         "idempotent_replay": idempotent_replay,
         "state_file": str(state_file) if state_file is not None else None,
         "project": str(project) if project is not None else None,
-        "updated_at": payload.get("completed_at") if payload.get("changed") else None,
+        # A receipt replay must also recover an uncheckpointed optional hook.
+        "updated_at": payload.get("completed_at") if command == "complete" else (
+            payload.get("completed_at") if payload.get("changed") else None
+        ),
         "next_todos": payload.get("generated_successors") or [],
         "mutation_authority": terminal_decision,
         "task_lease_fence": terminal_decision,

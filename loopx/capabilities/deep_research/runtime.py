@@ -241,6 +241,8 @@ def add_source(
     claims: list[dict[str, Any]],
     external_evidence: dict[str, str] | None = None,
     expected_question: str | None = None,
+    source_accessed_at: str | None = None,
+    source_publication_date: str | None = None,
 ) -> dict[str, Any]:
     # Load, validate the whole batch, allocate ids, mutate, and save all under
     # one project-level lock: concurrent deepresearch commands are a normal
@@ -250,6 +252,8 @@ def add_source(
         state = _require_active_state(project)
         if expected_question is not None and state["question"] != expected_question:
             raise ValueError("external evidence objective does not match the active research question")
+        if (source_accessed_at is not None or source_publication_date is not None) and external_evidence is None:
+            raise ValueError("receipt source clocks require external evidence lineage")
         if external_evidence is not None:
             fields = {"plan_id", "admission_id", "receipt_digest", "content_digest"}
             if set(external_evidence) != fields or any(
@@ -344,8 +348,12 @@ def add_source(
                 "url_or_path": url_or_path,
                 "tool": tool,
                 "title": (title or "").strip() or None,
-                "accessed_at": _now_iso(),
+                # The typed receipt owner already normalized these clocks.
+                # Ledger insertion is a separate event, not a fresh source read.
+                "accessed_at": source_accessed_at if source_accessed_at is not None else _now_iso(),
                 "claims": claim_ids,
+                **({"recorded_at": _now_iso(), "publication_date": source_publication_date}
+                   if source_accessed_at is not None else {}),
                 **({"external_evidence": dict(external_evidence)} if external_evidence is not None else {}),
             }
         )

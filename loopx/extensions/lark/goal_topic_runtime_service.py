@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -38,6 +39,7 @@ class LarkGoalTopicRuntimeService:
         runtime_root: str | Path,
         runtime_controller: Any,
         action_service: Any | None = None,
+        private_conversations: Any | None = None,
         profile_poller: ProfilePoller | None = None,
         manager_route_reconciler: ManagerRouteReconciler | None = None,
     ) -> None:
@@ -45,6 +47,7 @@ class LarkGoalTopicRuntimeService:
         self.runtime_root = Path(runtime_root).expanduser().resolve()
         self.runtime_controller = runtime_controller
         self.action_service = action_service
+        self.private_conversations = private_conversations
         self._profile_poller = profile_poller or self._poll_profile
         self.manager_route_reconciler = manager_route_reconciler
         self._lock = threading.Lock()
@@ -52,6 +55,7 @@ class LarkGoalTopicRuntimeService:
         self._health: dict[str, dict[str, Any]] = {}
         self._closed = threading.Event()
         self._startup_thread: threading.Thread | None = None
+        self._delivery_thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Discover existing bindings without blocking the HTTP readiness path."""
@@ -65,6 +69,42 @@ class LarkGoalTopicRuntimeService:
                 daemon=True,
             )
             self._startup_thread.start()
+            if self.private_conversations is not None:
+                self._delivery_thread = threading.Thread(target=self._reconcile_private, name="loopx-lark-private-delivery", daemon=True)
+                self._delivery_thread.start()
+
+    def _reconcile_private(self) -> None:
+        # Keep slow provider writes/readbacks off the scan loop. At most four
+        # persisted requests run, with no executor backlog or extra listener.
+        # The per-request journal lock retains ambiguous-write/no-resend safety.
+        transport = self.private_conversations
+        if transport is None:
+            return
+        pending: dict[Path, Future[int]] = {}
+        attempted: dict[Path, int] = {}
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool:
+            while not self._closed.is_set():
+                for path, future in list(pending.items()):
+                    if not future.done():
+                        continue
+                    pending.pop(path)
+                    try:
+                        future.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
+                try:
+                    paths = transport.pending_delivery_paths()
+                    attempted = {path: count for path, count in attempted.items() if path in paths}
+                    for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
+                        if len(pending) >= 4 or self._closed.is_set():
+                            break
+                        if path in pending:
+                            continue
+                        pending[path] = pool.submit(transport.reconcile_request, path)
+                        attempted[path] = attempted.get(path, 0) + 1
+                except Exception:
+                    logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
+                self._closed.wait(1)
 
     def _refresh_on_start(self) -> None:
         while not self._closed.is_set():
@@ -125,7 +165,7 @@ class LarkGoalTopicRuntimeService:
         )
         return (
             str(profile_config.get("cli_bin") or "lark-cli"),
-            str(profile_config.get("bot_app_id") or ""),
+            str(profile_config.get("bot_app_id") or profile_config.get("binding_id") or ""),
             callback_chats,
         )
 
@@ -232,8 +272,12 @@ class LarkGoalTopicRuntimeService:
                     # A bot App can have several local profile aliases and Chat
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
-                    app_id = str(profile_config.get("bot_app_id") or profile)
-                    digest = hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]
+                    app_id = str(profile_config.get("bot_app_id") or "")
+                    # Both paths lease the same App-scoped digest, so aliases
+                    # or a second server cannot start another consumer.
+                    digest = (hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]
+                              if app_id else str(profile_config.get("consumer_ref")
+                              or hashlib.sha256(profile.encode("utf-8")).hexdigest()[:32]))
                     lease = Path.home() / ".loopx" / "lark-consumers" / digest
                     with try_exclusive_file_lock(
                         lease, operation="lark_event_consumer"
@@ -252,10 +296,11 @@ class LarkGoalTopicRuntimeService:
                             stop=stop,
                             runtime_root=self.runtime_root,
                             answer=answer,
+                            private_admitter=(self.private_conversations.admit if self.private_conversations is not None else None),
                             proposal_deliverer=deliver_proposals,
                             review_callback_handler=(
                                 handle_review_callback
-                                if self.action_service is not None
+                                if self.action_service is not None and profile not in dict(self.snapshot_provider().get("private_profiles") or {})
                                 else None
                             ),
                             health_sink=lambda update: self._update_health(
@@ -431,6 +476,8 @@ class LarkGoalTopicRuntimeService:
             stop.set()
         for _stop, thread, _fingerprint in workers:
             thread.join(timeout=3)
+        if self._delivery_thread is not None:
+            self._delivery_thread.join(timeout=3)
 
 
 __all__ = ["LarkGoalTopicRuntimeService"]

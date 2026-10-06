@@ -324,7 +324,8 @@ def main() -> int:
         assert "single primary" not in heartbeat["task_body"].lower(), heartbeat
         assert "side-agent" not in heartbeat["task_body"].lower(), heartbeat
         assert "equal peer" in heartbeat["task_body"].lower(), heartbeat
-        assert "no cross-agent authority" in heartbeat["task_body"].lower(), heartbeat
+        assert "Follow user authority and repository rules" in heartbeat["task_body"], heartbeat
+        assert "Gate only the affected path" in heartbeat["task_body"], heartbeat
 
     print("peer-agent-migration-smoke ok")
     return 0

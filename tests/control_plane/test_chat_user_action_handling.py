@@ -15,6 +15,7 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from test_todo_decision_scope_lifecycle import AGENT_ID, GOAL_ID, _write_fixture
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.todos import add_goal_todo, list_goal_todos
 
@@ -90,3 +91,22 @@ def test_no_longer_needed_closes_only_the_reminder(tmp_path, monkeypatch, provid
     rows = _rows(registry)
     assert rows[action_id]["status"] == "done"
     assert rows[target_id]["status"] == "blocked", "closing a reminder must not resume or approve other work"
+
+
+@pytest.mark.parametrize("actor", ["codex", "codex-review"])
+@pytest.mark.parametrize("operation", ["complete", "cancel"])
+def test_wrong_actor_is_rejected_without_effects(tmp_path, monkeypatch, actor, operation):
+    registry, service, target_id, action_id = _goal(tmp_path, monkeypatch, "file", "hard_lease")
+    before = _rows(registry)
+    parameters = {"goal_id": GOAL_ID, "agent_id": actor, "todo_id": action_id}
+    if operation == "cancel":
+        action_kind = "gate.resolve"
+        parameters["decision"] = "cancel"
+    else:
+        action_kind = "todo.update"
+        parameters["operation"] = "complete"
+    with pytest.raises((ValueError, LocalCoordinationAuthorityUnavailable)):
+        service.preview({"action_kind": action_kind, "summary": "Wrong actor", "context": {},
+                         "normalized_parameters": parameters, "idempotency_key": "wrong-actor"})
+    assert _rows(registry) == before
+    assert before[action_id]["status"] == "open" and before[target_id]["status"] == "blocked"

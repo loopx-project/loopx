@@ -266,3 +266,62 @@ def test_doctor_registers_the_restart_flag_and_reports_its_result(
     assert "## Effect Runtime Restart" in rendered
     assert "- status: `stopped`" in rendered
     assert "stopped_runtime: Node" in rendered
+
+
+@pytest.mark.parametrize(
+    ("published", "token", "lock_state", "pid_alive", "expected"),
+    [
+        (False, None, "present", True, "shutdown_pending"),
+        (False, None, "claim", True, "shutdown_pending"),
+        (False, None, "released", True, "shutdown_pending"),
+        (False, None, "unrelated", True, "stopped"),
+        (False, None, "missing", True, "stopped"),
+        (False, None, "denied", True, "shutdown_pending"),
+        (True, None, "missing", True, "shutdown_pending"),
+        (True, "replacement", "present", True, "stopped"),
+        (True, "serving", "missing", True, "shutdown_pending"),
+        (False, None, "present", False, "stopped"),
+    ],
+)
+def test_restart_requires_observed_locator_retirement(
+    tmp_path: Path, monkeypatch, published: bool, token: str | None,
+    lock_state: str, pid_alive: bool, expected: str,
+) -> None:
+    """Missing/unknown locators cannot bypass pending or unreadable retirement."""
+    info_path = tmp_path / "runtime.json"
+    lock_path = info_path.with_name(info_path.name + ".ts-effect.lock")
+    if lock_state in {"present", "claim", "released", "unrelated"}:
+        suffix = {"present": "", "claim": ".claim.owned", "released": ".released.owned", "unrelated": ".unrelated"}[lock_state]
+        lock_path = lock_path.with_name(lock_path.name + suffix)
+        lock_path.write_text("owned retirement")
+    original_iterdir = Path.iterdir
+
+    def observe(path):
+        if path == info_path.parent and lock_state == "denied":
+            raise PermissionError("synthetic lock denial")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", observe)
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", lambda: "fixture")
+    monkeypatch.setattr(effect_runtime, "_runtime_info_path", lambda _: info_path)
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_a, **_kw:
+                        {"pid": 12345, "token": "serving"})
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *_a, **_kw: {})
+    monkeypatch.setattr(effect_runtime, "_serving_token", lambda _: (published, token))
+    monkeypatch.setattr(effect_runtime, "_pid_is_alive", lambda _: pid_alive)
+    result = effect_runtime.restart_effect_runtime(timeout=0.01)
+    assert result["status"] == expected
+    assert result["stopped"] is (expected == "stopped")
+    if lock_state in {"present", "claim", "released", "unrelated"}:
+        assert lock_path.read_text() == "owned retirement", "readback must not erase locks"
+
+
+@pytest.mark.parametrize("content", ["[]", "{}", '{"token": 7}', "not json"])
+def test_unknown_locator_content_cannot_prove_a_stopped_runtime(
+    tmp_path: Path, content: str,
+) -> None:
+    locator = tmp_path / "runtime.json"
+    locator.write_text(content)
+    assert effect_runtime._serving_token(locator) == (True, None)
+    locator.unlink()
+    assert effect_runtime._serving_token(locator) == (False, None)

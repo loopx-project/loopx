@@ -440,6 +440,15 @@ class ChatActionService(
         if not isinstance(parameters, Mapping) or not isinstance(context, Mapping):
             raise ValueError("typed Chat action proposal is malformed")
         workspace_ref = str(parameters.get("workspace_ref") or "current")
+        if context.get("binding_id"):
+            # The native steward freezes its configured workspace. Existing
+            # Goals and the single-Goal fallback cannot redirect a commission.
+            candidates = [root for root in self.workspace_roots if root.is_dir() and (root / ".git").exists()
+                          and workspace_ref == f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"]
+            if len(candidates) != 1:
+                raise ValueError("the bound steward workspace is unavailable")
+            return candidates[0], {"id": "", "repo": str(candidates[0]), "domain": "project-goal-control-plane",
+                                  "adapter": {"kind": "generic_project_goal_v0"}}
         goals = registry_goals(self._registry())
         context_goal_id = str(context.get("goal_id") or "").strip()
         source_goal = next(
@@ -602,7 +611,7 @@ class ChatActionService(
             # Registry publication precedes storage initialization. Resume the
             # frozen target through its TS owner before any downstream effects;
             # re-running Markdown bootstrap could overwrite a promoted Goal.
-            initialize_goal_storage_target(runtime_root, existing_goal)
+            initialize_goal_storage_target(runtime_root, existing_goal, registry_path=self.registry_path)
             result = {"ok": True}
         else:
             try:
@@ -750,11 +759,12 @@ class ChatActionService(
             first_turn, created = self.runtime_controller.submit_turn(
                 session_id=session_id,
                 client_turn_id=f"goal-start-{proposal_id}",
-                message=(
+                message=(f"/goal start --tokens {parameters['native_token_budget']} {objective}"
+                    if parameters.get("native_token_budget") else (
                     f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
                     f"首个 Todo：{'；'.join(str(item) for item in (parameters.get('initial_todos') or [])[:3]) or '按目标边界建立首个可验证进展'}。"
                     "然后直接推进并报告可验证结果；遇到权限边界时停止并提出明确 Gate。"
-                ),
+                )),
                 work_dir=project,
                 objective=objective,
             )
@@ -1309,7 +1319,8 @@ class ChatActionService(
             str(regenerated["proposal_id"]), regenerated_from=proposal_id
         )
 
-    def apply(self, proposal_id: str) -> dict[str, Any]:
+    def apply(self, proposal_id: str, *, steward_context: dict[str, Any] | None = None,
+              steward_confirmed_at: str | None = None) -> dict[str, Any]:
         proposal = self.store.load(proposal_id)
         if proposal is None:
             raise KeyError("typed Chat action proposal was not found")
@@ -1318,6 +1329,14 @@ class ChatActionService(
                 "proposal": proposal,
                 "turn": self._turn_from_receipt(proposal.get("receipt")),
             }
+        if (proposal.get("context") or {}).get("binding_id"):
+            if steward_context is None:
+                raise ProtectedActionGate("goal.create", gate={"kind": "authenticated_steward_confirmation_required",
+                    "summary": "Confirm this commission from its original owner private conversation.",
+                    "next_action": "Use the exact /confirm command in the originating Bot before it expires."})
+            from .control_plane.effect_runtime import effect_runtime_result
+            effect_runtime_result("collaboration.steward.authorize_creation", {
+                "context": steward_context, "proposal": proposal, "now": steward_confirmed_at or now_utc().isoformat()})
         if proposal.get("action_kind") == "operation.execute":
             raise ProtectedActionGate(
                 "operation.execute",

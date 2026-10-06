@@ -95,7 +95,11 @@ test("a host wake reuses the resume facts and returns a typed outcome, never an 
   assert.throws(() => planChatMode({...input, origin: "host"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "web"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "external"}), /local managed/);
-  assert.throws(() => planChatMode({...wake, session: {...enabled, channel_id: "manager"}}));
+  for (const changes of [{channel_id: "manager"}, {channel_id: "manager.external.test"},
+    {session_mode: "attached_host"}, {agent_id: "other"}]) {
+    assert.deepEqual(planChatMode({...wake, session: {...enabled, ...changes}}),
+      {operation: "wake", state: "refused", reason: "no_wake_owner"});
+  }
 });
 
 test("only a provider-dispatched wake Turn is dispatch evidence; a queued or merely starting one is replayed", () => {

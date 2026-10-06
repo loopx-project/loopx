@@ -7,6 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .ownership import (
+    MaterialProjectScope, material_owner_fields, verify_project_material_write,
+)
+
 from ._validation import (
     capability_contract,
     check_record_keys,
@@ -252,7 +256,8 @@ def _readback(
 
 def build_material_candidate_intake_proposal(
     *,
-    goal_id: str,
+    goal_id: str | None = None,
+    project_scope: MaterialProjectScope | None = None,
     proposal_id: str,
     store_id: str,
     source_authority_revision: str,
@@ -268,7 +273,7 @@ def build_material_candidate_intake_proposal(
 
     proposal: dict[str, Any] = {
         "schema_version": MATERIAL_CANDIDATE_INTAKE_PROPOSAL_SCHEMA_VERSION,
-        "goal_id": compact_token(goal_id, field="goal_id"),
+        **material_owner_fields(goal_id=goal_id, project_scope=project_scope),
         "proposal_id": compact_token(proposal_id, field="proposal_id"),
         "store_id": compact_token(store_id, field="store_id"),
         "source_authority_revision": compact_token(
@@ -299,10 +304,21 @@ def build_material_candidate_intake_proposal(
         "raw_content_captured": False,
         "private_locations_captured": False,
         "visibility": "public_safe",
-        "capability": capability_contract(packet_role="candidate_intake_proposal"),
+        "capability": capability_contract(packet_role="candidate_intake_proposal", project_scoped=project_scope is not None),
     }
     proposal["proposal_ref"] = packet_ref("material-candidate-intake", proposal)
     return proposal
+
+
+def _packet_owner(value: Mapping[str, Any]) -> dict[str, Any]:
+    owner = material_owner_fields(
+        goal_id=value.get("goal_id"), project_scope=value.get("project_scope"),
+    )
+    if "project_scope" in owner:
+        contract = value.get("capability")
+        if not isinstance(contract, Mapping) or contract.get("scope") != "project":
+            raise ValueError("project material packet must declare project capability scope")
+    return owner
 
 
 def _proposal(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -317,6 +333,7 @@ def _proposal(value: Mapping[str, Any]) -> dict[str, Any]:
             "exact_read_ref",
             "exact_read_verified",
             "goal_id",
+            "project_scope",
             "lifecycle_state",
             "material_ref",
             "observed_at",
@@ -337,7 +354,6 @@ def _proposal(value: Mapping[str, Any]) -> dict[str, Any]:
             "content_digest",
             "content_size_bytes",
             "exact_read_ref",
-            "goal_id",
             "material_ref",
             "proposal_ref",
             "schema_version",
@@ -349,6 +365,8 @@ def _proposal(value: Mapping[str, Any]) -> dict[str, Any]:
     )
     if value.get("schema_version") != MATERIAL_CANDIDATE_INTAKE_PROPOSAL_SCHEMA_VERSION:
         raise ValueError("candidate intake proposal has an unsupported schema_version")
+    owner = _packet_owner(value)
+
     required_truth = {
         "owner_gate_required": True,
         "exact_read_verified": True,
@@ -362,7 +380,7 @@ def _proposal(value: Mapping[str, Any]) -> dict[str, Any]:
         if value.get(field) != expected:
             raise ValueError(f"candidate intake proposal has invalid {field}")
     return {
-        "goal_id": compact_token(value["goal_id"], field="proposal.goal_id"),
+        **owner,
         "proposal_ref": compact_token(
             value["proposal_ref"],
             field="proposal.proposal_ref",
@@ -470,6 +488,11 @@ def apply_material_candidate_intake(
     material_ref = proposal["material_ref"]
     timestamp = iso_timestamp(observed_at, field="observed_at")
     owner_gate = compact_token(owner_gate_ref, field="owner_gate_ref")
+
+    verify_project_material_write(
+        provider, owner=proposal, store_id=store_id, owner_gate_ref=owner_gate,
+        observed_at=timestamp,
+    )
 
     before = _snapshot(
         provider,
@@ -624,6 +647,11 @@ def apply_material_candidate_intake(
         field="append_reconciliation.validation_ref",
     )
 
+    verify_project_material_write(
+        provider, owner=proposal, store_id=store_id, owner_gate_ref=owner_gate,
+        observed_at=timestamp,
+    )
+
     transition = provider.switch_authority(
         store_id=store_id,
         expected_revision=source_revision,
@@ -680,7 +708,9 @@ def apply_material_candidate_intake(
 
     receipt: dict[str, Any] = {
         "schema_version": MATERIAL_CANDIDATE_INTAKE_APPLY_RECEIPT_SCHEMA_VERSION,
-        "goal_id": proposal["goal_id"],
+        **material_owner_fields(
+            goal_id=proposal.get("goal_id"), project_scope=proposal.get("project_scope"),
+        ),
         "receipt_id": compact_token(receipt_id, field="receipt_id"),
         "proposal_ref": proposal["proposal_ref"],
         "provider_id": expected_provider,
@@ -718,7 +748,7 @@ def apply_material_candidate_intake(
         "private_locations_captured": False,
         "visibility": "public_safe",
         "observed_at": timestamp,
-        "capability": capability_contract(packet_role="candidate_intake_apply_receipt"),
+        "capability": capability_contract(packet_role="candidate_intake_apply_receipt", project_scoped="project_scope" in proposal),
     }
     receipt["receipt_ref"] = packet_ref("material-candidate-intake-apply", receipt)
     return receipt
@@ -766,6 +796,12 @@ def rollback_material_candidate_intake(
     timestamp = iso_timestamp(observed_at, field="observed_at")
     owner_gate = compact_token(owner_gate_ref, field="owner_gate_ref")
 
+    owner = _packet_owner(apply_receipt)
+    verify_project_material_write(
+        provider, owner=owner, store_id=store_id, owner_gate_ref=owner_gate,
+        observed_at=timestamp,
+    )
+
     current = _snapshot(
         provider,
         provider_id=expected_provider,
@@ -774,6 +810,11 @@ def rollback_material_candidate_intake(
     )
     if current.authority_revision != current_revision:
         raise ValueError("candidate intake rollback authority revision CAS failed")
+
+    verify_project_material_write(
+        provider, owner=owner, store_id=store_id, owner_gate_ref=owner_gate,
+        observed_at=timestamp,
+    )
 
     transition = provider.switch_authority(
         store_id=store_id,
@@ -828,7 +869,7 @@ def rollback_material_candidate_intake(
 
     receipt: dict[str, Any] = {
         "schema_version": MATERIAL_CANDIDATE_INTAKE_ROLLBACK_RECEIPT_SCHEMA_VERSION,
-        "goal_id": compact_token(apply_receipt.get("goal_id"), field="receipt.goal_id"),
+        **owner,
         "receipt_id": compact_token(receipt_id, field="receipt_id"),
         "apply_receipt_ref": compact_token(
             apply_receipt.get("receipt_ref"),
@@ -859,7 +900,8 @@ def rollback_material_candidate_intake(
         "visibility": "public_safe",
         "observed_at": timestamp,
         "capability": capability_contract(
-            packet_role="candidate_intake_rollback_receipt"
+            packet_role="candidate_intake_rollback_receipt",
+            project_scoped="project_scope" in owner,
         ),
     }
     receipt["receipt_ref"] = packet_ref(

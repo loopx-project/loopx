@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { goalCreateRequest } from "./goal-create-request.ts";
+import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -199,8 +200,8 @@ assert.match(tasks, /disabled=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)\}/
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
 assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.goalId\)\?\.activationState/, "Goal lifecycle rollback captures the rendered state instead of assuming the operation inverse");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.previous\)/, "Rejected Goal lifecycle apply rolls back the optimistic projection");
-assert.match(page, /if \(applied\.actionKind === "goal\.lifecycle" \|\| applied\.actionKind === "gate\.resolve"\) \{\s*void reconcileStatus\(applied\.goalId \? \[applied\.goalId\] : undefined\)/, "Successful Goal lifecycle or decision apply reconciles the affected Goal without blocking the sidebar");
-assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ background: true, invalidateGoalIds: options\?\.invalidateGoalIds, readScope: "missing" \}/, "Lifecycle reconciliation uses the non-fatal background status path");
+assert.match(page, /if \(applied\.actionKind === "goal\.lifecycle" \|\| applied\.actionKind === "gate\.resolve" \|\| applied\.actionKind === "todo\.update"\) \{\s*void reconcileStatus\(applied\.goalId \? \[applied\.goalId\] : undefined\)/, "Successful lifecycle, decision or Todo update reconciles the affected Goal without blocking the sidebar");
+assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ rejectOnError: true, background: true, invalidateGoalIds: options\?\.invalidateGoalIds, readScope: "missing" \}/, "Action reconciliation preserves the background workspace and reports failed reads to its caller");
 assert.match(dashboard, /statusRequestCanCommit\(statusRequestFenceRef\.current, request\)/, "A stale background response cannot overwrite a newer optimistic transition");
 assert.match(sidebar, /Trash2/, "Stopped Goals expose a delete icon");
 assert.match(sidebar, /onRequestGoalLifecycle\(goal, "delete"\)/, "Goal deletion stays behind the lifecycle request boundary");
@@ -300,7 +301,7 @@ assert.doesNotMatch(page, /personal-worker-strip/, "Manager home omits the redun
 assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Workspace header does not expose theme switching");
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
-assert.match(dashboard, /if \(selectedRoute\.agentId === "status-only" \|\| \(!targetGoal && targetContextId !== "manager"\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback");
+assert.match(dashboard, /if \(\(selectedRoute\.agentId === "status-only" && targetContext\.kind !== "project"\)\s*\|\| \(targetContext\.kind === "goal" && !targetGoal\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback; a workspace conversation never answers from the Goal projection");
 assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
@@ -435,7 +436,14 @@ assert.match(machineSettings, /periodicReportActivationDescription/, "Machine pe
 assert.match(i18n, /Enabled means automatic delivery at validated stage boundaries/, "English machine settings name automatic stage delivery");
 assert.match(i18n, /开启后将在已验证的阶段节点自动投递/, "Chinese machine settings name automatic stage delivery");
 assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale\)/, "Machine capability fields follow the selected locale");
-assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale\)/, "Goal capability fields follow the selected locale");
+assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/,
+  "Goal fields use the selected locale and capability-specific vocabulary");
+assert.deepEqual(localizedCapabilityFieldCopy("en", "explore_harness").mode.options,
+  { off: "Off", evidence: "Evidence only", planning: "Evidence and planning" });
+assert.deepEqual(localizedCapabilityFieldCopy("zh-CN", "explore_harness").mode.options,
+  { off: "关闭", evidence: "仅记录证据", planning: "证据与规划" });
+assert.equal(localizedCapabilityFieldCopy("en", "explore_harness").enabled.label, "Enabled");
+assert.equal(localizedCapabilityFieldCopy("zh-CN", "explore_harness").enabled.label, "启用");
 assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");
@@ -466,7 +474,7 @@ for (const capabilityId of [
   const matches = capabilityLocalization.match(new RegExp(`${capabilityId}:`, "g")) ?? [];
   assert.equal(matches.length, 2, `${capabilityId} has English and Simplified Chinese metadata`);
 }
-for (const fieldKey of ["allowed_domains", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "review_priority", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone"]) {
+for (const fieldKey of ["agent_orders", "allowed_domains", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone"]) {
   const matches = capabilityLocalization.match(new RegExp(`^\\s+${fieldKey}:`, "gm")) ?? [];
   assert.equal(matches.length, 2, `${fieldKey} has English and Simplified Chinese field copy`);
 }

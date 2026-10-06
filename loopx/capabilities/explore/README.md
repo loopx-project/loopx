@@ -1,19 +1,19 @@
-# Exploration Result Layer
+# Explore Harness
 
 Status: supported optional capability; default-off harness execution contract.
 
 ## At a Glance
 
-LoopX Explore is a supported, default-off optional capability for
+Explore Harness is a supported, default-off optional capability for
 long-running exploration goals (software research, security attack-surface
 mapping, domain studies). It turns "go look around" into a bounded,
 observable, gated process with three pillars:
 
-1. **Explore Graph** - an append-only, public-safe evidence topology
+1. **Evidence graph** (Explore Graph) - an append-only, public-safe evidence topology
    (nodes / edges / findings) plus bounded projections, Mermaid export, and
    canonical/executive presentation. It answers: what has been explored,
    where the loop is blocked and why, and what was found.
-2. **Explore Harness** - deny-by-default, read-only branch planners
+2. **Optional planning** - deny-by-default, read-only branch planners
    (`todo-branch-plan`, `worker-branch-plan`) that rank and bundle next
    steps (DSpark-style confidence/prefix/load, `adaptive-resilient` and
    `moe-router` profiles, resource-aware portfolio), without claiming,
@@ -36,11 +36,11 @@ executes it through the normal LoopX lifecycle.
 
 ## Quick Start
 
-Enable the gates, record evidence, project, and plan:
+Choose a mode, record evidence, project, and plan:
 
 ```bash
-loopx configure-goal --goal-id <id> --explore-graph-enabled \
-  --explore-harness-enabled --explore-harness-profile adaptive-resilient --execute
+loopx configure-goal --goal-id <id> --explore-mode planning \
+  --explore-harness-profile adaptive-resilient --execute
 
 loopx explore node --goal-id <id> --title "Attack surface A" --status exploring
 loopx explore edge --goal-id <id> --from A --to B --type leads_to
@@ -51,8 +51,7 @@ loopx explore graph --goal-id <id> --graph-format mermaid --out explore.mmd
 loopx explore worker-branch-plan --goal-id <id> --harness-profile adaptive-resilient --worker-width 3
 ```
 
-Both gates are separate and default-off (see "Independent Per-Goal Opt-In
-Gates"). When closed, evidence-backed surfaces have an explicit reason to be
+Explore Harness is off by default (see "Explore Harness Modes"). When closed, evidence-backed surfaces have an explicit reason to be
 tested together, the next `quota should-run` / turn packet projects a
 composition gap and can derive a joint-experiment successor todo (see
 "Composition Frontier"). The detailed contract follows.
@@ -357,51 +356,66 @@ deny-by-default disabled packet carries the `boundary` block plus the opt-in
 operator to decide which workers to start, but it cannot launch workers or
 mutate the control plane on its own.
 
-### Independent Per-Goal Opt-In Gates
+### Explore Harness Modes
 
-Explore Graph and Explore Harness are separate optional capabilities. Enabling
-one never enables the other:
+Explore Harness is one optional capability with an evidence graph and optional
+read-only planning. Goal settings offer one editor with three modes:
 
-- `explore_graph.enabled` controls durable graph projection and any already
-  configured presentation sink. After each successful material
-  `refresh-state` transaction, LoopX folds the canonical Explore evidence and
-  runs the configured sink. Semantic digests make an unchanged refresh a
-  zero-write operation. A configured row sink is complete only after a
-  row/result-id readback verifies the projection. A failed sync or readback
-  does not advance its digest, so the next material refresh retries it.
-  Visual sinks also preflight their deterministic delivery marker: an existing
-  marker reconciles the prior write without publishing again, while a bounded
-  readback timeout stops further calls in that stage batch and leaves a
-  retryable receipt instead of blindly repeating remote writes.
-- `spawn_policy.explore_harness.enabled` controls only the read-only branch
-  planners described below. It does not create, update, or publish a graph.
-
-Both gates are absent/false by default. A common operating mode is Graph on
-and Harness off: keep an operator-facing topology current without changing
-how work is planned.
-
-```yaml
-# inside the registered goal entry
-explore_graph:
-  enabled: true
-
-spawn_policy:
-  explore_harness:
-    enabled: false
-```
-
-Configure the gates independently instead of editing the registry:
+| Mode | Evidence graph | Branch planning |
+| --- | --- | --- |
+| `off` (default) | Inactive | Inactive |
+| `evidence` | Active | Inactive |
+| `planning` | Active | Active |
 
 ```bash
-loopx configure-goal --goal-id <id> \
-  --explore-graph-enabled \
-  --no-explore-harness-enabled \
-  --execute
+loopx configure-goal --goal-id <id> --explore-mode planning  # preview
+loopx configure-goal --goal-id <id> --explore-mode planning --execute
+loopx configure-goal --goal-id <id>                          # read back
+loopx explore turn-context --goal-id <id> --agent-id <registered-agent>
+loopx configure-goal --goal-id <id> --explore-mode evidence --execute
+loopx configure-goal --goal-id <id> --explore-mode off --execute
 ```
 
-Use `--no-explore-graph-enabled` to stop automatic graph work. Disabling the
-gate preserves existing evidence and display state; it only prevents future
-automatic projection and sink writes.
+Existing `explore_graph.enabled` and `spawn_policy.explore_harness` storage,
+record ids and CLI aliases remain supported. A legacy Graph-only Goal maps to
+`evidence`; a legacy Harness-enabled Goal maps to `planning`, now including the
+graph. Enabling planning writes both internal flags. Disabling planning through
+the legacy Harness flag retains the evidence layer. Disabling the Graph while
+planning remains enabled fails with an actionable mode command. Do not combine
+`--explore-mode` with the legacy enable flags in one request.
+
+Both enabled modes register an `explore.turn_context` turn-start hook. Its
+`required_reads` entry is a **before-work read obligation** in the normal packet.
+The command returns at most three recent nodes/findings and, in planning mode,
+three suggested Todo branches, plus structured commands for detail or evidence
+recording. The read folds existing history but bounds the returned context;
+it does not claim to reduce history IO. The agent chooses evidence-backed work;
+planner suggestions do not require branching on every turn or recording empty
+ceremonial nodes. Use the detail command when the short view is insufficient.
+
+Planning context also keeps a bounded `typed_evidence_audit` on suggested
+branches with explicit Todo/node links, and up to three existing exploring
+frontier nodes. Linked findings are resolved before the recent-history limit,
+so unrelated newer results do not hide an older linked refutation. The audit
+retains its diagnostic-only meaning and unchanged planner score; unknown links
+are visible and omission counts refer to the bounded audit, not the whole log.
+Use `todo update --goal-id <id> --agent-id <agent> --todo-id <todo>
+--explore-result-node-ref <node>` under the ordinary update/lease contract to
+link existing evidence. Before an experiment, use that evidence to explain the
+route and discriminating probe; a repeat can test changed conditions or
+uncertainty. These decision guidelines introduce no adoption/writeback gate,
+automatic successor or spawn permission. A context read does not prove that the
+model adopted the evidence or improved its result.
+
+Mode selection does not grant spawn, claim, lease, execution, quota or external
+publication authority. `spawn_allowed=false` retains analysis-only planning.
+Feature-off adds no Explore hook or evidence reads. Turning off preserves all
+recorded evidence and existing display state.
+
+The evidence layer reuses the material-refresh projection and any separately
+configured, authorized sink. Semantic digests avoid unchanged writes. Row sinks
+must read back result ids; failed sync/readback leaves the digest retryable.
+Visual sinks reconcile deterministic delivery markers before retrying writes.
 
 When a single run may update local state but is not authorized to write any
 configured external sink, keep the graph enabled and pass

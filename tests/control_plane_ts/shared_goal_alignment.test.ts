@@ -8,17 +8,42 @@ import {
 
 const DIGEST = "sha256:" + "a".repeat(64);
 
-test("canonical Todo basis does not fabricate an event frontier or accept mixed selectors", () => {
-  const request = baseRequest({source_basis: {revision_basis: "canonical_todo_snapshot",
+function canonicalRequest(sourceAuthority: string) {
+  return {...baseRequest(), source_basis: {revision_basis: "canonical_todo_snapshot",
     state_event_basis_sequence: 0, source_basis_digest: DIGEST, state_updated_at: null,
-    todo_basis: {source_authority: "file_v0", provider_revision: "opaque-provider-token", records_sha256: "a".repeat(64)}},
-    frontier_basis: {basis_source: "unbound", based_on_state_event_sequence: null, last_agent_event_id: null}});
-  const result = projectSharedGoalAlignment(request);
-  assert.deepEqual(result.drift_facts, []);
-  assert.ok(result.conflict_facts.includes("frontier_basis_unverifiable"));
-  assert.equal(result.source_basis.todo_basis?.provider_revision, "opaque-provider-token");
-  assert.throws(() => projectSharedGoalAlignment({...request, work_items: [], observed_at: "2026-09-09T00:00:00Z"}), /cannot mix/);
-});
+    todo_basis: {source_authority: sourceAuthority, provider_revision: "opaque-provider-token", records_sha256: "a".repeat(64)}},
+    frontier_basis: {basis_source: "unbound", based_on_state_event_sequence: null, last_agent_event_id: null}};
+}
+
+for (const sourceAuthority of ["file_v0", "sqlite_v0"]) {
+  test(`${sourceAuthority} Todo basis preserves identity without fabricating an event frontier`, () => {
+    const request = canonicalRequest(sourceAuthority);
+    const result = projectSharedGoalAlignment(request);
+    assert.deepEqual(result.drift_facts, []);
+    assert.deepEqual(result.source_basis, request.source_basis);
+    assert.ok(result.conflict_facts.includes("frontier_basis_unverifiable"));
+    assert.equal(result.read_only, true);
+    assert.throws(() => projectSharedGoalAlignment({...request, work_items: [], observed_at: "2026-09-09T00:00:00Z"}), /cannot mix/);
+  });
+
+  test(`${sourceAuthority} rejects corrupt or absent canonical basis fields`, () => {
+    const request = canonicalRequest(sourceAuthority);
+    for (const patch of [
+      {source_authority: "legacy"}, {source_authority: "nokv_v0"},
+      {source_authority: "postgresql_v0"}, {source_authority: "sqlite_v1"},
+      {source_authority: null}, {provider_revision: ""}, {provider_revision: " "},
+      {provider_revision: 7}, {records_sha256: "a".repeat(63)},
+      {records_sha256: "a".repeat(65)}, {records_sha256: "A".repeat(64)},
+      {records_sha256: "sha256:" + "a".repeat(64)}, {records_sha256: null},
+    ]) {
+      assert.throws(() => projectSharedGoalAlignment({...request, source_basis: {
+        ...request.source_basis, todo_basis: {...request.source_basis.todo_basis, ...patch},
+      }}));
+    }
+    const {todo_basis: _basis, ...sourceBasis} = request.source_basis;
+    assert.throws(() => projectSharedGoalAlignment({...request, source_basis: sourceBasis}), /requires a canonical Todo basis/);
+  });
+}
 
 function baseRequest(overrides: Record<string, unknown> = {}) {
   return {

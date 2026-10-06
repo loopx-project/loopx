@@ -1,4 +1,4 @@
-"""Compact, complete revisions for Todo advancement frontiers."""
+"""Complete source codecs and index transport for the typed Todo frontier owner."""
 
 from __future__ import annotations
 
@@ -96,23 +96,6 @@ def _request(operation: str, **facts: Any) -> dict[str, Any]:
     return result
 
 
-def _checkpoint_tuple(value: Any) -> tuple[str | None, str | None, bool] | None:
-    if value is None:
-        return None
-    if value["complete"]:
-        return value["frontier_revision"], value["frontier_updated_at"], True
-    return None, None, False
-
-
-def selectable_advancement_frontier_revision(
-    source_items: list[dict[str, Any]] | None, *, agent_id: str | None,
-) -> tuple[str | None, str | None, bool]:
-    result = _checkpoint_tuple(_request("select", rows=frontier_source_facts(source_items),
-        agent_id=normalize_todo_claimed_by(agent_id))["checkpoint"])
-    assert result is not None
-    return result
-
-
 def build_advancement_frontier_revision_index(
     source_items: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -127,10 +110,3 @@ def attach_advancement_frontier_revision_index(
 ) -> None:
     if role == "agent":
         summary["advancement_frontier_revision_index"] = build_advancement_frontier_revision_index(source_items)
-
-
-def advancement_frontier_revision_from_index(
-    value: Any, *, agent_id: str | None,
-) -> tuple[str | None, str | None, bool] | None:
-    return _checkpoint_tuple(_request("read", index=value,
-        agent_id=normalize_todo_claimed_by(agent_id))["checkpoint"])

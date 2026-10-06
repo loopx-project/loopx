@@ -97,9 +97,9 @@ permissions:
 
 concurrency:
   group: frontstage-pages-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'deployment' }}
-  # Keep production deploys in one lane, but isolate each pull request so an
-  # unrelated PR or main push cannot cancel its validation run.
-  cancel-in-progress: true
+  # Supersede validation for the same PR, but let an active publication finish.
+  # Frequent main pushes replace the pending deployment instead of starving Pages.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -135,20 +135,11 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Verify packaged Personal Workspace is current
+      # This artifact serves the public site and projection demo, not /chat/.
+      # Python Tests owns packaged Personal Workspace qualification.
+      - name: Install browser for public site checks
         working-directory: apps/presentation/dashboard
-        run: |
-          npm run build:chat
-          python ../../../scripts/chat_bundle.py verify --source
-          ./node_modules/.bin/playwright install --with-deps chromium
-          npm run smoke:personal-workspace-packaged
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: frontstage-chat-bundle-${{ github.sha }}
-          path: loopx/web/chat/
-          if-no-files-found: error
-          retention-days: 7
+        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Install docs dependencies
         run: |

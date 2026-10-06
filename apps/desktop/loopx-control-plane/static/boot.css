@@ -76,19 +76,6 @@ p { margin: 16px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
   animation: boot-progress 1.25s ease-in-out infinite;
 }
 .boot-note { margin-top: 14px; font-size: 12px; }
-.pairing { width: 100%; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); text-align: left; }
-.pairing[hidden] { display: none; }
-.pairing h2 { margin: 0; font-size: 15px; letter-spacing: -.01em; line-height: 1.4; }
-.pairing-lead { margin-top: 10px; font-size: 13px; }
-.pairing-revisions { display: grid; gap: 6px; margin: 14px 0 0; padding: 12px; border: 1px solid var(--hairline); border-radius: 8px; font-size: 12px; }
-.pairing-revisions div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.pairing-revisions dt { color: var(--muted); }
-.pairing-revisions dd { margin: 0; font-family: "Geist Mono", monospace; }
-.pairing-actions { display: flex; flex-direction: column; margin-top: 14px; }
-.pairing-actions button { width: 100%; margin-top: 8px; text-align: center; }
-.pairing-actions .pairing-primary { border-color: var(--indicator); background: var(--indicator); color: var(--surface); }
-.pairing-status { min-height: 20px; margin-top: 10px; font-size: 12px; }
-.pairing-note { margin-top: 10px; font-size: 11px; }
 .recovery { margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--hairline); font-size: 14px; }
 details { margin-top: 20px; font-size: 14px; }
 summary { cursor: pointer; padding: 10px 0; }
@@ -101,10 +88,6 @@ button:disabled { cursor: wait; opacity: .6; }
 main[data-state="error"] .mark { box-shadow: none; animation: none; }
 main[data-state="error"] .status-dots { display: none; }
 main[data-state="error"] .progress::after { width: 100%; transform: none; background: var(--warning); animation: none; }
-/* The pairing decision is a question, not a failure or a wait. */
-main[data-state="decision"] .mark { box-shadow: none; animation: none; }
-main[data-state="decision"] .status-dots { display: none; }
-main[data-state="decision"] .progress { display: none; }
 @keyframes boot-progress {
   0% { transform: translateX(-60px); }
   50% { transform: translateX(86px); }

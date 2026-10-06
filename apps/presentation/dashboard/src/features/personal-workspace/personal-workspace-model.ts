@@ -1,6 +1,6 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
-import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
+import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -37,15 +37,21 @@ export type WorkspaceAgentTodo = {
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
   resumeReceiptId?: string | null;
+  blockedReason?: string | null;
   claimedBy?: string | null;
   dependencies?: string[];
   done: boolean;
   evidence?: string | null;
+  note?: string | null;
   nextTransition?: string | null;
   priority?: string | null;
   status?: string | null;
   taskClass?: string | null;
   taskDomain?: string | null;
+  /** Original request retained when text is shortened for a card. */
+  requestText?: string;
+  /** The authority id, absent when a legacy projection needs a display-only id. */
+  sourceTodoId?: string | null;
   text: string;
   todoId: string;
   validationDigest?: string | null;
@@ -55,7 +61,7 @@ export type WorkspaceAgentTodo = {
 
 /** Both active status and retained history carry the same inspector facts. */
 export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
-  "todo_id" | "text" | "done" | "status" | "claimed_by" | "evidence" | "note"
+  "todo_id" | "text" | "done" | "status" | "claimed_by" | "evidence" | "note" | "reason"
   | "priority" | "task_class" | "task_domain" | "completed_at" | "resume_when"
   | "resume_ready" | "resume_condition" | "completion_validation_sha256"
   | "completion_validation_revision" | "completion_validation_revision_history"
@@ -65,11 +71,15 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     ? (receipt as Record<string, unknown>).receipt_id : null;
   return {
     todoId: todo.todo_id?.trim() || fallbackId,
+    sourceTodoId: todo.todo_id?.trim() || null,
+    requestText: todo.text,
     text: todo.text,
     done: todo.status === "deferred" ? false : todo.done,
     status: todo.status ?? null,
+    blockedReason: todo.status === "blocked" ? todo.reason?.trim() || null : null,
     claimedBy: todo.claimed_by ?? null,
-    evidence: todo.evidence || todo.note || null,
+    evidence: todo.evidence ?? null,
+    note: todo.note ?? null,
     priority: todo.priority ?? null,
     taskClass: todo.task_class ?? null,
     taskDomain: todo.task_domain ?? null,
@@ -82,6 +92,16 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     validationRevisionActor: todo.completion_validation_revision_history.at(-1)?.actor_agent_id ?? null,
   };
 }
+
+/** Host-granted workspaces that can scope the steward conversation without a Goal. */
+export type WorkspaceConversationDirectory = {
+  /** null until the host's workspace grants have been read. */
+  projects: ChatProject[] | null;
+  readFailed: boolean;
+  selectedRef: string | null;
+  /** null returns the conversation to the steward scope. */
+  onSelect: (projectRef: string | null) => void;
+};
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
   goalId: string;
@@ -516,7 +536,7 @@ export type PersonalWorkspaceCallbacks = {
   onSendMessage?: (
     message: string,
     agentId: string,
-    goalId: string | null,
+    contextId: string,
     attachments?: WorkspaceImageAttachment[],
   ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;

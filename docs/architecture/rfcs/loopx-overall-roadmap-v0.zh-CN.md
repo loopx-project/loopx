@@ -9,6 +9,8 @@
 
 **本地权威收尾检查点（2026-10-02）。** R5/T4 使用按 `9b0486dc1` 复核的[验证→迁移→删除计划](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#当前收尾验证迁移与删除2026-10-02)。先收尾现有 #5413/#5466/#5283，验证一个安装态可回退候选，再分别决定有界自愿试用和发布默认准入。Canonical 创建、legacy 策略迁移与最后 writer 删除各有明确出口；Python 替代 owner 随最后调用方删除。R6 独立，不用固定剩余 PR 数或历史测试数量证明完成。
 
+**S2/S12 启动诊断检查点（2026-10-04）** 已移至[执行账本](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.zh-CN.md)。
+
 ## 1. 总目标与产品路线
 
 LoopX 的目标是让人用本地前端或 Lark 提出、修订和验收复杂目标，由持久管家协调多个拥有独立工作承诺的长程 LoopX Agent，在本地 managed 与云端 runtime 上持续完成可验证的工作。单 Agent 的长程可靠性是基础，多个 Agent 的协作、handoff、恢复和共享目标收敛是核心能力，百 Agent 规模是需要独立证明的系统资格。
@@ -63,7 +65,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | **S4 runtime/host/daemon · P0/P1** | attached/managed、Turn、broker、runtime connector 和 Desktop 修复存在；“registered”不等于可执行 | 选择一个真实合格组合完成多 Turn supervision；restart/cancel/drain/stop 不丢工作且旧 executor 被 fence。之后扩 host parity、service-profile 唯一 owner、干净安装与版本升级；按 adapter 能力显示不支持项 |
 | **S5 前端、Lark 与人机交互 · P0/P1** | 本地对话、settings、proposal 和部分 Goal Channel vertical 已有；统一受众/会话/工作回读仍需资格 | 用一个团队旅程贯穿设置、工作图、handoff、阻塞、成本、修订、产物和回报；共享 typed projection，验证重连/重复点击/stale/原路反馈。实时 IM 复用 Chat/Turn：先让同一 listener 下的独立会话互不阻塞，再按[共享运行契约](capable-manager-semantic-handoff-v0.zh-CN.md#10-运行契约)验收普通私聊开通、显式角色选择、忙碌会话准入、临时进度、媒体和精确权限回调。再做 intelligent review、无障碍键盘流程、中英术语、错误可恢复和离线降级；只在真实决策处打断人；[团队实时工作区](live-team-workspace-v0.zh-CN.md)让交换、修订与原协调员继续推进可见；其[工作尺度地图分线](live-team-workspace-v0.zh-CN.md#11-交付顺序与激进推进-r2-的关系)先画出每个 Goal 的类型化 Todo 关系（W1），再在同一节点叠加实时状态与产出 |
 | **S6 材料、证据、记忆与学习 · P1** | authority registry、material lifecycle/frontier、decision context、reward memory、turn recall 已有；方向基线和部分归因仍是提案 | 先打通“材料 revision→同 Agent 阅读→决策引用→产物/结果”；失效、撤销、来源消失与遗忘策略可回读。handoff 保存影响决策的摘要与授权 artifact；OpenViking/Obelisk 按可选 provider 资格化。utility 的因果收益另以对照证明，不把相关性当提升 |
-| **S7 预算、调度与 fleet 规模 · P0 观测/P1–P2 扩展** | quota/scheduler 与部分 usage aggregate 存在；全 provider 成本、分布式资源预留及百 Agent 并发尚需证据 | 先区分配置预算、准入、消耗与估算；未知成本不记零、重复事件不双记。R7 分页/有界摘要及[完整历史传输](typescript-control-plane-migration-v0.zh-CN.md)，验收超出 RPC 上限后的写回/重放/单次扣记；provider/host 限流、公平性、背压、事件唤醒与失败隔离；分别报告注册数/活跃数/吞吐量和每个验收成果成本 |
+| **S7 预算、调度与 fleet 规模 · P0 观测/P1–P2 扩展** | quota/scheduler 与部分 usage aggregate 存在；全 provider 成本、分布式资源预留及百 Agent 并发尚需证据 | 先区分配置预算、准入、消耗与估算；未知成本不记零、重复事件不双记。R7 分页/有界摘要及[完整历史传输](typescript-control-plane-migration-v0.zh-CN.md)，验收超出 RPC 上限后的写回/重放/单次扣记；provider/host 限流、公平性、背压、事件唤醒与失败隔离；分别报告注册数/活跃数/吞吐量和每个验收成果成本 回执支持的语义进展已能关闭原 host Turn，保留未完成/等待中的 Todo；file/SQLite guard 回放覆盖 frontier 改变，边界见[quota 结算契约](../../quota-allocation.md#receipt-backed-settlement-progress)。这项有界修复不证明 fleet 规模或宿主延迟。 |
 | **S8 能力、扩展与领域集成 · P1/P2** | 已有 capability catalog、extension 生命周期、hook、工程/研究/content/office 能力及 computer-use 合同 | 优先用现有 issue-fix/PR-review 和材料/研究 caller 检验共享控制面；每个 provider 带 readiness、版本、权限、默认关闭、卸载/回滚、失败隔离与真实入口证据。新 domain effect 从模拟单操作闭环开始，不先建市场或通用工作流 DSL |
 | **S9 身份、权限、隐私与信任 · P0 持续/P1–P2 远端** | public/private 边界、作用域、capability gate、fence 与确认合同分布在已有 owner | 随 R1/R3 验 sender/audience/artifact scope 和 stale authority；远端 R6 必须认证 tenant/Goal/actor/host、轮换撤销与最小权限。凭据保管、非可信工具/文档输入、依赖供应链、审计留存/删除及漏洞响应纳入真实路径；角色、消息或 memory 不铸造写权限 |
 | **S10 可靠性、诊断与运行运营 · P0/P1** | recovery/canary、read-only diagnostics 原型及 DSH event adapter 已有；C0/C1、开销和完整运营资格仍未闭合 | 故障分类→可观察状态→恢复演练→防复发；覆盖进程/存储/网络/投递故障和数据增长。Chat 上下文或 provider 读取晚于停止等待返回时，按持久 Turn 和精确 Session claim 判断：即使新请求已完成，也不得再启动旧请求或交接迟到结果。这项有界 GQ08 修复不证明上游 interrupt 保真，也不取消其他 owner 已准入的效果；完整恢复仍遵循[共享对话运行契约](capable-manager-semantic-handoff-v0.md#10-operational-contract)。定义并冻结 SLO、RPO/RTO、容量/保留边界，实测后标 qualified；Lark 传输背压与 drain 保留 App consumer lease；未持久化的缓冲消息不算已受理工作或完成回执。运行手册含升级、备份恢复、停止与人工接管，不以测试数代替恢复结果 |
@@ -89,6 +91,10 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | [Testing/quality](../../development/testing-and-quality.md)、[CI impact](../../development/ci-impact-selection.md)、[source correctness](../../reference/protocols/local-state-write-correctness-v0.md)、[release readiness](../../product/release-readiness.md) | S2/S10/S12 | 独立语义预期、真实 backend 与安装入口、负例/mutation；控制验证成本，但不把 skipped 当通过 |
 | [Install](../../guides/installing-loopx.md)、[newcomer path](../../guides/newcomer-command-path.md)、[design](../../development/design.md)、[user guide](../../guides/personal-workspace-user-guide.md) | S1/S5/S12 | 首次价值路径、错误修复、支持平台、可访问性和双语一致性；UI 变化使用既有 design 和 first-screen review |
 | [Public adoption](../../product/public-adoption-loop.md)、[scenario gaps](../../product/scenario-capability-gap-map.md)、[SaaS assessment](../../product/roadmaps/saas-opportunity-assessment.zh-CN.md)、[licensing](../../project/licensing.md)、[governance](../../../.github/GOVERNANCE.md) | S12/S13 | 公开成果与失败反馈可追溯；商业假设独立验收，license/贡献者归属/社区权限按既有政策，不由总纲改写 |
+
+[飞书个人事项跟进 profile](../../product/use-cases/office-operations/personal-follow-through.zh-CN.md) 是[管家 RFC](capable-manager-semantic-handoff-v0.zh-CN.md)在 S1/S5/S6/S8/S9 的有界应用。通用授权、持续跟进和返回沿用管家既有验收；场景文档保留来源理解与评测。原独立提案已归并，安装版私有桌面流程仍待验收，不关闭已有门槛。
+
+S6/S8 的有界来源读取切片提供[现有 Ego Page 的只读 MCP adapter](../../integrations/ego-source-reader.md)。它返回受限 origin 与确切 URL 下的渲染文本、图片索引，以及按序号读取的单张渲染图片区域；不创建会话、材料 authority 或浏览器服务。原生 Bot 已验证单图内容消费；原渠道回复须独立验收。单图不证明全部图片、完整原文或引用原帖已读。来源捕获、验证墙、截断、未加载图片与可选 provider 设置入口仍保留各自的验收边界，不以文本或单图提取关闭整个材料工作流。
 
 ## 3. 组合里程碑、资源次序与完成定义
 
@@ -266,8 +272,8 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | S5/S11 | 已接受；Held | P3：第二个重复真实需求出现才重开；sidecar 不改变 gate/quota/调度 |
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.zh-CN.md) | S8/S9 + R2/R3 | 已接受；规范操作接缝存在，受管原生传输待 owner review | 验收来源上下文与已准入执行者分离、精确用户批准→单次消费→垂域证据→原路返回；自有 Turn/delegation 不等待 Desktop 认证。真实批准/效果/唤醒仍未资格化；金融 provider 保持独立 |
 | [Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | S8/S9，S2/S4 支撑 | 已接受设计；尚未接入 runtime，也未准入 provider | M1：controlled provider 与 deterministic revoke/crash/replay conformance；strict production 接线仍需精确 Goal 生命周期、receipt retention 与独立 provider 资格 |
-| [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现 | P1：observation/write-time gate/closure basis 独立验证；自选模型和推断触发继续 defer |
-| [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 只读观测 | P2：matched shadow stride 实验，定义代价与事件；不直接改变生产节奏 |
+| [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现；§11.5 result/adoption 修订为提案 | P1：一条真实 provider result -> 有范围 interpretation -> adopted step/successor，精确 lineage/shared write gate 与 packaged readback；shadow 资格先于 opt-in，保留 composition gap；推断与 M4 portfolio 排序继续 defer |
+| [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 只读观测；§7.5 checkpoint/monitor binding 为提案 | P2：matched shadow 决策时机、observer/model 成本与 lost-result recovery；保留每 Turn settlement，不改变默认 cadence |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | 已接受；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | S6/S11 | 已接受；Stage 1 verified-outcome 绑定 | P1 只读 reducer→P2 pilot：区分 recalled/applied/utility，归因不自动改 ranking |
 | [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | S6/S8 | 已接受；可选只读评估 | P2：显式 gap recall、来源与权限可解析、关闭不影响主流程；不当 work authority |
@@ -576,6 +582,11 @@ TS 对话准入规则负责；Lark 提供消息身份，现有收件箱负责去
 按连接选择并回读触发方式。外部渠道的工具权限、发信人绑定的委派授权仍需单独
 验收；收到请求不代表已经具备执行授权。
 
+R2/R3 的回答可读性复用同一条自适应写作指导，覆盖普通项目 Chat、管家上下文和
+协作返回工具。减少例行协议噪声，但保留用户要求的实质内容，也不评判验收是否
+完成；长期执行、steer 和原渠道返回仍须单独资格化。私聊 Markdown 已归现有
+Lark 传输 owner，本切片不再重复修改它。
+
 ### R4：共享目标对齐与演化
 
 - **Owner：** alignment RFC Stage 3–5；TS Goal/work-graph owner。
@@ -708,3 +719,9 @@ uv run --extra test python -m pytest -q tests/test_turn_managed_executor_binding
 这 177 项不是全仓测试，也不是云端、真实模型、packaged browser、Lark 或 PostgreSQL 现场资格。#4552 的 browser fixture 与选型 RFC 记录的既有现场读取为历史证据，本轮未复跑，不能推广到团队执行验收。F1–F4 的复现步骤在上表固定，实施时将对应的独立语义反例加入已有测试，不提交本次临时诊断脚本或私有运行日志。
 
 维护规则：本页只更新当前判断、卡的边界及通过证据；历史长账本移至 companion，领域 RFC 的状态与这里同步。领域状态/权限/迁移规则发生冲突时，停相关实现并修正文档，不用本路线覆盖已接受的 authority 合同。该文档合并表示路线可发现，不表示 R1–R7 已完成或 实现或晋升门槛已通过。
+
+## 附录 A：执行账本
+
+本 RFC 的带日期检查点是 [`ledger/loopx-overall-roadmap-v0/`](ledger/loopx-overall-roadmap-v0/) 下的文件，
+一次改动一条带日期的条目，命名与镜像配对遵循[账本约定](ledger/README.zh-CN.md)。条目写清这次改动测到了
+什么、改了什么、以及没有确立什么；本页正文只保留指向它的一行指针。

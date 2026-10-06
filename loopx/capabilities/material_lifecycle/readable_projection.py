@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+from .ownership import MaterialProjectScope, material_owner_fields
+
 from ._validation import (
     capability_contract,
     check_record_keys,
@@ -337,7 +339,8 @@ def _markdown_lines(
 
 def build_material_readable_projection(
     *,
-    goal_id: str,
+    goal_id: str | None = None,
+    project_scope: MaterialProjectScope | None = None,
     projection_id: str,
     authority_revision: str,
     observed_at: str,
@@ -463,7 +466,7 @@ def build_material_readable_projection(
     projection_ref = f"material-readable-projection-{projection_digest[:20]}"
     receipt: dict[str, Any] = {
         "schema_version": MATERIAL_READABLE_PROJECTION_RECEIPT_SCHEMA_VERSION,
-        "goal_id": compact_token(goal_id, field="goal_id"),
+        **material_owner_fields(goal_id=goal_id, project_scope=project_scope),
         "projection_id": compact_token(projection_id, field="projection_id"),
         "authority_revision": compact_token(
             authority_revision,
@@ -492,7 +495,7 @@ def build_material_readable_projection(
         },
         "visibility": "public_safe",
         "projection_visibility": "local_private_allowed",
-        "capability": capability_contract(packet_role="readable_projection_receipt"),
+        "capability": capability_contract(packet_role="readable_projection_receipt", project_scoped=project_scope is not None),
         "raw_content_captured": False,
         "private_locations_captured": False,
     }

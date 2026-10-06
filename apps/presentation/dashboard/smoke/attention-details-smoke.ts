@@ -36,6 +36,8 @@ for (const task_class of ["user_action", undefined, "unknown_future_class"]) {
 }
 // A User action is handled on its own Todo; it needs the stable id the owner validates.
 const action = { ...row, details: attentionDetails({ ...source, task_class: "user_action" }) };
+const boundAction = attentionDetails(todoItemSchema.parse({ ...source, task_class: "user_action", bound_agent: "codex-delivery" }));
+assert(boundAction.boundAgent === "codex-delivery", "canonical User action actor survives schema and projection");
 assert(!canHandleUserAction({ ...row, details: attentionDetails(source) }), "a User gate is decided, not marked done");
 const { todo_id: _omitted, ...idless } = source;
 assert(!canHandleUserAction({ ...action, details: attentionDetails({ ...idless, task_class: "user_action" }) }), "missing todo_id cannot be written");

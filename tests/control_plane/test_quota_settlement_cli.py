@@ -599,6 +599,10 @@ def _projected_cli_args(command: str, *, turn_instance_id: str) -> tuple[str, ..
 
 def _bind_selected_replan_guard(
     registry: Path, runtime: Path, project: Path, turn_instance_id: str,
+    *,
+    goal_id: str = GOAL_ID,
+    agent_id: str = AGENT_ID,
+    todo_id: str = SELECTED_REPLAN_TODO_ID,
 ) -> dict[str, Any]:
     """Choose the fixture Todo explicitly, then consume the generated recovery.
 
@@ -607,15 +611,19 @@ def _bind_selected_replan_guard(
     """
     rc, deferred = _run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--goal-id", goal_id, "--agent-id", agent_id,
         "--turn-instance-id", turn_instance_id, "--scan-path", str(project),
-        "--todo-id", SELECTED_REPLAN_TODO_ID,
+        "--todo-id", todo_id,
     )
-    assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
-    [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    rc, bound = _run_generated_cli(command, registry_path=registry)
+    if rc == 0:
+        bound = deferred
+    else:
+        # Without a prior receipt, first-call refusal remains caller-owned.
+        assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
+        [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, bound = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, bound
-    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
     return bound
 
 
@@ -3567,6 +3575,69 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     )
 
 
+@pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
+def test_host_owned_turn_executes_projected_selection_and_replays_identity(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    guard_args = (
+        "quota", "should-run", "--runtime-profile", profile,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", TURN_ID, "--scan-path", str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["agent_channel"]["selection_required"] is True
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    command = selection["route_prefix"] + " " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+    selected_rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert selected_rc == 0, selected
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert identity["turn_instance_id"] == TURN_ID
+    cli_channel = selected["interaction_contract"]["cli_channel"]
+    if profile == "outer_controller":
+        # Settlement stays with the controller, not the inner agent.
+        assert "settlement_plan" not in cli_channel
+    else:
+        assert cli_channel["settlement_plan"]["identity"] == identity
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args)
+    assert replay_rc == 0, replay
+    assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    conflict_rc, conflict = _run_cli(
+        registry_path, runtime, *guard_args, "--todo-id", TODO_ID,
+    )
+    assert conflict_rc != 0, conflict
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+    if profile == "outer_controller":
+        return
+
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", ALTERNATIVE_TODO_ID,
+        "--turn-instance-id", TURN_ID, "--classification", "validated_progress",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    spend_command = refresh["settlement_owed"]["command"]
+    spend_rc, spend = _run_cli(registry_path, runtime, *shlex.split(spend_command)[1:])
+    assert spend_rc == 0, spend
+    assert spend["settlement_identity"] == identity
+    retry_rc, retry = _run_cli(registry_path, runtime, *shlex.split(spend_command)[1:])
+    assert retry_rc == 0, retry
+    assert retry["appended"] is False
+    assert _spend_run_count(runtime) == 1
+
+
 def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
     tmp_path: Path,
 ) -> None:
@@ -3753,14 +3824,15 @@ def test_same_turn_can_select_eligible_todo_created_after_unbound_receipt(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
-def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+def test_agent_selection_rejects_unprojected_todo(tmp_path: Path, profile: str) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     turn_instance_id = "turn-agent-selection-unprojected"
     guard_args = (
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -3798,8 +3870,9 @@ def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
 def test_unsuggested_selection_revalidates_current_capability_readiness(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -3817,7 +3890,7 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
     guard_args = (
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -3847,8 +3920,9 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
 def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     turn_instance_id = "turn-agent-selection-first-call-rejected"
@@ -3858,7 +3932,7 @@ def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
         runtime,
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -3884,8 +3958,9 @@ def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 0
 
 
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
 def test_first_call_agent_selection_is_qualified_before_receipt_commit(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -3896,7 +3971,7 @@ def test_first_call_agent_selection_is_qualified_before_receipt_commit(
         runtime,
         "quota",
         "should-run",
-        "--codex-app",
+        "--runtime-profile", profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -4450,8 +4525,9 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     assert all(not event["details"].get("settlement_effect_id") for event in events)
 
 
-def test_pending_action_selection_reports_autonomous_replan_preemption(
-    tmp_path: Path,
+@pytest.mark.parametrize("capture", [False, True])
+def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
+    tmp_path: Path, capture: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -4484,25 +4560,25 @@ def test_pending_action_selection_reports_autonomous_replan_preemption(
         *guard_args,
         "--todo-id",
         ALTERNATIVE_TODO_ID,
+        *(["--decision-output-dir", str(tmp_path / "capture")] if capture else []),
     )
 
-    assert selected_rc == 1, selected
-    assert selected["error_code"] == "quota_action_selection_deferred"
-    assert selected["action_selection_qualification"] == {
-        "schema_version": "action_selection_qualification_v0",
-        "state": "deferred",
-        "recovery_action": "reenter_guard_without_selection",
-        "requested_todo_id": ALTERNATIVE_TODO_ID,
-        "reason": "autonomous_replan",
-        "delivery_preemptions": ["autonomous_replan", "delivery_not_allowed"],
-    }
-    _assert_action_selection_recovery_projections(selected)
-    assert selected["heartbeat_receipt"]["status"] == "selection_retained"
-    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
-        ALTERNATIVE_TODO_ID
-    )
+    assert selected_rc == 0, selected
+    assert selected["decision"] == "autonomous_replan_required"
+    assert selected["normal_delivery_allowed"] is False
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["settlement_bound"] is False
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert "todo_id" not in identity
     assert selected["rollout_event"]["appended"] is True
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+
+    if capture:
+        saved = json.loads((tmp_path / "capture" / "decision.json").read_text())
+        assert saved["decision"] == "autonomous_replan_required"
+        assert saved["heartbeat_receipt"] == selected["heartbeat_receipt"]
 
 
 def test_due_monitor_auxiliary_context_has_typed_selection_rejection(
@@ -5014,8 +5090,9 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
     assert all(not event["details"].get("settlement_effect_id") for event in events)
 
 
+@pytest.mark.parametrize("write_vision", [True, False], ids=["qualified-vision", "missing-vision"])
 def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
-    tmp_path: Path,
+    tmp_path: Path, write_vision: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
@@ -5090,6 +5167,28 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
         .replace("<probe-kind>", "probe-new")
         .replace("<evidence-id>", "evidence-new")
     )
+    if write_vision:
+        # Settling the original observation does not waive a fresh acceptance
+        # gap. Author the material checkpoint before expecting a quiet Turn.
+        vision_path = tmp_path / "replan-vision.json"
+        vision_path.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "agent_id": AGENT_ID,
+            "state": "active",
+            "vision_patch": {
+                "acceptance_summary": "Observe the fixture when its monitor becomes due.",
+                "advancement_policy": "as_needed",
+            },
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0",
+                "outcome": "no_change",
+                "prior_assumption": "Repeated observations may need another probe.",
+                "observed_reality": "The new probe leaves only the future monitor.",
+                "retained": ["The existing monitor and its due date."],
+                "evidence_refs": ["evidence-new"],
+            },
+        }), encoding="utf-8")
+        refresh_command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
@@ -5207,11 +5306,29 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     )
 
     assert fresh_rc == 0, fresh
-    assert fresh["decision"] == "skip", fresh
-    assert fresh["effective_action"] == "monitor_quiet_skip"
-    assert fresh["execution_obligation"]["must_attempt_work"] is False
-    assert fresh.get("autonomous_replan_obligation") is None
-    assert fresh.get("replan_action_packet") is None
+    if write_vision:
+        assert refresh["vision_checkpoint"]["satisfied"] is True
+        assert fresh["decision"] == "skip", fresh
+        assert fresh["effective_action"] == "monitor_quiet_skip"
+        assert fresh["execution_obligation"]["must_attempt_work"] is False
+        assert fresh.get("autonomous_replan_obligation") is None
+        assert fresh.get("replan_action_packet") is None
+    else:
+        assert refresh["vision_checkpoint"]["missing_baseline"] is True
+        assert refresh["vision_checkpoint"]["satisfied"] is False
+        assert fresh["decision"] == "autonomous_replan_required", fresh
+        assert fresh["execution_obligation"]["must_attempt_work"] is True
+        obligation = fresh["autonomous_replan_obligation"]
+        assert obligation["obligation_id"] != obligation_id
+        assert obligation["rearmed_after_obligation_id"] == obligation_id
+        assert {trigger["kind"] for trigger in obligation["triggers"]} == {
+            "vision_checkpoint_missing"
+        }
+        assert fresh["replan_action_packet"]["obligation_id"] == obligation["obligation_id"]
+        assert any(
+            gap["kind"] == "vision_checkpoint_missing" and gap["missing_baseline"]
+            for gap in fresh["goal_frontier_projection"]["acceptance_gaps"]
+        )
     assert fresh["heartbeat_receipt"]["turn_instance_id"] == fresh_turn_id
     assert _spend_run_count(runtime) == 1
 
@@ -6042,9 +6159,29 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
     assert resumed_turn["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_read_only_settlement_omits_non_causal_delivery_workspace(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    # The two legal completion phases may commit within one clock tick. Keep
+    # the real CLI, authority and hook journal; freeze only their commit clock.
+    run = subprocess.run
+
+    def frozen_completion_clock(argv, *args, **kwargs):
+        if isinstance(argv, list) and argv[1:3] == ["-m", "loopx.cli"]:
+            program = (
+                "import loopx.todos; "
+                "import loopx.control_plane.todos.provider_terminal_lifecycle as native; "
+                "clock=lambda:'2026-09-02T12:00:00+00:00'; "
+                "loopx.todos.now_local=clock; native.now_local=clock; "
+                "from loopx.cli import main; raise SystemExit(main())"
+            )
+            argv = [argv[0], "-c", program, *argv[3:]]
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", frozen_completion_clock)
     project, runtime, registry_path = _write_fixture(tmp_path)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["control_plane"] = {
@@ -6067,6 +6204,26 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         ),
         encoding="utf-8",
     )
+    if provider != "legacy":
+        from canonical_authority_fixture import (
+            initialize_canonical_authority,
+            isolate_sqlite_runtime,
+        )
+        from loopx.control_plane.coordination.runtime_shadow import (
+            build_todo_runtime_shadow_projection,
+        )
+
+        if provider == "sqlite":
+            isolate_sqlite_runtime(tmp_path, monkeypatch)
+        todos = parse_active_state_todos(state_path.read_text(), item_limit=None)
+        initialize_canonical_authority(
+            runtime, GOAL_ID,
+            build_todo_runtime_shadow_projection(
+                goal_id=GOAL_ID, todos=todos["agent_todos"]["items"],
+                handoff_mode="soft_claim",
+            ),
+            state_path=state_path, provider=provider,
+        )
     binding = (
         "--agent-id",
         AGENT_ID,
@@ -6232,6 +6389,8 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert complete["changed"] is True
     assert complete["completion_continuation"] == "no_followup"
     assert complete["completion_recovery"] == "same_turn_terminal_closeout"
+    assert ordinary["updated_at"] == complete["updated_at"]
+    assert ordinary["completion_receipt_id"] != complete["completion_receipt_id"]
     assert complete["post_writeback_hooks"]["intent_count"] == 1
     trigger_intent = complete["post_writeback_hooks"]["intents"][0]
     assert trigger_intent["intent_kind"] == "periodic_report.trigger_evaluation"
@@ -6247,6 +6406,25 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         "terminal_closeout",
     ]
     assert "no_followup=true" in state_path.read_text(encoding="utf-8")
+
+    # Model primary commit surviving a crash before the optional checkpoint.
+    # Only this disposable fixture's sidecar is removed; the Todo, original
+    # completion receipt, Turn journal and single quota debit remain intact.
+    sidecars = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
+    terminal_sidecars = [
+        path for path in sidecars.glob("*.json")
+        if json.loads(path.read_text())["source_receipt_id"]
+        == trigger_intent["source_receipt_id"]
+    ]
+    assert len(terminal_sidecars) == 1
+    terminal_sidecars[0].unlink()
+    recovered_rc, recovered = _run_cli(registry_path, runtime, *terminal_args)
+    assert recovered_rc == 0, recovered
+    assert recovered["changed"] is False
+    assert recovered["completion_receipt_id"] == complete["completion_receipt_id"]
+    assert recovered["post_writeback_hooks"]["invoked_count"] == 1
+    assert recovered["post_writeback_hooks"]["intents"] == [trigger_intent]
+    assert _spend_run_count(runtime) == 1
 
     event_log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     completion_events = [
@@ -6276,6 +6454,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert complete_replay_rc == 0, complete_replay
     assert complete_replay["idempotent_replay"] is True
     assert complete_replay["changed"] is False
+    assert complete_replay["completion_receipt_id"] == complete["completion_receipt_id"]
     assert complete_replay["post_writeback_hooks"]["invoked_count"] == 0
     assert complete_replay["post_writeback_hooks"]["replayed_hooks"] == [
         "periodic_report.runtime_trigger"

@@ -13,7 +13,7 @@ const serverCode = `
 import json,pathlib,sys,loopx
 from loopx.chat_server import ChatHTTPServer,ChatRequestHandler
 r=pathlib.Path(sys.argv[1]); runtime=r/'runtime'; registry=r/'registry.json'
-registry.write_text(json.dumps({'goals':[{'id':'fixture','repo':str(r),'control_plane':{'optional':{'context':'complete '*10000}}}]}))
+registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'fixture','repo':str(r),'control_plane':{'optional':{'context':'complete '*10000}}}]}))
 p=runtime/'machine/configuration.json';p.parent.mkdir(parents=True)
 p.write_text(json.dumps({'schema_version':'loopx_machine_configuration_v0','namespaces':{'goal_storage':{'schema_version':'loopx_goal_storage_defaults_v0','new_goal_provider':'sqlite'}}}))
 s=ChatHTTPServer(('127.0.0.1',0),ChatRequestHandler);s.registry_path=registry;s.runtime_root=runtime;s.verbose=False

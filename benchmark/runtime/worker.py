@@ -55,6 +55,15 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool) -> s
     ]
     if not native_goal:
         command += ["--turn-instance-id", turn_id]
+    if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
+    if env.get("LOOPX_TURN_ENVELOPE") == "1":
+        if native_goal:
+            raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
+        # Wake identity comes from this worker, never from model-authored text.
+        root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
+        root.mkdir(mode=0o700, exist_ok=False)
+        command += ["--decision-output-root", str(root)]
     result = subprocess.run(
         command,
         cwd=env["LOOPX_PROJECT"],
@@ -144,8 +153,8 @@ def turn_command(
         env["MODEL_NAME"],
         "--codex-sandbox",
         execution.sandbox,
-        "--timeout-seconds",
-        str(execution.timeout_seconds),
+        *(["--timeout-seconds", str(execution.timeout_seconds)]
+          if execution.timeout_seconds is not None else []),
         "--validation-command-json",
         json.dumps(execution.validation_command),
         "--available-capability",
@@ -231,13 +240,17 @@ def native_command(env, execution, stage, wake, session_wake):
 
 
 def run_once(env: dict[str, str]) -> dict:
+    if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT", "fresh"),
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"),
-        timeout_seconds=float(env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC", "4700")),
+        timeout_seconds=(float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"])
+                         if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY", "seeded-todo"),
+        turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
     )
     stage = env.get("LOOPX_TASK_STAGE", "execute")
     if stage not in {"plan", "execute"} or (stage == "plan" and execution.task_entry != "loopx-planned"):
@@ -254,6 +267,7 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
+        **({"turn_envelope": True} if execution.turn_envelope else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
@@ -272,7 +286,8 @@ def run_once(env: dict[str, str]) -> dict:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
             execution = replace(
-                execution, timeout_seconds=min(execution.timeout_seconds, remaining - 160)
+                execution, timeout_seconds=(remaining - 160 if execution.timeout_seconds is None
+                                             else min(execution.timeout_seconds, remaining - 160))
             )
         prepare_codex_home(
             home,
@@ -330,6 +345,7 @@ def run_once(env: dict[str, str]) -> dict:
                     ) as process:
                         allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
                         timeout = (float(env["LOOPX_PLANNING_TIMEOUT_SEC"]) if stage == "plan"
+                                   else None if execution.timeout_seconds is None
                                    else execution.timeout_seconds + allowance)
                         process.communicate(
                             input=body, timeout=timeout
@@ -391,6 +407,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, cancelled)
     receipt = run_once(dict(os.environ))
     print(json.dumps(receipt))
+    if receipt.get("budget_exhausted") and receipt["mode"] in {"heartbeat", "turn"}:
+        from benchmark.runtime.scheduler import BUDGET_EXHAUSTED_EXIT_CODE
+
+        return BUDGET_EXHAUSTED_EXIT_CODE
     return 124 if receipt["timed_out"] else (0 if receipt["ok"] else 1)
 
 

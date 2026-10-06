@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { resolve } from "node:path";
 
 import {
@@ -889,6 +890,15 @@ export const typedActionsScenario = {
       await page.locator(".personal-goal-link", { hasText: "Progress Projection" }).click();
       await page.getByRole("heading", { name: "Progress Projection" }).waitFor({ state: "visible" });
       await page.locator(".personal-task-card").getByText("Current Todo", {exact: true}).waitFor();
+      const unclaimedCard = page.locator(".personal-task-card", {hasText: "Current Todo"});
+      // The owner is visible text alongside status badges, not necessarily
+      // a separate element. Check the displayed fact without requiring a span.
+      assert.match(await unclaimedCard.locator(":scope > button small").innerText(), /未分配/,
+        "An unclaimed task must remain unassigned on its card");
+      await unclaimedCard.getByText("Current Todo", {exact: true}).click();
+      const unclaimedOwner = page.getByRole("dialog", {name: "Todo 详情"}).locator("dl > div", {has: page.getByText("Owner", {exact: true})});
+      await unclaimedOwner.getByText("未分配", {exact: true}).waitFor();
+      await page.getByRole("button", {name: /关闭详情/}).click();
       if ((await page.locator(".personal-channel-title").innerText()).includes("Current Todo")) throw new Error("Header repeated the task already shown in the workspace");
       const progressColumn = page.locator(".personal-object-list", { hasText: "待执行 / 进行中" });
       if ((await progressColumn.locator(".personal-task-card").count()) !== 5) throw new Error("Id-less long Todo was duplicated across compact and full projections");
@@ -1282,7 +1292,13 @@ export const typedActionsScenario = {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
       await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
-      await page.getByLabel(/^两次 Goal 复核间的已完成 Todo 数/u).waitFor({ state: "visible" });
+      const reviewUnit = page.getByLabel(/^复核计数依据/u);
+      const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
+      await reviewUnit.waitFor({ state: "visible" });
+      await reviewCount.waitFor({ state: "visible" });
+      assert.equal(await reviewUnit.inputValue(), "completed_todos");
+      assert.equal(await reviewCount.inputValue(), "3");
+      assert.deepEqual(await reviewUnit.locator("option").evaluateAll((options) => options.map((option) => option.value).filter(Boolean)), ["completed_todos", "effective_turns"]);
       await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
       await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
       for (const label of [/^启用$/u, /^允许一次有界安全修复$/u, /^要求精确 diff 回执$/u]) {
@@ -1766,12 +1782,35 @@ export const typedActionsScenario = {
       taskManagement = page.locator("details.personal-task-management");
       await taskManagement.locator("summary").click();
       await page.getByLabel("优先级", {exact: true}).selectOption("P4");
+      const priorityButton = taskManagement.locator("label", {has: page.getByLabel("优先级", {exact: true})}).getByRole("button");
+      const previewsBeforeFailure = api.actionPreviews.length;
+      api.failNextActionPreview = true;
+      await priorityButton.click();
+      await taskInspector.getByRole("alert").getByText(/Action preview temporarily unavailable/).waitFor();
+      if (api.actionPreviews.length !== previewsBeforeFailure) throw new Error("A refused preview persisted a proposal");
+      if (await page.getByLabel("优先级", {exact: true}).inputValue() !== "P4") throw new Error("Preview failure lost the owner's draft");
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await secondTaskRow.click();
+      if (await taskInspector.getByRole("alert").count()) throw new Error("Preview error leaked into another Todo");
+      await taskRow.click();
+      taskManagement = page.locator("details.personal-task-management");
+      await taskManagement.locator("summary").click();
+      await page.getByLabel("优先级", {exact: true}).selectOption("P4");
       await page.screenshot({path: resolve(outputDir, "todo-priority-edit.png"), fullPage: false, animations: "disabled"});
       await taskManagement.locator("label", {has: page.getByLabel("优先级", {exact: true})}).getByRole("button").click();
       await page.getByText("确认执行").waitFor({state: "visible"});
       const priorityEdit = api.actionPreviews.findLast(preview => preview.action_kind === "todo.update" && preview.normalized_parameters.priority === "P4");
       if (!priorityEdit || priorityEdit.normalized_parameters.text !== undefined) throw new Error("Priority edit must be structured, without a text rewrite");
-      await page.getByRole("button", {name: "关闭", exact: true}).click();
+      const readsBeforePriorityApply = api.statusRequestCount;
+      const writesBeforePriorityApply = api.durableWriteCount;
+      await page.getByRole("button", {name: "确认并应用", exact: true}).click();
+      await page.getByText("操作已完成，结果状态已通过读回验证。", {exact: true}).waitFor();
+      await page.waitForTimeout(2_000);
+      if (api.statusRequestCount <= readsBeforePriorityApply) throw new Error("Verified Todo update left the workspace status unread");
+      if (api.durableWriteCount !== writesBeforePriorityApply + 1) throw new Error("Todo status reconciliation repeated the confirmed write");
+      // Applied receipts retain their Goal navigation; close the drawer itself
+      // so the next operation still begins from the existing task card.
+      await page.getByRole("button", {name: /关闭详情/}).click();
       await taskRow.click();
       taskManagement = page.locator("details.personal-task-management");
       await taskManagement.locator("summary").click();

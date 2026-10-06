@@ -8,6 +8,7 @@ import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
   type AgentResponse,
+  type ChatProject,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -627,6 +628,16 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return parsedPayload as T;
 }
 
+export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal) {
+  const query = new URLSearchParams({goal_id: goalId, todo_id: todoId});
+  const result = z.object({
+    ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
+    status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+  }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
+  if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  return result;
+}
+
 export async function fetchChatStatus() {
   return chatStatusSchema.parse(await requestJson<unknown>("/status.json"));
 }
@@ -658,16 +669,42 @@ export async function recordProjectionExchange(options: {
   );
 }
 
+/** The App's conversation targets; each owns exactly one Core Chat channel. */
+export type ConversationContext =
+  | { kind: "manager" }
+  | { kind: "goal"; goalId: string }
+  | { kind: "project"; projectRef: string };
+
+// Goal ids are single path segments, so a key containing "/" never names a Goal.
+const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
+
+export function conversationContextKey(context: ConversationContext): string {
+  if (context.kind === "manager") return "manager";
+  return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
+}
+
+export function conversationContextOfKey(key: string): ConversationContext {
+  if (key === "manager") return { kind: "manager" };
+  if (key.startsWith(PROJECT_CONVERSATION_KEY_PREFIX)) {
+    return { kind: "project", projectRef: key.slice(PROJECT_CONVERSATION_KEY_PREFIX.length) };
+  }
+  return { kind: "goal", goalId: key };
+}
+
+export function conversationChannelId(context: ConversationContext): string {
+  if (context.kind === "manager") return "manager";
+  return context.kind === "goal" ? `goal.${context.goalId}` : `project.${context.projectRef}`;
+}
+
 export async function createChatSession(
-  goalId: string,
+  context: ConversationContext,
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
-  contextKind: "goal" | "manager" = "goal",
   signal?: AbortSignal,
 ) {
   return requestJson<{
     agent_id: string;
-    goal_id: string;
+    goal_id: string | null;
     ok: true;
     resumed: boolean;
     session_id: string;
@@ -677,7 +714,10 @@ export async function createChatSession(
     // An omitted ``agent_id`` means "no explicit executor pick": the channel
     // owner resolves its own default. Sending this client's own default would
     // silently re-point the steward channel away from its configured executor.
-    body: JSON.stringify({ goal_id: goalId, agent_id: agentId, mode, context_kind: contextKind }),
+    // A project Session carries only the host-issued reference, never a Goal.
+    body: JSON.stringify(context.kind === "project"
+      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, mode }
+      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, mode, context_kind: context.kind }),
   });
 }
 
@@ -691,7 +731,8 @@ export type ChatStreamEvent = {
 
 export type ChatSessionSummary = {
   session_id: string;
-  goal_id: string;
+  goal_id: string | null;
+  project_ref?: string | null;
   agent_id: string;
   adapter_kind: string;
   channel_id?: string;
@@ -708,6 +749,12 @@ export type ChatSessionSummary = {
   host_surface?: string | null;
   manager_runtime?: ManagerRuntimeSessionReadback | null;
 };
+
+export type { ChatProject };
+
+export async function fetchChatProjects(signal?: AbortSignal) {
+  return requestJson<{ok: true; projects: ChatProject[]}>("/api/chat/projects", {signal});
+}
 
 /** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */
 export type ChatSessionMode = "managed_runtime" | "attached_host";
@@ -1096,6 +1143,8 @@ export type DelegationReadback = {
   operation_id: string; request_id: string; agent_id: string; todo_id: string;
   status: string; worker_active: boolean; recovery_required: boolean;
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
+  validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
+    check_count: number; pinned_file_count: number};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
@@ -1580,7 +1629,8 @@ export const capabilityConfigurationFieldSchema = z.object({
   key: z.string(),
   label: z.string(),
   description: z.string(),
-  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule"]),
+  input_kind: z.enum(["boolean", "number", "select", "string_list", "text", "periodic_report_schedule", "pr_review_agent_orders"]),
+  agents: z.array(z.string()).optional(),
   nullable: z.boolean().optional(),
   required: z.boolean(),
   minimum: z.number().int().optional(),
@@ -2339,4 +2389,40 @@ export async function updateGoalOwnership(body: { goal_id: string; mode: Executi
     }
     throw error;
   }
+}
+
+
+const privateAgentSessionSchema = z.object({session_id: z.string(), goal_id: z.string(), agent_id: z.string(), executor_endpoint_id: z.string()});
+const privateAgentTargetSchema = privateAgentSessionSchema.extend({target_ref: z.string(), host_ref: z.string(), goal_instance_id: z.string().nullable()});
+const privateConversationSchema = z.object({
+  binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
+  project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
+  grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
+  goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
+  pending_count: z.number().int(), recovery_count: z.number().int(),
+  agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
+});
+const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+  connections: z.array(privateConversationSchema)});
+export type PrivateConversation = z.infer<typeof privateConversationSchema>;
+export async function fetchPrivateConversations() {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
+}
+export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write") {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
+      ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {})}),
+  }));
+}
+export async function disconnectPrivateConversation(bindingId: string, revision: number) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+    method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
+  }));
+}
+
+export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
+  }));
 }

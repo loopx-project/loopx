@@ -304,7 +304,7 @@ def test_live_machine_defaults_and_goal_override_keep_dashboard_revision(tmp_pat
     )
     overridden = inspect()
     assert cadence(overridden)["source"] == "goal_override"
-    assert cadence(overridden)["configuration"]["completed_todos"] == 3
+    assert cadence(overridden)["configuration"] == {"count_unit": "completed_todos", "count": 3}
     assert overridden["revision"] != inherited["revision"]
     assert overridden == SettingsHandler(
         registry, runtime_root
