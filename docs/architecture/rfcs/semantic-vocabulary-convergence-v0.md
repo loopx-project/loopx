@@ -439,7 +439,7 @@ not a proof of reachability or whole-program data flow.
 `uv run python examples/semantic-vocabulary-drift-smoke.py --report` lists unresolved
 production locations. Unresolved parts cannot supply missing value evidence; known
 conditional branches remain structural witnesses, not reachability proofs.
-The producer guard covers all six kernel entries using distinct evidence lanes:
+The producer guard covers the five live kernel entries using distinct evidence lanes:
 `effective_action`, `turn_route`, `loop_disposition`, and
 `agent_scope_frontier_action` have source witnesses; `turn_result_kind` also has
 executable input witnesses at the fixed `transaction._result_kind` decoder.
@@ -448,13 +448,32 @@ invalid probes must report rejection. This proves a permitted production path,
 not that a Host has emitted every member or that every host execution is valid.
 `input_producer` cannot select arbitrary code: the verifier is fixed in the smoke.
 
-`lease_action` is explicitly legacy/compatibility-only: in-repository runtime
-callers use whole native acquire/renew/transfer/release transactions. Unconsumed
-Python command facades are retired independently of this declared input contract.
-Its four members remain available to the existing typed `LeaseModeGateCommand` input
-interface until M4 caller/migration review. No persisted usage is asserted.
-The producer list is empty only because every value carries an explicit reason
-and retirement milestone. A newly observed producer invalidates that declaration. Kernel families without producer metadata are printed as coverage pending; their
+M4 retires the unused private Python `LeaseAction`, `LeaseModeGateCommand` and
+its `CoordinationCommand` union, after source/registration and isolated installed
+caller review. `lease_action` leaves the registry with that input contract. This
+changes internal Python import compatibility; it does not remove the shipped
+lease verbs, the `legacy` ownership policy, or pre-canonical Goal recovery.
+
+The useful lifecycle subset check now references the actual TypeScript request
+owner, `TASK_LEASE_LIFECYCLE_OPERATIONS`, registered as
+`task_lease_lifecycle_operation`: renew/transfer/release plus terminal/holder
+verification and fence cleanup. Acquisition retains its separate native
+transaction. The mutation decision subset excludes those three verification and
+cleanup operations. Coverage floors remain 26 vocabularies, 51 owner symbols and
+9 relations; no empty owner or fake producer replaces the retired interface.
+Its native request values carry notes and owner/subset checks, but production
+liveness is explicitly unverified: the formal producer domain now has six
+entries, five kernel and one cross-runtime, with twenty cross-runtime entries
+outside it. No surviving producer check or inventory budget is relaxed.
+
+The drift smoke rejects restored definitions or statically resolved imports of
+the retired input; fresh-wheel negative imports and real File/SQLite
+lease/replay/conflict and unpromoted Goal paths qualify the installed boundary.
+Dynamic/external imports are not a whole-program compatibility proof. Retain the
+live Todo bridge, historical backup/format/receipt readers and Host IO. Reverting
+this code package restores the private imports without converting persisted
+state. This slice does not complete all M4, C1 or release-default qualification.
+Kernel families without producer metadata are printed as coverage pending; their
 owner parity must not be reported as I12/I13 completion. M0.5 remains incomplete
 until all required families meet its acceptance rows.
 

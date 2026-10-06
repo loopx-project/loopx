@@ -73,9 +73,15 @@ Python 退役收益。调用方清单如下：
 | `task_lease.acquire.decide`、`task_lease.lifecycle.decide`、`coordination.handoff_mode.plan` RPC 注册 | 只剩这些旧 facade／handler 测试；原生事务直接复用同一 TS 规则 | 废弃私有 RPC 明确拒绝；保留仍有 Python 调用方的 `task_lease.owner_eligibility` 和 write-scope overlap。 |
 | `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | 保留真实 Todo mutation authorization 使用的 `todo_snapshot_from_mapping`；不删 store、回执、备份或迁移 reader。 |
 
-`authority_core.py` 仍是活跃 Todo bridge。`LeaseAction`、`LeaseModeGateCommand`
-也保留：semantic-vocabulary 注册表明确将该输入契约保留到 M4 评审。本切片不通过
-降低语义覆盖下限丢弃已有兼容义务。仅服务旧 facade 的测试随实现退役，公共／原生
+`authority_core.py` 仍是活跃 Todo bridge；#5395 当时将
+`LeaseAction`／`LeaseModeGateCommand` 保留到 M4 评审。有界 M4 包现退役无人
+使用的私有输入及其 union，加入定义／import 回生守卫，明确内部 import 不兼容。
+有价值的原生 lifecycle 子集证明改为引用实际 TS request owner；26／51／9
+覆盖下限及其他预算保持。安装态 File／SQLite lease／恢复测试在旧接口真正
+不存在时执行。回退旧代码包即可恢复私有 import，无需状态转换。公共 lease
+事务、source writer／outbox、legacy 策略、历史备份／格式／回执 reader 和永久
+Host IO 保留。这是最后调用方切片，不代表整项 C1／M4、D2 或发布默认资格完成。
+仅服务旧 facade 的测试随实现退役，公共／原生
 行为测试保留。回退该切片可恢复内部跨界，无需转换数据。本机 CLI 已采用
 `db3672f3c`，验证了干净源码清单、具备资格的 SQLite runtime、已知权威格式均为
 当前版本及健康的 canonical 合同读回。这不证明所有已安装 Host 或 D2 已验收。
