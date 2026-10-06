@@ -404,7 +404,13 @@ offers retry, and discards stale selection responses. A failed read never
 reuses an earlier full body. File/SQLite CLI and loopback HTTP checks cover
 active/retained requests and recovery; packaged desktop/390px checks cover a
 988-character request, mismatched identity, late response and keyboard return.
-These read-only checks do not certify semantic acceptance or L1 completion.
+Map entries outside the bounded status summary now retain their exact Todo reference
+for this request-only read. The drawer does not treat graph metadata as current
+state or expose mutation actions; a current status entry restores the ordinary
+inspector. Packaged desktop/390px checks use the actual isolated SQLite/HTTP
+reader, remove its registry to withdraw the earlier body, and restore it for an
+explicit retry. Canonical task state remains unchanged. These read-only checks
+do not certify semantic acceptance, installed native behavior or L1 completion.
 Motion is retained
 only when it clarifies these transitions;
 remove effects that obscure absent execution, absent acceptance or source loss.

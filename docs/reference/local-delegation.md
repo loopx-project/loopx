@@ -961,6 +961,29 @@ The following packaged transport-fixture views show current check records and th
 
 ![Unavailable output clears the report and check records](../assets/personal-workspace/team-check-records-unavailable.png)
 
+Task details opened from the work map can read the original request even when
+the task is outside the current bounded status summary. That drawer explicitly
+marks current state and actions unavailable; graph captions are not authoritative
+request text. A missing source withdraws the earlier body, and an explicit retry
+reads the same exact Goal/Todo again. This changes the former summary-only detail
+guard without weakening current-state or mutation checks. The existing Todo CLI
+and HTTP authority remain the reader; no new execution or settings are added.
+
+The following desktop and 390px views use the packaged frontend with an isolated
+real SQLite/HTTP reader; the surrounding workspace/map data is synthetic. Source
+loss, recovery and unchanged canonical state are checked in that same journey.
+They do not qualify installed native behavior or an independent semantic verdict.
+
+![Original task request outside the current status summary](../assets/personal-workspace/goal-map-request-only-desktop.png)
+
+![390px request-only task details](../assets/personal-workspace/goal-map-request-only-mobile.png)
+
+中文：工作地图里的事项即使不在当前状态摘要中，也能按准确 Goal/Todo 读取原始要求。
+详情明确提示当前状态和操作不可用，不把地图标题当作权威正文；来源失联撤回旧正文，
+恢复后显式重试。读取复用原有 Todo CLI/HTTP 权威源，不新增配置或执行权限。
+上述打包桌面及 390px 场景使用隔离的真实 SQLite/HTTP 正文读取，周边工作区与地图为
+合成数据，并验证失联、恢复与规范任务状态不变；不代表已安装 Native App 或独立语义验收。
+
 ![Current execution list withdraws acceptance for changed output](../assets/personal-workspace/team-evidence-stale.png)
 
 ![Downstream loss preserves the current correction and marks adoption unavailable](../assets/personal-workspace/team-adoption-unavailable.png)

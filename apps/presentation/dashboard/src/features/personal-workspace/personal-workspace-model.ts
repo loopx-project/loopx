@@ -52,6 +52,8 @@ export type WorkspaceAgentTodo = {
   requestText?: string;
   /** The authority id, absent when a legacy projection needs a display-only id. */
   sourceTodoId?: string | null;
+  /** Local map fallback: exact request reading without current-state actions. */
+  detailMode?: "request_only";
   text: string;
   todoId: string;
   validationDigest?: string | null;
