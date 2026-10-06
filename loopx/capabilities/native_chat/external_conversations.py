@@ -41,9 +41,17 @@ class ChatExternalConversations:
             raise ValueError("invalid external request reference")
         if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
-        selected = self.bindings.resolve(binding_id=binding_id, **source)
+        # These references enter the lock path before authority is resolved.
+        # Check path-safe shape here; the typed owner checks current grants
+        # and provider identity after both fences are acquired.
+        for ref in (binding_id, source.get("source_ref")):
+            if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{24}", ref):
+                raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"), exclusive_file_lock(path, operation="admit_external_chat_request"):
+            # Resolve after waiting for both fences, including exact replay.
+            # A lock-external provider probe cannot authorize the write and
+            # would duplicate this fresh authority check on every request.
             selected = self.bindings.resolve(binding_id=binding_id, **source)
             expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
                         "attachments": normalize_chat_image_attachments(attachments) or None}

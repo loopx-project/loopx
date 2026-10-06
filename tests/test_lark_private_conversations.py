@@ -417,6 +417,110 @@ def test_revocation_during_source_read_prevents_native_admission(ordinary):  # n
         runtime.close()
 
 
+def test_core_admission_verifies_once_inside_both_fences_including_replay(ordinary, monkeypatch):  # noqa: F811
+    from contextlib import contextmanager
+    from loopx.capabilities.native_chat import external_conversations
+
+    store, runtime, _, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    original_lock = external_conversations.exclusive_file_lock
+    active = set()
+
+    @contextmanager
+    def track_lock(path, *, operation):
+        with original_lock(path, operation=operation):
+            active.add(operation)
+            try:
+                yield
+            finally:
+                active.remove(operation)
+
+    original_observe = transport.bindings.observe
+    observed = []
+
+    def observe(profile):
+        assert active == {"route_external_chat_request", "admit_external_chat_request"}
+        observed.append(profile)
+        return original_observe(profile)
+
+    monkeypatch.setattr(external_conversations, "exclusive_file_lock", track_lock)
+    transport.bindings.observe = observe
+    try:
+        args = {"binding_id": binding["binding_id"], "source": source,
+                "request_ref": "b" * 24, "message": "/help", "command": "help"}
+        first = transport.core.admit(**args)
+        assert first["status"] == "command_completed"
+        assert observed == ["notes-app"]
+        assert transport.core.admit(**args) == first
+        assert observed == ["notes-app", "notes-app"]
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        with pytest.raises(ValueError):
+            transport.core.admit(**args)
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("field", ["binding_id", "source_ref"])
+@pytest.mark.parametrize("value", ["../../outside", "", "not-an-opaque-reference", None])
+def test_invalid_source_lock_path_is_rejected_before_file_access(ordinary, monkeypatch, field, value):  # noqa: F811
+    from loopx.capabilities.native_chat import external_conversations
+
+    _, runtime, _, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    binding_id = binding["binding_id"]
+    if field == "binding_id":
+        binding_id = value
+    else:
+        source[field] = value
+
+    def unexpected_lock(*args, **kwargs):
+        pytest.fail("invalid references must not reach filesystem locks")
+
+    monkeypatch.setattr(external_conversations, "exclusive_file_lock", unexpected_lock)
+    try:
+        with pytest.raises(ValueError, match="invalid external conversation source reference"):
+            transport.core.admit(binding_id=binding_id, source=source,
+                                 request_ref="b" * 24, message="must not execute")
+        assert not transport.core.root.exists()
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("change", ["disconnect", "owner_change"])
+def test_authority_changed_while_waiting_for_source_fence_blocks_admission(ordinary, monkeypatch, change):  # noqa: F811
+    from contextlib import contextmanager
+    from loopx.capabilities.native_chat import external_conversations
+
+    store, runtime, _, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
+    original_lock = external_conversations.exclusive_file_lock
+    original_observe = transport.bindings.observe
+
+    @contextmanager
+    def change_before_acquiring_source_fence(path, *, operation):
+        if operation == "route_external_chat_request":
+            if change == "disconnect":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            else:
+                transport.bindings.observe = lambda profile: {**original_observe(profile), "operator_ref": "f" * 24}
+        with original_lock(path, operation=operation):
+            yield
+
+    monkeypatch.setattr(external_conversations, "exclusive_file_lock", change_before_acquiring_source_fence)
+    try:
+        with pytest.raises(ValueError):
+            transport.core.admit(binding_id=binding["binding_id"], source=source,
+                                 request_ref="b" * 24, message="must not execute")
+        assert transport.core.pending() == []
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()
+
+
 
 def test_listener_discovery_is_separate_from_current_owner_authorization(ordinary):  # noqa: F811
     _, runtime, _, transport = connect(ordinary)
