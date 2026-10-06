@@ -484,6 +484,7 @@ const root={get innerText(){return readiness?.startsWith('image_')?'':loaded?tex
 spinner.closest=()=>null;
 const article={innerText:text,getAttribute(){return null;},closest(){return null;},
  querySelectorAll(selector){return selector==='img'?[image]:[];}};
+const emptyArticle={innerText:'',getAttribute(){return null;},closest(){return null;},querySelectorAll(){return [];}};
 const sidebar={innerText:'Loading sidebar',getAttribute(){return 'true';},
  closest(selector){return selector==='[aria-busy="true"]'?this:{};},
  querySelectorAll(){return [spinner];},getClientRects(){return [1];}};
@@ -500,6 +501,7 @@ if(readiness==='article_busy_with_main_chrome'){
 const doc=new Proxy({title:'Article',body:root,
  querySelectorAll(selector){return selector==='main,[role="main"]'?[root]:[...articles,...(sidebarFixture?[sidebar]:[])];},
  querySelector(selector){if(readiness==='article_with_sidebar')return selector==='article'?article:root;
+ if(readiness==='empty_sibling_article')return selector==='article'?emptyArticle:root;
  if(sidebarFixture||readiness==='article_busy_with_main_chrome')return selector==='article'?sidebar:root;
  if(readiness==='main_busy_with_readable_article')return selector==='article'?article:root;
  return readiness&&selector!=='article'?root:null;},images:[image]},
