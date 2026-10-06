@@ -128,6 +128,25 @@ def create_canonical_todo_if_promoted(
         or result.get("legacy_fallback_used") is not False
     ):
         payload = result if isinstance(result, dict) else {}
+        if (
+            payload.get("status") == "missing"
+            and payload.get("source_authority") in LOCAL_AUTHORITY_SOURCES
+            and payload.get("decision_read_from_provider") is True
+            and payload.get("legacy_fallback_used") is False
+        ):
+            unavailable_payload = dict(payload)
+            unavailable_payload["recovery"] = {
+                "action": "restore_canonical_authority",
+                "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                "goal_id": goal_id,
+                "legacy_markdown_fallback_allowed": False,
+                "retry_after": "canonical_provider_readback_loaded",
+            }
+            raise LocalCoordinationAuthorityUnavailable(
+                "canonical Todo authority is unavailable",
+                code="local_authority_todo_list_unavailable",
+                payload=unavailable_payload,
+            )
         raise LocalCoordinationAuthorityUnavailable(
             str(payload.get("reason") or "canonical Todo create failed; reread before retry"),
             code=str(payload.get("reason_code") or payload.get("conflict_kind")
