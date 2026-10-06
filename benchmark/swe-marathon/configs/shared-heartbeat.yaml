@@ -6,7 +6,7 @@ agents:
     override_timeout_sec: 5400
     kwargs:
       execution_mode: heartbeat
-      task_entry: seeded-todo  # Use loopx-planned for the product planning checkpoint.
+      task_entry: loopx-planned  # Set seeded-todo for the entry-policy ablation.
       iteration_context: fresh
       reasoning_effort: high
       turn_timeout_sec: null

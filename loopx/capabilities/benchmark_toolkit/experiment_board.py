@@ -10,6 +10,7 @@ from typing import Any
 from ...domain_state import default_domain_state_file_path, upsert_domain_state_jsonl
 from .experiment_identity import (
     ARM_ROLES,
+    experiment_run_key,
     experiment_token_text as _token,
 )
 from .factorial_contrast import (
@@ -476,13 +477,7 @@ def upsert_benchmark_experiment_board_row(
 def _benchmark_experiment_board_row_key_tuple(
     payload: Mapping[str, Any],
 ) -> tuple[str, str, str, str]:
-    key = benchmark_experiment_board_row_key(payload)
-    return (
-        key["benchmark_id"],
-        key["study_id"],
-        key["case_id"],
-        key["run_id"],
-    )
+    return experiment_run_key(benchmark_experiment_board_row_key(payload))
 
 
 def _benchmark_experiment_board_observed_at(payload: Mapping[str, Any]) -> datetime:
@@ -730,9 +725,19 @@ def build_benchmark_experiment_board(
         else []
     )
 
-    by_run_id = {row["run_id"]: row for row in normalized}
+    by_run_key = {}
+    for row in normalized:
+        key = experiment_run_key(row)
+        if key in by_run_key:
+            raise ValueError("duplicate experiment-board run identity")
+        by_run_key[key] = row
     comparisons = [
-        _build_comparison(row, by_run_id.get(row.get("comparison_anchor_run_id")))
+        _build_comparison(
+            row,
+            by_run_key.get(
+                experiment_run_key(row, run_id=row["comparison_anchor_run_id"])
+            ),
+        )
         for row in normalized
         if row["arm_role"] != "baseline"
     ]

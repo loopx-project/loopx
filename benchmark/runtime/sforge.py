@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
 
-from .codex import Execution, TASK_ENTRIES, prepare_codex_home
+from .codex import Execution, prepare_codex_home
 from .codex_offline import CodexOffline
 from .harbor import (
     BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
@@ -81,7 +81,7 @@ class SForgeWorker(CodexAgent):
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
                  blind_prompt: str | None = None,
-                 task_entry: str = "seeded-todo",
+                 task_entry: str | None = None,
                  turn_envelope: bool = False,
                  replan_after_turns: int | None = None):
         super().__init__(config)
@@ -98,11 +98,12 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Explicit model and reasoning effort are required")
         if not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
-        if task_entry not in TASK_ENTRIES:
-            raise ValueError("unsupported task entry")
-        if task_entry != "seeded-todo" and not profile.startswith("heartbeat-"):
+        if task_entry == "loopx-planned" and not profile.startswith("heartbeat-"):
             raise ValueError("loopx-planned requires a heartbeat profile")
-        self.task_entry = task_entry
+        self.task_entry = Execution(
+            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
+            task_entry=task_entry,
+        ).task_entry
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
                     not 1 <= replan_after_turns <= 5):

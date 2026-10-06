@@ -38,6 +38,7 @@ const benchmarkStudySearchSchema = z.object({
   dashboardUrl: z.string().optional().default(""),
   view: z.enum(["campaign", "arms", "cases", "runs"]).optional().default("campaign"),
   runId: z.string().optional().default(""),
+  caseId: z.string().optional().default(""),
 });
 
 // Bookmarks remain valid, but the retired boards no longer ship a second UI.

@@ -45,6 +45,7 @@ from .position_guard import REQUEST_SCHEMA as POSITION_GUARD_INPUT_SCHEMA
 from .position_guard import evaluate_finance_position_guard
 from .period_semantics import (
     FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
+    FINANCE_PERIOD_COMPARISON_INPUT_V2_SCHEMA_VERSION,
     assess_period_comparison,
 )
 
@@ -196,7 +197,10 @@ def run(argv: Sequence[str] | None = None) -> int:
             schema_version = payload.get("schema_version")
             if schema_version == FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION:
                 packet = assess_cash_reconciliation(payload)
-            elif schema_version == FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION:
+            elif schema_version in {
+                FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
+                FINANCE_PERIOD_COMPARISON_INPUT_V2_SCHEMA_VERSION,
+            }:
                 packet = assess_period_comparison(payload)
             elif schema_version == POSITION_GUARD_INPUT_SCHEMA:
                 packet = evaluate_finance_position_guard(payload)

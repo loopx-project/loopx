@@ -914,6 +914,11 @@ silently pooled. Unknown fields and path-like references fail closed.
 Every non-baseline row names an exact `comparison_anchor_run_id`. Standard control
 or treatment rows anchor to a baseline. Explore rows use `diagnostic_only` claim
 scope and may anchor to the baseline or fixed standard arm they are examining.
+Run identity is `(benchmark_id, study_id, case_id, run_id)`; an anchor inherits
+the candidate's benchmark, study, and case. Run ids may be reused across those
+scopes. Duplicate full identities must be reconciled before board readback.
+Study provenance and case insights bind to this same identity. Dashboard run
+links retain the case; a legacy run-id-only link resolves only when unambiguous.
 Matched comparisons require compatible benchmark, study, case, model, primary
 metric, comparison protocol, score countability, and treatment fidelity. Exact
 protocol revisions remain visible as a warning even when a declared comparison

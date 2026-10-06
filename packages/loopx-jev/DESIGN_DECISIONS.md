@@ -270,3 +270,38 @@ wasted work or safe escalation and pause, which this capability does not provide
 Stopping or retaining the existing workflow is a valid result. The original M0
 RFC intake remains discussion intake; no research, provider, spend or control
 approval is inferred from that earlier decision.
+
+## Q1–Q4 study-selection brief (2026-10-06)
+
+**Contributor recommendation: defer M1, while keeping D7 as the only candidate
+for the next owner decision.** The RFC places same-priority Todo ordering first
+in its qualitative investigation order, and current contracts expose a
+bounded, non-binding choice. Neither fact demonstrates that an independent
+assessment improves accepted outcomes over the normal Agent workflow. The
+recorded observer runs and judge comparison are constructed, small, and not a
+held-out D7 evaluation. This is a recommendation, not an owner decision or
+authorization to run a study.
+
+| Decision | Proposed scope | Evidence or unresolved gate |
+| --- | --- | --- |
+| **Q1 — caller** | D7 only: an Agent or steward choosing the next Todo from one current, policy-equivalent, same-priority eligible cohort. Do not include D8 in the same study. | The RFC's §3.1 ranks D7 first. The integrated start contract keeps the same-priority tie-break at planner order then Todo write order; action-selection recommendations are non-binding. There is no measured D7 outcome set or evidence that the normal Agent misses valuable choices. |
+| **Q2 — finite question and checkpoint** | For one fixed decision window, does adding a read-only assessment before dispatch improve independently verified accepted-goal contribution from the normally selected eligible cohort, compared with normal Agent selection? Freeze the cohort, goal/dependency evidence, selection checkpoint and work window before assignment. | Current evidence identifies the selector and legal cohort, but does not define a public, independently labeled D7 dataset or an agreed number of decisions. The owner must select that finite sample before any result is observed. |
+| **Q3 — comparator and rubric** | Preserve the normal Agent, tools, reviewer and deterministic rules in every arm. Compare normal selection with the same workflow plus (a) an existing-model read-only assessment and (b) Jev, using identical candidate facts, question semantics and effort limits; blind independent adjudication to the arm. Primary outcome: independently accepted goal contribution within the fixed work window and total budget. Report false-positive selections, missed higher-value selections, latency and total assessment cost separately. | Freeze eligibility/authority violations as hard failures: no arm may add an ineligible Todo, cross priority, bypass dependencies/holds/claims/quota, change canonical order, or make the recommendation binding. Do not collapse false positives and false negatives into a weighted score until the product/domain owner records their relative cost. Require independent labels before any result is revealed. |
+| **Q4 — data, destination and spend** | For this decision brief: public source and synthetic evidence only; zero new provider calls and zero external-study spend. | No selected data owner, destination, pinned live model, call cap, dollar cap or retention decision is recorded. M1 remains deferred until the responsible owners approve those exact terms. Do not send private Goal or user-session material. |
+
+**Stop rule:** do not enter M1 unless the domain/evaluation owner accepts the D7 question, finite sample and rubric, and the data/operations owner records the permitted data, destination, model, hard spend/call caps and retention. Stop without a result if those gates cannot be met. This does not reject Jev or approve product adoption; off/shadow and the existing authority boundary remain unchanged.
+
+No runtime, configuration, receipt, replay or removal behavior changes in this
+brief. Any later D8 study must keep its research portfolio and spend fixed; no
+ranking may override that budget or existing authority. Advice remains
+non-binding and cannot execute, settle or grant eligibility.
+
+**Evidence boundary:** this brief is based on integrated main
+`42e55a809eb94f13443d303d76118735d4112182`, the current RFC §§2–3.3 and 12,
+`loopx/control_plane/goals/start_contract.py`,
+`loopx/control_plane/work_items/action_selection_contract.py`, and the dated
+recordings already summarized above. It is source and public-record review
+only. No new test, provider call, live task, cost measurement or outcome
+comparison was run. The earlier 96-test implementation check and recorded
+provider comparisons remain attached to their original revisions and do not
+qualify this proposed D7 study.

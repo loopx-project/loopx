@@ -10,6 +10,11 @@ from loopx.extensions import ego_source_reader as reader
 URL = "https://example.com/article?q=1"
 
 
+@pytest.fixture(autouse=True)
+def isolated_reader_space(monkeypatch):
+    monkeypatch.setattr(reader, "_OWNED_SPACE", reader._OwnedSpace())
+
+
 @pytest.fixture
 def configured(monkeypatch, tmp_path):
     executable = tmp_path / "ego-browser"
@@ -49,7 +54,7 @@ def test_read_returns_evidence_without_visual_or_write_claim(configured, monkeyp
     assert result["images_read"] is False and result["image_count"] == 2
     args, kwargs = calls[0]
     assert args[:3] == [str(configured), "nodejs", "-e"]
-    assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["timeout"] == 30
+    assert kwargs["stdin"] == subprocess.DEVNULL and 0 < kwargs["timeout"] <= 30
     assert "shell" not in kwargs
     assert "does not prove article" in result["limitations"]
 
@@ -106,6 +111,167 @@ def test_bad_operator_configuration_fails_closed(configured, monkeypatch, key, v
     monkeypatch.setenv(key, value)
     monkeypatch.setattr(reader.subprocess, "run", lambda *a, **k: pytest.fail("browser accessed"))
     assert reader.read_public_url(URL)["error"] == "source_reader_not_configured"
+
+
+def auto_config(monkeypatch):
+    monkeypatch.setenv("LOOPX_EGO_READ_TASK_SPACE", "auto")
+    monkeypatch.setenv("LOOPX_EGO_READ_PAGE", "p1")
+
+
+def space_response(space, *, stderr=False):
+    output = reader.SPACE_MARKER + json.dumps({"id": space})
+    return subprocess.CompletedProcess([], 0, "" if stderr else output, output if stderr else "")
+
+
+@pytest.mark.parametrize("stderr", [False, True])
+def test_auto_space_is_lazy_and_reused_for_text_and_image(configured, monkeypatch, tmp_path, stderr):
+    auto_config(monkeypatch)
+    calls = []
+    def run(_executable, script, **_kwargs):
+        calls.append(script)
+        if 'taskSpace("LoopX public-source reader ' in script:
+            return space_response(19, stderr=stderr)
+        if "screenshot(" in script:
+            path = tmp_path / "image.png"
+            path.write_bytes(png())
+            return response({"url": URL, "index": 0, "alt": "figure"})
+        return response(extraction())
+    monkeypatch.setattr(reader, "_run", run)
+    assert reader.read_public_url("https://other.test/private")["error"] == "source_origin_not_authorized"
+    assert not calls
+    assert reader.read_public_url(URL)["ok"]
+    assert reader.read_public_url(URL)["ok"]
+    assert reader._read(URL, 0, str(tmp_path / "image.png"))["ok"]
+    assert len(calls) == 4
+    assert all("taskSpace(19)" in s for s in calls[1:])
+
+
+def test_separate_reader_process_state_owns_separate_spaces(configured, monkeypatch):
+    auto_config(monkeypatch)
+    config = reader.ReaderConfig.from_environment()
+    # Model the real factory's name-based reuse, not predetermined distinct ids.
+    spaces = {}
+    def run(_executable, script, **_kwargs):
+        name = json.loads(script.split("taskSpace(", 1)[1].split(");", 1)[0])
+        return space_response(spaces.setdefault(name, 19 + len(spaces)))
+    monkeypatch.setattr(reader, "_run", run)
+    first, second = reader._OwnedSpace(), reader._OwnedSpace()
+    assert first.resolve(config).task_space == 19
+    assert second.resolve(config).task_space == 20
+    assert first.resolve(config).task_space == 19
+    assert first.name != second.name and len(spaces) == 2
+    first.forget_closed()
+    first.resolve(config)
+    assert len(spaces) == 2  # The owner identity remains stable during recovery.
+
+
+@pytest.mark.parametrize("failure", ["user_control", "timeout", "ambiguous_creation"])
+def test_errors_do_not_create_replacement_spaces(configured, monkeypatch, failure):
+    auto_config(monkeypatch)
+    calls = []
+    def run(executable, script, **_kwargs):
+        calls.append(script)
+        if 'taskSpace("LoopX public-source reader ' in script:
+            if failure == "ambiguous_creation":
+                raise subprocess.TimeoutExpired(executable, 30)
+            return space_response(19)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(executable, 30)
+        return subprocess.CompletedProcess([], 1, "", "user took control")
+    monkeypatch.setattr(reader, "_run", run)
+    assert not reader.read_public_url(URL)["ok"]
+    assert not reader.read_public_url(URL)["ok"]
+    assert sum('taskSpace("LoopX public-source reader ' in s for s in calls) == 1
+
+
+@pytest.mark.parametrize("stderr", [False, True])
+def test_only_confirmed_missing_owned_space_is_replaced_once(configured, monkeypatch, stderr):
+    auto_config(monkeypatch)
+    calls = []
+    def run(_executable, script, **_kwargs):
+        calls.append(script)
+        if 'taskSpace("LoopX public-source reader ' in script:
+            return space_response(19 if len(calls) == 1 else 20)
+        if "taskSpace(19)" in script:
+            output = reader.SPACE_MARKER + '{"closed":true}'
+            return subprocess.CompletedProcess([], 1, "" if stderr else output, output if stderr else "")
+        return response(extraction())
+    monkeypatch.setattr(reader, "_run", run)
+    assert reader.read_public_url(URL)["ok"]
+    assert reader._OWNED_SPACE.space == 20 and len(calls) == 4
+
+
+@pytest.mark.parametrize("auto", [True, False])
+def test_shutdown_only_finishes_its_created_space_once(configured, monkeypatch, auto):
+    if auto:
+        auto_config(monkeypatch)
+    calls = []
+    def run(_executable, script, **_kwargs):
+        calls.append(script)
+        return space_response(19)
+    monkeypatch.setattr(reader, "_run", run)
+    reader._OWNED_SPACE.resolve(reader.ReaderConfig.from_environment())
+    reader._OWNED_SPACE.close()
+    reader._OWNED_SPACE.close()
+    if auto:
+        assert len(calls) == 2
+        assert "taskSpace(19)" in calls[-1] and "ownership==='agent'" in calls[-1]
+        assert "finish({keep:[]})" in calls[-1]
+    else:
+        assert not calls
+
+
+def test_creation_and_read_share_one_timeout_budget(configured, monkeypatch):
+    auto_config(monkeypatch)
+    clock = iter([0, 5, 29])
+    monkeypatch.setattr(reader.time, "monotonic", lambda: next(clock))
+    timeouts = []
+    def run(_args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return space_response(19) if len(timeouts) == 1 else response(extraction())
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    assert reader.read_public_url(URL)["ok"]
+    assert timeouts == [25, 1]
+
+
+def test_stdio_hosts_create_isolated_spaces_and_clean_up_on_eof(configured, monkeypatch, tmp_path):
+    import asyncio
+    import os
+    import sys
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    auto_config(monkeypatch)
+    log = tmp_path / "calls.jsonl"
+    configured.write_text("#!" + sys.executable + "\n" +
+        "import json,os,sys\nfrom pathlib import Path\n" +
+        "script=sys.argv[-1]\n" +
+        f"with Path({str(log)!r}).open('a') as f: f.write(json.dumps([os.getppid(),script])+'\\n')\n" +
+        "if 'taskSpace(\"LoopX public-source reader ' in script:\n" +
+        " print('LOOPX_READER_SPACE:'+json.dumps({'id':os.getppid()}),file=sys.stderr)\n" +
+        "elif 'finish({keep:[]})' not in script:\n" +
+        " print('LOOPX_PUBLIC_SOURCE:'+" + repr(response(extraction()).stdout.split(":", 1)[1]) + ",file=sys.stderr)\n")
+    configured.chmod(0o700)
+    async def host():
+        params = StdioServerParameters(command=sys.executable,
+            args=["-m", "loopx.extensions.ego_source_reader"], env=dict(os.environ))
+        async with stdio_client(params) as (incoming, outgoing):
+            async with ClientSession(incoming, outgoing) as session:
+                await session.initialize()
+                for _ in range(2):
+                    result = await session.call_tool("read_public_url", {"url": URL})
+                    assert json.loads(result.content[0].text)["ok"]
+    async def journey():
+        await asyncio.gather(host(), host())
+    asyncio.run(journey())
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    hosts = {pid for pid, _ in calls}
+    assert len(hosts) == 2
+    for pid in hosts:
+        scripts = [script for owner, script in calls if owner == pid]
+        assert len(scripts) == 4
+        assert sum('taskSpace("LoopX public-source reader ' in s for s in scripts) == 1
+        assert all(f"taskSpace({pid})" in s for s in scripts[1:])
+        assert scripts[-1].endswith("if(t.ownership==='agent')await t.finish({keep:[]});")
 
 
 @pytest.mark.parametrize("value", [

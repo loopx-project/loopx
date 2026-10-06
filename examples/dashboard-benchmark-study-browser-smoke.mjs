@@ -3,7 +3,7 @@
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -97,13 +97,58 @@ async function assertCommonSurface(page, label) {
   await assertNoHorizontalOverflow(page, label);
 }
 
+async function assertCaseScopedRunSelection(page, url) {
+  const fixture = JSON.parse(readFileSync(resolve(dashboardDir, "public/benchmark-study.example.json"), "utf8"));
+  const localIds = new Map(fixture.runs.map((run) => [run.run_id, run.arm_id]));
+  const packet = JSON.parse(JSON.stringify(fixture, (_key, value) => localIds.get(value) ?? value));
+  await page.route("**/case-local-runs.json", (route) => route.fulfill({ json: packet }));
+  const target = new URL(url);
+  target.search = new URLSearchParams({ dashboardUrl: "/case-local-runs.json", view: "cases" }).toString();
+  await page.goto(target.toString(), { waitUntil: "networkidle" });
+  const secondCase = page.getByRole("row").filter({ has: page.getByText("case-state-transition", { exact: true }) });
+  await secondCase.getByRole("button", { name: /Countable/ }).first().click();
+  const detail = page.getByRole("complementary", { name: "Run detail for goal_plain" });
+  await detail.waitFor();
+  if (process.env.LOOPX_BENCHMARK_STUDY_SCREENSHOT_DIR) {
+    mkdirSync(process.env.LOOPX_BENCHMARK_STUDY_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: resolve(process.env.LOOPX_BENCHMARK_STUDY_SCREENSHOT_DIR, "case-local-run.png"), fullPage: true });
+  }
+  if (!(await detail.innerText()).includes("case-state-transition · goal_plain")) {
+    throw new Error("case-cell navigation opened another case's reused run id");
+  }
+  if (new URL(page.url()).searchParams.get("caseId") !== "case-state-transition") {
+    throw new Error("run link lost its case identity");
+  }
+  await page.reload({ waitUntil: "networkidle" });
+  await detail.getByText("case-state-transition · goal_plain", { exact: true }).waitFor();
+  const firstCase = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "case-api-contract", exact: true }) });
+  await firstCase.getByRole("button", { name: "goal_plain", exact: true }).click();
+  await detail.getByText("case-api-contract · goal_plain", { exact: true }).waitFor();
+
+  for (const caseId of ["", "missing-case"]) {
+    target.search = new URLSearchParams({ dashboardUrl: "/case-local-runs.json", view: "runs", runId: "goal_plain", caseId }).toString();
+    await page.goto(target.toString(), { waitUntil: "networkidle" });
+    await page.getByText("Select a run from the table to view its details.", { exact: true }).waitFor();
+    if (!caseId && process.env.LOOPX_BENCHMARK_STUDY_SCREENSHOT_DIR) {
+      await page.screenshot({ path: resolve(process.env.LOOPX_BENCHMARK_STUDY_SCREENSHOT_DIR, "ambiguous-run-link.png"), fullPage: true });
+    }
+    if (await page.getByRole("complementary", { name: /Run detail for/ }).count()) {
+      throw new Error("ambiguous or stale run link silently selected a different run");
+    }
+  }
+  // A unique legacy runId bookmark remains valid without a caseId parameter.
+  target.search = new URLSearchParams({ view: "runs", runId: "run-goal-state" }).toString();
+  await page.goto(target.toString(), { waitUntil: "networkidle" });
+  await page.getByRole("complementary").getByText("case-state-transition · goal_plain", { exact: true }).waitFor();
+}
+
 async function main() {
   const { chromium } = loadPlaywright();
-  const server = startDashboardServer();
+  const server = process.env.LOOPX_BENCHMARK_STUDY_URL ? null : startDashboardServer();
   let browser;
   const pageErrors = [];
   try {
-    const url = `http://127.0.0.1:${port}/benchmarks/study`;
+    const url = process.env.LOOPX_BENCHMARK_STUDY_URL ?? `http://127.0.0.1:${port}/benchmarks/study`;
     await waitForDashboard(url);
     browser = await launchBrowser(chromium);
 
@@ -149,11 +194,12 @@ async function main() {
     await rejected.goto(`${url}?dashboardUrl=${encodeURIComponent("https://example.com/study.json")}`, { waitUntil: "networkidle" });
     await rejected.getByText("Benchmark dashboard source must use same-origin local readback", { exact: true }).waitFor();
 
+    await assertCaseScopedRunSelection(desktop, url);
     if (pageErrors.length) throw new Error(`browser errors: ${pageErrors.join(" | ")}`);
     console.log("benchmark study browser smoke passed");
   } finally {
     await browser?.close();
-    server.kill("SIGTERM");
+    server?.kill("SIGTERM");
   }
 }
 

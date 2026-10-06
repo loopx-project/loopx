@@ -12,6 +12,7 @@ from loopx.capabilities.manager_context import (
 )
 from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
 from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_manager_context import manager_authorization_scope_id_for_registry
 from loopx.chat_store import ChatSessionStore
 from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
 
@@ -47,16 +48,23 @@ def test_short_reply_handoff_preserves_source_and_returns_once(
         store=store, codex_bin=str(executable), registry_path=registry,
         manager_scope_resolver=lambda _session: ["research"],
     )
-    monkeypatch.setattr("loopx.chat_manager_context.collect_manager_turn_context",
-                        lambda *_args, **_kwargs: {
-                            "coverage": {}, "goals": [], "authorization_scope_id": "fixture-research",
-                        })
     try:
         session, _ = controller.open_session(
             goal_id="loopx-manager", agent_id="codex", work_dir=tmp_path,
             objective="Inspect the referenced material.", mode="resume_latest",
             channel_id="manager.external.public_fixture",
         )
+        scope_id = manager_authorization_scope_id_for_registry(
+            registry,
+            ["research"],
+            runtime_root=controller.coordination_runtime_root,
+            channel_id=session["channel_id"],
+        )
+        assert scope_id is not None
+        monkeypatch.setattr("loopx.chat_manager_context.collect_manager_turn_context",
+                            lambda *_args, **_kwargs: {
+                                "coverage": {}, "goals": [], "authorization_scope_id": scope_id,
+                            })
         _write(_root(tmp_path) / "policy.json", {
             "schema_version": POLICY_SCHEMA,
             "sources": {session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}},

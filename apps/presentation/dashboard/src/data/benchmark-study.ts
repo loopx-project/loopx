@@ -196,6 +196,15 @@ export type BenchmarkStudyCase = BenchmarkStudyDashboard["cases"][number];
 export type BenchmarkStudyRun = BenchmarkStudyDashboard["runs"][number];
 export type BenchmarkStudyView = "campaign" | "arms" | "cases" | "runs";
 
+export function selectBenchmarkStudyRun(
+  runs: BenchmarkStudyRun[], runId: string, caseId: string,
+): BenchmarkStudyRun | undefined {
+  if (!runId && !caseId) return runs[0];
+  const matches = runs.filter((run) => run.run_id === runId && (!caseId || run.case_id === caseId));
+  // Legacy runId-only bookmarks are safe only when they identify exactly one run.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function parseBenchmarkStudyDashboard(value: unknown): BenchmarkStudyDashboard {
   return benchmarkStudyDashboardSchema.parse(value);
 }

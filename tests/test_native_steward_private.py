@@ -278,7 +278,6 @@ def test_confirmed_commission_runs_native_goal_returns_result_and_extends_same_s
     transport.admit("steward-app", provider.event("steward-app", "before", "Check the empty portfolio"))
     initial = transport.core.pending()[0]
     assert finish(runtime, initial)["status"] == "completed"
-    original = store.load_session(initial["session_id"])["upstream_thread_id"]
     event = provider.event("steward-app", "delegate", "/delegate --tokens 12000 Inspect the authorized README and report findings")
     started = time.monotonic()
     assert transport.admit("steward-app", event)["status"] == "command_recorded"
@@ -318,15 +317,23 @@ def test_confirmed_commission_runs_native_goal_returns_result_and_extends_same_s
     after = next(r for r in transport.core.pending() if r["message"] == "Report the new commission status")
     assert finish(runtime, after)["status"] == "completed"
     assert after["session_id"] == initial["session_id"]
-    assert store.load_session(after["session_id"])["upstream_thread_id"] == original
+    rotated = store.load_session(after["session_id"])["upstream_thread_id"]
     context = collect_manager_turn_context(runtime.registry_path, store.load_session(after["session_id"]), store.root.parent, runtime.manager_scope_resolver)
     assert [g["goal_id"] for g in context["goals"]] == [resources["goal_id"]]
     facts = transport.core.commission_evidence(store.load_session(after["session_id"]))
     assert facts[0]["native_execution"]["status"] == "complete"
     assert facts[0]["result_delivery_verified"] is True
     assert facts[0]["canonical_acceptance_attested"] is False
+    registry_bytes = runtime.registry_path.read_bytes()
+    registry_payload = json.loads(registry_bytes)
+    registry_payload["goals"][0]["creation_operation_id"] = "replacement-operation"
+    runtime.registry_path.write_text(json.dumps(registry_payload))
+    assert transport.core.commission_evidence(
+        store.load_session(after["session_id"])
+    ) == []
+    runtime.registry_path.write_bytes(registry_bytes)
     requests = [json.loads(line) for line in capture.read_text().splitlines()]
-    assert len([r for r in requests if r.get("method") == "thread/start"]) == 3
+    assert len([r for r in requests if r.get("method") == "thread/start"]) == 4
     assert any(r.get("method") == "thread/goal/set" for r in requests)
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
@@ -338,7 +345,7 @@ def test_confirmed_commission_runs_native_goal_returns_result_and_extends_same_s
         current, resumed = restarted.open_session(goal_id=None, agent_id="codex", work_dir=runtime.registry_path.parent,
             objective="ignored", mode="resume_latest", conversation_binding_id=binding["binding_id"],
             source_context=initial["source"])
-        assert resumed and current["session_id"] == initial["session_id"] and current["upstream_thread_id"] == original
+        assert resumed and current["session_id"] == initial["session_id"] and current["upstream_thread_id"] == rotated
     finally:
         restarted.close()
 

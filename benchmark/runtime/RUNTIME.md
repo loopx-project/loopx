@@ -5,6 +5,13 @@ LHTB, SWE-Marathon and other Harbor tasks use
 `PYTHONPATH`. This research runner is not another installed product package.
 Native tasks, environment, phases, feedback, verifier and scores stay in Harbor.
 
+The shared adapter reads `PATH` from the task container before installing its
+isolated profile. Worker and login shells retain those task toolchain directories;
+LoopX modes prepend their staged Node and CLI. No operator-host PATH or other
+ambient environment variables are copied. A missing/unreadable task PATH fails
+installation. This changes tool discovery for newly installed trials only; keep
+existing trials pinned when comparing runner versions.
+
 ## Configure the native job
 
 Use this agent in the benchmark's existing job config, retaining its dataset
@@ -17,7 +24,7 @@ agents:
     override_timeout_sec: 5400
     kwargs:
       execution_mode: heartbeat
-      task_entry: seeded-todo
+      task_entry: loopx-planned
       iteration_context: fresh
       reasoning_effort: max
       codex_sandbox: danger-full-access
@@ -76,14 +83,14 @@ validator protection remains the environment owner's responsibility.
 
 `task_entry` is independent of the execution mode:
 
-- `seeded-todo` (the compatibility default) writes a generic execution Todo.
+- `seeded-todo` (explicit compatibility/ablation choice) writes a generic execution Todo.
   Follow-up phases update that Todo while it remains live and owned by this
   agent; completed or deferred work gets a new Todo. Updates preserve blocked
   state. The agent can still plan and replan during execution. The seed asks the
   worker to read, implement and validate the task. It leaves task decomposition
   to the worker and the existing task protocol. This removes the previous
   unconditional successor instruction for newly seeded or updated phases.
-- `loopx-planned` runs the installed `$loopx` skill against the public
+- `loopx-planned` (the default for LoopX modes) runs the installed `$loopx` skill against the public
   `loopx todo plan` checkpoint before execution. The checkpoint shares the
   product's planner and continuation-aware Todo delta; it creates no planning
   Todo and starts no host loop. Select it only for heartbeat, Turn or LoopX Goal.
@@ -233,7 +240,7 @@ By default, worker calls have no independent turn deadline. Harbor derives their
 ### Native SForge task entry
 
 The EdgeBench runner accepts `--task-entry seeded-todo|loopx-planned` for
-`heartbeat-resume` and `heartbeat-explore`; the default remains `seeded-todo`.
+`heartbeat-resume` and `heartbeat-explore`; the heartbeat default is `loopx-planned`.
 Official, single and native-Goal profiles reject planned entry before creating
 an attempt. Select only this flag for a task-entry ablation and keep all other
 inputs fixed. Runtime/profile receipts record the selected entry.
@@ -271,3 +278,6 @@ The two options are independent: `--task-entry` selects where the initial Todo
 comes from, while `--replan-after-turns` selects which cadence the shared control
 plane uses afterwards. A trial may set either, both, or neither; receipts record
 both selections so a comparison keeps every other input fixed.
+
+See [default settings and recommended ablations](SETTINGS.md) for explicit launch flags,
+matched controls and rollback.

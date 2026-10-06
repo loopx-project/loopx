@@ -107,7 +107,8 @@ document. Registries are inside their own task containers, so no Goal, Todo,
 or scheduler state is shared between the 46 trials.
 
 The adapter registers the project through the current public bootstrap CLI and
-adds the benchmark phase as an explicit P0 Todo. Retired onboarding flags are
+plans phase Todos from the task by default (or adds a generic P0 Todo when
+seeded entry is explicitly selected). Retired onboarding flags are
 not replayed; bootstrap and Todo lifecycle follow the installed product version.
 
 ## Shared execution configuration
@@ -118,8 +119,9 @@ accept `resume`, sharing the same Goal/Agent session across planning, wakes and 
 an argv array for the independently protected task validator. No generic
 benchmark scoring or hidden-verifier feedback is introduced.
 
-`LOOPX_TASK_ENTRY=seeded-todo` preserves the generic phase Todo default.
-`LOOPX_TASK_ENTRY=loopx-planned` invokes the product planning checkpoint before
+`LOOPX_TASK_ENTRY=seeded-todo` retains the former generic phase Todo entry.
+Omitting this setting now selects `loopx-planned` for LoopX modes and invokes
+the product planning checkpoint before
 heartbeat, Turn or LoopX Goal execution. `LOOPX_PLANNING_TIMEOUT_SEC` defaults
 to 300 and consumes the existing phase budget. Both entry policies preserve
 existing waits when new phases arrive. See the shared runtime for session and

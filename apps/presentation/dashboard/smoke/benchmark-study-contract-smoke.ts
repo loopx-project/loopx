@@ -2,9 +2,19 @@ import fixture from "../public/benchmark-study.example.json" with { type: "json"
 import {
   parseBenchmarkStudyDashboard,
   resolveBenchmarkStudyDashboardUrl,
+  selectBenchmarkStudyRun,
 } from "../src/data/benchmark-study.js";
 
 const packet = parseBenchmarkStudyDashboard(fixture);
+const first = packet.runs[0]!;
+const second = { ...first, case_id: "another-case" };
+if (selectBenchmarkStudyRun([first, second], first.run_id, second.case_id) !== second) throw new Error("run selection lost its case");
+if (selectBenchmarkStudyRun([first, second], first.run_id, "") !== undefined) throw new Error("ambiguous legacy link selected a run");
+if (selectBenchmarkStudyRun([first], first.run_id, "") !== first) throw new Error("unique legacy link stopped resolving");
+if (selectBenchmarkStudyRun([first], first.run_id, "missing-case") !== undefined) throw new Error("stale case link selected another case");
+if (selectBenchmarkStudyRun([first], "missing-run", "") !== undefined) throw new Error("stale run link selected another run");
+if (selectBenchmarkStudyRun([first, first], first.run_id, first.case_id) !== undefined) throw new Error("duplicate full identity selected a run");
+if (selectBenchmarkStudyRun([first], "", "") !== first) throw new Error("unselected runs view lost its default");
 if (packet.status !== "provisional") throw new Error("fixture must expose provisional coverage");
 if (packet.campaign.intended_cell_denominator !== 8) throw new Error("campaign denominator drifted");
 if (packet.campaign.selected_score_countable_cell_count !== 6) throw new Error("countable numerator drifted");

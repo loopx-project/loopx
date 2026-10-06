@@ -318,9 +318,19 @@ def test_legal_brief_budget_survives_real_chat_dispatch(delegation_service, monk
     assert controller.coordination_runtime_root == service.root
     if separate_chat_store:
         assert store.root.parent != service.root
-    store.update_session(session["session_id"], manager_authorization_scope_id="fixture-scope")
+    scope_id = manager_context.manager_authorization_scope_id_for_registry(
+        service.registry,
+        [service.goal_id],
+        runtime_root=service.root,
+        channel_id=session["channel_id"],
+    )
+    assert scope_id is not None
+    store.update_session(
+        session["session_id"],
+        manager_authorization_scope_id=scope_id,
+    )
     monkeypatch.setattr(manager_context, "collect_manager_turn_context", lambda *_, **__: {
-        "coverage": {}, "goals": [], "authorization_scope_id": "fixture-scope"})
+        "coverage": {}, "goals": [], "authorization_scope_id": scope_id})
     model_calls = []
     class Adapter:
         upstream_thread_id = "fixture-upstream"

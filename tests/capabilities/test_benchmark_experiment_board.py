@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import itertools
 import json
 import subprocess
 from pathlib import Path
@@ -222,6 +224,60 @@ def _connected_goal_registries(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return project, global_registry
+
+
+@pytest.mark.parametrize("scope", ["benchmark_id", "study_id", "case_id"])
+def test_board_resolves_reused_run_ids_within_the_persisted_scope(scope: str) -> None:
+    baseline = _baseline()
+    treatment = _row(
+        run_id="treatment",
+        arm_id="loopx",
+        arm_role="treatment",
+        protocol_id="runner-v21",
+        observed_at="2026-08-18T00:01:00+00:00",
+        f2p=20,
+        comparison_anchor_run_id=baseline["run_id"],
+    )
+    other_baseline, other_treatment = copy.deepcopy(baseline), copy.deepcopy(treatment)
+    other_baseline[scope] = other_treatment[scope] = "z-other"
+    other_baseline["metrics"]["feature_pass"]["value"] = 60
+    other_treatment["metrics"]["feature_pass"]["value"] = 65
+    rows = [baseline, treatment, other_baseline, other_treatment]
+    for ordering in itertools.permutations(rows):
+        board = build_benchmark_experiment_board(ordering)
+        assert board["summary"]["matched_pair_countable_count"] == 2
+        assert [
+            c["metric_deltas"]["feature_pass"]["delta"] for c in board["comparisons"]
+        ] == [20, 5]
+    if scope != "case_id":
+        filtered = build_benchmark_experiment_board(rows, **{scope: baseline[scope]})
+        assert filtered["comparisons"] == board["comparisons"][:1]
+
+
+def test_board_never_falls_back_to_an_anchor_in_another_case() -> None:
+    baseline = _baseline(case_id="other-case")
+    treatment = _row(
+        run_id="treatment",
+        arm_id="loopx",
+        arm_role="treatment",
+        protocol_id="runner-v21",
+        observed_at="2026-08-18T00:01:00+00:00",
+        f2p=20,
+        comparison_anchor_run_id=baseline["run_id"],
+    )
+    comparison = build_benchmark_experiment_board([baseline, treatment])["comparisons"][
+        0
+    ]
+    assert comparison["reason_codes"] == ["comparison_anchor_run_missing"]
+    assert comparison["metric_deltas"] == {}
+
+
+def test_board_rejects_duplicate_full_run_identities() -> None:
+    baseline = _baseline()
+    conflicting = copy.deepcopy(baseline)
+    conflicting["metrics"]["feature_pass"]["value"] = 60
+    with pytest.raises(ValueError, match="duplicate experiment-board run identity"):
+        build_benchmark_experiment_board([baseline, conflicting])
 
 
 def test_row_rejects_raw_or_path_like_fields() -> None:

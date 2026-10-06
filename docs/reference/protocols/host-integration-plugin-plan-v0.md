@@ -127,13 +127,18 @@ A host ACK is separate from delivery settlement. Completing or replaying a
 settled delivery does not by itself suppress an uncommitted ACK from its still
 current heartbeat receipt. A newer Turn supersedes the older receipt for host
 writeback: reject the old ACK before writing scheduler state, then use the new
-Turn's emitted command. The `scheduler-ack-current` command returns the native
+Turn's emitted command. Only a quota event with a nonempty string Turn identity
+is a heartbeat receipt in the matching Goal/Agent scope. Identity-less failed
+invocations remain diagnostic audit events: they neither grant host writeback
+nor supersede a valid receipt. The `scheduler-ack-current` command returns the native
 `loopx_scheduler_host_followup_result_v0` projection with mode `scheduler-ack`.
 With a current receipt, exact retries replay the scheduler commit without
 another state write or quota debit; they never reconstruct authority from the live work frontier.
 
 Host ACK 与交付结算分开：交付已结算时，仍是最新的 heartbeat receipt 可提交尚未
 写入的 ACK；较新 Turn 会使旧 ACK 失效，必须先拒绝旧写入，再使用新 Turn 的命令。
+同一 Goal/Agent 范围内，只有包含非空字符串 Turn 身份的 quota 事件才是 heartbeat
+回执。没有 Turn 身份的失败调用保留为诊断审计，既不授予 host 写权限，也不使合法回执失效。
 精确重试只重放 scheduler commit，不再次写入或扣额，也不从当前工作 frontier 重建权限。
 
 ### Phase 4: Controlled Write Tools

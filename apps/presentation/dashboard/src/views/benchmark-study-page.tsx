@@ -13,6 +13,7 @@ import { benchmarkStudyRoute } from "../router";
 import {
   parseBenchmarkStudyDashboard,
   resolveBenchmarkStudyDashboardUrl,
+  selectBenchmarkStudyRun,
   type BenchmarkStudyArm,
   type BenchmarkStudyCase,
   type BenchmarkStudyDashboard,
@@ -190,7 +191,7 @@ function ArmsView({ packet }: { packet: BenchmarkStudyDashboard }) {
   );
 }
 
-function CasesView({ packet, primaryMetric, onOpenRun }: { packet: BenchmarkStudyDashboard; primaryMetric: string; onOpenRun: (runId: string) => void }) {
+function CasesView({ packet, primaryMetric, onOpenRun }: { packet: BenchmarkStudyDashboard; primaryMetric: string; onOpenRun: (runId: string, caseId: string) => void }) {
   return (
     <div className="benchmark-table-shell benchmark-wide-table">
       <table>
@@ -208,7 +209,7 @@ function CasesView({ packet, primaryMetric, onOpenRun }: { packet: BenchmarkStud
                 {item.arms.map((cell) => (
                   <td key={cell.arm_id}>
                     {cell.selected_run_id && cell.score_countable ? (
-                      <button className="benchmark-cell-link" onClick={() => onOpenRun(cell.selected_run_id!)} type="button">
+                      <button className="benchmark-cell-link" onClick={() => onOpenRun(cell.selected_run_id!, item.case_id)} type="button">
                         <span>{primaryMetric}: {metricValue(cell.metrics[primaryMetric])}</span>
                         {packet.design.metric_catalog.filter((metric) => metric.metric_name !== primaryMetric).map((metric) => (
                           <small className="benchmark-cell-metric" key={metric.metric_name}>{metric.metric_name}: {metricValue(cell.metrics[metric.metric_name])}</small>
@@ -261,23 +262,23 @@ function RunDetail({ run, packet }: { run: BenchmarkStudyRun; packet: BenchmarkS
   );
 }
 
-function RunsView({ packet, selectedRunId, onSelectRun }: { packet: BenchmarkStudyDashboard; selectedRunId: string; onSelectRun: (runId: string) => void }) {
-  const selected = packet.runs.find((run) => run.run_id === selectedRunId) ?? packet.runs[0];
+function RunsView({ packet, selectedRunId, selectedCaseId, onSelectRun }: { packet: BenchmarkStudyDashboard; selectedRunId: string; selectedCaseId: string; onSelectRun: (runId: string, caseId: string) => void }) {
+  const selected = selectBenchmarkStudyRun(packet.runs, selectedRunId, selectedCaseId);
   return (
     <div className="benchmark-runs-layout">
       <div className="benchmark-table-shell">
         <table>
           <thead><tr><th>Run</th><th>Case</th><th>Arm</th><th>Status</th><th>Countability</th></tr></thead>
           <tbody>{packet.runs.map((run) => (
-            <tr aria-selected={run.run_id === selected?.run_id} key={run.run_id}>
-              <td><button className="benchmark-run-link" onClick={() => onSelectRun(run.run_id)} type="button">{run.run_id}</button></td>
+            <tr aria-selected={run === selected} key={JSON.stringify([run.case_id, run.run_id])}>
+              <td><button className="benchmark-run-link" onClick={() => onSelectRun(run.run_id, run.case_id)} type="button">{run.run_id}</button></td>
               <td>{run.case_id}</td><td>{run.arm_id}</td><td>{run.status}</td>
               <td>{run.countability.score_countable ? "Score-countable" : "Diagnostic only"}</td>
             </tr>
           ))}</tbody>
         </table>
       </div>
-      {selected && <RunDetail packet={packet} run={selected} />}
+      {selected ? <RunDetail packet={packet} run={selected} /> : <p role="status">Select a run from the table to view its details.</p>}
     </div>
   );
 }
@@ -323,7 +324,7 @@ export function BenchmarkStudyPage() {
   if (!packet) return <main aria-busy="true" className="benchmark-page benchmark-loading"><Activity aria-hidden="true" /><h1>Reading benchmark study</h1><p>Validating the public-safe dashboard packet…</p></main>;
 
   const primaryMetric = packet.design.metric_catalog.find((metric) => metric.role === "primary")?.metric_name ?? "primary";
-  const setView = (view: BenchmarkStudyView, runId = search.runId) => navigate({ search: (current) => ({ ...current, view, runId }) });
+  const setView = (view: BenchmarkStudyView, runId = search.runId, caseId = search.caseId) => navigate({ search: (current) => ({ ...current, view, runId, caseId }) });
   const sourcePath = new URL(source.url).pathname;
 
   return (
@@ -361,8 +362,8 @@ export function BenchmarkStudyPage() {
       <div className="benchmark-content">
         {search.view === "campaign" && <CampaignView packet={packet} primaryMetric={primaryMetric} />}
         {search.view === "arms" && <ArmsView packet={packet} />}
-        {search.view === "cases" && <CasesView onOpenRun={(runId) => setView("runs", runId)} packet={packet} primaryMetric={primaryMetric} />}
-        {search.view === "runs" && <RunsView onSelectRun={(runId) => setView("runs", runId)} packet={packet} selectedRunId={search.runId} />}
+        {search.view === "cases" && <CasesView onOpenRun={(runId, caseId) => setView("runs", runId, caseId)} packet={packet} primaryMetric={primaryMetric} />}
+        {search.view === "runs" && <RunsView onSelectRun={(runId, caseId) => setView("runs", runId, caseId)} packet={packet} selectedRunId={search.runId} selectedCaseId={search.caseId} />}
       </div>
 
       <footer className="benchmark-footer">

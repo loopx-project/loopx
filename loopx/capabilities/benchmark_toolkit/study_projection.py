@@ -25,6 +25,7 @@ from .experiment_board import (
 )
 from .experiment_identity import (
     ARM_ROLES,
+    experiment_run_key,
     experiment_token_text as _token,
 )
 from .four_arm_contract import BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION
@@ -640,17 +641,13 @@ def _validate_case_insight_attachment(
         candidate["payload"]
         for candidate in active_envelopes
         if candidate["record_kind"] == "experiment_board_row"
-        and candidate["benchmark_id"] == envelope["benchmark_id"]
-        and candidate["study_id"] == envelope["study_id"]
-        and candidate["payload"]["run_id"] == insight["run_id"]
+        and experiment_run_key(candidate["payload"]) == experiment_run_key(insight)
     ]
     if len(board_rows) != 1:
         raise ValueError(
             "case-insight upload requires one active exact-run board record"
         )
     run = board_rows[0]
-    if run["case_id"] != insight["case_id"]:
-        raise ValueError("case insight identity does not match its board row")
     if not benchmark_run_status_is_terminal(run["status"]):
         raise ValueError("case-insight upload requires a terminal run")
     if run["status"] != insight["outcome_status"]:
@@ -1017,7 +1014,7 @@ def build_benchmark_study_dashboard(
     ]
     board_rows = [envelope["payload"] for envelope in board_envelopes]
     board_provenance = {
-        envelope["payload"]["run_id"]: {
+        experiment_run_key(envelope["payload"]): {
             key: envelope[key]
             for key in (
                 "record_id",
@@ -1062,7 +1059,7 @@ def build_benchmark_study_dashboard(
         if envelope["record_kind"] == "case_insight_projection"
     ]
     insights = {
-        envelope["payload"]["run_id"]: envelope["payload"]
+        experiment_run_key(envelope["payload"]): envelope["payload"]
         for envelope in insight_envelopes
     }
     insight_records = [envelope["payload"] for envelope in insight_envelopes]
@@ -1185,12 +1182,16 @@ def build_benchmark_study_dashboard(
                     sorted(
                         {
                             failure: sum(
-                                insights.get(row["run_id"], {}).get("failure_class")
+                                insights.get(experiment_run_key(row), {}).get(
+                                    "failure_class"
+                                )
                                 == failure
                                 for row in arm_rows
                             )
                             for failure in {
-                                insights.get(row["run_id"], {}).get("failure_class")
+                                insights.get(experiment_run_key(row), {}).get(
+                                    "failure_class"
+                                )
                                 for row in arm_rows
                             }
                             if failure
@@ -1213,7 +1214,7 @@ def build_benchmark_study_dashboard(
                     "score_countable": row is not None,
                     "metrics": row["metrics"] if row else {},
                     "effort": row["effort"] if row else {},
-                    "insight": insights.get(row["run_id"]) if row else None,
+                    "insight": insights.get(experiment_run_key(row)) if row else None,
                 }
             )
         complete = all(cell["score_countable"] for cell in arm_cells)
@@ -1347,8 +1348,8 @@ def build_benchmark_study_dashboard(
         "runs": [
             {
                 **row,
-                "redacted_insight": insights.get(row["run_id"]),
-                "upload_provenance": board_provenance[row["run_id"]],
+                "redacted_insight": insights.get(experiment_run_key(row)),
+                "upload_provenance": board_provenance[experiment_run_key(row)],
             }
             for row in board["runs"]
         ],

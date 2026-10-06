@@ -128,7 +128,7 @@ def main() -> int:
     )
     execution = Execution(
         mode=kwargs.get("execution_mode", "heartbeat"),
-        task_entry=kwargs.get("task_entry", "seeded-todo"),
+        task_entry=kwargs.get("task_entry"),
         context=kwargs.get("iteration_context", "fresh"),
         validation_command=kwargs.get("validation_command", []),
     )
