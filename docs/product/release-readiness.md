@@ -725,6 +725,25 @@ path, and canary route rather than as a user-facing release baseline.
   [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.4)
   for its shipped capability usage and qualification limits.
 
+- `v1.3.0` on 2026-10-06 09:41 +08:00: long-horizon benchmark findings and
+  Astra-assisted semantic control-plane engineering, with continuing-work
+  ownership, evidence-driven replanning and recoverable workspace interaction
+  at commit `e1dd9e519c3057fda4b3765d0c93e7ae793608bf`. The
+  [published release](https://github.com/loopx-project/loopx/releases/tag/v1.3.0)
+  contains bilingual operating instructions and annotated community credits;
+  the [personal illustrated guide](https://my.feishu.cn/docx/Rlg0d9pvAo6zXExWTvWcv0ben0f)
+  was read back with the released UI. Eight source-qualification lanes passed,
+  including the full Python/public smoke suites, installed wheel upgrade and
+  isolated real-model validation. Package checksums, PyPI hashes, hosted
+  attestations, desktop assets, signed update feed and the fast-forwarded
+  `stable` installation were independently verified. The attested source
+  record distinguishes immutable product source from reviewed workflow and
+  browser-fixture corrections. Native desktop builds passed; the maintainer
+  published verified CI outputs after cancelling queued publication jobs.
+  Windows execution, Apple Developer ID/notarization, live Lark/Bot channels
+  and unavailable Harbor/SForge/PostgreSQL/NoKV environments remain unqualified.
+  This release does not claim a paired-version benchmark uplift.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
