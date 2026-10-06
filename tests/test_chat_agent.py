@@ -681,7 +681,11 @@ def test_unstructured_upstream_error_stays_generic() -> None:
     assert "private upstream" not in str(error) + json.dumps(error.gate)
 
 
-@pytest.mark.parametrize("retry_info", ["rateLimitExceeded", "serverOverloaded"])
+@pytest.mark.parametrize("retry_info", [
+    "rateLimitExceeded", "serverOverloaded",
+    {"responseStreamConnectionFailed": {"httpStatusCode": 429}},
+    {"responseStreamDisconnected": {"httpStatusCode": 503}},
+])
 def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
     monkeypatch, tmp_path, retry_info
 ):
@@ -716,7 +720,11 @@ def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
                 "params": {
                     "threadId": "thread-fixture",
                     "turnId": "turn-fixture",
-                    "error": {"codexErrorInfo": retry_info},
+                    "error": {
+                        "codexErrorInfo": retry_info,
+                        "message": "private upstream request",
+                        "additionalDetails": "private upstream detail",
+                    },
                     "willRetry": True,
                 },
             },
@@ -736,8 +744,58 @@ def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
         "Report progress.", on_event=lambda k, p: events.append((k, p))
     )
     assert result["message"] == "Recovered."
-    assert any(k == "agent.phase" and p["label"] == "Codex 正在重试" for k, p in events)
+    retry_events = [
+        p for k, p in events if k == "agent.phase" and p["label"] == "Codex 正在重试"
+    ]
+    assert retry_events == [{
+        "label": "Codex 正在重试", "method": "error",
+        "retry": {"codex_error_info": retry_info},
+    }]
+    assert "private upstream" not in json.dumps(events)
     assert sum(k == "answer.final" for k, p in events) == 1
+
+
+@pytest.mark.parametrize("variant", [
+    "httpConnectionFailed", "responseStreamConnectionFailed",
+    "responseStreamDisconnected", "responseTooManyFailedAttempts",
+])
+@pytest.mark.parametrize("status", [None, 429, 503])
+def test_retry_http_diagnostics_keep_only_typed_status(variant, status):
+    actual = chat_agent._retry_error_details({
+        "codexErrorInfo": {variant: {
+            "httpStatusCode": status, "message": "private upstream request",
+        }},
+        "message": "private upstream request", "additionalDetails": "private detail",
+    })
+    assert actual == {"retry": {"codex_error_info": {variant: {"httpStatusCode": status}}}}
+    assert "private" not in json.dumps(actual)
+
+
+@pytest.mark.parametrize("status", [True, False, -1, 65536, "503", 503.0, {}, []])
+def test_retry_http_diagnostics_do_not_coerce_untrusted_status(status):
+    assert chat_agent._retry_error_details({
+        "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": status}},
+    }) == {"retry": {"codex_error_info": {"httpConnectionFailed": {}}}}
+
+
+@pytest.mark.parametrize("info", [
+    None, [], "private-future-error", {"private-future-error": {}},
+    {"responseStreamDisconnected": None},
+    {"responseStreamDisconnected": {}, "httpConnectionFailed": {}},
+    {"activeTurnNotSteerable": {"turnKind": []}},
+    {"activeTurnNotSteerable": {"turnKind": "private-future-kind"}},
+])
+def test_retry_unknown_shapes_keep_generic_phase_without_private_details(info):
+    assert chat_agent._retry_error_details({
+        "codexErrorInfo": info, "message": "private request", "additionalDetails": "private detail",
+    }) == {}
+
+
+@pytest.mark.parametrize("kind", ["review", "compact"])
+def test_retry_nonsteerable_details_use_existing_provider_turn_kind(kind):
+    assert chat_agent._retry_error_details({
+        "codexErrorInfo": {"activeTurnNotSteerable": {"turnKind": kind, "detail": "private"}},
+    }) == {"retry": {"codex_error_info": {"activeTurnNotSteerable": {"turnKind": kind}}}}
 
 
 def test_native_child_callback_is_scoped_to_owned_thread_and_turn(monkeypatch, tmp_path):

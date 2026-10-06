@@ -101,6 +101,50 @@ def _approval_gate(summary: str) -> dict[str, str]:
     }
 
 
+def _retry_error_details(error: Any) -> dict[str, Any]:
+    """Keep the app-server v2 discriminator, not its private error prose.
+
+    These are provider protocol values, not Core failure classifications. An
+    unknown shape keeps the existing generic retry phase and retry behavior.
+    """
+    info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    if isinstance(info, str):
+        if info not in {
+            "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded",
+            "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "cyberPolicy",
+            "misalignmentPolicyViolation", "tooManyDenials", "internalServerError",
+            "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other",
+        }:
+            return {}
+        safe_info: Any = info
+    elif isinstance(info, dict) and len(info) == 1:
+        variant, detail = next(iter(info.items()))
+        if not isinstance(detail, dict):
+            return {}
+        if variant in {
+            "httpConnectionFailed", "responseStreamConnectionFailed",
+            "responseStreamDisconnected", "responseTooManyFailedAttempts",
+        }:
+            safe_detail: dict[str, Any] = {}
+            status = detail.get("httpStatusCode")
+            if "httpStatusCode" in detail and (
+                status is None or (type(status) is int and 0 <= status <= 65535)
+            ):
+                safe_detail["httpStatusCode"] = status
+        elif (
+            variant == "activeTurnNotSteerable"
+            and isinstance(detail.get("turnKind"), str)
+            and detail["turnKind"] in {"review", "compact"}
+        ):
+            safe_detail = {"turnKind": detail["turnKind"]}
+        else:
+            return {}
+        safe_info = {variant: safe_detail}
+    else:
+        return {}
+    return {"retry": {"codex_error_info": safe_info}}
+
+
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
@@ -1212,7 +1256,11 @@ class CodexChatAgentSession:
                     if on_event:
                         on_event(
                             "agent.phase",
-                            {"label": "Codex 正在重试", "method": method},
+                            {
+                                "label": "Codex 正在重试",
+                                "method": method,
+                                **_retry_error_details(params.get("error")),
+                            },
                         )
                     continue
                 raise _terminal_turn_error(
