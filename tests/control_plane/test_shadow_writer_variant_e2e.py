@@ -296,7 +296,15 @@ def test_native_fence_waits_for_public_prose_and_then_blocks_todo_writes(tmp_pat
             ws, "todo", "add", "--role", "agent", "--text", "Must now be fenced.",
             "--evidence", "Boundary check.",
         )
-        assert result["error_code"] == "local_authority_todo_list_unavailable", result
+        # The fence selects native create; its owner reads the complete head,
+        # rather than the retired Python list preflight. Missing authority must
+        # reject without falling through to this still-writable source document.
+        assert result["ok"] is False and result["added"] is False, result
+        assert result["error_code"] == "todo_create_failed", result
+        assert result["status"] == "missing", result
+        assert result["source_authority"] == "file_v0", result
+        assert result["decision_read_from_provider"] is True, result
+        assert result["legacy_fallback_used"] is False, result
         assert ws.state.read_bytes() == before
         assert "Prose committed before the fence." in ws.state.read_text()
         assert len(index.read_text().splitlines()) == 2
