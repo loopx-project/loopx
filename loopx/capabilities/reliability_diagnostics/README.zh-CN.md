@@ -114,6 +114,10 @@ provider/observer stats 精确关联。stats 按 observer 实例累计；receipt
 
 ### Diagnostic projection（`reliability_diagnostic_projection_v0`）
 
+事件按 `observed_at` 表示的实际时刻排序，同一时刻再按 session 和 sequence 排序。
+不同 UTC 偏移或小数秒格式不会改变时间顺序。Receipt 的起止时间保留原始时间戳文本，
+读回不会重写账本。
+
 | 字段 | 含义 |
 | --- | --- |
 | `mode`、`authority`、`write_scope`、`worker_influence` | `read_only`、`none`、`diagnostic_ledger_only`、`none` |

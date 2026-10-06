@@ -15,7 +15,7 @@ LoopX 协调长程 agent。一个局部正确的改动，仍可能改变 agent �
 | Layer / 层 | What it proves / 证明什么 | Normal cadence / 常规频率 |
 | --- | --- | --- |
 | Unit and contract tests / 单元与合同测试 | Pure rules, schemas, transition tables, invalid-state rejection / 纯规则、schema、状态转换和非法状态拒绝 | Every relevant PR in `python-tests.yml` / 相关 PR 必跑 |
-| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public on `main`, daily, or manual / 本地聚焦；主干、每日或手动全量 |
+| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public daily or manual / 本地聚焦；每日或手动全量 |
 | Catalog-informed canary / Catalog 驱动 canary | The smallest risk-based slice spanning every changed public surface / 覆盖所有变更面的最小风险切片 | Before sensitive merge or release / 敏感合并与发布前 |
 | CLI output budgets / CLI 输出预算 | Agent-facing output stays bounded and base-to-head growth is visible / 输出有界且能发现相对增长 | Relevant PR CI and premerge / 相关 PR CI 与 premerge |
 | Public-safe decision replay / 公开安全决策回放 | Reviewed source-state invariants replay through the real quota-to-scheduler path / 经审阅的源状态不变量重放真实 quota-to-scheduler 链路 | Regression and control-plane changes / 回归与控制面变更 |
@@ -172,7 +172,8 @@ workflow-level path-filtered check that cannot report on every PR.
 
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
-requiring common checks and the real packaged Dashboard build/browser smoke.
+requiring frontend type-check/build, scoped coverage and real packaged Dashboard
+browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
 Mixed, prompt, dependency and unknown changes stay full. Full Python runs four
 complete shards and combines all four coverage files. The `ci:full` label forces
 full qualification; main stays full. No selected-only report impersonates full
@@ -646,12 +647,18 @@ Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺
 不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
 正式契约变化时同步更新其归属 fixture。
 
-`full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
-not a required PR check. This separation protects repository quality without
-making every small patch wait for the broadest suite.
+`full-public-smokes.yml` runs daily and by manual dispatch on the selected ref;
+ordinary main pushes do not launch a sweep. It is not a required PR check. The
+five complete shards share one source-verified frontend build and at most two
+shards run at once. Daily/manual Python Tests also probes the next Node runtime;
+supported-runtime qualification remains on full PR/main/merge-queue candidates.
+See [CI impact and resource cadence](ci-impact-selection.md) for supersession,
+force-full and release readback. Hosted queue/runtime gains require measurement.
 
-`full-public-smokes.yml` 在主干、每日定时和手动触发时运行，不是 PR 必须门禁。
-这种分层既保护质量，也避免每个小 patch 都等待最宽测试集。
+`full-public-smokes.yml` 每日定时或按指定 ref 手动运行，不随普通主干提交重复启动，
+也不是 PR 必须门禁。五个完整分片共享一次前端构建，同时最多运行两个分片；
+下一版 Node 探测移到每日／手动 Python Tests，受支持 runtime 的完整验证仍保留。
+发布前需手动运行并回读精确候选的全量结果；实际排队与执行改善需在线测量。
 
 ### Smoke Fleet Health / Smoke 集群健康
 
@@ -794,6 +801,9 @@ it does not grant execution quota, spending, or provider authority.
    sample window, workload and distribution; acknowledge noise. Keep the
    failing scenario and original result; do not shrink fixture populations,
    scan roots or sampling depth to obtain a pass.
+   CI comparisons must use the event's immutable base and candidate revisions,
+   including merge-queue bases. Do not resolve a moving branch after queueing:
+   unrelated changes on that branch are not regressions in the tested commit.
 2. **Inspect information value and redundancy.** Name the current consumer and
    decision each changed field supports. Remove derivable or unused copies when
    the consumer contract permits it. Similar rows in different lanes may serve
@@ -815,6 +825,8 @@ it does not grant execution quota, spending, or provider authority.
 1. **同口径测量。** 记录 base/head、负载、指标和测量边界。紧凑 JSON 字符、UTF-8
    字节、嵌套键数、真实 stdout 和 token 不可互换。延迟要保留样本窗口、负载和
    分布，并承认噪声。保留失败场景与原结果，不缩小 fixture、扫描范围或采样深度。
+   CI 对照必须固定事件的 base 和 candidate 提交，包括合并队列的 base；不能在排队
+   后重新解析移动分支，把其他提交的变化当作被测提交的回归。
 2. **分析信息价值与真实冗余。** 说明变化字段服务哪个消费者、哪个决策。合同允许时
    删除可推导或无人使用的副本；不同 lane 中相同的数据可能服务不同消费者，去重
    需要调用方迁移和语义等价验证。详情优先使用有界摘要和可达冷路径。不能删身份、

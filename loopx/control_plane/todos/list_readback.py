@@ -148,6 +148,24 @@ def list_goal_todos(
     source = projected.source
     summaries = projected.summaries
     todos = projected.todos
+    # Exact cold reads restore source bytes after the shared summary owner has
+    # evaluated identity/status/guards. List and thin projections stay bounded;
+    # a hot summary is never treated as the original request.
+    if normalized_todo_id and not thin and len(todos) == 1:
+        if canonical_read is not None:
+            source_items = canonical_read["todos"]
+        else:
+            active, archived, _sections = parse_todo_source(
+                state_text, goal=goal, state_path=resolved_state_file,
+            )
+            source_items = [*active["user"], *active["agent"], *archived]
+        detail = todos[0]
+        matches = [item for item in source_items
+            if item.get("todo_id") == normalized_todo_id
+            and item.get("role") == detail.get("role")
+            and item.get("archive_state", "active") == detail.get("archive_state", "active")]
+        if len(matches) == 1:
+            detail["text"] = str(matches[0].get("text") or "")
     unfiltered_count = projected.unfiltered_count
     uncapped_todo_count = projected.uncapped_todo_count
 

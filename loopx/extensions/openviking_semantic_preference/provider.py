@@ -10,11 +10,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...capabilities.semantic_preference.contract import REQUEST_SCHEMA, RESPONSE_SCHEMA
 from .project_peer import ProjectPeerScope, resolve_project_peer_scope
 
 
-REQUEST_SCHEMA = "semantic_preference_provider_request_v0"
-RESPONSE_SCHEMA = "semantic_preference_provider_response_v0"
 SCOPE_SCHEMA = "openviking_project_peer_scope_v0"
 PREFERENCE_PATH_MARKER = "/memories/preferences/"
 MAX_FIND_CALLS = 3

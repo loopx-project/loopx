@@ -520,7 +520,10 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 source = Path(str(item.get("source_path") or "")).expanduser()
                 archive_name = str(item.get("archive_path") or source.name)
                 _add_path_to_tar(tar, source, archive_name, exclude_roots, staging, snapshots)
-            from .configuration_backup import capture_configuration_backup, verify_configuration_backup
+            from .capabilities.configuration_backup import (
+                capture_configuration_backup,
+                verify_configuration_backup,
+            )
             configuration = capture_configuration_backup(
                 registry_path=Path(payload["configuration_source_registry"]),
                 runtime_root=Path(payload["runtime_root"]),

@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
+from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from ..control_plane.coordination.local_authority import (
     local_authority_is_promoted,
     read_canonical_todo_fields_if_promoted,
@@ -225,6 +226,10 @@ def _validated_replan_successor_obligation(
         agent_id=args.claimed_by,
         goal_id=args.goal_id,
         registry_goal=registry_goal,
+        effective_turn_cadence=effective_turn_cadence_context(
+            registry_goal or {"id": args.goal_id}, runtime_root,
+            registry_path=registry_path,
+        ),
     )
     current = str((obligation or {}).get("obligation_id") or "").strip()
     if not current:
@@ -291,6 +296,8 @@ def handle_todo_command(
                 "`loopx todo claim`, `loopx todo update`, or another command shown "
                 "by `loopx todo --help`"
             )
+        if args.todo_command == "claim":
+            validate_todo_claim_options(args)
         validate_shared_todo_options(args)
         validate_capability_gap_options(args)
         if getattr(args, "turn_instance_id", None):
@@ -437,7 +444,6 @@ def handle_todo_command(
                 if not payload.get("dry_run"):
                     payload["host_action"] = "end_current_heartbeat"
         elif args.todo_command == "claim":
-            validate_todo_claim_options(args)
             payload = update_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -675,6 +681,7 @@ def handle_todo_command(
                 todo_id=args.todo_id,
                 role=args.role,
                 reason=args.reason,
+                successor_todo_ids=args.successor_todo_ids,
                 next_agent_todo=args.next_agent_todo,
                 next_user_todo=args.next_user_todo,
                 next_user_task_class=args.next_user_task_class,
@@ -715,7 +722,9 @@ def handle_todo_command(
     except Exception as exc:
         from ..usage_ping import capture_failure
         capture_failure(exc)
-        payload = todo_error_payload(args, exc)
+        payload = todo_error_payload(
+            args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+        )
     append_todo_rollout_event(
         payload,
         args=args,

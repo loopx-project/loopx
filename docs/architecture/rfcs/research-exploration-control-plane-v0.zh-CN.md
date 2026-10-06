@@ -125,6 +125,7 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | Explore evidence | Explore 拥有 append-only node、edge、finding 与有界 public-safe projection。 |
 | Research evidence 与 cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.zh-CN.md) 组合 generic progress、typed closure 和 explicit binary candidate。CLI summary 与 Lark node summary 共用只读投影，精确 experiment input fingerprint 防止过期结果继续有效。 |
 | Explore planning | 可选 branch planner 保持只读，并把执行交还 quota、Todo、claim 和 lease。 |
+| Turn context 中的证据 | Planning 模式的 turn-start 读取保留有界的显式 Todo/节点证据诊断与既有 exploring 前沿节点；先解析 finding 再裁剪近期历史。这交付决策输入，不代表 §11.5 adoption gate 或模型行为已经验证。 |
 | Model behavior qualification | 真实 function-tool 对话可以验证模型是否读取真实 packet 并选择真实 semantic writeback。 |
 
 ### 5.2 还缺什么
@@ -949,6 +950,14 @@ evidence-backed terminal result。
 | 2026-08-13 | 采用 Explore 作为 canonical research-topology owner；v0 选择 explicit-only composition candidate；joint work 表示为 experiment node；shared-constraint inference 延后到 shadow qualification。 |
 | 2026-08-13 | 将 eligibility 与 ranking 分离：控制面拥有合法、有界 candidate set，模型在多个 eligible candidate 中自主择优；selection receipt 只证明调度选择，不构成 research truth。该协议延后到 M4，不进入 #3173 的首期 runtime。 |
 | 2026-10-04 | 提议 §11.5 作为有界 M3 prerequisite：精确 result -> 有范围 interpretation -> adopted task step/successor。复用 Explore 和 task/replan receipt；Turn settlement、原生评分与科学资格独立。本次 RFC 更新不交付自动策略。 |
+
+探索 Harness 的产品入口现在将仅证据和证据加规划模式统一到既有 `explore`
+能力。类型化配置 owner 保留旧存储和 flag；规划配套图谱，但不授予 spawn 或外部
+发布权限。轮次开始 hook 通过既有 hook 契约请求有界证据和分支上下文。这是 M3
+入口与采纳的前置条件，不是实验选择、结果解释或科学收益的验收。
+CLI/File 状态与打包设置验证模式切换、过期预览恢复和关闭态行为；真实长程轨迹
+仍须验证模型实际采纳和后续推进。模式词汇仅属于 Explore 配置，不是新的 kernel
+生命周期或调度契约。
 
 ## 20. RFC 验收标准
 

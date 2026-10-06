@@ -23,6 +23,20 @@ def heartbeat_user_language_prompt_revision(text: str) -> str | None:
     return "heartbeat_user_language_v1" if any(rule in text for rule in rules) else None
 
 
+def heartbeat_peer_admission_prompt_revision(text: str) -> str | None:
+    """Attribute readable peer guidance for a one-time CLI budget transition.
+
+    This recognizes the complete reviewed instruction block for validation only;
+    workspace and claim/lease admission remain owned by the live quota contract.
+    """
+    block = (
+        "Follow the current quota claim/lease and workspace contract plus repository rules. "
+        "Follow todo continuation policy. Task-scoped coordination grants no authority over "
+        "other agents. Keep scope in this prompt, not todo metadata."
+    )
+    return "heartbeat_peer_admission_v1" if block in text else None
+
+
 def host_prompt_static_safety_revision(text: str) -> str | None:
     """Exact renderer evidence for the one-time static-safety budget transition.
 

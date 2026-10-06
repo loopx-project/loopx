@@ -1,4 +1,6 @@
-"""Goal-scoped Material Lifecycle capability contracts."""
+"""Material Lifecycle contracts for explicit Goal or project source owners."""
+
+from .ownership import MaterialProjectScope, MaterialProjectScopeVerifier
 
 from .apply import (
     MATERIAL_MIGRATION_APPLY_RECEIPT_SCHEMA_VERSION,
@@ -75,6 +77,8 @@ from .ranking import (
     MATERIAL_RERANK_PROPOSAL_SCHEMA_VERSION,
     build_material_rerank_apply_receipt,
     build_material_rerank_proposal,
+    material_rerank_receipt_chunks,
+    plan_material_single_move,
 )
 from .readable_projection import (
     MATERIAL_READABLE_PROJECTION_RECEIPT_SCHEMA_VERSION,
@@ -93,6 +97,8 @@ from .settlement import (
 )
 
 __all__ = [
+    "MaterialProjectScope",
+    "MaterialProjectScopeVerifier",
     "MATERIAL_CANDIDATE_INTAKE_APPLY_RECEIPT_SCHEMA_VERSION",
     "MATERIAL_CANDIDATE_INTAKE_PROPOSAL_SCHEMA_VERSION",
     "MATERIAL_CANDIDATE_INTAKE_ROLLBACK_RECEIPT_SCHEMA_VERSION",
@@ -152,6 +158,8 @@ __all__ = [
     "inspect_project_material_skill",
     "install_project_material_skill",
     "material_skill_digest",
+    "material_rerank_receipt_chunks",
+    "plan_material_single_move",
     "plan_material_decision_actions",
     "prepare_material_migration",
     "project_material_skill_target",

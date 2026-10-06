@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -304,6 +306,62 @@ def test_late_scheduler_wake_does_not_open_an_unfinishable_turn(planning_env, mo
     assert not (Path(env["LOOPX_RUNTIME_ROOT"]) / "benchmark-pending-turn.json").exists()
 
 
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "plain", "native-goal", "loopx-goal"])
+def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode):
+    from benchmark.runtime.scheduler import worker_command
+
+    env = planning_env | {
+        "LOOPX_EXECUTION_MODE": mode, "LOOPX_TASK_STAGE": "execute",
+        "LOOPX_TASK_ENTRY": "seeded-todo",
+        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 100),
+    }
+    if mode == "turn":
+        env["LOOPX_VALIDATION_COMMAND_JSON"] = '["python", "check.py"]'
+    registry = Path(env["LOOPX_REGISTRY"])
+    registered = json.loads(registry.read_text())
+    registered["goals"][0]["domain"] = "project"
+    registered["goals"][0]["adapter"] = {
+        "kind": "read_only_project_map_v0", "status": "connected-read-only",
+    }
+    registry.write_text(json.dumps(registered))
+    # An isolated File authority remains runnable: only the benchmark owner
+    # knows its separate phase deadline. Exercise the real quota CLI, not a
+    # synthetic scheduler decision that happens to terminate on the next read.
+    cli = [env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
+           "--runtime-root", env["LOOPX_RUNTIME_ROOT"]]
+    subprocess.run([*cli, "todo", "add", "--goal-id", env["LOOPX_GOAL_ID"],
+                    "--role", "agent", "--claimed-by", env["LOOPX_AGENT_ID"],
+                    "--text", "[P0] Complete synthetic task", "--execute"],
+                   env=env, check=True, capture_output=True, text=True)
+    def quota():
+        result = subprocess.run([
+            *cli, "quota", "should-run", "--goal-id", env["LOOPX_GOAL_ID"],
+            "--agent-id", env["LOOPX_AGENT_ID"], "--runtime-profile", "generic_cli",
+            "--include-detail", "scheduler",
+        ], env=env, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+    before = quota()
+    assert before["should_run"] is True
+    command = worker_command(env, python=sys.executable,
+        source=str(Path(__file__).resolve().parents[2]),
+        state_file=str(Path(env["LOOPX_RUNTIME_ROOT"]) / "scheduler.json"),
+        host_timeout=500)
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if mode in {"heartbeat", "turn"}:
+        assert "status=wake_requested_stop" in result.stdout
+    receipts = list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["budget_exhausted"] and receipt["host_invoked"] is False
+    assert not Path(env["LOOPX_CODEX_HOME"]).exists()
+    assert not (Path(env["LOOPX_RUNTIME_ROOT"]) / "benchmark-pending-turn.json").exists()
+    after = quota()
+    assert after["should_run"] is True
+    assert after["quota"]["spent_slots"] == before["quota"]["spent_slots"]
+
+
 def test_remaining_phase_time_caps_later_host_windows(planning_env, monkeypatch):
     from benchmark.runtime import worker
 
@@ -364,6 +422,13 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
         await agent._seed_phase(None, cwd=planning_env["LOOPX_PROJECT"])
         listed = await cli(None, ["todo", "list", "--goal-id", "planning-goal", "--role", "agent"])
         todos = {t["todo_id"]: t for t in listed["todos"]}
+        # Read back the exact minimal seed through the real Todo owner. Phase
+        # updates must not add task-decomposition advice to the benchmark task.
+        assert todos[agent._seeded_todo_id]["text"] == (
+            "[P0] Execute benchmark phase 2. Read the exact "
+            "current task from /opt/loopx-benchmark/control/task-phase-002.md; "
+            "inspect the workspace, implement and validate it."
+        )
         if status in {"open", "blocked"}:
             assert agent._seeded_todo_id == original and len(todos) == 1
             assert todos[original]["status"] == status

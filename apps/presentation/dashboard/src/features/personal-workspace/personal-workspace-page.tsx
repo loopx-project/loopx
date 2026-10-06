@@ -1098,6 +1098,14 @@ export function PersonalWorkspacePage({
       const currentGoal = workspaceGoals.find((goal) => goal.goalId === selection.item.goalId);
       return currentGoal ? { item: currentGoal, kind: "goal" } : selection;
     }
+    if (selection?.kind === "todo") {
+      const goal = workspaceGoals.find((goal) => goal.goalId === selection.item.goalId);
+      const todo = goal?.agentTodos.find((item) => item.todoId === selection.item.todoId);
+      return goal && todo ? { kind: "todo", item: {
+        ...todo, goalId: goal.goalId, goalTitle: goal.title,
+        ownerLabel: goal.agentLanes?.find((lane) => lane.agentId === todo.claimedBy)?.label ?? todo.claimedBy,
+      } } : selection;
+    }
     if (selection?.kind !== "run") return selection;
     const currentRun = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
       item.kind === "run" && item.run.runId === selection.item.runId
@@ -1448,6 +1456,9 @@ export function PersonalWorkspacePage({
           }
           void reconcileStatus(proposal.goalId ? [proposal.goalId] : undefined);
         }
+        if (proposal.actionKind === "todo.update") {
+          void reconcileStatus(proposal.goalId ? [proposal.goalId] : undefined);
+        }
         return;
       }
       const result = await applyTypedAction(proposal.previewId);
@@ -1487,7 +1498,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
       }
-      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve") {
+      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
     } catch (error) {
@@ -1839,6 +1850,9 @@ export function PersonalWorkspacePage({
     <WorkspaceShell
       notice={serviceNotice}
       drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
+        todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
+          goal.goalId === drawerSelection.item.goalId && (drawerSelection.item.done
+            || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
         proposalReadbackUnavailable={actionReadback.isError || !actionReadback.data
           || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
         proposalReadbackFetching={actionReadback.isFetching} onRetryProposalReadback={() => void actionReadback.refetch()} onClose={() => {
@@ -1877,7 +1891,7 @@ export function PersonalWorkspacePage({
               ],
               value: selectedWorkspaceRef ?? stewardScopeValue,
             } : null}
-            workspaceGrantLabel={selectedWorkspaceRef ? t(workspaceUnavailable ? "workspace.grantRevoked" : "workspace.grantRead") : null}
+            workspaceGrantLabel={selectedWorkspaceRef ? t(workspaceUnavailable ? "workspace.grantRevoked" : selectedWorkspaceProject?.grant === "workspace_write" ? "workspace.grantWrite" : "workspace.grantRead") : null}
             managerChatOpen={managerChatOpen}
             managerChannelBinding={managerChannelBinding}
             managerRuntime={managerRuntime}

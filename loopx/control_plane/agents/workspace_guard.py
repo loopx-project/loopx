@@ -100,6 +100,47 @@ def _git_repository_identity(path: Path) -> str | None:
         return None
 
 
+def _capture_local_goal_workspace(
+    path: Path, *, local_goal_id: str | None, local_project_root: Path | None,
+    peer_independent_worktree_required: bool, repository_source: str | None,
+) -> dict[str, Any] | None:
+    if peer_independent_worktree_required or not local_goal_id:
+        return None
+    if local_project_root is not None and not _is_same_or_child_path(
+        path, local_project_root
+    ):
+        return None
+    try:
+        workspace_identity = resolve_project_identity(
+            path,
+            loopx_project_id=local_goal_id,
+        )
+    except ValueError:
+        return None
+    if not workspace_identity.startswith("loopx:"):
+        return None
+    return build_delivery_workspace_snapshot(
+        workspace_identity=workspace_identity,
+        identity_kind="local_goal",
+        repository_source=repository_source or "goal_id_fallback",
+        workspace_kind="local_goal_workspace",
+        peer_independent_worktree_required=False,
+    )
+
+
+def _git_origin_is_absent(path: Path) -> bool:
+    """Only Git's missing-key result permits local fallback; errors do not."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "config", "--get", "remote.origin.url"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=1.5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 1
+
+
 def capture_delivery_workspace(
     current_path: Path | None = None,
     *,
@@ -111,35 +152,18 @@ def capture_delivery_workspace(
     """Capture a compact, credential-free delivery workspace identity.
 
     Git deliveries bind to their canonical repository identity and, when HEAD
-    exists, an opaque digest of its content-addressed revision. A single-agent
-    non-Git goal may instead bind to its stable LoopX goal identity. The
+    exists, an opaque digest of its content-addressed revision. A registered local
+    goal without an origin may instead bind to its stable LoopX goal identity. The
     snapshot intentionally excludes local paths, branch names and raw commits.
     """
 
     path = current_path or Path.cwd()
     current_root = _git_worktree_root(path)
     if current_root is None:
-        if peer_independent_worktree_required or not local_goal_id:
-            return None
-        if local_project_root is not None and not _is_same_or_child_path(
-            path, local_project_root
-        ):
-            return None
-        try:
-            workspace_identity = resolve_project_identity(
-                path,
-                loopx_project_id=local_goal_id,
-            )
-        except ValueError:
-            return None
-        if not workspace_identity.startswith("loopx:"):
-            return None
-        return build_delivery_workspace_snapshot(
-            workspace_identity=workspace_identity,
-            identity_kind="local_goal",
-            repository_source=repository_source or "goal_id_fallback",
-            workspace_kind="local_goal_workspace",
-            peer_independent_worktree_required=False,
+        return _capture_local_goal_workspace(
+            path, local_goal_id=local_goal_id, local_project_root=local_project_root,
+            peer_independent_worktree_required=peer_independent_worktree_required,
+            repository_source=repository_source,
         )
     # Resolve the root once per observation; keep layout, origin and HEAD reads
     # fresh. Re-querying the same root inside both layout helpers adds two
@@ -148,6 +172,19 @@ def capture_delivery_workspace(
     current_git_dir = _git_dir(current_root)
     task_repository = _git_repository_identity(path)
     workspace_revision = _git_command_output(path, "rev-parse", "HEAD")
+    if (
+        task_repository is None
+        and current_common is not None
+        and current_git_dir == current_common
+        and local_project_root is not None
+        and current_root == local_project_root.expanduser().resolve()
+        and _git_origin_is_absent(path)
+    ):
+        return _capture_local_goal_workspace(
+            path, local_goal_id=local_goal_id, local_project_root=local_project_root,
+            peer_independent_worktree_required=peer_independent_worktree_required,
+            repository_source=repository_source,
+        )
     if (
         not task_repository
         or current_common is None
@@ -286,10 +323,13 @@ def _peer_work_requires_isolated_workspace(
     agent_todo_summary: dict[str, Any] | None,
     *,
     selected_todo: dict[str, Any] | None = None,
+    local_goal_workspace: bool = False,
 ) -> bool:
     explicit = workspace_guard_policy.get("peer_independent_worktree_required")
     if explicit is not None:
         return explicit is True
+    if local_goal_workspace:
+        return False
     candidate = (
         selected_todo
         if isinstance(selected_todo, dict) and selected_todo
@@ -307,6 +347,39 @@ def _peer_work_requires_isolated_workspace(
     )
 
 
+def observe_goal_local_workspace(
+    goal: dict[str, Any],
+    selected_todo: dict[str, Any] | None,
+    allowed_write_scopes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Reuse the registered workspace identity and project its existing grants."""
+    empty: dict[str, Any] = {}
+    if not selected_todo or selected_todo.get("task_repository"):
+        return empty
+    repo = goal.get("repo") or goal.get("project") or goal.get("root")
+    goal_id = goal.get("goal_id") or goal.get("id")
+    if not repo or not goal_id:
+        return empty
+    root = Path(str(repo)).expanduser()
+    if not root.is_absolute():
+        return empty
+    snapshot = capture_delivery_workspace(
+        root, local_goal_id=str(goal_id), local_project_root=root
+    )
+    if not snapshot or snapshot.get("identity_kind") != "local_goal":
+        return empty
+    boundary = goal.get("coordination") or {}
+    raw_scopes = boundary.get("write_scope") if isinstance(boundary, dict) else None
+    scopes = allowed_write_scopes if allowed_write_scopes is not None else raw_scopes
+    if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
+        return empty
+    from ..quota.settlement_workspace_causality import project_goal_write_scopes
+
+    # Physical identity is resolved above. Scope authority stays relative to the
+    # registered spelling, including an explicit symlink alias of that root.
+    return {"workspace": snapshot, **project_goal_write_scopes(str(root), scopes)}
+
+
 def build_agent_workspace_guard(
     goal: dict[str, Any],
     agent_identity: dict[str, Any] | None,
@@ -314,6 +387,7 @@ def build_agent_workspace_guard(
     agent_todo_summary: dict[str, Any] | None = None,
     selected_todo: dict[str, Any] | None = None,
     current_path: Path | None = None,
+    local_workspace: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(agent_identity, dict):
         return None
@@ -324,18 +398,27 @@ def build_agent_workspace_guard(
     )
     if len(agent_identity.get("registered_agents") or []) <= 1:
         return None
-    if not _peer_work_requires_isolated_workspace(
-        workspace_guard_policy,
-        agent_todo_summary,
-        selected_todo=selected_todo,
-    ):
-        return None
     current_path = current_path or Path.cwd()
     candidate = (
         selected_todo
         if isinstance(selected_todo, dict) and selected_todo
         else next(iter(_peer_candidate_items(agent_todo_summary)), {})
     )
+    local = (
+        local_workspace
+        if local_workspace is not None
+        else observe_goal_local_workspace(goal, candidate)
+    )
+    # Local declarations are relative to the registered Goal target, not the
+    # caller cwd. Causal accounting still names the actual delivery workspace.
+    local_admitted = (local.get("workspace") or {}).get("identity_kind") == "local_goal"
+    if not _peer_work_requires_isolated_workspace(
+        workspace_guard_policy,
+        agent_todo_summary,
+        selected_todo=selected_todo,
+        local_goal_workspace=local_admitted,
+    ):
+        return None
     task_repository = normalize_todo_task_repository(candidate.get("task_repository"))
     current_workspace = ""
     repository_source = "goal.repo"

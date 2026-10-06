@@ -4,10 +4,13 @@ import { useWorkspaceI18n } from "./i18n";
 
 type Phase = "idle" | "runtime_required" | "runtime_pairing_required" | "connecting" | "service_error" | "checking" | "available" | "up_to_date" | "downloading" | "installing_app" | "installing_runtime" | "restart_required" | "ready" | "error";
 type UpdateState = { phase: Phase; details?: { version?: string; channel?: string; received?: number; total?: number; code?: string } };
+type RuntimeSelection = { explicit?: boolean; remembered?: boolean; bundled_repair_available?: boolean };
+type UpdateStatus = { state: UpdateState | null; app_version: string; rollback_available?: boolean; runtime_selection?: RuntimeSelection };
 type DesktopWindow = Window & { __TAURI__?: { core: { invoke: <T>(command: string, args?: Record<string, string>) => Promise<T> } } };
 const workingPhases: Phase[] = ["checking", "connecting", "downloading", "installing_app", "installing_runtime"];
 
 const updateErrors: Record<string, [string, string]> = {
+  runtime_selection_explicit: ["当前运行时由其他安装方式或启动参数管理。请通过原安装方式维护它；App 不会覆盖该安装。", "This runtime is managed by another installer or launch override. Maintain it through that owner; the App will not overwrite it."],
   desktop_status_unavailable: ["无法读取 App 更新状态。请重启 App 后再试；若仍失败，请重新安装最新 App。", "Cannot read the App update status. Restart the App; if this persists, reinstall the latest App."],
   update_feed_unavailable: ["此通道的更新源尚未就绪或暂时不可用。可稍后重新检查，当前版本仍可继续使用。", "This channel's update feed is not ready or temporarily unavailable. Check again later; you can keep using this version."],
   update_feed_invalid: ["更新源格式异常。请稍后重新检查。", "The update feed is invalid. Check again later."],
@@ -29,9 +32,26 @@ export function DesktopUpdate() {
   const [state, setState] = useState<UpdateState>({ phase: "idle" });
   const [version, setVersion] = useState("");
   const [rollbackAvailable, setRollbackAvailable] = useState(false);
+  const [runtimeSelection, setRuntimeSelection] = useState<RuntimeSelection>();
   const busy = useRef(false);
+  const statusGeneration = useRef(0);
   const invoke = (window as DesktopWindow).__TAURI__?.core.invoke;
   const working = workingPhases.includes(state.phase);
+  const repairAvailable = runtimeSelection?.explicit !== true && runtimeSelection?.bundled_repair_available !== false;
+
+  function readStatus(value: UpdateStatus, includeState = true) {
+    setVersion(value.app_version);
+    setRollbackAvailable(value.rollback_available === true);
+    setRuntimeSelection(value.runtime_selection);
+    if (includeState && value.state?.phase) setState(value.state);
+  }
+
+  function commitStatus(value: UpdateStatus, generation: number) {
+    if (generation !== statusGeneration.current) return false;
+    const stateIsCurrent = !busy.current || !value.state?.phase || workingPhases.includes(value.state.phase);
+    readStatus(value, stateIsCurrent);
+    return true;
+  }
 
   useEffect(() => {
     const element = panel.current;
@@ -44,47 +64,60 @@ export function DesktopUpdate() {
   useEffect(() => {
     if (!invoke) return;
     let alive = true;
-    void invoke<{ state: UpdateState | null; app_version: string; rollback_available?: boolean }>("desktop_update_status").then((value) => {
-      if (!alive) return;
-      setVersion(value.app_version);
-      setRollbackAvailable(value.rollback_available === true);
-      if (value.state?.phase) setState(value.state);
+    const generation = ++statusGeneration.current;
+    void invoke<UpdateStatus>("desktop_update_status").then((value) => {
+      if (!alive || !commitStatus(value, generation)) return;
       const selected = value.state?.details?.channel ?? (value.app_version.includes("-main.") ? "main" : "stable");
       setChannel(selected);
       if (!value.state?.phase) {
-        void invoke<UpdateState>("desktop_update", { action: "check", channel: selected }).then((next) => { if (alive) setState(next); }).catch((error: unknown) => { if (alive) setState(failedUpdate(error)); });
+        const actionGeneration = ++statusGeneration.current;
+        void invoke<UpdateState>("desktop_update", { action: "check", channel: selected }).then((next) => {
+          if (alive && actionGeneration === statusGeneration.current) setState(next);
+        }).catch((error: unknown) => {
+          if (alive && actionGeneration === statusGeneration.current) setState(failedUpdate(error));
+        });
       }
-    }).catch(() => { if (alive) setState(failedUpdate(null, "desktop_status_unavailable")); });
-    return () => { alive = false; };
+    }).catch(() => {
+      if (alive && generation === statusGeneration.current) setState(failedUpdate(null, "desktop_status_unavailable"));
+    });
+    return () => { alive = false; statusGeneration.current++; };
   }, [invoke]);
 
   useEffect(() => {
     if (!invoke || !working) return;
     const timer = window.setInterval(() => {
-      void invoke<{state: UpdateState}>("desktop_update_status").then((value) => { if (value.state?.phase) setState(value.state); }).catch(() => {});
+      const generation = ++statusGeneration.current;
+      void invoke<UpdateStatus>("desktop_update_status").then((value) => {
+        commitStatus(value, generation);
+      }).catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
   }, [invoke, working]);
 
-  async function run(action: "check" | "apply" | "repair" | "restart" | "rollback") {
+  async function run(action: "check" | "apply" | "repair" | "restart" | "rollback" | "forget_runtime_selection") {
     if (!invoke || busy.current) return;
     busy.current = true;
-    setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : "downloading" });
+    statusGeneration.current++;
+    setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : "downloading" });
     try {
       if (!version) {
-        const current = await invoke<{ app_version: string; rollback_available?: boolean }>("desktop_update_status");
-        setVersion(current.app_version);
-        setRollbackAvailable(current.rollback_available === true);
+        const generation = ++statusGeneration.current;
+        commitStatus(await invoke<UpdateStatus>("desktop_update_status"), generation);
       }
-      setState(await invoke<UpdateState>("desktop_update", { action, channel }));
+      const next = await invoke<UpdateState>("desktop_update", { action, channel });
+      statusGeneration.current++;
+      setState(next);
     }
-    catch (error: unknown) { setState(failedUpdate(error, version ? "update_failed" : "desktop_status_unavailable")); }
+    catch (error: unknown) {
+      statusGeneration.current++;
+      setState(failedUpdate(error, version ? "update_failed" : "desktop_status_unavailable"));
+    }
     finally { busy.current = false; }
   }
   const message: Record<Phase, string> = {
     service_error: zh ? "运行时已安装，但服务尚未连接。可重试更新、修复或恢复上版。" : "Runtime installed, but services are unavailable. Retry updates, repair, or restore the previous version.",
-    runtime_pairing_required: zh ? "本机 CLI 运行时与 App 自带运行时不一致。回到 App 启动界面可「更新 App 与运行时」或「回退 CLI」。" : "This host's CLI runtime and the App's bundled runtime differ. On the App boot screen, update both or use the App's runtime.",
-    idle: zh ? "App 会检查可用更新，不会自动安装。" : "Updates are checked automatically, never installed without confirmation.",
+    runtime_pairing_required: zh ? "旧版启动器未能自动选择可用组件。请检查 App 更新，或通过恢复入口重新连接。" : "The older launcher could not select a usable runtime. Check for an App update or reconnect through recovery.",
+    idle: zh ? "App 启动时会检查并安装当前通道的可用更新；也可在此手动检查。" : "On launch, the App checks and installs available updates on its current channel. You can also check here.",
     runtime_required: zh ? "请完成匹配组件安装，或检查 App 更新。" : "Install matching components or check for an App update.",
     connecting: zh ? "正在连接更新后的服务…" : "Connecting to updated services…",
     checking: zh ? "正在检查更新…" : "Checking for updates…",
@@ -126,7 +159,14 @@ export function DesktopUpdate() {
         </select>
       </label>
       <p>{zh ? "App 与匹配的 CLI 一起更新，服务可能短暂断开。不删除 Goal 数据。" : "Updates the App and matching CLI. Services may briefly disconnect. Goal data is not deleted."}</p>
-      {invoke ? <><p>{zh ? "启动失败时，可重装当前 App 随附的运行时。" : "If startup fails, reinstall this App's bundled runtime."}</p><button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("repair")}>{zh ? "修复当前版本" : "Repair this version"}</button></> : null}
+      {invoke ? <>
+        <p>{repairAvailable ? (zh ? "启动失败时，可重装当前 App 随附的运行时。" : "If startup fails, reinstall this App's bundled runtime.") : updateErrors.runtime_selection_explicit[zh ? 0 : 1]}</p>
+        <button disabled={working || state.phase === "restart_required" || !repairAvailable} type="button" onClick={() => void run("repair")}>{zh ? "修复当前版本" : "Repair this version"}</button>
+        {runtimeSelection?.remembered === true && runtimeSelection.explicit !== true ? <>
+          <p>{zh ? "清除后会重新检测已安装的运行时，不删除该安装。" : "Forgetting the choice rediscovers installed runtimes without deleting them."}</p>
+          <button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("forget_runtime_selection")}>{zh ? "清除记住的运行时选择" : "Forget runtime choice"}</button>
+        </> : null}
+      </> : null}
       {invoke && rollbackAvailable ? <details><summary>{zh ? "恢复上个版本" : "Restore previous version"}</summary><p>{zh ? "将恢复已保留的 App 和它的运行时，需要重启。" : "Restore the retained App and its runtime, then restart."}</p><button disabled={working} type="button" onClick={() => void run("rollback")}>{zh ? "确认恢复上版" : "Restore previous version"}</button></details> : null}
       </details>
     </section>

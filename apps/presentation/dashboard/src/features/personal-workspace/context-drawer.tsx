@@ -4,6 +4,7 @@ import type {DecisionOutcome} from "../../../../../../loopx/control_plane/todos/
 import { attentionSuccessor, canDecideAttention, canReviewAttention } from "./attention-details";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertCircle,
   ArrowLeft,
   Bell,
   Bot,
@@ -29,6 +30,7 @@ import {
 
 import type {
   PersonalWorkspaceCallbacks,
+  WorkspaceActionPreviewRequest,
   WorkspaceAgentOption,
   WorkspaceAttention,
   WorkspaceDrawerSelection,
@@ -42,6 +44,7 @@ import type { LarkGoalConnection } from "../../data/chat";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
+import { TaskRequest } from "./task-request";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
@@ -117,7 +120,7 @@ const RUN_ACTION_LABEL_KEYS = {
   retry: "drawer.recoveryRetry",
 } as const;
 
-export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention, callbacks, goalNotifications = [], goals = [], inspectorExpanded = false, larkConnections = [], onClose, onToggleInspectorSize, readOnly = false, proposalReadbackUnavailable = false, onRetryProposalReadback, proposalReadbackFetching = false, runs = [], selection }: {
+export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention, callbacks, goalNotifications = [], goals = [], inspectorExpanded = false, larkConnections = [], onClose, onToggleInspectorSize, readOnly = false, proposalReadbackUnavailable = false, onRetryProposalReadback, proposalReadbackFetching = false, todoReadbackUnavailable = false, runs = [], selection }: {
   agents: WorkspaceAgentOption[];
   attentionHistory?: WorkspaceAttention[];
   onSelectAttention?: (item: WorkspaceAttention) => void;
@@ -132,6 +135,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   proposalReadbackUnavailable?: boolean;
   onRetryProposalReadback?: () => void;
   proposalReadbackFetching?: boolean;
+  todoReadbackUnavailable?: boolean;
   runs?: WorkspaceRun[];
   selection: ContextDrawerSelection;
 }) {
@@ -155,19 +159,23 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const [todoAgentId, setTodoAgentId] = useState(agents.find((agent) => agent.available)?.agentId ?? "codex");
   const [todoPriority, setTodoPriority] = useState("");
   const [todoResumeWhen, setTodoResumeWhen] = useState("");
+  const [previewFailure, setPreviewFailure] = useState<{identity: string; message: string} | null>(null);
+  const previewAttemptRef = useRef(0);
   const closeRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const selectionIdentity = selection.kind === "run" ? `run:${selection.item.runId}`
     : selection.kind === "proposal" ? `proposal:${selection.item.previewId}`
-      : selection.kind === "todo" ? `todo:${selection.item.todoId}`
-        : selection.kind === "attention" ? `attention:${selection.item.todoId}`
+      : selection.kind === "todo" ? `todo:${selection.item.goalId}:${selection.item.todoId}`
+        : selection.kind === "attention" ? `attention:${selection.item.goalId}:${selection.item.todoId}`
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
                 : `goal:${selection.item.goalId}`;
 
   useEffect(() => {
+    previewAttemptRef.current += 1;
+    setPreviewFailure(null);
     setRepositoryCopyState("idle");
     setDiagnosticsOpen(false);
     setRunDrawerTab("record");
@@ -370,9 +378,22 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     if (await performRunAction(run, "correct", () => onCorrectRun(run, message))) setCorrection("");
   }
 
+  async function previewAction(request: WorkspaceActionPreviewRequest) {
+    const attempt = ++previewAttemptRef.current;
+    setPreviewFailure(null);
+    try {
+      await callbacks.onPreviewAction?.(request);
+    } catch (error) {
+      if (attempt !== previewAttemptRef.current) return;
+      setPreviewFailure({identity: selectionIdentity, message: t("feedback.previewFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      })});
+    }
+  }
+
   async function previewTodoTransition(todo: WorkspaceTodo, operation: TodoOperation, label: string, resumeWhen?: string) {
     if (operation === "successor_create") {
-      await callbacks.onPreviewAction?.({
+      await previewAction({
         actionKind: "todo.create",
         context: { goal_id: todo.goalId, kind: "todo", todo_id: todo.todoId },
         idempotencyKey: `workspace-todo-successor-${todo.todoId}-${Date.now().toString(36)}`,
@@ -381,7 +402,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       });
       return;
     }
-    await callbacks.onPreviewAction?.({
+    await previewAction({
       actionKind: "todo.update",
       context: { goal_id: todo.goalId, kind: "todo", todo_id: todo.todoId },
       idempotencyKey: `workspace-todo-${todo.todoId}-${operation}-${Date.now().toString(36)}`,
@@ -399,7 +420,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
 
   async function previewDecision(attention: WorkspaceAttention, decision: DecisionOutcome) {
     if (readOnly || !canDecideAttention(attention)) return;
-    await callbacks.onPreviewAction?.({
+    await previewAction({
       actionKind: "gate.resolve",
       context: { goal_id: attention.goalId, kind: "todo", todo_id: attention.todoId },
       idempotencyKey: `workspace-decision-${attention.todoId}-${decision}-${Date.now().toString(36)}`,
@@ -603,6 +624,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       </header>
 
       <div className="personal-drawer-body">
+        {previewFailure?.identity === selectionIdentity ? <p className="personal-proposal-explainer" role="alert">{previewFailure.message}</p> : null}
         {selection.kind === "attention" ? (
           <>
             <AttentionDetailCard item={selection.item} onSelect={onSelectAttention} successor={attentionSuccessor(selection.item, attentionHistory)} />
@@ -625,7 +647,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           </>
         ) : null}
 
-        {selection.kind === "todo" ? (
+        {selection.kind === "todo" ? todoReadbackUnavailable ? (
+          <section className="personal-detail-card" role="status">
+            <p>{t("drawer.taskReadbackUnavailable")}</p>
+          </section>
+        ) : (
           <>
             <section className="personal-task-inspector-summary">
               <div className="personal-task-inspector-status">
@@ -635,13 +661,17 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
-              <h3>{selection.item.text}</h3>
+              <TaskRequest todo={selection.item} local={!readOnly} />
+              {selection.item.status === "blocked" && !selection.item.done ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
+                <h4><AlertCircle size={14} />{t("drawer.blockedReason")}</h4>
+                <p>{selection.item.blockedReason ?? t("drawer.blockedReasonMissing")}</p>
+              </section> : null}
             </section>
             <section aria-label={t("drawer.taskInfo")} className="personal-task-inspector-fields">
               <h4>{t("drawer.taskInfo")}</h4>
               <dl>
                 <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
-                <div><dt>{t("common.owner")}</dt><dd>{selection.item.ownerLabel ?? selection.item.claimedBy ?? t("drawer.notAssigned")}</dd></div>
+                <div><dt>{t("common.owner")}</dt><dd>{selection.item.claimedBy ? selection.item.ownerLabel ?? selection.item.claimedBy : t("drawer.notAssigned")}</dd></div>
                 <div><dt>{t("common.status")}</dt><dd>{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
                 <div><dt>{t("drawer.priority")}</dt><dd>{selection.item.priority ?? t("drawer.notSet")}</dd></div>
                 {selection.item.completedAt ? <div><dt>{t("drawer.completedAt")}</dt><dd><time dateTime={selection.item.completedAt}>{selection.item.completedAt}</time></dd></div> : null}
@@ -654,7 +684,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <div><dt>{t("drawer.validationDigest")}</dt><dd><code>{selection.item.validationDigest}</code></dd></div>
                   {selection.item.validationRevisionActor ? <div><dt>{t("drawer.validationRevisionActor")}</dt><dd>{selection.item.validationRevisionActor}</dd></div> : null}
                 </> : null}
-                <div><dt>{t("drawer.nextTransition")}</dt><dd>{selection.item.nextTransition ?? (selection.item.done ? t("drawer.taskNextCompleted") : selection.item.resumeReady ? t("drawer.taskNextResumeReady") : selection.item.status === "deferred" ? t("drawer.taskNextDeferred") : t("drawer.taskNextOpen"))}</dd></div>
+                <div><dt>{t("drawer.nextTransition")}</dt><dd>{selection.item.nextTransition ?? (selection.item.done ? t("drawer.taskNextCompleted") : selection.item.resumeReady ? t("drawer.taskNextResumeReady") : selection.item.status === "deferred" ? t("drawer.taskNextDeferred") : selection.item.status === "blocked" ? t("drawer.taskNextBlocked") : t("drawer.taskNextOpen"))}</dd></div>
               </dl>
             </section>
             {!readOnly && !selection.item.done ? <div className="personal-task-inspector-actions" aria-label={t("drawer.taskActions")}>
@@ -666,7 +696,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                     <select aria-label={t("drawer.reassign")} onChange={(event) => setTodoAgentId(event.target.value)} value={todoAgentId}>
                       {agents.filter((agent) => agent.available).map((agent) => <option key={agent.agentId} value={agent.agentId}>{agent.label}</option>)}
                     </select>
-                    <button className="personal-secondary-action" onClick={() => void callbacks.onPreviewAction?.({
+                    <button className="personal-secondary-action" onClick={() => void previewAction({
                       actionKind: "todo.update",
                       context: { goal_id: selection.item.goalId, kind: "todo", todo_id: selection.item.todoId },
                       idempotencyKey: `workspace-todo-${selection.item.todoId}-reassign-${todoAgentId}-${Date.now().toString(36)}`,
@@ -680,7 +710,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                       {["P0", "P1", "P2", "P3", "P4"].map((priority) => <option key={priority} value={priority}>{priority}</option>)}
                       <option value="clear">{t("drawer.taskPriorityClear")}</option>
                     </select>
-                    <button className="personal-secondary-action" disabled={!todoPriority} onClick={() => void callbacks.onPreviewAction?.({
+                    <button className="personal-secondary-action" disabled={!todoPriority} onClick={() => void previewAction({
                       actionKind: "todo.update",
                       context: {goal_id: selection.item.goalId, kind: "todo", todo_id: selection.item.todoId},
                       idempotencyKey: `workspace-todo-${selection.item.todoId}-priority-${todoPriority}-${Date.now().toString(36)}`,
@@ -714,6 +744,10 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <h4>{t("drawer.evidence")}</h4>
               <MarkdownText text={selection.item.evidence} />
             </section> : null}
+            {selection.item.note ? <details className="personal-detail-card" aria-label={t("drawer.notes")}>
+              <summary>{t("drawer.notes")}</summary>
+              <MarkdownText text={selection.item.note} />
+            </details> : null}
             {selection.item.done ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
           </>
         ) : null}

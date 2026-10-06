@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...presentation.answer_instruction import conversation_answer_instruction
 
 
 PROJECT_CONVERSATION_OBJECTIVE = (
@@ -21,9 +22,22 @@ PROJECT_CONVERSATION_OBJECTIVE = (
     "Do not create an implicit Goal or borrow the global manager identity."
 )
 
+PROJECT_WORK_OBJECTIVE = (
+    "Carry out the owner's explicit requests in the selected workspace, preserving "
+    "this Session's context. The explicit workspace write grant permits bounded "
+    "file edits and project workflows. Read and follow the workspace AGENTS.md "
+    "and applicable project skills. Use existing typed owners for durable state; "
+    "do not bypass material authority, intake, ranking or readback gates. The grant "
+    "does not create a LoopX Goal, scheduling, delegation or portfolio access. "
+    "Do not create an implicit Goal or borrow the global manager identity."
+)
+
 
 class ChatProjectContexts:
-    def __init__(self, roots: list[Path]) -> None:
+    def __init__(self, roots: list[Path], *, workspace_grant: str = "workspace_write") -> None:
+        if workspace_grant not in {"workspace_read", "workspace_write"}:
+            raise ValueError("unsupported project workspace grant")
+        self.workspace_grant = workspace_grant
         # Remember the owner's spelling as well as its initial canonical target.
         # A later symlink retarget must not redirect an accepted Session.
         self.roots = [(root.expanduser().absolute(), root.expanduser().resolve()) for root in roots]
@@ -37,7 +51,7 @@ class ChatProjectContexts:
             ref = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:24]
             contexts[ref] = {"kind": "project_workspace", "project_ref": ref,
                              "workspace_path": str(canonical), "audience": "local_owner",
-                             "grant": "workspace_read"}
+                             "grant": self.workspace_grant}
         return list(contexts.values())
 
     def resolve(self, project_ref: str, *, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -71,8 +85,9 @@ class ChatProjectContexts:
             selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
         if session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
+        objective = PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE
         return {"project": Path(selected["context"]["workspace_path"]),
-                "objective": PROJECT_CONVERSATION_OBJECTIVE,
+                "objective": objective + " " + conversation_answer_instruction(),
                 "title": Path(selected["context"]["workspace_path"]).name}
 
     def open_bound(self, binding_id: str, source: dict[str, Any], *, executor: str, channel_id: str | None) -> dict[str, Any]:
@@ -90,10 +105,26 @@ class ChatProjectContexts:
         return {**session, **self.session_context(session)}
 
     @staticmethod
-    def initialize_bound_scope(store, session):
+    def initialize_bound_scope(store, session, *, runtime_root=None):
         steward = session.get("steward_context")
         if not steward:
             return session
         from ...chat_manager_context import manager_authorization_scope_id
         return store.update_session(session["session_id"], manager_authorization_scope_id=manager_authorization_scope_id(
-            steward["goal_ids"], runtime_root=store.root.parent, channel_id=session["channel_id"]))
+            steward["goal_ids"], runtime_root=runtime_root or store.root.parent, channel_id=session["channel_id"]))
+
+
+def coordination_runtime_root(registry_path: Path | None, chat_root: Path) -> Path:
+    """Registered work/inboxes follow the registry; Chat keeps its own storage.
+
+    A Chat storage override must not create another Goal/Agent inbox authority.
+    Fixtures and ordinary project Chat without a registry keep their local root.
+    """
+    if registry_path is None or not registry_path.exists():
+        return chat_root
+    from ...control_plane.projects.registry_codec import load_project_registry
+    from ...paths import resolve_runtime_root
+    # Reading the registered storage root is lifecycle metadata observation.
+    # Session/Turn admission still enforces the runtime profile and Goal lifetime.
+    registry = load_project_registry(registry_path)
+    return resolve_runtime_root(registry, registry_path=registry_path) if registry.get("common_runtime_root") else chat_root

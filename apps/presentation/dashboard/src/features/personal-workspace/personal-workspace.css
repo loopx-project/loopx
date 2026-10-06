@@ -919,6 +919,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-capability-field-summary { padding: 20px 24px 24px; }
 .personal-capability-field-summary .personal-capability-fields { margin-top: 0; }
 .personal-capability-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; border: 0; }
+.personal-pr-review-agent-orders { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.personal-pr-review-agent-orders legend { margin-bottom: 10px; padding: 0; font-size: 12px; font-weight: 650; }
 .personal-report-schedule { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; min-width: 0; }
 .personal-report-schedule p { grid-column: 1 / -1; margin: 0; color: var(--pw-muted); font-size: 12px; overflow-wrap: anywhere; }
 .personal-capability-fields label { display: grid; align-content: start; gap: 6px; min-width: 0; }
@@ -1143,6 +1145,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-task-inspector-status .is-done i { background: var(--pw-green); }
 .personal-task-inspector-status .is-blocked { background: var(--pw-red-bg); color: var(--pw-red); }
 .personal-task-inspector-status .is-blocked i { background: var(--pw-red); }
+.personal-task-blocked-reason { margin-top: 14px; padding: 11px 13px 12px; border: 1px solid color-mix(in srgb, var(--pw-red) 22%, var(--pw-line)); border-radius: 9px; background: color-mix(in srgb, var(--pw-red-bg) 55%, #fff); }
+.personal-task-blocked-reason h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 5px; color: var(--pw-red); font-size: 12px; font-weight: 700; }
+.personal-task-blocked-reason p { margin: 0; color: var(--pw-text); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.personal-task-blocked-reason[data-recorded="false"] p { color: var(--pw-muted); }
 .personal-task-inspector-fields { padding: 20px 24px 22px; background: #fff; }
 .personal-task-inspector-fields h4 { margin: 0 0 9px; color: var(--pw-text); font-size: 12px; font-weight: 700; }
 .personal-task-inspector-fields dl { margin: 0; border-top: 1px solid var(--pw-line); }
@@ -1165,6 +1171,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-task-completed-note strong { font-size: 12px; }
 .personal-task-completed-note small { color: #5d786c; font-size: 10.5px; }
 .personal-detail-card, .personal-correction-panel { padding: 15px; border: 1px solid var(--pw-line); border-radius: 14px; background: #fff; }
+.personal-detail-card > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: 12px; font-weight: 600; }
+.personal-detail-card > summary:focus-visible { outline: 2px solid var(--pw-blue-ink); outline-offset: 3px; }
 .personal-proposal-card { padding: 16px; border: 1px solid #c3d3f9; border-radius: 14px; background: #f5f8ff; }
 .personal-proposal-card > small { color: #5270bd; font-size: 11px; font-weight: 650; letter-spacing: 0.05em; }
 .personal-proposal-card h3 { margin: 8px 0; font-size: 15.5px; }
@@ -1425,7 +1433,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-task-chat-receipt { grid-template-columns: 32px minmax(0, 1fr); padding: 11px; }
   .personal-task-lane-filter { align-items: stretch; flex-direction: column; gap: 8px; }
   .personal-task-lane-filter label, .personal-task-lane-filter select { width: 100%; max-width: none; }
-  .personal-capability-layout, .personal-capability-value-grid, .personal-capability-fields { grid-template-columns: minmax(0, 1fr); }
+  .personal-capability-layout, .personal-capability-value-grid, .personal-capability-fields, .personal-pr-review-agent-orders { grid-template-columns: minmax(0, 1fr); }
   .personal-capability-linked-setting { grid-template-columns: minmax(0, 1fr); }
   .personal-capability-linked-setting .personal-notification-toggle { justify-self: start; }
   .personal-capability-layout { grid-template-rows: auto minmax(0, 1fr); }

@@ -336,6 +336,26 @@ def test_probe_existing_chat_rejects_stale_runtime_identity() -> None:
         thread.join(timeout=2)
 
 
+def test_probe_existing_chat_fences_two_wheels_with_the_same_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loopx import dashboard_launcher
+
+    expected = {"schema_version": "loopx_runtime_identity_v1", "package_version": "1.2.4",
+                "release_id": None, "source_revision": None, "package_fingerprint": "sha256:new"}
+    monkeypatch.setattr(dashboard_launcher, "release_runtime_identity", lambda _root: expected)
+    class Handler(_CapabilitiesHandler):
+        capabilities = {"ok": True, "schema_version": "loopx_chat_capabilities_v1",
+                        "runtime_identity": {**expected, "package_fingerprint": "sha256:old"}}
+    server, thread = _serve_capabilities(Handler)
+    try:
+        assert dashboard_launcher._probe_existing_chat("127.0.0.1", server.server_address[1]) == "stale"
+        Handler.capabilities["runtime_identity"] = expected
+        assert dashboard_launcher._probe_existing_chat("127.0.0.1", server.server_address[1]) == "matching"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_probe_existing_chat_defers_timeout_to_server_bind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

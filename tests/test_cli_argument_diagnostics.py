@@ -906,9 +906,16 @@ def test_todo_complete_validation_accepts_no_follow_up_with_evidence() -> None:
             "use todo update first",
         ),
         (
-            ["--todo-id", "todo_example", "--successor-todo-id", "todo_successor"],
-            "todo supersede does not support --successor-todo-id; "
-            "use --next-agent-todo or update the source todo before supersede",
+            ["--todo-id", "todo_example", "--successor-todo-id", "todo_successor",
+             "--next-agent-todo", "Continue."],
+            "--successor-todo-id links existing work and cannot be combined "
+            "with --next-agent-todo or --next-user-todo",
+        ),
+        (
+            ["--todo-id", "todo_example", "--successor-todo-id", "todo_successor",
+             "--next-user-todo", "Approve.", "--next-user-task-class", "user_gate"],
+            "--successor-todo-id links existing work and cannot be combined "
+            "with --next-agent-todo or --next-user-todo",
         ),
         (
             ["--todo-id", "todo_example", "--target-key", "monitor"],
@@ -931,7 +938,14 @@ def test_todo_supersede_validation_preserves_exact_diagnostics(
     assert str(exc_info.value) == expected
 
 
-def test_todo_supersede_validation_accepts_successor_creation() -> None:
+@pytest.mark.parametrize("successor_args", [
+    [],
+    ["--next-agent-todo", "Continue."],
+    ["--successor-todo-id", "todo_successor", "--successor-todo-id", "todo_second"],
+])
+def test_todo_supersede_validation_accepts_omitted_generated_or_existing_successors(
+    successor_args: list[str],
+) -> None:
     args = build_parser().parse_args(
         [
             "todo",
@@ -940,8 +954,7 @@ def test_todo_supersede_validation_accepts_successor_creation() -> None:
             "example-goal",
             "--todo-id",
             "todo_example",
-            "--next-agent-todo",
-            "Continue.",
+            *successor_args,
         ]
     )
 

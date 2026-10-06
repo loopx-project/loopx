@@ -48,7 +48,10 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                         "status": "active",
                         "repo": str(repo),
                         "state_file": state.name,
-                        "adapter": {"kind": "harness_self_improvement"},
+                        "adapter": {
+                            "kind": "harness_self_improvement",
+                            "status": "connected-read-only",
+                        },
                         "coordination": {
                             "agent_model": "peer_v1",
                             "registered_agents": [AGENT],

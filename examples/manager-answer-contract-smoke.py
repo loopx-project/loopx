@@ -46,9 +46,11 @@ def repeated_segments(text: str) -> list[str]:
 def main() -> int:
     instruction = manager_answer_contract_instruction()
     skill = manager_skill_text()
-    check("simple factual question" in instruction and "investigation or decision" in instruction,
+    check("A simple question needs no report template." in instruction
+          and "Preserve requested substantive detail" in instruction,
           "the shared instruction must distinguish short and substantive answers")
-    check("fixed sections" in instruction and "without a template" in instruction,
+    check("depth proportionate to the work" in instruction
+          and "do not replace a complete answer" in instruction,
           "the new instruction must not recreate the four-section obligation")
     check(instruction in MANAGER_AGENT_OBJECTIVE,
           "the steward objective must use the contract owner")

@@ -84,7 +84,7 @@ frontend projection; explicitly choosing status-only still uses that projection.
 The manager channel's model and reasoning effort follow its executor. On the
 interactive CLI endpoint the defaults are `gpt-6-astra` with `high` reasoning; on
 the managed host they are the managed execution profile
-(`deepseek-official` / `deepseek-v4-flash` / `high`). The machine's
+(`deepseek-official` / `deepseek-flash` / `high`). The machine's
 `steward_executor` machine configuration decides the executor, the model and the
 effort first; set `LOOPX_MANAGER_MODEL` and `LOOPX_MANAGER_REASONING_EFFORT` on
 the Chat service when a machine has no such configuration, and the shipped
@@ -95,7 +95,7 @@ is unchanged. Capabilities expose the manager defaults, their source, and the
 status and revision of the machine document they were read from.
 
 The managed profile reaches the channel as the same one-line readback the
-governed Turn publishes (`deepseek-v4-flash@high`), so the channel and the
+governed Turn publishes (`deepseek-flash@high`), so the channel and the
 bounded Turns it drives cannot report two different managed profiles; the
 provider is prepended when it is not the shipped one.
 

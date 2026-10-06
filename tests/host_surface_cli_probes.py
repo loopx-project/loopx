@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -124,6 +125,9 @@ def onboarding_setup_command_installs(
     """agent-onboard hands back a setup command; executing it must provision
     the host it named, from any cwd. The surface's skills come from the LoopX
     installer, not from a host that manages skills itself."""
+    node = shutil.which("node")
+    assert node is not None, "The real CLI onboarding probe requires Node.js"
+    env = {**env, "PATH": os.pathsep.join((str(Path(node).parent), env["PATH"]))}
     onboard = run_cli(
         "agent-onboard",
         "--agent-type",

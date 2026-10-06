@@ -126,6 +126,29 @@ def test_explicit_matching_step_keeps_task_binding_and_is_not_replan_evidence(tm
         write(registry, runtime, next_action=step, recommended_action="A different direction.")
 
 
+@pytest.mark.parametrize("length", [1200, 1201])
+def test_cli_next_step_budget_checks_trimmed_text_before_append(tmp_path, length):
+    registry, state, runtime, goal = fixture(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+         "--runtime-root", str(runtime), "refresh-state", "--goal-id", goal["id"],
+         "--agent-id", "agent-a", "--next-action", "  " + "x" * length + "  ",
+         "--no-global-sync"],
+        text=True, capture_output=True, timeout=30,
+    )
+    payload = json.loads(result.stdout)
+    index = runtime / "goals/next-action-goal/runs/index.jsonl"
+    if length == 1200:
+        assert result.returncode == 0, payload
+        assert payload["recommended_action"] == "x" * length
+        assert len(index.read_text().splitlines()) == 1
+    else:
+        assert result.returncode == 1, payload
+        assert payload["error"] == "next_action exceeds 1200 characters"
+        assert not index.exists()
+    assert state.read_text() == STATE
+
+
 def test_same_actor_concurrent_cli_writers_cannot_commit_one_old_basis_twice(tmp_path):
     registry, state, runtime, goal = fixture(tmp_path)
     _, selected = routes(registry, runtime, tmp_path)

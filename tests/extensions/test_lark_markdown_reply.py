@@ -187,6 +187,9 @@ def test_markdown_request_with_mentions_keeps_verified_text_transport(tmp_path):
     ("**委派已完成。**回执可查", "**委派已完成**。回执可查"),
     ("**交给了 `research-agent`。**回执 `example-01` 确认", "**交给了 `research-agent`**。回执 `example-01` 确认"),
     ("**Done.**Next", "**Done**.Next"),
+    ("- **设计回顾（草稿）**｜状态：待审", "- **设计回顾（草稿**）｜状态：待审"),
+    ("**Release notes (draft)**｜Ready", "**Release notes (draft**)｜Ready"),
+    ("**检查完成！**✅", "**检查完成**！✅"),
     ("**一。**后面 **二！**还有", "**一**。后面 **二**！还有"),
 ])
 def test_provider_strong_boundary_preserves_visible_text(source, expected):
@@ -208,6 +211,9 @@ def test_provider_strong_boundary_preserves_visible_text(source, expected):
 
 @pytest.mark.parametrize("source", [
     "**已完成。** 回执确认", "**已完成**。回执确认",
+    "**已完成。**！确认", "**Ready.**|Next", "**Price $**$10",
+    "**标题**｜下一项", "`**标题（草稿）**｜下一项`",
+    "[link](https://example.org/**draft）**｜next)",
     "`**literal。**Next`", "``**literal。**Next``",
     "**带 `**literal。**Next` 的代码。** 已确认",
     r"\*\*literal。\*\*Next", "**unmatched。Next",
@@ -221,10 +227,12 @@ def test_provider_repair_keeps_valid_or_opaque_markdown(source):
     assert normalize_lark_markdown_emphasis(source) == source
 
 
-def test_reply_transport_uses_the_provider_repair_and_checks_normalized_readback(tmp_path):
+@pytest.mark.parametrize(("source", "expected"), [
+    ("**交给了 `research-agent`。**回执已确认", "**交给了 `research-agent`**。回执已确认"),
+    ("**设计回顾（草稿）**｜待审", "**设计回顾（草稿**）｜待审"),
+])
+def test_reply_transport_uses_the_provider_repair_and_checks_normalized_readback(tmp_path, source, expected):
     config, _, project = _fixture(tmp_path, lifecycle=False)
-    source = "**交给了 `research-agent`。**回执已确认"
-    expected = "**交给了 `research-agent`**。回执已确认"
     fallback = ReplyRunner()
     def runner(args):
         if "+messages-send" in args or "+messages-reply" in args:

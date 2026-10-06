@@ -38,8 +38,7 @@ MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.context.page",
-    "goal.checkpoint_read_context.source",
-    "goal.checkpoint_read_context.evaluate",
+    "goal.checkpoint_read_context.resolve",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
     "performance_diagnosis.inspect",
@@ -48,6 +47,7 @@ MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
 # another 5 seconds for the provider lock. Keep the client connected through
@@ -219,6 +219,23 @@ class EffectRuntimeStartupError(RuntimeError):
     def __init__(self, message: str, *, diagnostic_code: str) -> None:
         super().__init__(message)
         self.diagnostic_code = diagnostic_code
+
+
+class EffectRuntimeHostPermissionError(EffectRuntimeStartupError):
+    """The host denied local runtime access before any request was dispatched."""
+
+    recommended_action = (
+        "retry the same registry, Goal, Agent and Turn through host-approved "
+        "local runtime access; do not enable optional capabilities, replace "
+        "authority or spend until the guard succeeds"
+    )
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Host permission denied access to the local TypeScript Effect runtime "
+            "before request dispatch; no capability operation was executed",
+            diagnostic_code="runtime_host_permission_denied",
+        )
 
 
 class EffectRuntimeResponseAmbiguous(EffectRuntimeStartupError):
@@ -445,6 +462,8 @@ def _start_lock_holder_pid(path: Path) -> int | None:
 def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except PermissionError as exc:
+        raise EffectRuntimeHostPermissionError() from exc
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
     if not isinstance(payload, dict):
@@ -459,6 +478,26 @@ def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
     ):
         return None
     return payload
+
+
+def _wait_for_runtime_locator_turnover(
+    path: Path,
+    *,
+    fingerprint: str,
+    observed: Mapping[str, Any] | None,
+    timeout: float,
+) -> None:
+    """Give a retiring runtime time to remove or replace its locator."""
+
+    if not isinstance(observed, Mapping):
+        return
+    token = observed.get("token")
+    deadline = time.monotonic() + min(timeout, RUNTIME_RETRY_SETTLE_SECONDS)
+    while time.monotonic() < deadline:
+        current = _read_info(path, fingerprint=fingerprint)
+        if current is None or current.get("token") != token:
+            return
+        time.sleep(STARTUP_POLL_SECONDS)
 
 
 _RUNTIME_IDENTITY_TEXT_FIELDS = (
@@ -506,7 +545,9 @@ def _serving_token(path: Path) -> tuple[bool, str | None]:
     """Report whether a runtime is still publishing itself at ``path``.
 
     The managed runtime removes its info file as part of its shutdown
-    handshake, so the file is the authoritative stop signal. The pid is not:
+    handshake. Its mutation lock and cleanup files must also retire before
+    namespace cleanup.
+    A readable replacement token proves this runtime no longer serves. The pid is not:
     an exited runtime whose parent has not reaped it still answers a liveness
     probe, which would otherwise report a completed restart as pending.
     """
@@ -520,9 +561,26 @@ def _serving_token(path: Path) -> tuple[bool, str | None]:
         # until the deadline instead of claiming a restart that did not happen.
         return True, None
     if not isinstance(payload, dict):
-        return False, None
+        return True, None
     token = payload.get("token")
     return True, token if isinstance(token, str) else None
+
+
+def _locator_retirement_pending(info_path: Path) -> bool:
+    """Observe the existing TS lock namespace, including its cleanup files."""
+    lock_name = info_path.name + ".ts-effect.lock"
+    try:
+        return any(
+            path.name == lock_name
+            or path.name.startswith(lock_name + ".claim.")
+            or path.name.startswith(lock_name + ".released.")
+            for path in info_path.parent.iterdir()
+        )
+    except FileNotFoundError:
+        return False
+    except OSError:
+        # An unreadable directory cannot prove that retirement finished.
+        return True
 
 
 def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
@@ -568,7 +626,10 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
     stopped = False
     while time.monotonic() < deadline:
         published, published_token = _serving_token(info_path)
-        if not published or published_token != serving_token:
+        if published and published_token is not None and published_token != serving_token:
+            stopped = True
+            break
+        if not published and not _locator_retirement_pending(info_path):
             stopped = True
             break
         if not _pid_is_alive(pid):
@@ -640,9 +701,13 @@ def _request_with_info(
             )
         chunks: list[bytes] = []
         size = 0
-        with socket.create_connection(
-            (str(info["host"]), int(info["port"])), timeout=timeout
-        ) as connection:
+        try:
+            connection = socket.create_connection(
+                (str(info["host"]), int(info["port"])), timeout=timeout
+            )
+        except PermissionError as exc:
+            raise EffectRuntimeHostPermissionError() from exc
+        with connection:
             try:
                 connection.settimeout(timeout)
                 # sendall may have delivered a prefix before it raises. From this
@@ -881,6 +946,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     start_new_session=os.name != "nt",
                     close_fds=True,
                 )
+            except PermissionError as exc:
+                raise EffectRuntimeHostPermissionError() from exc
             except OSError as exc:
                 raise EffectRuntimeStartupError(
                     "TypeScript Effect runtime process could not be launched",
@@ -888,7 +955,12 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                 ) from exc
             ready_deadline = time.monotonic() + STARTUP_READY_TIMEOUT_SECONDS
             while time.monotonic() < ready_deadline:
-                info = _read_info(info_path, fingerprint=fingerprint)
+                try:
+                    info = _read_info(info_path, fingerprint=fingerprint)
+                except EffectRuntimeHostPermissionError:
+                    if process.poll() is None:
+                        process.terminate()
+                    raise
                 if info is not None:
                     return info
                 exit_code = process.poll()
@@ -935,9 +1007,12 @@ def effect_runtime_request(
     for attempt in range(2 if retry_safe else 1):
         info: dict[str, Any] | None = None
         try:
-            info = _read_info(info_path, fingerprint=fingerprint)
-            if info is None:
-                info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
+            try:
+                info = _read_info(info_path, fingerprint=fingerprint)
+                if info is None:
+                    info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
+            except PermissionError as exc:
+                raise EffectRuntimeHostPermissionError() from exc
             return _request_with_info(
                 info,
                 request_id=request_id,
@@ -946,7 +1021,11 @@ def effect_runtime_request(
                 timeout=timeout,
                 large_local_snapshot=large_local_snapshot,
             )
-        except (EffectRuntimeRemoteError, EffectRuntimeResponseAmbiguous):
+        except (
+            EffectRuntimeRemoteError,
+            EffectRuntimeResponseAmbiguous,
+            EffectRuntimeHostPermissionError,
+        ):
             raise
         except EffectRuntimeStartupError as exc:
             last_error = exc
@@ -972,6 +1051,12 @@ def effect_runtime_request(
                 # Even a token check followed by unlink would race with a
                 # replacement server publishing its own locator.
                 _reap_exited_runtime_child(info)
+                _wait_for_runtime_locator_turnover(
+                    info_path,
+                    fingerprint=fingerprint,
+                    observed=info,
+                    timeout=timeout,
+                )
                 continue
             break
     if isinstance(last_error, TimeoutError):
@@ -1038,6 +1123,7 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
     runtime_state = "unavailable"
     runtime_diagnostic_code: str | None = None
     runtime_identity: dict[str, Any] | None = None
+    host_permission_error: EffectRuntimeHostPermissionError | None = None
     if ready:
         try:
             fingerprint = _runtime_fingerprint()
@@ -1047,6 +1133,11 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             )
             runtime_state = "running" if info is not None else "stopped"
             runtime_identity = runtime_identity_from_info(info)
+        except EffectRuntimeHostPermissionError as exc:
+            ready = False
+            status = "probe_failed"
+            runtime_diagnostic_code = exc.diagnostic_code
+            host_permission_error = exc
         except (OSError, EffectRuntimeStartupError) as exc:
             ready = False
             status = "package_invalid"
@@ -1076,7 +1167,9 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
         "semantic_probe": "not_requested" if not deep else "not_run",
         "runtime_lifecycle": runtime_lifecycle,
         "recommended_action": (
-            None
+            host_permission_error.recommended_action
+            if host_permission_error is not None
+            else None
             if ready
             else (
                 f"Install Node.js {MINIMUM_NODE_VERSION_TEXT} or newer, then "
@@ -1117,7 +1210,9 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
                 "diagnostic_code": diagnostic_code,
             },
             "recommended_action": (
-                "Run `loopx doctor --deep` again after any concurrent startup "
+                exc.recommended_action
+                if isinstance(exc, EffectRuntimeHostPermissionError)
+                else "Run `loopx doctor --deep` again after any concurrent startup "
                 "finishes. If the same diagnostic code remains, reinstall LoopX "
                 "and verify Node.js before retrying."
             ),

@@ -51,7 +51,7 @@ ATTEMPTS_FILE = "attempts.json"
 def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
-    workspace = root / "workspace"
+    workspace = project
     runtime.mkdir(parents=True)
     workspace.mkdir(parents=True)
     (workspace / "docs").mkdir()
@@ -158,8 +158,7 @@ def _write_fake_runner(root: Path, workspace: Path) -> Path:
                 "        error = RuntimeError('provider at capacity')",
                 "        error.code = 'insufficient_capacity'",
                 "        raise error",
-                "    marker = Path(__file__).resolve().parent / "
-                f"{str(Path('workspace') / MARKER_NAME)!r}",
+                f"    marker = Path(kwargs['workspace']) / {MARKER_NAME!r}",
                 "    marker.parent.mkdir(parents=True, exist_ok=True)",
                 f"    marker.write_text({MARKER_VALUE!r}, encoding='utf-8')",
                 "    payload = {",

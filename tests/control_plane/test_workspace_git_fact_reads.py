@@ -55,6 +55,18 @@ def test_capture_resolves_nested_root_once_but_reads_all_original_facts(workspac
     assert owner.capture_delivery_workspace(canonical)["workspace_kind"] == "canonical_checkout"
 
 
+def test_single_agent_guidance_does_not_impose_multi_peer_workspace_gate(workspaces):
+    canonical, peer, _ = workspaces
+    todo = {"task_repository": "git:github.com/example/workspace", "required_write_scopes": ["src/**"]}
+    # Real Git facts: one agent may use this checkout; shared peer writes still
+    # require the independent worktree and retain the same repository binding.
+    identity = {"agent_id": "peer", "registered_agents": ["peer"]}
+    assert owner.build_agent_workspace_guard({}, identity, selected_todo=todo, current_path=canonical) is None
+    identity["registered_agents"] = ["lead", "peer"]
+    assert owner.build_agent_workspace_guard({}, identity, selected_todo=todo, current_path=canonical)["blocks_delivery"] is True
+    assert owner.build_agent_workspace_guard({}, identity, selected_todo=todo, current_path=peer) is None
+
+
 def test_next_capture_rechecks_head_and_origin_without_cross_request_cache(workspaces, monkeypatch):
     _, peer, nested = workspaces
     calls = observe_reads(monkeypatch)

@@ -355,6 +355,100 @@ def test_source_cli_discovers_inventory_without_claiming_readiness(
     assert payload["truth_contract"]["execution_observed"] is False
 
 
+@pytest.mark.parametrize("field,value", [
+    ("selected_provider", None),
+    ("selected_provider", []),
+    ("selected_provider", "invalid"),
+    ("selected_provider", 1),
+    ("request", None),
+    ("request", []),
+    ("request", "invalid"),
+    ("request", 1),
+])
+def test_execute_reports_typed_errors_before_provider_and_recovers(
+    tmp_path: Path, monkeypatch, field: str, value: object,
+) -> None:
+    from loopx.extensions import public_github_research as provider
+
+    source = "https://github.com/example/public/blob/" + "a" * 40 + "/README.md"
+    plan = cli.effect_runtime_result("external_evidence.plan", {
+        "request": {
+            "objective": "Inspect a synthetic source",
+            "user_activity": "Choose a research provider",
+            "decision": "Whether to use the source",
+            "evidence_kinds": ["literal_match"], "source_refs": [source],
+        },
+        "providers": [{
+            "provider_id": provider.PROVIDER_ID, "provider_kind": "method",
+            "protocol": "external_evidence_research_v0", "declared": True,
+            "installed": True, "enabled": True, "ready": True,
+            "unavailable_reason": None,
+        }],
+    })
+    malformed = {**plan, field: value}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(malformed), encoding="utf-8")
+    reads = []
+
+    def read(url):
+        reads.append(url)
+        return b'{"private": false}' if url.startswith("https://api.github.com/") else b"Synthetic source\n"
+
+    monkeypatch.setattr(provider, "_read", read)
+    payloads = []
+    args = argparse.Namespace(
+        command="external-evidence", external_evidence_action="execute",
+        plan_json=str(path), execute=True,
+    )
+    def emit(payload, *_):
+        payloads.append(payload)
+    assert cli.handle_external_evidence_command(
+        args, output_format=lambda _: "json", print_payload=emit,
+    ) == 1
+    assert payloads[-1]["schema_version"] == "loopx_external_evidence_error_v0"
+    assert payloads[-1]["status"] == "invalid_request"
+    assert reads == []
+    assert malformed == {**plan, field: value}
+
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    assert cli.handle_external_evidence_command(
+        args, output_format=lambda _: "json", print_payload=emit,
+    ) == 0
+    assert len(reads) == 2
+    assert payloads[-1]["receipt"]["status"] == "succeeded"
+    assert payloads[-1]["observation"]["plan_id"] == plan["plan_id"]
+    assert payloads[-1]["execution"]["automatic_admission"] is False
+
+
+def test_source_cli_execute_keeps_blocked_plan_structured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    providers = tmp_path / "providers.json"
+    providers.write_text('{"providers": []}', encoding="utf-8")
+    command = [
+        sys.executable, "-m", "loopx.entrypoint", "--runtime-root",
+        str(tmp_path / "runtime"), "--registry", str(tmp_path / "registry.json"),
+        "--format", "json", "external-evidence",
+    ]
+    result = subprocess.run(command + [
+        "plan", "--objective", "Inspect synthetic availability", "--user-activity",
+        "Choose a provider", "--decision", "Whether to collect evidence",
+        "--evidence-kind", "current_behavior", "--provider-inventory-json", str(providers),
+    ], capture_output=True, text=True, check=True, timeout=30)
+    plan = json.loads(result.stdout)
+    assert plan["status"] == "blocked" and plan["selected_provider"] is None
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    result = subprocess.run(command + [
+        "execute", "--plan-json", str(path), "--execute",
+    ], capture_output=True, text=True, check=False, timeout=30)
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["status"] == "invalid_request"
+    assert "ready plan" in payload["error"]
+    assert "Traceback" not in result.stderr
+    assert json.loads(path.read_text(encoding="utf-8")) == plan
+
+
 @pytest.mark.parametrize("duplicate", [
     "https://example.com/original", "  https://example.com/original  ",
 ])

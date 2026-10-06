@@ -430,7 +430,7 @@ async function exercisePackedService(installed) {
   const service = host.createGoalBarService({
     getAgent: id => id === sessionId ? currentAgent : undefined,
     coordinator,
-    command: { file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx smoke' },
+    command: { file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 1.2.4' },
     runner,
     retryDelaysMs: [0, 0],
     watchTimeoutMs: 50,
@@ -1042,6 +1042,8 @@ async function exerciseRealDshWeb(
     await new Promise(resolveWait => setTimeout(resolveWait, 150))
     const idleCalls = (await readFile(cliLog, 'utf8')).trim().split('\n')
     assert.deepEqual(idleCalls, startupCalls, 'idle real DSH runtime invoked LoopX after bootstrap')
+  } catch (error) {
+    throw new Error(`real DSH web qualification failed: ${error.message}\n${redactWebOutput(output.text)}`, { cause: error })
   } finally {
     await stopChild(child)
   }
@@ -1073,7 +1075,7 @@ set -eu
 printf '%s\n' "$*" >> "${cliLog}"
 case " $* " in
   *" --version "*)
-    printf '%s\n' 'loopx smoke'
+    printf '%s\n' 'loopx 1.2.4'
     exit 0
     ;;
 esac

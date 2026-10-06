@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "1.2.4"
+version = "1.3.0"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -77,6 +77,20 @@ include = ["loopx*"]
 "loopx.kunluncode_goal_mode" = ["README.md"]
 
 [tool.setuptools.data-files]
+"share/loopx/skills/loopx-material" = [
+  "skills/loopx-material/SKILL.md",
+  "skills/loopx-material/.loopx-skill-scope",
+]
+"share/loopx/skills/loopx-material/agents" = [
+  "skills/loopx-material/agents/openai.yaml",
+]
+"share/loopx/skills/loopx-change-quality" = [
+  "skills/loopx-change-quality/SKILL.md",
+  "skills/loopx-change-quality/.loopx-skill-scope",
+]
+"share/loopx/skills/loopx-change-quality/agents" = [
+  "skills/loopx-change-quality/agents/openai.yaml",
+]
 "share/loopx/skills/loopx-performance-diagnosis" = [
   "skills/loopx-performance-diagnosis/SKILL.md",
   "skills/loopx-performance-diagnosis/.loopx-skill-scope",

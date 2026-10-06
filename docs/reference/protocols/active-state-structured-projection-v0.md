@@ -226,11 +226,14 @@ title still fails parity, even when its first 500 characters match. This is not
 permission to accept malformed records or to shorten an already committed Todo
 to repair its display.
 
-Status, `todo list` (including an exact ID), dashboard and chat attention views
-keep their existing bounded summaries. The canonical provider and regenerated
-active state retain the complete source; a display summary is not an input to
-source serialization. No new frontend setting, Lark command or parallel state
-store is introduced. This change stays in the permanent Python Markdown/legacy
+Status, unfiltered `todo list`, `todo list --thin` (including an exact ID),
+dashboard and chat attention views keep their existing bounded summaries.
+An exact `todo list --todo-id ID` without `--thin` returns the complete current
+or retained request text through the existing Task detail reader. The canonical
+provider and regenerated active state retain the complete source; a display
+summary is not an input to source serialization. No new frontend setting, Lark
+command or parallel state store is introduced. This change stays in the
+permanent Python Markdown/legacy
 I/O adapter; the TypeScript authority, admission and delivery-confirmation
 owners are unchanged.
 

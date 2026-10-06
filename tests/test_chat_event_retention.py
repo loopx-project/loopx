@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import gc
+import inspect
 import json
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION, ChatSessionStore
 
 def _write_completed_turn(root: Path, *, with_events: bool = True) -> tuple[Path, Path]:
     turn_path = root / "chat" / "sessions" / "session" / "turns" / "turn.json"
-    turn_path.parent.mkdir(parents=True)
+    turn_path.parent.mkdir(parents=True, exist_ok=True)
     turn_path.write_text(
         json.dumps(
             {
@@ -62,6 +63,228 @@ def test_completed_replay_reuses_log_until_an_external_append(tmp_path: Path, mo
     other.append_event(*key, kind="turn.completed", payload={"recovered": True})
     assert [row["sequence"] for row in store.events_after(*key, "2")] == [3]
     assert len(reads) == 3  # independent writer plus invalidated reader
+
+
+def test_event_flush_retry_after_durable_fsync_keeps_distinct_identical_events(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    key = ("session", "turn")
+    monkeypatch.setattr(chat_store, "utc_now", lambda: "2026-10-05T00:00:00Z")
+    first = store.append_event(
+        *key, kind="assistant.delta", payload={"text": "same"}, buffered=True
+    )
+    second = store.append_event(
+        *key, kind="assistant.delta", payload={"text": "same"}, buffered=True
+    )
+    actual_fsync = chat_store.os.fsync
+    failed = False
+
+    def uncertain_fsync(fd: int) -> None:
+        nonlocal failed
+        actual_fsync(fd)
+        caller_name = inspect.currentframe().f_back.f_code.co_name
+        if not failed and caller_name == "_append_jsonl_rows":
+            failed = True
+            raise OSError("fsync completed, but its result was lost")
+
+    monkeypatch.setattr(chat_store.os, "fsync", uncertain_fsync)
+    with pytest.raises(OSError, match="result was lost"):
+        store.flush_events(*key)
+
+    event_path = store._event_path(*key)
+    assert [row["sequence"] for row in chat_store._read_jsonl(event_path)] == [1, 2]
+    assert store.flush_events(*key) == 0
+    replay = ChatSessionStore(tmp_path).events_after(*key, None)
+    assert [row["sequence"] for row in replay] == [1, 2]
+    assert [row["payload"] for row in replay] == [{"text": "same"}, {"text": "same"}]
+    assert [first["sequence"], second["sequence"]] == [1, 2]
+    assert store.events_after(*key, None) == replay
+    assert all("_append_id" not in row for row in replay)
+    _write_completed_turn(tmp_path, with_events=False)
+
+    from http.client import HTTPConnection
+    from threading import Thread
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.chat_store = store
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request("GET", "/api/chat/sessions/session/turns/turn/events")
+        response = connection.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "text/event-stream; charset=utf-8"
+        assert [line for line in body.splitlines() if line.startswith("id: ")] == [
+            "id: 1", "id: 2",
+        ]
+        data = [
+            json.loads(line[6:])
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        assert [row["sequence"] for row in data] == [1, 2]
+        assert all("_append_id" not in row for row in data)
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_failed_flush_does_not_resurrect_events_after_other_store_compacts(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    _write_completed_turn(tmp_path, with_events=False)
+    key = ("session", "turn")
+    delta = store.append_event(
+        *key, kind="assistant.delta", payload={"text": "late"}, buffered=True
+    )
+    terminal = store.append_event(*key, kind="turn.completed", payload={}, buffered=True)
+    append_rows = chat_store._append_jsonl_rows
+    failed = False
+
+    def durable_then_lose_result(path: Path, rows: list[dict]) -> None:
+        nonlocal failed
+        append_rows(path, rows)
+        if not failed:
+            failed = True
+            raise OSError("durable write result lost")
+
+    monkeypatch.setattr(chat_store, "_append_jsonl_rows", durable_then_lose_result)
+    with pytest.raises(OSError, match="result lost"):
+        store.flush_events(*key)
+    path = store._event_path(*key)
+    assert [(row["sequence"], row["kind"]) for row in chat_store._read_jsonl(path)] == [
+        (1, "assistant.delta"), (2, "turn.completed"),
+    ]
+
+    compacting_store = ChatSessionStore(tmp_path)
+    assert [row["kind"] for row in compacting_store.events_after(*key, None)] == [
+        "turn.completed",
+    ]
+    assert store.flush_events(*key) == 0
+    assert [(row["sequence"], row["kind"]) for row in chat_store._read_jsonl(path)] == [
+        (2, "turn.completed"),
+    ]
+    assert [delta["sequence"], terminal["sequence"]] == [1, 2]
+
+
+def test_failed_flush_keeps_uncertain_events_if_locked_readback_fails(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    key = ("session", "turn")
+    event = store.append_event(*key, kind="assistant.delta", payload={}, buffered=True)
+    event_path = store._event_path(*key)
+    append_rows = chat_store._append_jsonl_rows
+    read_bytes = Path.read_bytes
+    readback_failures = 0
+    result_lost = False
+    nonempty_appends = 0
+
+    def lose_result(path: Path, rows: list[dict]) -> None:
+        nonlocal readback_failures, result_lost, nonempty_appends
+        if rows:
+            nonempty_appends += 1
+        append_rows(path, rows)
+        if not result_lost:
+            result_lost = True
+            readback_failures = 2
+            raise OSError("append result lost")
+
+    def fail_two_reads(path: Path) -> bytes:
+        nonlocal readback_failures
+        if path == event_path and readback_failures:
+            readback_failures -= 1
+            raise PermissionError("readback temporarily unavailable")
+        return read_bytes(path)
+
+    monkeypatch.setattr(chat_store, "_append_jsonl_rows", lose_result)
+    monkeypatch.setattr(Path, "read_bytes", fail_two_reads)
+    with pytest.raises(OSError, match="append result lost"):
+        store.flush_events(*key)
+    persisted_size = event_path.stat().st_size
+    with pytest.raises(PermissionError, match="readback temporarily unavailable"):
+        store.flush_events(*key)
+    assert event_path.stat().st_size == persisted_size
+    assert nonempty_appends == 1
+    assert store.flush_events(*key) == 1
+    assert [row["sequence"] for row in chat_store._read_jsonl(event_path)] == [1]
+    assert [row["sequence"] for row in store.events_after(*key, None)] == [1]
+    assert event["sequence"] == 1
+
+
+def test_event_flush_retry_after_partial_batch_and_concurrent_writer(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    key = ("session", "turn")
+    first = store.append_event(
+        *key, kind="assistant.delta", payload={"text": "first"}, buffered=True
+    )
+    second = store.append_event(
+        *key, kind="assistant.delta", payload={"text": "second"}, buffered=True
+    )
+    append_rows = chat_store._append_jsonl_rows
+    failed = False
+
+    def partially_durable(path: Path, rows: list[dict]) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            append_rows(path, rows[:1])
+            raise OSError("batch interrupted after one durable row")
+        append_rows(path, rows)
+
+    monkeypatch.setattr(chat_store, "_append_jsonl_rows", partially_durable)
+    with pytest.raises(OSError, match="one durable row"):
+        store.flush_events(*key)
+    assert [
+        row["sequence"] for row in chat_store._read_jsonl(store._event_path(*key))
+    ] == [1]
+
+    other = ChatSessionStore(tmp_path)
+    other.append_event(*key, kind="assistant.delta", payload={"text": "other"})
+    assert store.flush_events(*key) == 1
+    replay = store.events_after(*key, None)
+    assert [(row["sequence"], row["payload"]["text"]) for row in replay] == [
+        (1, "first"), (2, "other"), (3, "second"),
+    ]
+    assert [first["sequence"], second["sequence"]] == [1, 3]
+    assert [row["sequence"] for row in store.events_after(*key, "1")] == [2, 3]
+
+
+def test_event_flush_retry_after_no_write_preserves_once_only_readback(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    key = ("session", "turn")
+    event = store.append_event(*key, kind="turn.completed", payload={}, buffered=True)
+    append_rows = chat_store._append_jsonl_rows
+    failed = False
+
+    def fail_before_write(path: Path, rows: list[dict]) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("write never started")
+        append_rows(path, rows)
+
+    monkeypatch.setattr(chat_store, "_append_jsonl_rows", fail_before_write)
+    with pytest.raises(OSError, match="write never started"):
+        store.flush_events(*key)
+    assert chat_store._read_jsonl(store._event_path(*key)) == []
+    assert store.flush_events(*key) == 1
+    assert [
+        row["sequence"] for row in ChatSessionStore(tmp_path).events_after(*key, None)
+    ] == [1]
+    assert event["sequence"] == 1
 
 
 def test_completed_replay_evicts_least_recently_used_log(tmp_path: Path) -> None:
@@ -204,3 +427,4 @@ def test_compaction_marker_does_not_make_legacy_terminal_turns_unreadable(
     assert persisted["event_compaction_revision"] == list(
         store._event_revision(event_path) or ()
     )
+    assert [row["event_id"] for row in store.events_after("session", "turn", None)] == ["2"]

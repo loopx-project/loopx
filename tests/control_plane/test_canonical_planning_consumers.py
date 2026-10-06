@@ -494,15 +494,28 @@ def test_preview_refresh_missing_projection_is_readable_not_implicitly_rebuilt(
     if promoted:
         _promote(registry, path, goal)
     path.unlink()
-    if promoted:
-        result = _refresh(registry)
-        assert "Canonical work" in json.dumps(result)
-    else:
+    if not promoted:
         with pytest.raises(FileNotFoundError):
             _refresh(registry)
-    assert not path.exists()
-    with pytest.raises(FileNotFoundError):
-        _refresh(registry, next_action="Replace the missing narrative", progress_scope="goal")
+        with pytest.raises(FileNotFoundError):
+            _refresh(
+                registry,
+                next_action="Replace the missing narrative",
+                progress_scope="goal",
+            )
+        assert not path.exists()
+        return
+
+    result = _refresh(registry)
+    assert "Canonical work" in json.dumps(result)
+    next_action = _refresh(
+        registry,
+        next_action="Replace the missing narrative",
+        progress_scope="goal",
+    )
+    assert next_action["recommended_action"] == "Replace the missing narrative"
+    assert next_action["recommended_action_resolution"]["todo_id"] == "todo_selected"
+    assert next_action["appended"] is False
     assert not path.exists()
 
 

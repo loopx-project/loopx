@@ -116,8 +116,19 @@ project/state 路由和租约证明保留在对应命令支持的参数中。命
 
 `todo supersede --turn-instance-id <原 Turn>` 现在接受普通完成已有的精确
 Goal/Agent/Todo/Turn guard 身份。先验证原身份，再由已有 terminal authority 决定
-退役；租约、actor 和重试意图不变的门禁仍然保留。若已有真实的未来 Monitor，先用
-`todo update --successor-todo-id` 关联，再 supersede，不制造另一条替代任务。
+退役；租约、actor 和重试意图不变的门禁仍然保留。对于已晋级的 canonical authority，
+直接向 `todo supersede` 传入 `--successor-todo-id <已有 ID>`。既有 typed transaction
+在一次提交中关联后继、退役原 Todo 并释放原租约。后继保留声明的 scope、owner、
+状态和到期时间；命令不会重写已租用工作的要求，也不会制造另一条替代任务。
+可关联多个已有后继，但不能与 `--next-agent-todo` 或 `--next-user-todo` 混用。
+缺失、其他 Goal 或自身关联在写入前拒绝。精确回放恢复原回执，改变意图则拒绝；
+新的终结操作不能向已退役 Todo 追加后继。
+
+与先 `todo update --successor-todo-id` 再 `todo supersede` 相比，直接路径删除中间
+canonical mutation 和一次 CLI 往返，不承诺 provider 整体延迟改善。原预先关联与
+生成后继的路径仍支持。未晋级的 Markdown Goal 拒绝新的直接关联选项，并给出迁移
+指引；省略该选项保留原行为。本批通过既有事务扩展 CLI 与公开 lifecycle facade，
+不改变 Chat/Lark 操作，也不新增配置开关。
 
 scoped 退役回执、原永久写回和原一次扣额都齐全后，同 Turn 的 `quota should-run`
 返回 `heartbeat_settled_skip`。退役不代表交付通过 validator，不关闭 Goal，也不消费

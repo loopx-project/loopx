@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .presentation import goal_ownership_api as ownership_api
-from . import chat_usage_statistics_api as usage_api
-from . import chat_goal_configuration_api as goal_api
-from . import chat_machine_configuration_api as machine_api
-from . import chat_operator_provider_api as operator_api
-from . import chat_automation_cadence_api as cadence_api
-from . import chat_configuration_backup_api as backup_api
+from . import configuration_backup_api as backup_api
+from . import goal_ownership_api as ownership_api
+from .. import chat_usage_statistics_api as usage_api
+from .. import chat_goal_configuration_api as goal_api
+from .. import chat_machine_configuration_api as machine_api
+from .. import chat_operator_provider_api as operator_api
+from .. import chat_automation_cadence_api as cadence_api
 
 
 class ChatConfigurationRequestMixin(

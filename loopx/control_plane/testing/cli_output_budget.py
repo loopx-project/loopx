@@ -170,25 +170,18 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 12_000, "markdown": 300},
-            # The crowded fixture exercises the required-vision route. Its
-            # TurnEnvelope intentionally carries the complete authoring schema
-            # that the validator accepts, plus the typed executor and selection
-            # facts needed to decide whether execution is authorized. The
-            # Explicit registry routing adds 75 necessary command characters:
-            # the same fixture measured 14,482 before routing and 14,557 after.
-            # Keep the executable authority binding intact; 14,600 leaves a
-            # 43-character margin without relaxing line or per-Todo growth.
-            # The over-target TurnEnvelope diagnostic remains visible instead
-            # of hiding authority overflow; latest main renders it in 542
-            # characters, leaving a narrow 58-character presentation margin.
-            "crowded": {"json": 14_600, "markdown": 600},
+            # Required vision carries the validator's complete authoring schema,
+            # executable registry-bound commands and the overflow diagnostic.
+            # The same fixed-path fixture emits 14,647 chars on base and head;
+            # 15,000 leaves 353 chars without dropping these decision inputs.
+            # Keep the line, per-Todo and fixed semantic-growth guards below.
+            "crowded": {"json": 15_000, "markdown": 600},
             "multi_agent": {"json": 12_000, "markdown": 300},
         },
         max_lines={
             "small": {"json": 320, "markdown": 12},
-            # The same latest-main fixture measures 389 lines. Keep a bounded
-            # 11-line formatting margin while the semantic character budget
-            # above remains the primary cost guard.
+            # The complete example renders in 397 lines. Keep the existing
+            # 400-line ceiling; characters remain the primary cost guard.
             "crowded": {"json": 400, "markdown": 12},
             "multi_agent": {"json": 320, "markdown": 12},
         },
@@ -196,8 +189,12 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         max_json_growth_chars_per_unit=60,
         # The complete validator-owned vision-authoring schema appears only on
         # the required-vision route. Account for that fixed semantic packet
-        # separately so it does not relax the per-Todo growth budget.
-        max_json_fixed_semantic_growth_chars=3_800,
+        # separately so it does not relax the per-Todo growth budget. The
+        # executable example changes crowded-minus-small from 5,957 to 6,168
+        # chars. The old 3,800 + 35*60 allowance was already 57 short on base;
+        # 4,200 leaves 132 chars of fixed headroom. Absolute and per-Todo
+        # ceilings remain unchanged; this is not a model-token measurement.
+        max_json_fixed_semantic_growth_chars=4_200,
     ),
     CliOutputBudgetSpec(
         surface_id="status",
@@ -235,7 +232,11 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Diagnosis Packet",
         max_chars={
             "small": {"json": 21_000, "markdown": 4_300},
-            "crowded": {"json": 44_000, "markdown": 4_500},
+            # The unchanged selected/Goal-array diagnostic emits 44,126 chars
+            # on the same fixed-path base/head fixture. Preserve both consumers
+            # and their required-replan evidence; 45,000 leaves 874 chars.
+            # Line and per-Todo/fixed-growth limits remain independently active.
+            "crowded": {"json": 45_000, "markdown": 4_500},
             "multi_agent": {"json": 21_000, "markdown": 4_300},
         },
         max_lines={

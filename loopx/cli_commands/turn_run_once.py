@@ -777,7 +777,7 @@ def execute_turn_run_once(
                     "model": args.codex_model,
                     "reasoning_effort": args.codex_reasoning_effort,
                     "mcp_server": args.codex_mcp_server_json,
-                    "timeout_seconds": max(1.0, args.timeout_seconds - 5.0),
+                    "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
                 }
                 if goal_admission is not None:
                     options["goal_admission"] = goal_admission
@@ -797,7 +797,7 @@ def execute_turn_run_once(
                         ),
                         **options,
                     )
-                return run_codex_cli_host(request, **options)
+                return run_codex_cli_host(request, registry_path=registry_path, **options)
 
             host_runner = run_built_in_host
 

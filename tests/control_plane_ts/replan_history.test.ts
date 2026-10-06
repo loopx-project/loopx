@@ -35,6 +35,20 @@ function trigger(runs: JsonObject[], patch: JsonObject = {}): JsonObject | null 
 }
 const many = (count: number, build = run): JsonObject[] => Array.from({ length: count }, (_, i) => build(count - i));
 
+test("effective cadence uses qualified lane identities, independent of Todo completion", () => {
+  const qualified = new Set([1, 2].map(n => JSON.stringify(["worker-a", `turn-${n}`])));
+  const project = (runs: JsonObject[]) => projectReplanHistory(request(runs, {
+    operation: "periodic", periodic_threshold: 2,
+  }), qualified).trigger as JsonObject | null;
+  assert.equal(project([run(1), run(1), run(30), run(31, { turn_id: null })]), null);
+  assert.equal(project([run(2), run(1)])?.run_count, 2);
+  assert.equal(project([run(3, { accepted_ack: true }), run(2), run(1)]), null);
+  assert.equal(project([run(3, { agent_id: "peer", accepted_ack: true }), run(2), run(1)])?.run_count, 2);
+  assert.equal(project([run(2, { agent_id: "peer" }), run(1)]), null);
+  // Verified negative work remains eligible; progress-repeat is a separate rule.
+  assert.equal(project([run(2, { progress: observation }), run(1, { progress: observation })])?.run_count, 2);
+});
+
 test("periodic work counts distinct logical turns and keeps the existing public trigger", () => {
   assert.equal(trigger(many(30, () => run(1))), null);
   assert.deepEqual(trigger(many(20)), {

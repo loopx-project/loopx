@@ -68,6 +68,12 @@ def register_chat_and_dashboard_commands(
     )
     chat_parser.add_argument("--limit", type=int, default=20)
     chat_parser.add_argument(
+        "--project-workspace-grant",
+        choices=("workspace_read", "workspace_write"),
+        default="workspace_write",
+        help="Ordinary project Chat workspace access. Defaults to workspace_write; workspace_read prevents App write grants.",
+    )
+    chat_parser.add_argument(
         "--global-registry",
         action="store_true",
         help="Use the shared global registry even when the command runs in a project directory.",
@@ -149,6 +155,10 @@ def register_chat_and_dashboard_commands(
     )
     dashboard_parser.add_argument(
         "--verbose", action="store_true", help="Print HTTP request logs."
+    )
+    chat_parser.add_argument(
+        "--no-private-reactions", action="store_true",
+        help="Disable received/processing reactions for native Lark private conversations. Enabled by default.",
     )
 
 

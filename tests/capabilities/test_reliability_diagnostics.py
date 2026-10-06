@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -575,6 +577,137 @@ def test_receipt_sums_latest_stats_per_observer_instance() -> None:
 
 def projection_for(*records: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     return build_diagnostic_projection(read_ledger(records, goal_id=GOAL), **kwargs)
+
+
+@pytest.mark.parametrize("first,last,gap_ms", [
+    ("2026-09-01T12:00:00+02:00", "2026-09-01T10:01:00Z", 60_000),
+    ("2026-09-02T00:00:00+14:00", "2026-09-01T10:01:00Z", 60_000),
+    ("2026-09-01T10:00:00Z", "2026-09-01T10:00:00.500Z", 500),
+    ("2026-09-01T10:00:00Z", "2026-09-01T10:00:00.000+00:00", 0),
+    ("2026-09-01T10:00:00+00:00", "2026-09-01T10:01:00+00:00", 60_000),
+])
+def test_diagnostics_order_instants_without_rewriting_timestamps(
+    first: str, last: str, gap_ms: int,
+) -> None:
+    # UTC instants, then session/sequence, determine order, not text or append order.
+    records = [
+        envelope(1, ObserverEventKind.TURN_ENDED, observed_at=last),
+        envelope(0, ObserverEventKind.AGENT_ERROR, observed_at=first),
+        stats(accepted_event_count=2),
+    ]
+    reading = read_ledger(records, goal_id=GOAL)
+    assert [item.sequence for item in reading.ordered_envelopes] == [0, 1]
+    receipt = build_integrity_receipt(reading)
+    assert receipt["status"] == "valid"
+    assert receipt["observed_from"] == first
+    assert receipt["observed_until"] == last
+    projection = build_diagnostic_projection(reading, as_of="2026-09-01T10:06:00Z")
+    assert projection["stage"] == "idle"
+    assert projection["recovery"] == {
+        "error_count": 1, "recovered_error_count": 1, "unrecovered_error_count": 0,
+    }
+    assert projection["stall"]["max_inter_event_gap_ms"] == gap_ms
+    assert projection["stall"]["last_event_age_ms"] == 360_000 - gap_ms
+    assert projection["signals"] == []
+
+
+def test_diagnostics_equal_instants_keep_session_then_sequence_order() -> None:
+    reading = read_ledger([
+        envelope(0, observed_at="2026-09-01T10:00:00+00:00", session_id="session-b"),
+        envelope(1, observed_at="2026-09-01T10:00:00.000Z", session_id="session-a"),
+        envelope(0, observed_at="2026-09-01T12:00:00+02:00", session_id="session-a"),
+    ], goal_id=GOAL)
+    assert [(item.session_id, item.sequence) for item in reading.ordered_envelopes] == [
+        ("session-a", 0), ("session-a", 1), ("session-b", 0),
+    ]
+
+
+@pytest.mark.parametrize("earlier,later", [
+    ("2026-09-01T10:00:00.0000001Z", "2026-09-01T10:00:00.0000009Z"),
+    ("20260901T100000,0000001Z", "2026-09-01T12:00:00.0000009+02:00"),
+    ("2026-09-01T10:00:00+00:00:01.0000009", "2026-09-01T10:00:00+00:00:01.0000001"),
+    ("2026-09-01T10:00:00-00:00:01.0000001", "2026-09-01T10:00:00-00:00:01.0000009"),
+    ("2026-09-01T10:00:00+00:00:00.5", "2026-09-01T09:59:59.6Z"),
+    ("2026-09-01T09:59:59.4Z", "2026-09-01T10:00:00+00:00:00.5"),
+])
+def test_diagnostics_preserves_accepted_fractional_precision(earlier: str, later: str) -> None:
+    reading = read_ledger([
+        envelope(0, ObserverEventKind.AGENT_ERROR, observed_at=later),
+        envelope(1, ObserverEventKind.TURN_ENDED, observed_at=earlier),
+        stats(accepted_event_count=2),
+    ], goal_id=GOAL)
+    assert reading.invalid_record_count == 0
+    assert [item.sequence for item in reading.ordered_envelopes] == [1, 0]
+    receipt = build_integrity_receipt(reading)
+    assert (receipt["observed_from"], receipt["observed_until"]) == (earlier, later)
+    projection = build_diagnostic_projection(reading)
+    assert projection["stage"] == "errored"
+    assert projection["recovery"]["unrecovered_error_count"] == 1
+    assert projection["recovery"]["recovered_error_count"] == 0
+
+
+@pytest.mark.parametrize("first,last,elapsed_ms", [
+    ("2026-09-01T10:00:00.0000009Z", "2026-09-01T10:00:00.0010001Z", 0),
+    ("2026-09-01T10:00:00+00:00:00.5", "2026-09-01T10:00:00Z", 500),
+    ("2026-09-01T10:00:00Z", "2026-09-01T10:00:00-00:00:00.5", 500),
+    ("0001-01-01T00:00:00Z", "9999-12-31T23:59:59.999999Z", 315_537_897_599_999),
+])
+def test_diagnostic_age_and_gap_use_the_same_instant_precision(
+    first: str, last: str, elapsed_ms: int,
+) -> None:
+    projection = projection_for(
+        envelope(0, ObserverEventKind.STEP_STARTED, observed_at=first),
+        stats(), as_of=last, stall_threshold_ms=1,
+    )
+    assert projection["stall"]["last_event_age_ms"] == elapsed_ms
+    assert projection["stall"]["detected"] is (elapsed_ms >= 1)
+    interval = projection_for(
+        envelope(0, observed_at=first), envelope(1, observed_at=last),
+        stats(accepted_event_count=2),
+    )
+    assert interval["stall"]["max_inter_event_gap_ms"] == elapsed_ms
+
+
+def test_cli_diagnostics_replays_mixed_offsets_without_mutating_ledger(tmp_path: Path) -> None:
+    first, recovered, last = (
+        "2026-09-01T12:00:00+02:00", "2026-09-01T10:01:00Z", "2026-09-01T10:02:00Z",
+    )
+    records = [
+        envelope(0, ObserverEventKind.AGENT_ERROR, observed_at=first),
+        envelope(1, ObserverEventKind.STEP_ENDED, observed_at=recovered),
+        envelope(2, ObserverEventKind.TURN_ENDED, observed_at=last),
+        stats(accepted_event_count=3),
+    ]
+    command = [
+        sys.executable, "-m", "loopx.cli", "--registry", str(tmp_path / "registry.json"),
+        "--runtime-root", str(tmp_path), "--format", "json", "reliability-diagnostics",
+    ]
+
+    def run(*args: str, source: str | None = None) -> dict[str, Any]:
+        result = subprocess.run(
+            [*command, *args, "--goal-id", GOAL], input=source,
+            capture_output=True, text=True, encoding="utf-8", check=True, timeout=30,
+        )
+        return json.loads(result.stdout)
+
+    ingest = run("ingest", "--input", "-", source="\n".join(map(json.dumps, records)))
+    assert ingest["accepted_envelope_count"] == 3
+    assert ingest["rejected_event_count"] == 0
+    path = tmp_path / ingest["ledger_ref"]
+    before = path.read_bytes()
+    combined = run("status", "--with-receipt", "--as-of", "2026-09-01T10:10:00Z")
+    receipt = run("receipt")["receipt"]
+    assert receipt == combined["receipt"]
+    assert receipt["status"] == "valid"
+    assert (receipt["observed_from"], receipt["observed_until"]) == (first, last)
+    projection = combined["projection"]
+    assert projection["stage"] == "idle"
+    assert projection["recovery"]["recovered_error_count"] == 1
+    assert projection["recovery"]["unrecovered_error_count"] == 0
+    assert projection["stall"]["last_event_age_ms"] == 480_000
+    assert projection["signals"] == []
+    assert projection["authority"] == "none"
+    assert path.read_bytes() == before
 
 
 def test_projection_declares_read_only_boundary() -> None:

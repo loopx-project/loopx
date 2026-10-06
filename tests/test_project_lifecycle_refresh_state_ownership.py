@@ -60,3 +60,43 @@ def test_dispatch_ignores_other_commands() -> None:
         )
         is None
     )
+
+
+def test_authoring_help_matches_existing_validator_boundaries() -> None:
+    """The discoverable CLI constraints must agree with the admission owners."""
+    from loopx.control_plane.work_items.progress_observation import replan_writeback_requirements
+    from loopx.control_plane.work_items.progress_result import normalize_progress_identifier
+
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    refresh_module.register_refresh_state_command(subparsers, lambda _: None)
+    actions = {action.dest: action for action in subparsers.choices["refresh-state"]._actions}
+    evidence_help = actions["progress_evidence_ids"].help
+    assert "1-128" in evidence_help
+    assert "leading-dot file path" in evidence_help
+    assert normalize_progress_identifier("evidence:validation-1") == "evidence:validation-1"
+    assert normalize_progress_identifier(".local/validation.json") is None
+    assert normalize_progress_identifier("x" * 128) is not None
+    assert normalize_progress_identifier("x" * 129) is None
+
+    # Call the TypeScript authoring owner, rather than adding a Python budget.
+    contract = replan_writeback_requirements({
+        "satisfying_semantic_outcomes": ["fresh_vision_path_outcome"],
+    })["writeback_contract"]["vision_authoring"]
+    limits = contract["fields"]["todo_delta"]
+    delta_help = actions["vision_todo_delta"].help
+    assert f"at most {limits['max_item_chars']} characters" in delta_help
+    assert f"first {limits['max_retained_items']} are retained" in delta_help
+
+    recovery_help = " ".join(subparsers.choices["checkpoint-context"].format_help().split())
+    assert "requires the original committed refresh-state writeback" in recovery_help
+    assert "For the first writeback" in recovery_help
+
+    assert "at most 1200 characters after trimming" in actions["next_action"].help
+    boundary_help = actions["delivery_boundary"].help
+    assert "within-Todo --next-action is allowed" in boundary_help
+    assert "--autonomous-replan-recorded require semantic_closeout" in boundary_help
+    assert "vision checkpoint" in boundary_help
+    assert "do not add this ACK to an ordinary in_flight_continuation" in actions[
+        "autonomous_replan_recorded"
+    ].help

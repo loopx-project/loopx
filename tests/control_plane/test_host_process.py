@@ -60,7 +60,8 @@ def test_real_generic_host_roundtrip_and_stream_budget(tmp_path: Path) -> None:
     assert overflow["reason"] == "host stdout exceeded the result budget"
 
 
-def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path) -> None:
+@pytest.mark.parametrize("deadline", [None, 20])
+def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path, deadline) -> None:
     def reject(_text: str) -> None:
         raise ValueError("consumer stopped")
 
@@ -74,7 +75,7 @@ def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path) -> None:
             ],
             project=tmp_path,
             input_text="",
-            timeout_seconds=20,
+            timeout_seconds=deadline,
             on_stdout=reject,
         )
     assert time.monotonic() - started < 8
@@ -420,3 +421,17 @@ def test_execution_drain_needs_every_group_a_leased_run_launched(tmp_path: Path)
     finally:
         live.kill()
         live.wait(timeout=10)
+
+
+def test_default_turn_deadline_is_optional_and_real_transport_accepts_none(tmp_path):
+    from loopx.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["turn", "run-once", "--goal-id", "fixture",
+                              "--agent-id", "agent", "--project", str(tmp_path)])
+    assert args.timeout_seconds is None
+    result = run_host_process(
+        [sys.executable, "-c", "import time;time.sleep(.15);print('finished')"],
+        project=tmp_path, input_text="", timeout_seconds=None,
+    )
+    assert result["outcome"] == "exited"
+    assert result["returncode"] == 0

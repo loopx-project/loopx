@@ -29,7 +29,7 @@
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/external-evidence-research-capability-v0/) |
 | [RFC：前沿科学研究计划 v0](frontier-science-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Goal Channel 协作模型 v0](goal-channel-collaboration-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -46,7 +46,7 @@
 | [RFC：团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Harness Benchmark 与研究计划 v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |
-| [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | — |
+| [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0 / 管家运行模式 v0](manager-runtime-profile-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Monorepo 内的发行物拆分（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |

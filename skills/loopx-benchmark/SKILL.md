@@ -1,13 +1,20 @@
 ---
 name: loopx-benchmark
-description: Use when a LoopX-managed goal runs, tracks, scores, or analyzes a benchmark experiment through benchmark-toolkit, including experiment-board rows, solver arms, integrity qualification, matched comparisons, or case insights. Do not use for casual benchmark discussion, ordinary software microbenchmarks, or eval mentions without LoopX experiment state.
+description: "Use when acting as the operator or post-run analyst of a LoopX-managed benchmark experiment through benchmark-toolkit: select or launch runs, maintain experiment-board rows, qualify integrity, or analyze matched comparisons and case insights. Solving an assigned benchmark task under an existing runner does not by itself select this skill. Excludes casual benchmark discussion and ordinary software microbenchmarks."
 ---
 
 # LoopX Benchmark Workflow
 
-Use this skill for a LoopX-managed benchmark experiment. The builtin
+Use this skill to operate or analyze a LoopX-managed benchmark experiment. The builtin
 `benchmark-toolkit` capability owns provider-neutral experiment state and
 integrity boundaries. This packaged skill is its task-triggered Agent playbook.
+
+An assigned solver follows its task instructions and current execution contract.
+The words “benchmark”, “evaluation”, or “submission” in that task do not grant
+the operator role or require experiment-board discovery. Use this workflow when
+the requested work actually includes run management or post-run analysis; an
+explicit request to use the skill still applies. Keep the solver's task-local
+validation and authorized submission path distinct from experiment management.
 
 The capability is catalog-ready without a per-Goal enable switch. Installing
 this skill does not grant runner, shell, network, credential, private-evidence,

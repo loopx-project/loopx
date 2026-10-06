@@ -30,9 +30,9 @@ the TypeScript owner decides context identity and scope. Native Codex resume ret
 the original upstream thread and workspace. HTTP/protocol fixtures qualify that
 continuity and denial behavior; they do not establish real model adoption.
 
-The App grant is workspace reading for the local owner. The App scope alone does
-not qualify Lark private-message admission, installed or mobile journeys, or
-authorize edits. A revoked grant keeps the history readable and blocks new
+The local App grant covers the selected owner workspace under its current host
+permissions. Scope selection alone does not qualify Lark private-message
+admission, installed or mobile journeys. A revoked grant keeps history readable and blocks new
 messages until the host grants it again. The independent Lark checkpoint below
 qualifies its source implementation separately.
 
@@ -51,8 +51,7 @@ shared request owner, and a replay retains the original Session/Turn target.
 A lost admission correlation cannot move a request to a newer Session. Admission
 feedback and final delivery use separate durable provider intents; an ambiguous
 write is read back without blind resend. Unsupported media receives an explicit
-notice. This grant remains workspace reading, without a Goal, portfolio or peer
-execution authority.
+notice. The workspace grant conveys no Goal, portfolio or peer execution authority.
 
 The packaged settings journey, source revocation/recovery, duplicate events,
 native queue/stop and two-App isolation have synthetic-provider regression and
@@ -74,13 +73,73 @@ Synthetic product previews: [desktop](../../assets/personal-workspace/private-pr
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
 
+## Ordinary workspace writes: default and revocation checkpoint
+
+Ordinary project Chat defaults to `workspace_write` for host-declared roots. The
+Core context owner derives the actual Codex `workspace-write` sandbox on start
+and exact-thread resume; this is conversational work, without Task/Goal mode or
+manager permissions. The project prompt follows workspace `AGENTS.md` and skills,
+permits requested bounded edits, and keeps durable operations with their existing
+owners. A write grant does not activate Material Lifecycle or certify a project
+adapter's intake/ranking workflow.
+
+`loopx chat --project-workspace-grant workspace_read` restricts the host to
+read-only, including Lark bindings. Settings → Lark defaults a Codex project App
+to workspace writes within that host grant and exposes an explicit read-only
+choice. Other executors remain read-only until their host policy is qualified.
+The readback, `/status` and `/help` show the effective grant. Selecting an existing
+App restores its persisted setting. Changing a binding's grant requires a new
+identity and Session, invalidates the old Session for new work, and requires new
+Agent target grants; it cannot silently elevate an attached host or another App.
+Host grant removal or downgrade is rechecked before admission and resume. Ordinary
+local Scope reuses only the same typed project context; a host grant change opens
+a new Session while retaining old history and rejecting new work on the old
+Session.
+
+Typed Core/HTTP/native-host regressions qualify default writes, explicit read-only,
+workspace identity, independent App grants, old-Session rejection and exact-thread
+resume. Earlier source evidence records a Codex canary editing and reading back a
+synthetic note while preserving prior text and creating no Goal. This historical
+host/filesystem evidence is separate from current synthetic-protocol regression
+checks and does not qualify live Lark, material intake or a release.
+Committed same-claim replay is separate from new admission: after a lost response
+and target revocation, the original host can recover its committed receipt; new
+claims and external result publication remain denied. Current validation uses real
+Core HTTP, file storage and the claim broker with synthetic Codex/provider
+transport; it does not rerun a live-model edit or phone journey. Installed/Lark
+journeys and broader IM interactions remain open.
+
 ## Bound steward private Chat: explicit new commissions
 
 Settings → Lark can now select a steward role independently of ordinary project
 Chat. The existing typed conversation binding owns its App, verified owner,
-source, workspace and bounded portfolio. A verified empty scope is distinct from
-an unavailable authorization; it contains no inherited Goals and does not certify
-global inventory coverage. Ordinary Chat still has no Goal or manager identity.
+source and workspace. New verified owner stewards default to `all_registered`:
+the current configured registry supplies every registered Goal and Agent, including
+future registrations. Stopped work remains inspectable through explicit history,
+but cannot receive new work. A verified empty registry is distinct from unavailable
+authorization; no historical registry or identity is imported. Ordinary Chat still
+has no Goal or manager identity.
+
+Older bindings retain their selected scope. Settings → Lark → **Authorize all
+registered work** upgrades the existing binding and its known sender-bound delivery
+policies without replacing its Session or audience. Individual recipient revocations
+remain effective; discovery does not prove execution readiness or grant protected
+operations. Trusted-local `manager-inbox configure-delivery-scope` uses the same
+source-policy owner, and a verified new private source initializes that policy once.
+An explicitly narrowed existing source policy is not widened by ordinary admission.
+An upgrade verifies every known delivery policy before publishing the broader
+binding. If an I/O write fails, the UI retains the old binding scope and offers
+an explicit retry. Earlier source-policy writes authorized by that upgrade may
+remain applied; retry converges them without resetting recipient revocations.
+This ordering does not claim an atomic transaction across separate files.
+
+When the configured registry declares `common_runtime_root`, coordination context,
+inboxes and return processing use that declared root even if Chat has a separate
+storage override. App bindings, conversations and provider credentials stay in
+their existing private storage. Without a declared common root, existing local
+Chat behavior is retained. This scope/path slice does not complete worker activation,
+receiver adoption or original-route return; native private ingress remains a separate
+integration boundary from the existing group ingress.
 
 Only an explicit `/delegate --tokens N objective` prepares a `goal.create`
 preview. Confirmation must arrive from that exact owner/App/source within fifteen
@@ -141,7 +200,7 @@ conversation.
 Missing execution evidence and unknown states stay explicitly unavailable.
 These commands open no Session, invoke no model and create no Goal. `/help`
 shows role-specific commands and the existing Settings → Lark entry for workspace,
-executor and revocation, including the text-only attachment boundary.
+executor and revocation, including supported images and unavailable media/attached-host boundaries.
 
 Regression coverage uses the production native filesystem store, durable queue,
 bound request and provider admission/reconciliation paths with a synthetic
@@ -862,3 +921,23 @@ historical cards and rejected-draft recovery. These fixtures establish transport
 and interface behavior, not live model quality, public posting or installed-host
 acceptance. GQ06's material entry and GQ07–09's continuity remain subject to their
 full delivery and recovery acceptance.
+
+
+### Default Lark private images reuse native Turn attachments
+
+Ordinary project and steward private conversations accept images and image/text
+posts by default. The provider verifies the canonical message under its receiving
+App, downloads only that message's resources as that App, and passes bounded
+PNG/JPEG/GIF/WebP data into the existing Core request and durable Session queue.
+Limits remain four images, 5 MiB each and 12 MiB total. Captions survive; resource
+keys and private image bytes do not enter typed routing observations. Duplicate
+events reuse downloaded input and the original Turn; restart drains that same
+Turn and upstream thread. Grants are checked again after download and on return.
+
+Failed downloads, unsupported files/audio/video, and images sent with control
+commands or to an attached host receive an explicit non-execution notice. The
+provider does not execute only the text of a partially supported post. Attached
+host media and file delivery remain separate gaps. Regression covers model-wire
+image input, unchanged Session, replay, durable restart and download-time
+revocation; live provider/model acceptance is reported separately. No new
+Session authority, queue, worker or feature toggle is introduced.

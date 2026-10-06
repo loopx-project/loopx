@@ -20,6 +20,7 @@ export const ACTION_SIGNATURE_COVERAGE_V1 = "turn_envelope_action_dimensions_v1"
 export const ACTION_SIGNATURE_COVERAGE_V2 = "turn_envelope_action_dimensions_v2";
 export const ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3";
 export const ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4";
+export const ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5";
 export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;
 
 const EXECUTABLE_CLI_ARGS_MAX_ITEMS = 64;
@@ -640,6 +641,8 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   if (nextCliActions.length === 0 && Array.isArray(cliChannel.next_cli_actions)) {
     nextCliActions = [...cliChannel.next_cli_actions].map(pythonString);
   }
+  const settlementPlan = object(cliChannel.settlement_plan);
+  const hasSettlementPlan = Object.keys(settlementPlan).length > 0;
   let preserveBoundReplanCommands = replanSettlementOnly;
   if (replanPacket && !replanSettlementOnly) {
     const writebackContract = object(object(payload.replan_action_packet).writeback_contract);
@@ -675,10 +678,15 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   } else {
     // Original-Turn identities often follow an absolute runtime path. Cutting
     // a closeout command into display text can erase its binding or execute flag.
-    writeback.next_cli_actions = preserveBoundReplanCommands
+    writeback.next_cli_actions = hasSettlementPlan
+      ? nextCliActions.map(command => scalarString(command, "settlement command"))
+      : preserveBoundReplanCommands
       ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
       : textList(nextCliActions, 5, 420);
   }
+  // Transport the canonical plan intact. Reconstructing it from command previews
+  // loses the effect identity, conditional closeout and host/agent boundary.
+  if (hasSettlementPlan) writeback.settlement_plan = settlementPlan;
   for (const field of ["replan_settlement_contract", "delivery_workspace_causality"]) {
     const value = object(cliChannel[field]);
     if (Object.keys(value).length > 0) writeback[field] = value;
@@ -763,6 +771,7 @@ function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObj
 }
 
 function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): string {
+  if (Object.keys(object(object(envelope.writeback).settlement_plan)).length > 0) return ACTION_SIGNATURE_COVERAGE_V5;
   if (Object.keys(object(envelope.agent_context)).length > 0) return ACTION_SIGNATURE_COVERAGE_V4;
   const action = object(envelope.action);
   if (Object.keys(object(action.planning_horizon)).length > 0) return ACTION_SIGNATURE_COVERAGE_V3;
@@ -818,14 +827,27 @@ function coldPath(
   payload: JsonObject,
   agentId: string | null,
   schedulerExecutionArgs: string,
+  capturedDecisionPath?: string,
 ): JsonObject {
   const goalId = scalarString(payload.goal_id, "quota payload goal_id", "<goal-id>");
   const agentArg = agentId ? ` --agent-id ${agentId}` : "";
   const prefix = commandPrefix(payload.runtime_root);
   return {
-    full_decision: schedulerExecutionArgs
+    full_decision: capturedDecisionPath ? `cat -- ${shellQuote(capturedDecisionPath)}` : schedulerExecutionArgs
       ? `${prefix} --format json quota should-run --goal-id ${goalId}${agentArg}${schedulerExecutionArgs}`
       : "rerun the typed quota_guard from the current host packet",
+    ...(capturedDecisionPath ? {
+      captured_decision: {
+        path: capturedDecisionPath,
+        goal_id: payload.goal_id ?? null,
+        agent_id: agentId,
+        turn_instance_id: object(payload.heartbeat_receipt).turn_instance_id ?? null,
+        source_hash_ref: "$.action_signature.source_decision_hash",
+        instruction: "Read this saved observation for omitted context. Check ok, Goal/Agent/Turn and source hash before use. " +
+          "It grants no fresh authority: selection, lease/workspace changes, cancellation or quota revalidation require " +
+          "the current host guard and a new capture directory. Missing or invalid capture requires recovery, not blind guard replay.",
+      },
+    } : {}),
     todo_detail: `${prefix} --format json todo list --goal-id ${goalId}`,
     status_detail: `${prefix} --format json status --goal-id ${goalId}`,
   };
@@ -844,6 +866,12 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     );
   }
   const schedulerExecutionArgs = request.scheduler_execution_args;
+  const capturedDecisionPath = request.captured_decision_path;
+  if (capturedDecisionPath !== undefined && (
+    typeof capturedDecisionPath !== "string" || !capturedDecisionPath.trim() || capturedDecisionPath.includes("\0")
+  )) {
+    throw new EffectRuntimeRequestError("turn envelope captured_decision_path must be a non-empty file path");
+  }
   const agentId = scalarString(
     object(payload.agent_identity).agent_id,
     "quota payload agent_identity.agent_id",
@@ -860,7 +888,7 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     action_required: Boolean(payload.action_required),
     open_count: Number(payload.open_count || 0),
     ...actionProjectionValue,
-    detail_ref: coldPath(payload, agentId, schedulerExecutionArgs),
+    detail_ref: coldPath(payload, agentId, schedulerExecutionArgs, capturedDecisionPath),
   };
   const sourceSignature = turnEnvelopeActionSignatureDocument(actionProjectionValue);
   const envelopeSignature = turnEnvelopeActionSignatureDocument(envelope);

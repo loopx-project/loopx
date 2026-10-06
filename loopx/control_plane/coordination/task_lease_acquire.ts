@@ -81,7 +81,7 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
       return failed(decision.code, `canonical task lease acquire rejected: ${decision.code}`, {
         ...(decision.code === "write_scope_conflict" ? {recommended_action:
-          "Coordinate with the listed holders to narrow scopes. For isolated code edits, both holders may release and reacquire with --write-worktree; existing grants remain exclusive. Never take over a foreign lease or use this mode for shared runtime state."} : {}),
+          "Coordinate shared writes with the listed holders. For isolated code edits, use your own separate Git worktree and acquire with --write-worktree; file overlaps become integration advisories. A known same-checkout collision remains rejected. Never take over a foreign lease or use code-edit mode for shared runtime state."} : {}),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(facts.current),
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
         ...(decision.conflict_indexes.length ? {conflicts: decision.conflict_indexes.map(i => facts.other_leases[i])} : {})});

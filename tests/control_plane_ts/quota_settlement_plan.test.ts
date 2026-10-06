@@ -20,6 +20,9 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.equal(plan.steps[0].conditional, undefined); // Validation itself is never optional.
   assert.match(plan.steps[0].precondition, /original declaration and current lease/);
   assert.match(plan.steps[0].precondition, /Todo done does not settle the Turn/);
+  assert.match(plan.steps[1].precondition, /--agent-vision-json/);
+  assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);
+  assert.match(plan.steps[1].precondition, /acceptance_summary/);
   assert.match(plan.steps[2].precondition, /declared completion validation/);
   assert.match(plan.steps[3].precondition, /matching writeback and quota spend receipts/);
   assert.equal(plan.steps[3].conditional, true);
@@ -37,6 +40,13 @@ test("in-flight progress neither executes completion nor rewrites the declaratio
   assert.equal(plan.steps[0].command_template, undefined);
   assert.equal(plan.steps[0].command_condition, undefined);
   assert.match(plan.steps[0].precondition, /keep the Todo open/);
+  assert.match(plan.steps[1].precondition, /^validation succeeded/);
+  assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
+  assert.match(plan.steps[1].precondition, /failure alone is not progress/);
+  assert.match(plan.steps[1].precondition, /outcome_gap: blocked.*blocker\/evidence IDs.*continuation checks/);
+  assert.equal(plan.steps[1].command_template, "writeback");
+  assert.equal(plan.steps[2].command_template, "spend");
+  assert.equal(plan.identity.turn_instance_id, "turn");
   assert.equal(plan.steps[3].conditional, true);
 });
 
@@ -48,6 +58,13 @@ test("autonomous replan never manufactures a Todo completion step", () => {
   assert.deepEqual(plan.steps.map(step => step.kind), ["validation", "durable_writeback", "quota_spend"]);
   assert.equal(plan.steps[0].command_template, undefined);
   assert.equal(plan.identity.binding_kind, "autonomous_replan");
+  assert.match(plan.steps[1].precondition, /^validation succeeded/);
+  assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
+  assert.match(plan.steps[1].precondition, /failure alone is not progress/);
+  assert.match(plan.steps[1].precondition, /outcome_gap: blocked.*blocker\/evidence IDs.*continuation checks/);
+  assert.equal(plan.steps[1].command_template, "writeback");
+  assert.equal(plan.steps[2].command_template, "spend");
+  assert.equal(plan.identity.turn_instance_id, "turn");
 });
 
 test("incomplete command facts or ambiguous identity fail closed", () => {

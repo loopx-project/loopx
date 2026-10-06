@@ -121,6 +121,7 @@ class CodexAppServerAdapter:
         execution_mode: bool = False,
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
+        project_context: dict[str, str] | None = None,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -138,6 +139,7 @@ class CodexAppServerAdapter:
                 execution_mode=execution_mode,
                 runtime_profile=runtime_profile,
                 sandbox=sandbox,
+                project_context=project_context,
                 resume_thread_id=resume_thread_id,
                 codex_home=codex_home,
                 model=model,
@@ -302,6 +304,8 @@ class ChatRuntimeController:
     ) -> None:
         self.store = store
         self.registry_path = registry_path
+        from .capabilities.native_chat.project_context import coordination_runtime_root
+        self.coordination_runtime_root = coordination_runtime_root(registry_path, store.root.parent)
         self.manager_scope_resolver = manager_scope_resolver
         self.project_contexts = project_contexts or ChatProjectContexts([])
         self.codex_bin = codex_bin
@@ -410,7 +414,10 @@ class ChatRuntimeController:
         project_coordination: bool = False,
         loopx_tools: bool = False,
         executor_model: Mapping[str, str | None] | None = None,
+        project_context: dict[str, str] | None = None,
     ) -> ChatRuntimeAdapter:
+        if project_context is not None and project_context.get("grant") == "workspace_write" and agent_id != "codex":
+            raise ValueError("the selected executor cannot enforce workspace write authorization")
         if (
             manager_runtime is not None
             and manager_runtime.get("runtime_profile") == "trusted_owner"
@@ -474,6 +481,7 @@ class ChatRuntimeController:
                     if manager_profile is not None
                     else None
                 ),
+                project_context=project_context,
                 model=model_config.get("model"),
                 reasoning_effort=model_config.get("reasoning_effort"),
                 dynamic_tools=(
@@ -641,6 +649,10 @@ class ChatRuntimeController:
                     agent_id=agent_id,
                     channel_id=selected_channel,
                 )
+                # Reuse only the same typed project identity. A changed host grant
+                # starts a new Session while the old context and history remain intact.
+                if latest is not None and project_context is not None and latest.get("project_context") != project_context:
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
@@ -661,6 +673,7 @@ class ChatRuntimeController:
                 execution_mode=selected_channel.startswith("task."),
                 project_coordination=conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal",
                 manager_runtime=manager_runtime,
+                project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
             )
             persisted = self.store.create_session(
@@ -675,7 +688,7 @@ class ChatRuntimeController:
                 project_context=project_context,
                 steward_context=steward_context,
             )
-            persisted = self.project_contexts.initialize_bound_scope(self.store, persisted)
+            persisted = self.project_contexts.initialize_bound_scope(self.store, persisted, runtime_root=self.coordination_runtime_root)
             if is_manager_channel(selected_channel):
                 assert manager_runtime is not None
                 persisted = self.store.update_session(
@@ -912,6 +925,7 @@ class ChatRuntimeController:
                 executor_model=(alloc.manager_executor_model(model_allocation)
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
+                project_context=session.get("project_context"),
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
@@ -1253,6 +1267,7 @@ class ChatRuntimeController:
         session_id: str,
         client_turn_id: str,
         message: str,
+        attachments: list[AttachmentPayload] | None = None,
         work_dir: Path,
         objective: str,
         origin: str = "external",
@@ -1273,6 +1288,8 @@ class ChatRuntimeController:
             context = self.project_contexts.session_context(session)
             work_dir, objective = context["project"], context["objective"]
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            if attachments:
+                raise ValueError("attached host session queue does not yet accept attachments")
             turn, created = enqueue_attached_agent_turn(
                 store=self.store,
                 registry_path=self.registry_path,
@@ -1289,6 +1306,7 @@ class ChatRuntimeController:
                 session_id,
                 client_turn_id=client_turn_id,
                 message=message,
+                attachments=attachments,
                 origin=origin,
             )
             self.resume_session_queue(
@@ -1404,7 +1422,7 @@ class ChatRuntimeController:
                     session_id=session_id,
                     turn_id=turn_id,
                     message=str(turn.get("message") or ""),
-                    attachments=[],
+                    attachments=turn.get("attachments") or [],
                     adapter=adapter,
                     done_event=done_event,
                 )
@@ -1635,25 +1653,15 @@ class ChatRuntimeController:
                 event_buffer.close()
                 return
             if response.get("context_handoff") is not None:
-                from .capabilities.manager_context import deliver
+                from .capabilities.manager_context.execution import handoff_response
                 if scope["kind"] == "unavailable":
                     raise ValueError("context handoff requires a scoped conversation")
-                try:
-                    if scope["kind"] == "external_audience" and (
-                        self.manager_scope_resolver is None or not self.manager_scope_resolver(session)
-                    ):
-                        raise ValueError("manager connection authority is no longer available")
-                    receipt = deliver(self.store.root.parent, self.registry_path,
-                                      session=session, turn=self.store.load_turn(session_id, turn_id) or {},
-                                      request=response["context_handoff"])
-                    response = {**response, "proposals": [], "gate": None,
-                                "context_handoff_receipt": receipt,
-                                "message": ("已将交办说明和原消息交给 " if response["context_handoff"].get("brief") else "已将原消息交给 ") + receipt["agent_id"] +
-                                "。材料已进入收件箱，后续处理结论会自动回到这里。"
-                                "（委托 " + receipt["request_id"][:8] + "）"}
-                except (OSError, ValueError):
-                    response = {**response, "proposals": [], "gate": None,
-                                "message": "材料尚未转交：目标绑定、来源授权或持久收件回读未通过。需要修复交接链路；没有改动任务或优先级。"}
+                response = handoff_response(
+                    self.coordination_runtime_root, self.registry_path, session=session,
+                    turn=self.store.load_turn(session_id, turn_id) or {}, response=response,
+                    source_authorized=lambda: scope["kind"] != "external_audience" or bool(
+                        self.manager_scope_resolver and self.manager_scope_resolver(session)),
+                    execution_allowed=lambda: not execution_ended())
             response = offer_team_plan_confirmation(
                 store=self.store,
                 session=session,

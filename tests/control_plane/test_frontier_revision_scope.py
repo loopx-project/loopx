@@ -5,11 +5,12 @@ import json
 import pytest
 
 from loopx.control_plane.todos import frontier_revision
+from loopx.control_plane.goals.goal_frontier.long_todo_chain import (
+    long_todo_chain_successor_checkpoints,
+)
 
 from loopx.control_plane.todos.frontier_revision import (
-    advancement_frontier_revision_from_index,
     build_advancement_frontier_revision_index,
-    selectable_advancement_frontier_revision,
 )
 
 
@@ -36,31 +37,29 @@ def test_excluded_unclaimed_work_does_not_rearm_this_agents_frontier():
     after = deepcopy(before)
     after[1]["priority"] = "P0"
     after[1]["updated_at"] = "2026-09-02T00:00:00Z"
-    for source in (before, after):
-        direct = selectable_advancement_frontier_revision(source, agent_id="worker-a")
-        indexed = advancement_frontier_revision_from_index(
-            build_advancement_frontier_revision_index(source), agent_id="worker-a",
-        )
-        assert direct == indexed
-    assert selectable_advancement_frontier_revision(before, agent_id="worker-a") == (
-        selectable_advancement_frontier_revision(after, agent_id="worker-a")
-    )
-    assert selectable_advancement_frontier_revision(before, agent_id="worker-b") != (
-        selectable_advancement_frontier_revision(after, agent_id="worker-b")
-    )
+    before_index = build_advancement_frontier_revision_index(before)
+    after_index = build_advancement_frontier_revision_index(after)
+    assert before_index["by_agent"] == after_index["by_agent"]
+    assert before_index["unclaimed"] != after_index["unclaimed"]
+    # The excluded-only lane must remain explicit even without claimed work.
+    assert before_index["by_agent"][0]["agent_id"] == "worker-a"
+    assert before_index["by_agent"][0]["complete"] is True
 
 
 def test_duplicate_identity_cannot_be_a_complete_frontier():
     source = rows()
     source[1]["todo_id"] = source[0]["todo_id"]
-    assert selectable_advancement_frontier_revision(source, agent_id=None) == (None, None, False)
+    index = build_advancement_frontier_revision_index(source)
+    assert index["all"] == index["unclaimed"] == {"complete": False}
 
 
 def test_removing_exclusion_rearms_newly_available_work():
     source = rows()
-    before = selectable_advancement_frontier_revision(source, agent_id="worker-a")
+    before = build_advancement_frontier_revision_index(source)
     source[1].pop("excluded_agents")
-    assert selectable_advancement_frontier_revision(source, agent_id="worker-a") != before
+    after = build_advancement_frontier_revision_index(source)
+    assert after["by_agent"] == []
+    assert before["by_agent"][0]["frontier_revision"] != after["unclaimed"]["frontier_revision"]
 
 
 def test_v0_codec_preserves_unicode_hash_and_microsecond_ordering():
@@ -72,8 +71,10 @@ def test_v0_codec_preserves_unicode_hash_and_microsecond_ordering():
     expected = "todo_frontier_revision_v0:" + sha256(encoded.encode()).hexdigest()[:24]
     source = [{**material[1], "completed_at": "2026-09-01T08:00:00.000001+08:00"},
               {**material[0], "updated_at": "2026-09-01T00:00:00.000002Z"}]
-    assert selectable_advancement_frontier_revision(source, agent_id=None) == (
-        expected, "2026-09-01T00:00:00.000002Z", True)
+    checkpoint = build_advancement_frontier_revision_index(source)["all"]
+    assert checkpoint["complete"] is True
+    assert checkpoint["frontier_revision"] == expected
+    assert checkpoint["frontier_updated_at"] == "2026-09-01T00:00:00.000002Z"
 
 
 def test_legacy_agent_spelling_in_index_remains_readable():
@@ -81,8 +82,12 @@ def test_legacy_agent_spelling_in_index_remains_readable():
     source[0]["claimed_by"] = "Worker A"
     index = build_advancement_frontier_revision_index(source)
     index["by_agent"][0]["agent_id"] = " Worker\u0085A "
-    assert advancement_frontier_revision_from_index(index, agent_id="worker-a") == (
-        selectable_advancement_frontier_revision(source, agent_id="Worker A"))
+    result = long_todo_chain_successor_checkpoints(
+        source, agent_id="worker-a", triggers=[], obligation_id="replan-test",
+        candidates=[], frontier_revision_index=index,
+    )
+    assert result is not None
+    assert result["trigger_checkpoints"][0]["frontier_revision"] == index["by_agent"][0]["frontier_revision"]
 
 
 def test_large_frontier_transport_preserves_exact_v0_identity_and_tail_edits():
@@ -92,10 +97,9 @@ def test_large_frontier_transport_preserves_exact_v0_identity_and_tail_edits():
     assert len(encoded.encode()) > 2 * 1024 * 1024
     expected = "todo_frontier_revision_v0:" + sha256(encoded.encode()).hexdigest()[:24]
     source = [{**item, "updated_at": "2026-09-01T00:00:00Z"} for item in material]
-    assert selectable_advancement_frontier_revision(source, agent_id=None) == (
-        expected, "2026-09-01T00:00:00Z", True)
-    assert advancement_frontier_revision_from_index(
-        build_advancement_frontier_revision_index(source), agent_id=None,
-    ) == (expected, "2026-09-01T00:00:00Z", True)
+    checkpoint = build_advancement_frontier_revision_index(source)["all"]
+    assert checkpoint["complete"] is True
+    assert checkpoint["frontier_revision"] == expected
+    assert checkpoint["frontier_updated_at"] == "2026-09-01T00:00:00Z"
     source[-1]["text"] += " Material edit at the tail."
-    assert selectable_advancement_frontier_revision(source, agent_id=None)[0] != expected
+    assert build_advancement_frontier_revision_index(source)["all"]["frontier_revision"] != expected

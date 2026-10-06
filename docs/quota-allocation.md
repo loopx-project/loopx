@@ -35,6 +35,18 @@ of that observation, including explicit cache use; the Markdown view shows it.
 
 ## Product Scope
 
+Host-denied local Effect runtime access fails closed with
+`quota_runtime_permission_denied`. The client preserves the pre-dispatch
+permission failure without retrying it as a transient connection error. Locator
+discovery and readiness preserve the same diagnostic and recovery guidance; a
+startup whose locator becomes denied stops its newly owned process. Retry
+the same registry, Goal, Agent and Turn through host-approved access; do not
+enable optional capabilities, replace authority or spend before guard success.
+A method such as `capabilities.pr_review.configuration` can be called to
+normalize stored configuration during generic collection; its name is not
+evidence that PR review ran. Failures after dispatch retain the existing
+ambiguous-response fence and require receipt recovery before replay.
+
 In v0.1, quota means **compute quota only**.
 
 It does not decide human reward, write approval, production permission, or
@@ -132,6 +144,36 @@ window of 20 material run records and long-open-Todo-chain triggers also retain
 their existing thresholds. Quiet or unchanged Monitor polls do not consume the
 periodic material-run window; their dedicated Monitor replan thresholds still apply.
 
+### Effective-work-Turn review cadence
+
+An explicit `execution_profile.replan_after_effective_turns` selects receipt-backed
+periodic review while a Todo may remain open. The setting replaces that Goal's
+completed-Todo cadence; the legacy default remains unchanged. Both units currently
+accept 1–5, keeping this opt-in within the existing cadence configuration range.
+
+```bash
+loopx configure-goal --goal-id example --execution-replan-after-turns 3
+loopx configure-goal --goal-id example --execution-replan-after-turns 3 --execute
+loopx configure-goal --goal-id example
+loopx configure-goal --goal-id example --clear-execution-replan-after-turns --execute
+```
+
+The shared TypeScript history owner counts distinct, settled work Turns for the
+selected Agent after its latest accepted replan acknowledgement. An accepted
+negative work result can count; a poll, duplicate retry, unspent writeback or
+missing settlement receipt cannot. Reaching the threshold creates a periodic
+review obligation through the existing quota/writeback path. This does not
+schedule a host Turn or grant execution, quota or write authority.
+
+In the Capability Center, **Goal review cadence** offers the counting unit and
+quantity for either the device default or selected Goal. The versioned machine
+configuration `todo_replan_cadence_machine_defaults_v1` stores `count_unit`
+(`completed_todos` or `effective_turns`) and `count`. Existing v0 configuration
+retains its completed-Todo meaning and storage on read; applying the guided
+editor explicitly migrates its shape. Legacy Goal API input `completed_todos`
+remains accepted. Clearing a Goal override restores the current device default;
+removing that namespace restores the legacy capability default.
+
 ### Governed Turn Execution
 
 `loopx turn plan` / `loopx turn run-once` is a separate execution surface from
@@ -165,6 +207,15 @@ writeback/spend chain. An exact typed blocked writeback with a bounded retry
 instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
+
+An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
+Todo-bound Turn after the matching writeback and spend receipts commit. Both
+`in_flight_continuation` and `semantic_closeout` use their corresponding typed
+checkpoint triggers. The latter can leave the Todo open or waiting while the
+eligible frontier changes. Reentering the same Turn returns
+`heartbeat_settled_skip` with the original binding; only a fresh Turn discovers
+new work or replan obligations. Missing, rejected or mismatched checkpoints and
+receipts remain incomplete; this replay rule grants no Todo or Goal completion.
 
 A Todo-bound path replan can be qualified during execution even when the
 initial guard selected no replan obligation. Its exact durable writeback must
@@ -577,6 +628,12 @@ promotion, it reads the selected canonical provider, including authoritative
 empty results; missing/stale display and provider failure never authorize a
 Markdown fallback. The guard does not append a second Markdown candidate list.
 Historical receipt-bound recovery remains separate from new work admission.
+
+Hosts supplying their own `--turn-instance-id` use this same selection contract,
+including `generic_cli`, `outer_controller`, and native CLI profiles. An explicit
+`--todo-id` is qualified before receipt binding; it must not leave the response
+asking for the selection it just accepted. This does not enable `--begin-turn`
+for those hosts or change legacy calls without a Turn identity.
 
 A single-candidate response
 keeps the direct execution path and does not add an extra selection round trip.
@@ -1466,15 +1523,29 @@ Post-turn accounting protocol:
   and omitted from persisted history. Do not point this option at the canonical
   checkout for peer work.
 - delivery attribution is not synonymous with Git. A registered non-Git
-  project records a path-free `local_goal`
+  project or a canonical local Git checkout with no `origin` records a path-free `local_goal`
   workspace identity (`loopx:<goal-id>`) when refresh runs inside that
   registered project root. This lets validated non-repository work settle
   without inventing a repository, including peer research and material work.
   The existing Todo claim/lease and completion validator still apply; local
-  delivery is not `same_agent_non_delivery`. A Git peer delivery still requires
+  identity does not waive causal delivery requirements. A Git peer delivery still requires
   an `independent_git_worktree`. An explicit Git task repository or an explicit
   owner isolation requirement rejects a local Goal receipt. An outside-root
-  workspace cannot produce that local receipt.
+  workspace cannot produce that local receipt. For originless Git, the checkout
+  root must equal the registered project root; nested repositories, linked
+  worktrees, invalid/empty origins and failed Git config reads cannot fall back.
+- `quota should-run` reuses that registered `local_goal` identity for local
+  tasks by default. Declaring write scopes does not turn local work into a Git
+  edit or require a particular task domain or continuation marker. An explicit
+  task repository and owner isolation requirements keep their existing guards.
+  Relative Goal scopes keep their existing matching semantics; absolute grants
+  under the registered root are projected into the same relative view, including
+  existing glob patterns. The existing boundary guard alone checks coverage.
+  Caller cwd does not rebase the declared targets or itself block local work.
+  If actual delivery is produced in the Goal project from another cwd, use
+  `refresh-state --delivery-workspace-path <Goal-project>`; settlement consumes
+  that recorded local workspace without requiring a cwd move. This changes local
+  task admission, not grants, claim/lease or causal settlement requirements.
 - `todo complete --evidence <pointer>` can record a validated local artifact.
   `--result-file` additionally requires approved Goal acceptance criteria bound
   to that Todo. A standalone Todo validator does not establish Goal acceptance;

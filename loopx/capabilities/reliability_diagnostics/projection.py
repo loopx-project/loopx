@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fractions import Fraction
 from typing import Any
 
 from .envelope import (
     CAPABILITY_ID,
     ObserverEnvelope,
     ObserverEventKind,
+    observed_at_microseconds,
     parse_observed_at,
 )
 from .receipt import LedgerReading, build_integrity_receipt
@@ -75,7 +77,7 @@ def _stage_after(envelope: ObserverEnvelope) -> DiagnosticStage:
 
 def _ms_between(earlier: str, later: str) -> int:
     return int(
-        (parse_observed_at(later) - parse_observed_at(earlier)).total_seconds() * 1000
+        Fraction(observed_at_microseconds(later) - observed_at_microseconds(earlier), 1000)
     )
 
 

@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Any
+
 from .goal_channel_contracts import bindings_for_goal
 from .goal_channel_targets import goal_channel_target_for_name
 from .goal_topic_runtime import _inbox_config
 from .manager_routing import authorized_manager_goal_ids
 from .event_inbox import load_lark_event_inbox_config, _load_processed
-from .inbox_reply import reply_lark_event_inbox, verify_lark_inbox_reply
+from .inbox_reply import CommandRunner, reply_lark_event_inbox, verify_lark_inbox_reply
 from ...capabilities.manager_context import authority
 from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
 
 
 def _resolve_return(
-    *, root, registry, snapshot_provider, route, session, turn, cancelled
-):
+    *, root: Path, registry: Path, snapshot_provider: Callable[[], dict[str, Any]],
+    route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any], cancelled: Callable[[], bool],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if cancelled():
         raise ValueError("manager return service stopped")
     snapshot = snapshot_provider()
@@ -68,21 +73,72 @@ def _resolve_return(
     return snapshot, routing, target_config
 
 
+def _return_inbox(*, root: Path, registry: Path, snapshot_provider: Callable[[], dict[str, Any]],
+                  route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
+                  cancelled: Callable[[], bool], private_transport: Any) -> tuple[Path, Path, Callable[[], bool] | None, object, str]:
+    project = root
+    source_verifier: Callable[[], bool] | None
+    destination: object
+    if isinstance(session.get("steward_context"), dict):
+        if cancelled():
+            raise ValueError("manager return service stopped")
+        grant = authority(root, registry, session, turn)
+        target = {k: route[k] for k in ("goal_id", "agent_id")}
+        if (target not in grant["targets"] or grant.get("source_id") != route["source_id"]
+                or private_transport is None):
+            raise ReturnResolutionBlocked(
+                "return_authorization_unavailable", "private return authority unavailable"
+            )
+        try:
+            config_path, record = private_transport.return_inbox(route=route, session=session, turn=turn)
+            # The original Inbox belongs to the private Chat transport. Its
+            # relative paths must not be resolved against the coordination
+            # root, which continues to own grants and returned-result state.
+            project = private_transport.runtime_root
+        except (KeyError, ValueError, OSError) as exc:
+            raise ReturnResolutionBlocked(
+                "original_route_unavailable", "original private source unavailable"
+            ) from exc
+        def verify_source() -> bool:
+            return bool(private_transport._source_verified(record))
+        source_verifier = verify_source
+        destination = {key: record[key] for key in ("profile", "binding_id", "source", "event")}
+        message_id = record["event"]["message_id"]
+    else:
+        snapshot, routing, target_config = _resolve_return(
+            root=root, registry=registry, snapshot_provider=snapshot_provider,
+            route=route, session=session, turn=turn, cancelled=cancelled,
+        )
+        config_path, _ = _inbox_config(
+            runtime_root=root, route=routing, target_payload=snapshot["target_payload"]
+        )
+        source_verifier = None
+        destination = (routing, target_config)
+        message_id = route["source_id"].removeprefix("lark:")
+    config = load_lark_event_inbox_config(project=project, config_path=config_path)
+    if message_id not in _load_processed(config["inbox_path"] / "processed.json"):
+        raise ReturnResolutionBlocked(
+            "initial_delivery_receipt_unavailable", "initial reply has not been acknowledged"
+        )
+    return project, config_path, source_verifier, destination, message_id
+
+
 def send_return(
     *,
-    root,
-    registry,
-    snapshot_provider,
-    route,
-    session,
-    turn,
-    text,
-    runner=None,
-    cancelled=lambda: False,
-    delivery_attempt_recorder=None,
-):
-    def resolve():
-        return _resolve_return(
+    root: Path,
+    registry: Path,
+    snapshot_provider: Callable[[], dict[str, Any]],
+    route: dict[str, Any],
+    session: dict[str, Any],
+    turn: dict[str, Any],
+    text: str,
+    runner: CommandRunner | None = None,
+    cancelled: Callable[[], bool] = lambda: False,
+    delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
+    private_transport: Any = None,
+) -> dict[str, Any]:
+    def resolve() -> tuple[Path, Path, Callable[[], bool] | None, object, str]:
+        return _return_inbox(
             root=root,
             registry=registry,
             snapshot_provider=snapshot_provider,
@@ -90,26 +146,19 @@ def send_return(
             session=session,
             turn=turn,
             cancelled=cancelled,
+            private_transport=private_transport,
         )
 
-    snapshot, routing, target_config = resolve()
-    config_path, _ = _inbox_config(
-        runtime_root=root, route=routing, target_payload=snapshot["target_payload"]
-    )
-    message_id = route["source_id"].removeprefix("lark:")
-    config = load_lark_event_inbox_config(project=root, config_path=config_path)
-    if message_id not in _load_processed(config["inbox_path"] / "processed.json"):
-        raise ReturnResolutionBlocked(
-            "initial_delivery_receipt_unavailable",
-            "initial reply has not been acknowledged",
-        )
-
-    def before_send(_intent):
+    project, config_path, source_verifier, destination, message_id = resolve()
+    if runner is None and isinstance(session.get("steward_context"), dict):
+        runner = private_transport._reply_runner
+    def before_send(_intent: str) -> dict[str, bool]:
         current = resolve()
-        return {"continue_delivery": current[1:] == (routing, target_config)}
+        return {"continue_delivery": current[:2] == (project, config_path) and current[3:] == (destination, message_id)}
 
-    return reply_lark_event_inbox(
-        project=root,
+    runner_kwargs: dict[str, Any] = {"runner": runner} if runner else {}
+    result: dict[str, Any] = reply_lark_event_inbox(
+        project=project,
         config_path=config_path,
         message_id=message_id,
         text=text,
@@ -117,27 +166,30 @@ def send_return(
         execute=True,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
+        source_membership_verifier=source_verifier,
         # A returned manager answer keeps the provider bound, not the compact
         # notification length.
         short_message_limit=None,
-        **({"runner": runner} if runner else {}),
+        **runner_kwargs,
     )
+    return result
 
 
 def verify_return(
     *,
-    root,
-    registry,
-    snapshot_provider,
-    route,
-    session,
-    turn,
-    text,
-    attempt,
-    runner=None,
-    cancelled=lambda: False,
-):
-    snapshot, routing, _target_config = _resolve_return(
+    root: Path,
+    registry: Path,
+    snapshot_provider: Callable[[], dict[str, Any]],
+    route: dict[str, Any],
+    session: dict[str, Any],
+    turn: dict[str, Any],
+    text: str,
+    attempt: Mapping[str, str | None],
+    runner: CommandRunner | None = None,
+    cancelled: Callable[[], bool] = lambda: False,
+    private_transport: Any = None,
+) -> dict[str, Any]:
+    project, config_path, source_verifier, _destination, message_id = _return_inbox(
         root=root,
         registry=registry,
         snapshot_provider=snapshot_provider,
@@ -145,49 +197,47 @@ def verify_return(
         session=session,
         turn=turn,
         cancelled=cancelled,
+        private_transport=private_transport,
     )
-    config_path, _ = _inbox_config(
-        runtime_root=root, route=routing, target_payload=snapshot["target_payload"]
-    )
-    message_id = route["source_id"].removeprefix("lark:")
-    config = load_lark_event_inbox_config(project=root, config_path=config_path)
-    if message_id not in _load_processed(config["inbox_path"] / "processed.json"):
-        raise ReturnResolutionBlocked(
-            "initial_delivery_receipt_unavailable",
-            "initial reply has not been acknowledged",
-        )
-    return verify_lark_inbox_reply(
-        project=root,
+    if runner is None and isinstance(session.get("steward_context"), dict):
+        runner = private_transport._reply_runner
+    runner_kwargs: dict[str, Any] = {"runner": runner} if runner else {}
+    result: dict[str, Any] = verify_lark_inbox_reply(
+        project=project,
         config_path=config_path,
         message_id=message_id,
         text=text,
         attempt=attempt,
-        **({"runner": runner} if runner else {}),
+        source_membership_verifier=source_verifier,
+        **runner_kwargs,
     )
+    return result
 
 
 class LarkManagerReturnTransport:
     """Send or read back one saved result through the existing Lark adapter."""
 
-    def __init__(self, server, root):
+    def __init__(self, server: Any, root: Path) -> None:
         self.server = server
         self.root = root
         self.cancelled = lambda: False
 
-    def _arguments(self):
+    def _arguments(self) -> dict[str, Any]:
         return {
             "root": self.root,
             "registry": self.server.registry_path,
             "snapshot_provider": self.server.lark_goal_topic_runtime.snapshot_provider,
             "cancelled": self.cancelled,
+            "private_transport": getattr(self.server, "lark_private_conversations", None),
         }
 
-    def __call__(self, route, session, turn, text):
+    def __call__(self, route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any], text: str) -> dict[str, Any]:
         return send_return(
             **self._arguments(), route=route, session=session, turn=turn, text=text
         )
 
-    def send_with_attempt(self, route, session, turn, text, record_attempt):
+    def send_with_attempt(self, route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
+                          text: str, record_attempt: Callable[[Mapping[str, str | None]], None]) -> dict[str, Any]:
         return send_return(
             **self._arguments(),
             route=route,
@@ -197,7 +247,8 @@ class LarkManagerReturnTransport:
             delivery_attempt_recorder=record_attempt,
         )
 
-    def verify(self, route, session, turn, text, attempt):
+    def verify(self, route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
+               text: str, attempt: Mapping[str, str | None]) -> dict[str, Any]:
         return verify_return(
             **self._arguments(),
             route=route,
@@ -208,7 +259,7 @@ class LarkManagerReturnTransport:
         )
 
 
-def start_return_service(server, runtime_root):
+def start_return_service(server: Any, runtime_root: Path) -> Any:
     """Compose the return pump at the existing Chat/Lark service boundary."""
     from ...capabilities.manager_context.roundtrip import ReturnService
 

@@ -24,7 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from loopx import diagnose, state_projection, status
+from loopx import diagnose, history, state_projection, state_refresh, status
+from loopx.control_plane import progress_scope
+from loopx.control_plane.agents import agent_lane_recommendation
 from loopx.control_plane.status import (
     active_state_projection,
     attention_projection,
@@ -43,6 +45,10 @@ FACADE = "loopx/status.py"
 # name -> (module holding the one remaining definition, other modules importing it).
 # Each name has one owner and any public or internal consumers import that object.
 FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
+    "AGENT_LANE_PROGRESS_SCOPE": (
+        progress_scope,
+        (status, run_projection, agent_lane_recommendation, history, state_refresh),
+    ),
     "AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD": (
         autonomous_replan_projection,
         (status,),
@@ -78,21 +84,15 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
     ),
 }
 
-# The facade copy is gone here too, but these names are still restated by modules
-# outside the facade. Recorded with their remaining declarers so a follow-up starts
-# from the list, and so one more copy cannot appear unnoticed.
-STILL_FORKED_ELSEWHERE: dict[str, list[str]] = {
-    "AGENT_LANE_PROGRESS_SCOPE": [
-        "loopx/control_plane/agents/agent_lane_recommendation.py",
-        "loopx/control_plane/status/run_projection.py",
-        "loopx/history.py",
-        "loopx/state_refresh.py",
-    ],
-}
+# Nothing is left forked outside the facade. The last recorded name,
+# AGENT_LANE_PROGRESS_SCOPE, was single-sourced into
+# ``loopx/control_plane/progress_scope.py``; it is asserted as a fully merged name
+# above, so a new copy is caught there rather than by an entry here. Add a name back
+# to this table only when a follow-up is genuinely gated on someone else's decision.
+STILL_FORKED_ELSEWHERE: dict[str, list[str]] = {}
 
 OWNERSHIPS: dict[str, tuple[object, tuple[object, ...]]] = {
     **FULLY_MERGED,
-    "AGENT_LANE_PROGRESS_SCOPE": (run_projection, (status,)),
 }
 
 # The values those carriers already had in the projections before the merge.

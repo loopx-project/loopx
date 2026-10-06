@@ -12,6 +12,7 @@ from .paths import (
     resolve_runtime_root,
     shell_selected_global_registry,
 )
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     SchedulerRuntimeProfile,
@@ -570,13 +571,13 @@ def build_codex_cli_bootstrap_message(
         resolved_goal_id,
         cli_bin=cli_bin,
         agent_id=agent_id,
-        progress_scope="agent_lane" if agent_id else None,
+        progress_scope=AGENT_LANE_PROGRESS_SCOPE if agent_id else None,
     )
     progress_refresh_command = render_accountable_progress_refresh_command(
         resolved_goal_id,
         cli_bin=cli_bin,
         agent_id=agent_id,
-        progress_scope="agent_lane" if agent_id else None,
+        progress_scope=AGENT_LANE_PROGRESS_SCOPE if agent_id else None,
     )
     first_run_validation_checklist = [
         f"{cli_bin} doctor passed after PyPI install repair or an existing install",

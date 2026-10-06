@@ -280,6 +280,42 @@ view on PayPal or any control company.
 
 ## Install And Run
 
+### Signed cash reconciliation (candidate 0.8.5)
+
+`assess-cash` consumes six declared rows from one retained source column. It
+calculates signed gross capex plus asset-sale and government-incentive proceeds,
+then operating cash flow plus that net capex. Residuals compare the calculated
+amounts with the reported net-capex and adjusted-FCF rows. This is a deterministic
+arithmetic assessment; extraction, row classification and current source truth
+remain upstream. See [the bounded input contract](CONTRACT.md#signed-cash-reconciliation).
+
+```bash
+loopx-finance-value-discovery assess-cash \
+  --input-json packages/loopx-finance-value-discovery/examples/cash-reconciliation-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/cash-reconciliation-v1.json \
+  --execute --format json
+```
+
+Install and enable the extension using the lifecycle commands below; `--doctor`
+checks the provider. Disable it with `loopx extension disable
+loopx-finance-value-discovery --execute --format json`, then enable with the
+corresponding `extension enable` command. Roll back by installing a previously
+pinned package wheel and upgrading the runtime registration to that matching
+manifest. An older provider without this input schema rejects the cash request;
+rollback does not convert it into a successful assessment.
+
+CLI/direct and managed-runtime paths share the same function. App/Lark cash
+presentation and source-provider classification are companion work; this slice
+does not complete that user journey or authorize financial/trading operations.
+Existing period stdin dispatch is retained alongside the new cash schema.
+
+0.8.5 候选通过同一 direct/managed 入口消费六项已声明现金行，计算带符号
+gross capex + 销售及政府激励现金流入 = net capex，以及 CFO + net capex =
+adjusted FCF。缺证、冲突、错单位、错来源列和错符号明确保留；显示舍入不生成
+新的精确观察。算术一致不代表来源真实、PIT、可分配现金或金融准入。App/Lark
+展示和上游来源分类仍是配套交付，关闭及旧 wheel 回退沿现有 extension 生命周期。
+
 Install the extension package, then register its manifest with the LoopX
 extension runtime:
 

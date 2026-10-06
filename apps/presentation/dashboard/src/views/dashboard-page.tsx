@@ -3301,6 +3301,7 @@ export function DashboardPage() {
       background?: boolean;
       readScope?: WorkspaceReadScope;
       invalidateGoalIds?: string[];
+      rejectOnError?: boolean;
       resyncAttempt?: number;
       selectionRevision?: number;
     } = {},
@@ -3385,6 +3386,9 @@ export function DashboardPage() {
     } catch (error) {
       if (!statusRequestIsCurrent(statusRequestFenceRef.current, request)) return;
       if (!background) setLoadError(formatStatusError(error));
+      // A confirmed action keeps its receipt while its caller reports that
+      // the independent status read needs retrying. Passive refreshes stay quiet.
+      if (options.rejectOnError) throw error;
     } finally {
       if (!background && statusRequestIsCurrent(statusRequestFenceRef.current, request)) {
         setIsLoading(false);
@@ -3583,7 +3587,7 @@ export function DashboardPage() {
       onSelectWorkspace={selectWorkspace}
       onReconcileStatus={(options) => loadFromUrl(
         source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl),
-        { background: true, invalidateGoalIds: options?.invalidateGoalIds, readScope: "missing" },
+        { rejectOnError: true, background: true, invalidateGoalIds: options?.invalidateGoalIds, readScope: "missing" },
       )}
       onRetryGoalArchive={retryGoalArchive}
       onRefresh={(readScope = "all") => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope })}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {mkdtemp, readFile, rm, writeFile, mkdir} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile, mkdir, readdir} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {upgradeAuthorityFormats} from "../../loopx/control_plane/coordination/authority_format_upgrade.ts";
@@ -9,6 +9,7 @@ import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlit
 import {migrateSqliteAuthorityStoreV1ToV2} from "../../loopx/control_plane/coordination/sqlite_authority_migration.ts";
 import {createSqliteAuthorityStoreV1} from "./sqlite_authority_v1_fixture.ts";
 import {authorityStoreCommitFixture as commit} from "./authority_store_conformance.ts";
+import {withFileMutationLock} from "../../loopx/control_plane/effect_runtime_io.ts";
 import {exportAuthorityArchive, restoreAuthorityArchive, verifyAuthorityArchive} from
   "../../loopx/control_plane/coordination/authority_archive.ts";
 
@@ -16,6 +17,91 @@ async function root(t: test.TestContext) {
   const value = await mkdtemp(join(tmpdir(), "authority-upgrade-"));
   t.after(() => rm(value, {recursive: true, force: true})); return value;
 }
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`current ${provider} format verifies without waiting for a migration lock`, async t => {
+    const runtime = await root(t), goal = "current-format";
+    const directory = join(runtime, "authority", `${provider}-v0`);
+    const store = provider === "file" ? new FileAuthorityStore(directory, goal)
+      : new SqliteAuthorityStore(directory, goal);
+    await store.commitAuthority({...commit(null, "seed", 1, 1), next_projection: {goal_id: goal}});
+    const before = await store.scanCommitted(null, 10);
+    const names = await readdir(directory);
+    let release!: () => void, entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const held = withFileMutationLock(provider === "file" ? store.path : `${store.path}.upgrade`, async () => {
+      entered(); await new Promise<void>(resolve => { release = resolve; });
+    });
+    await ready;
+    const checking = upgradeAuthorityFormats([runtime], true);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([checking, new Promise<null>(resolve => {
+        timer = setTimeout(() => resolve(null), 1000);
+      })]);
+      assert.notEqual(result, null, "current format must not enter the mutation lock");
+      assert.equal(result!.status, "upgraded");
+      assert.equal(result!.authority_changed, false);
+      assert.equal((result!.results as any[])[0].status, "already_current");
+    } finally {
+      clearTimeout(timer); release(); await held; await checking;
+    }
+    assert.deepEqual(await store.scanCommitted(null, 10), before);
+    assert.deepEqual(await readdir(directory), names, "no backup or migration artifact for current format");
+  });
+}
+
+test("current File format still rejects corrupted history without rewriting it", async t => {
+  const runtime = await root(t), goal = "corrupt-current";
+  const store = new FileAuthorityStore(join(runtime, "authority", "file-v0"), goal);
+  await store.commitAuthority({...commit(null, "seed", 1, 1), next_projection: {goal_id: goal}});
+  const raw = JSON.parse(await readFile(store.path, "utf8"));
+  raw.committed[0].operation_id = "tampered";
+  const bytes = JSON.stringify(raw); await writeFile(store.path, bytes);
+  const result = await upgradeAuthorityFormats([runtime], true);
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  assert.equal(await readFile(store.path, "utf8"), bytes);
+});
+
+test("old File format re-reads the source after acquiring its writer lock", async t => {
+  const runtime = await root(t), goal = "locked-old-format";
+  const store = new FileAuthorityStore(join(runtime, "authority", "file-v0"), goal);
+  await store.commitAuthority({...commit(null, "seed", 1, 1), next_projection: {goal_id: goal}});
+  const history = await store.scanCommitted(null, 10);
+  assert.equal(history.status, "page"); if (history.status !== "page") return;
+  const raw = JSON.parse(await readFile(store.path, "utf8"));
+  const old = {...raw, schema_version: "loopx_file_authority_store_v0", committed: history.transactions};
+  await writeFile(store.path, JSON.stringify(old));
+  let release!: () => void, entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const held = withFileMutationLock(store.path, async () => {
+    entered(); await new Promise<void>(resolve => { release = resolve; });
+  });
+  await ready;
+  const checking = upgradeAuthorityFormats([runtime], true);
+  try {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    // A changed source must not be replaced from the unlocked preflight bytes.
+    old.committed[0]!.operation_id = "tampered-under-lock";
+    await writeFile(store.path, JSON.stringify(old));
+  } finally { release(); await held; }
+  assert.equal((await checking).status, "failed");
+  assert.equal(await readFile(store.path, "utf8"), JSON.stringify(old));
+});
+
+test("current SQLite format still rejects a noncontiguous lineage", async t => {
+  const {sqliteAuthorityRuntime} = await import("../../loopx/control_plane/coordination/sqlite_runtime.ts");
+  const runtime = await root(t), goal = "corrupt-current-sqlite";
+  const store = new SqliteAuthorityStore(join(runtime, "authority", "sqlite-v0"), goal);
+  await store.commitAuthority({...commit(null, "seed", 1, 1), next_projection: {goal_id: goal}});
+  const db = new (sqliteAuthorityRuntime().driver.DatabaseSync)(store.path);
+  try { db.exec("DELETE FROM head"); } finally { db.close(); }
+  const before = await readFile(store.path);
+  const result = await upgradeAuthorityFormats([runtime], true);
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  assert.match(String(result.reason), /contiguous committed lineage/);
+  assert.deepEqual(await readFile(store.path), before);
+});
 
 test("runtime upgrade discovers old File and SQLite, backs up and preserves history across provider restore", async t => {
   const runtime = await root(t), goal = "upgrade-goal";

@@ -25,11 +25,11 @@ grant 授权 peer delegation。
 store，TypeScript 负责上下文身份及范围。原生 Codex 恢复保留原 upstream thread
 和工作区；HTTP/协议 fixture 验证连续性与拒绝行为，不证明真实模型采用了上下文。
 
-App grant 仅面向本机 owner 的工作区读取。App 范围入口本身不证明 Lark 私聊
-admission、安装或手机旅程已通过，也不授权修改文件；grant 撤销后历史仍可读，
+App grant 仅面向本机 owner 明确授权的工作区操作。App 范围入口本身不证明 Lark 私聊
+admission、安装或手机旅程已通过；grant 撤销后历史仍可读，
 新消息在宿主重新授权前被阻止。下方独立检查点说明 Lark 的源码实现资格。
 
-本机 owner 的只读工作区入口现已接入独立核验的 Lark App 私聊绑定。既有设置 →
+本机 owner 的工作区入口现已接入独立核验的 Lark App 私聊绑定。既有设置 →
 Lark 页面选择一个非默认 App、当前可用工作区和宿主 executor，读回监听状态、待回复
 数量及恢复缺口；重新绑定不会把旧 Session 移到其它工作区。
 
@@ -42,7 +42,7 @@ provider 读回确认回复；发生没有 receipt 的不确定写入时不盲�
 后续消息持久排队、exact stop，以及重启后原会话恢复和已确认回复不重复发送。
 这些是合成 provider/协议验收；真实原生 Codex 另行验证独立线程与上下文隔离。
 真实 Lark 收发、安装候选、手机旅程、注册 Agent 选择、媒体/增量/权限回调，以及
-更广的长期协调仍未验收。这一普通项目绑定保持只读，新增管家入口见下一检查点。
+更广的长期协调仍未验收。普通项目权限以当前 workspace grant 为准，新增管家入口保持独立授权。
 
 私聊配置复用设置 → Lark；App 范围仍是本机普通对话的唯一入口。未存储 App 身份
 的旧群聊 profile 保留原 profile-hash 监听锁键。没有私聊绑定时不增加鉴权；有绑定
@@ -53,12 +53,52 @@ extension，typed binding owner 继续保持 provider-neutral。
 ![窄屏私聊设置](../../assets/personal-workspace/private-project-conversations-narrow.png)
 ![工作区撤权读回](../../assets/personal-workspace/private-project-workspace-revoked.png)
 
+## 普通工作区读写：默认值与撤权检查点
+
+普通项目 Chat 对宿主声明的工作区默认使用 `workspace_write`。Core context owner
+在启动和原线程恢复时导出真实 Codex `workspace-write` 沙箱；仍是普通对话，不借
+Task/Goal 模式或 manager 权限。项目 prompt 要求读取工作区 AGENTS.md 与适用 skills，
+执行明确请求所需的有界编辑；持久状态继续走既有 owner。读写 grant 本身不激活
+Material Lifecycle，也不证明项目 adapter 的 intake/ranking 已接通。
+
+`loopx chat --project-workspace-grant workspace_read` 将宿主及 Lark 项目绑定限制为
+只读。设置 → Lark 的 Codex 项目 App 默认读写，并保留只读选项；其它 executor 在
+宿主策略完成验收前保持只读。设置读回、/status 和 /help 显示实际 grant，重新选择
+已配置 App 会恢复持久配置。改变 grant 会创建新绑定及 Session，拒绝旧会话的新工作，
+直连 Agent 必须重新授权；不能偷偷提高 attached 宿主或另一 App 的权限。宿主撤权或
+降为只读后，入站受理及恢复重新核验授权。本机 Scope 只复用相同 typed 项目上下文；
+宿主授权变化时创建新会话，保留旧历史，拒绝在旧会话上执行新工作。
+
+typed Core、HTTP 与原生宿主回归覆盖默认读写、明确只读、工作区身份、App 独立授权、
+旧会话拒绝和原线程恢复。既有源码证据记录了 Codex canary 编辑并读回合成笔记、
+保留原文且不创建 Goal；这项历史宿主/文件系统证据与本次合成协议回归分开，
+不代表真实 Lark 写入、素材 intake 或发布完成。
+同 claim 已领取回执恢复与新任务准入分开：响应丢失后撤权，原宿主可读回已提交回执；
+新领取及外部结果发送仍拒绝。验证使用真实 Core HTTP、文件存储、领取 broker 与
+合成 Codex/provider；不声称本次运行真实模型编辑或手机旅程。安装与真实 Lark 旅程、
+更多 IM 交互仍未关闭。
+
 ## 本人私聊管家：明确的新委托
 
 设置 → Lark 可为独立 App 选择管家角色。既有 typed conversation binding
-固定 App、独立核验的本人、来源、工作区和有界 portfolio。已核验的空范围与授权
-不可用分开：新管家没有继承旧 Goal；空范围也不证明全局 inventory 覆盖完整。
-普通项目聊天仍没有 Goal 或管家身份。
+固定 App、独立核验的本人、来源和工作区。新建本人管家默认 `all_registered`：
+从当前配置的 registry 发现全部已注册 Goal 与 Agent，后续注册也自动可见。
+停止的工作可通过显式历史查询发现，但不接收新工作。已核验的空 registry 与授权
+不可用分开，不导入旧历史 registry 或身份。普通项目聊天仍没有 Goal 或管家身份。
+
+旧绑定保留原已选范围。设置 → Lark → **授权全部已注册工作** 原地升级既有绑定及
+其已知本人来源的交办策略，不替换 Session 或受众。单个收件 Agent 的撤权继续生效；
+发现目录不证明执行就绪，也不增加受保护操作权限。可信本地的
+`manager-inbox configure-delivery-scope` 复用相同 source-policy owner；新核验私聊来源
+仅初始化一次策略，普通消息不会重新放宽人工收紧的既有策略。
+升级先写入并核验所有已知交办策略，再发布扩大的绑定范围。I/O 写入失败时，
+界面保留原绑定范围并允许明确重试；本次升级已授权、先前成功的来源策略可能
+保留，重试会收敛而不重置单个收件人的撤权。这不声称跨文件原子事务。
+
+配置的 registry 声明 `common_runtime_root` 时，即使 Chat 使用独立存储 override，
+协调上下文、inbox 和返回处理仍使用该根目录。App 绑定、对话和 provider 凭据保留
+原私有存储；未声明共同根目录时保留原本地 Chat 行为。本增量不等于 worker 激活、
+接收方采用或原路结果返回闭环；原生私聊 ingress 与已有群 ingress 仍是独立集成边界。
 
 只有显式 `/delegate --tokens N 具体目标` 会准备既有 `goal.create` 预览。
 确认必须在十五分钟内从原本人、App 和私聊来源进入。预览固定只读边界、原生总
@@ -103,7 +143,7 @@ Core request 在 provider 投递前保存带时间的观测。重复事件保留
 较新的 Session。已选定注册 Agent 时固定观测其确切绑定 Session：即使该会话已
 失败或关闭也如实读取，不退回更新的会话；执行证据缺失和未知状态明确显示不可判定。这两个命令不会打开
 Session、调用模型或创建 Goal。`/help` 按角色列出命令、既有设置 → Lark 的工作区、
-执行器与解绑入口，以及目前仅支持文字的附件边界。
+执行器与解绑入口，以及图片支持和暂不可用的媒体/原宿主边界。
 
 回归使用生产原生文件 store、持久队列、bound request 与 provider 受理/投递路径，
 provider 和协议执行器为合成 fixture。它验证排队、停止、读回和重复投递，不证明
@@ -522,3 +562,16 @@ Turn HTTP 预算包含既有附件额度的 base64 编码：最多四张图片�
 源码验收覆盖 HTTP 准入、会话持久化读回和合成 Codex 协议进程，以及打包后的桌面/窄屏
 图片发送、历史操作卡与拒绝后的草稿恢复。该证据只证明传输和界面行为，不证明真实模型质量、
 公开发布或已安装宿主验收。GQ06 的材料入口及 GQ07–09 的连续性仍须完成各自的交付与恢复验收。
+
+### 飞书私聊默认复用原生 Turn 图片附件
+
+普通项目与管家私聊默认接收图片和图文消息。provider 在接收 App 下核验 canonical
+message，仅以该 App 身份下载属于这条消息的资源，再将 PNG/JPEG/GIF/WebP 交给
+既有 Core request 与持久 Session queue。沿用四张、单张 5 MiB、合计 12 MiB 上限。
+保留配文；资源 key 和私有图片字节不进入 typed routing 观测。重复事件复用原输入
+和 Turn；重启后仍由原 Turn、原 upstream thread 执行。下载后及回复前重新核验授权。
+
+下载失败、文件/音视频、携图控制命令或原宿主 Agent 图片请求均明确告知未提交执行，
+不会只执行混合消息的文字部分。原宿主媒体与文件交付仍待补齐。回归覆盖图片模型输入、
+原 Session、重复投递、持久重启与下载中撤权；真实 provider/model 验收另行记录。
+本增量不新增 Session authority、queue、worker 或默认关闭的功能开关。

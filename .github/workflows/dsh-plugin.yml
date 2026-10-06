@@ -1,0 +1,77 @@
+name: DSH Plugin Distribution
+
+on:
+  pull_request:
+    paths:
+      - "packages/dsh-loopx-plugin/**"
+      - ".github/workflows/dsh-plugin.yml"
+      - ".github/workflows/dsh-plugin-publish.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/dsh-loopx-plugin/**"
+      - ".github/workflows/dsh-plugin.yml"
+      - ".github/workflows/dsh-plugin-publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-plugin-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  distribution:
+    name: dsh-plugin (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: packages/dsh-loopx-plugin
+        shell: bash
+    env:
+      LOOPX_USAGE_PING: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.33.0"
+      - uses: astral-sh/setup-uv@v7
+      - name: Prepare source-checkout integration interpreter
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: uv sync --extra test
+      - name: Install frozen plugin dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Validate typed host and client contracts
+        run: pnpm typecheck && pnpm smoke:peer-range
+      - name: Validate unit and real LoopX admission contracts
+        if: runner.os == 'Linux'
+        run: PATH="$GITHUB_WORKSPACE/.venv/bin:$PATH" pnpm test
+      - name: Build the npm publication artifact
+        run: |
+          node -e 'require("node:fs").mkdirSync("output", { recursive: true })'
+          npm pack --pack-destination output
+          node -e 'require("node:fs").appendFileSync(process.env.GITHUB_ENV, "DSH_ARTIFACT=output/dsh-loopx-plugin-" + require("./package.json").version + ".tgz\n")'
+      - name: Qualify the real package-name install and uninstall
+        run: node smoke/dsh-registry-smoke.mjs --tarball "$DSH_ARTIFACT"
+      - name: Qualify packed Client and real web runtime
+        if: runner.os == 'Linux'
+        run: |
+          node smoke/dsh-client-artifact-smoke.mjs --tarball "$DSH_ARTIFACT"
+          node smoke/dsh-profile-smoke.mjs --tarball "$DSH_ARTIFACT"
+          node smoke/dsh-goalbar-runtime-smoke.mjs --tarball "$DSH_ARTIFACT"
+      - name: Preserve the qualified package for review and local recovery
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-loopx-plugin-${{ matrix.os }}
+          path: packages/dsh-loopx-plugin/${{ env.DSH_ARTIFACT }}
+          if-no-files-found: error

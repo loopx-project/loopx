@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from ..configuration_backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
+from ..capabilities.configuration_backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 
@@ -43,18 +43,19 @@ def handle_configuration_backup(args, *, registry_path, print_payload, output_fo
                 path = Path(args.output).expanduser()
                 # Keep backups immutable, including dangling symlink destinations.
                 path.parent.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
-                    staging = Path(stream.name)
-                    try:
+                stream = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False)
+                staging = Path(stream.name)
+                try:
+                    with stream:
                         stream.write(json.dumps(backup, ensure_ascii=False, indent=2) + "\n")
                         stream.flush()
                         os.fsync(stream.fileno())
-                        # An exclusive hard-link publication cannot replace a
-                        # destination created by another exporter.
-                        os.link(staging, path)
-                    finally:
-                        staging.unlink(missing_ok=True)
-                if json.loads(path.read_text()) != backup:
+                    # Publish only after closing the file: Windows cannot unlink
+                    # an open staging file, and the hard link never replaces a peer.
+                    os.link(staging, path)
+                finally:
+                    staging.unlink(missing_ok=True)
+                if json.loads(path.read_text(encoding="utf-8")) != backup:
                     raise RuntimeError("configuration backup export readback mismatch")
                 payload.update(status="exported", written=True)
         else:

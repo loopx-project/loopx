@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process'
 
+// 1.2.4 includes the released Windows peer-file fix. Bootstrap and every
+// runtime consumer must use the same floor, including an existing global CLI.
+export const MINIMUM_LOOPX_VERSION = '1.2.4'
+
 export type LoopXCliErrorKind =
   | 'aborted'
   | 'missing'
@@ -302,7 +306,20 @@ export async function runJsonCommand(
 
 function versionText(stdout: string): string | undefined {
   const value = stdout.trim().split(/\r?\n/u)[0]?.trim()
-  return value && value.length <= 120 ? value : undefined
+  if (!value || value.length > 120) return undefined
+  // LoopX reports its Python package version. Compare the release tuple and
+  // recognize its PEP 440 pre/dev/post/local suffixes without accepting prose.
+  const parsed = /^loopx (\d+)\.(\d+)\.(\d+)((?:a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?(?:\+[A-Za-z0-9.-]+)?$/u.exec(value)
+  if (!parsed) return undefined
+  const release = parsed.slice(1, 4).map(Number)
+  if (release.some(component => !Number.isSafeInteger(component))) return undefined
+  const floor = MINIMUM_LOOPX_VERSION.split('.').map(Number)
+  for (let index = 0; index < floor.length; index += 1) {
+    const component = release[index]!
+    if (component < floor[index]!) return undefined
+    if (component > floor[index]!) return value
+  }
+  return !parsed[4] && (!parsed[6] || parsed[5]) ? value : undefined
 }
 
 function shellWord(value: string): string {
@@ -355,10 +372,10 @@ export async function resolveLoopXCommand(
         },
       )
       const version = result.exitCode === 0 ? versionText(result.stdout) : undefined
-      if (version?.startsWith('loopx ')) return { ...candidate, version }
+      if (version) return { ...candidate, version }
     } catch (error: unknown) {
       if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
     }
   }
-  throw new LoopXCliError('missing', 'LoopX CLI is unavailable', false)
+  throw new LoopXCliError('missing', `LoopX CLI ${MINIMUM_LOOPX_VERSION} or newer is unavailable`, false)
 }

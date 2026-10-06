@@ -44,10 +44,12 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.tests.json",
     "test": "vitest run",
-    "prepack": "pnpm build",
+    "prepack": "node scripts/build.mjs",
     "smoke:artifact": "node smoke/dsh-client-artifact-smoke.mjs",
     "smoke:peer-range": "node smoke/dsh-peer-range-smoke.mjs",
     "smoke:install": "node smoke/dsh-installer-smoke.mjs",
+    "smoke:registry": "node smoke/dsh-registry-smoke.mjs",
+    "verify:distribution": "node scripts/verify-distribution.mjs",
     "smoke:profile": "node smoke/dsh-profile-smoke.mjs",
     "smoke:runtime": "node smoke/dsh-goalbar-runtime-smoke.mjs",
     "smoke:docker": "bash smoke/dsh-clean-docker-smoke.sh"
@@ -68,13 +70,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
-    "@deepseek-ai/dsh-client-connection": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
-    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-client-connection": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -90,17 +92,17 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-locale": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-commands": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-commands": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
     "@types/node": "^22.19.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",
@@ -113,6 +115,11 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
+  "pnpm": {
+    "overrides": {
+      "@deepseek-ai/libreoffice-kit>fflate": "0.8.3"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/loopx-project/loopx.git",
@@ -121,5 +128,16 @@
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "loopx",
+    "workflow",
+    "goal"
+  ],
+  "homepage": "https://github.com/loopx-project/loopx/tree/main/packages/dsh-loopx-plugin",
+  "bugs": {
+    "url": "https://github.com/loopx-project/loopx/issues"
   }
 }

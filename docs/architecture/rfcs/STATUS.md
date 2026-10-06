@@ -32,7 +32,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
-| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | — |
+| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | [1 entry](ledger/external-evidence-research-capability-v0/) |
 | [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Accepted | none | — |
 | [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
 | [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |
@@ -49,7 +49,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Live Team Workspace v0](live-team-workspace-v0.md) | Accepted | none | — |
 | [RFC: Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md) | Accepted | none | — |
 | [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |
-| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | — |
+| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | [1 entry](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0](manager-runtime-profile-v0.md) | Accepted | none | — |
 | [RFC: Monorepo Distribution Split (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
 | [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Accepted | none | — |

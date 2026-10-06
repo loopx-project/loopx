@@ -27,6 +27,7 @@ from .codex_sessions import (
     select_codex_cli_session,
     codex_session_profile_digest,
     require_codex_session_profile,
+    approved_codex_workspace_write_resume,
 )
 from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
@@ -645,8 +646,9 @@ def run_codex_cli_host(
     model: str | None = None,
     reasoning_effort: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
-    timeout_seconds: float = 115.0,
+    timeout_seconds: float | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
@@ -678,7 +680,20 @@ def run_codex_cli_host(
         model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, mcp_server=mcp_server,
     ) if session_scope == "agent" else None)
     if binding and profile_digest:
-        require_codex_session_profile(binding, profile_digest)
+        approved_write_resume = (
+            sandbox == "workspace-write"
+            and binding.get("session_profile_digest") == codex_session_profile_digest(
+                project=project, codex_bin=str(resolved),
+                home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
+                model=model, reasoning_effort=reasoning_effort, sandbox="read-only",
+                mcp_server=mcp_server,
+            )
+            and approved_codex_workspace_write_resume(
+                registry_path, lineage=lineage, project=project,
+            )
+        )
+        if not approved_write_resume:
+            require_codex_session_profile(binding, profile_digest)
     if planned_action == "resume" and binding is None:
         raise RuntimeError("Codex CLI resume binding disappeared after planning")
     if planned_action == "start_new" and binding is not None:

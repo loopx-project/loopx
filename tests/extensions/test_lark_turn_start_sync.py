@@ -15,6 +15,7 @@ from loopx.control_plane.work_items.work_lane import (
 )
 from loopx.extensions.lark import goal_topic_connections as goal_topic_connections_module
 from loopx.extensions.lark import turn_start_sync as turn_start_sync_module
+from loopx.extensions.lark import inbox_reactions as inbox_reactions_module
 from loopx.extensions.lark.event_collector import load_lark_event_collector_config
 from loopx.extensions.lark.event_inbox import project_lark_event_inbox_urgency
 from loopx.extensions.lark.inbox_reactions import lark_inbox_reaction_receipts
@@ -802,7 +803,7 @@ def test_turn_start_sync_reports_reaction_write_failure_without_losing_message(
     assert (project / ".loopx/inbox/requirements/om_reaction_failure.json").is_file()
 
 
-def test_turn_start_sync_retries_reaction_from_local_read_beyond_overlap_window(
+def test_turn_start_sync_fences_uncertain_reaction_beyond_overlap_window(
     tmp_path: Path,
 ) -> None:
     project, config = _project(tmp_path, received_reaction=True)
@@ -830,17 +831,56 @@ def test_turn_start_sync_retries_reaction_from_local_read_beyond_overlap_window(
         now=SECOND_NOW,
     )
 
-    assert retried["status"] == "empty"
+    # The provider returned no durable reaction id. Retry cannot certify that
+    # the first create failed externally, so it must preserve the pending read
+    # and prepared operation instead of creating a possible duplicate.
+    assert retried["status"] == "unavailable"
     assert retried["observation_count"] == 0
     assert retried["agent_read_required"] is False
-    assert retried["received_reaction_count"] == 1
-    assert retried["external_writes_performed"] is True
-    assert any("reactions" in call for call in retry_runner.calls)
+    assert retried["received_reaction_count"] == 0
+    assert retried["received_reaction_failure_count"] == 1
+    assert retried["read_ack_attempt_count"] == 0
+    assert retried["external_writes_performed"] is False
+    assert not any("reactions" in call for call in retry_runner.calls)
     history_call = next(call for call in retry_runner.calls if "reactions" not in call)
     assert history_call[history_call.index("--start") + 1] == "2026-08-26T09:59:55Z"
 
 
-def test_turn_start_sync_bounds_failed_reactions_and_resumes_round_robin(
+def test_turn_start_sync_recovers_known_reaction_id_beyond_overlap_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, config = _project(tmp_path, received_reaction=True)
+    message = {"message_id": "om_known_recovery", "create_time": "2026-08-26T09:59:00Z",
+               "content": "Recover the committed acknowledgement.", "deleted": False}
+    original_record = inbox_reactions_module.record_lark_inbox_reaction
+
+    def failed_receipt(**_kwargs: object) -> None:
+        raise OSError("fixture normal reaction receipt unavailable")
+
+    monkeypatch.setattr(inbox_reactions_module, "record_lark_inbox_reaction", failed_receipt)
+    first_runner = ReactionPageRunner([_page(message)])
+    failed = sync_lark_turn_start_inbox(
+        project=project, config_path=config, runner=first_runner, now=FIRST_NOW,
+    )
+    assert failed["status"] == "partial"
+    assert failed["received_reaction_count"] == 1
+    monkeypatch.setattr(inbox_reactions_module, "record_lark_inbox_reaction", original_record)
+    recovered_runner = ReactionPageRunner([_page()])
+    recovered = sync_lark_turn_start_inbox(
+        project=project, config_path=config, runner=recovered_runner, now=SECOND_NOW,
+    )
+    assert recovered["status"] == "empty"
+    assert recovered["observation_count"] == 0
+    assert recovered["agent_read_required"] is False
+    assert recovered["received_reaction_failure_count"] == 0
+    assert recovered["read_ack_attempt_count"] == 0
+    assert recovered["external_writes_performed"] is False
+    assert not any("reactions" in call for call in recovered_runner.calls)
+    inbox = project / ".loopx/inbox/requirements"
+    assert lark_inbox_reaction_receipts(inbox=inbox, message_id="om_known_recovery")["received"]["reaction_id"] == "reaction_Get"
+
+
+def test_turn_start_sync_bounds_uncertain_reactions_and_rotates_to_new_attempts(
     tmp_path: Path,
 ) -> None:
     project, config = _project(tmp_path, received_reaction=True)
@@ -885,7 +925,11 @@ def test_turn_start_sync_bounds_failed_reactions_and_resumes_round_robin(
         for call in second_runner.calls
         if "reactions" in call
     ]
-    assert second_reactions == ["om_backlog_3", "om_backlog_4", "om_backlog_0"]
+    # Only previously unattempted messages may create provider reactions; the
+    # cursor still rotates, and the original uncertain writes remain fenced.
+    assert second_reactions == ["om_backlog_3", "om_backlog_4"]
+    assert len(first_reactions + second_reactions) == len(set(first_reactions + second_reactions))
+    assert second["read_ack_attempt_count"] == 2
     assert second["received_reaction_failure_count"] == 3
     assert second["received_reaction_deferred_count"] == 2
     assert second["observation_count"] == 0
@@ -1028,9 +1072,9 @@ def test_turn_start_sync_shares_budget_and_rotates_routes_across_dispatches(
         for call in second_runner.calls
         if "reactions" in call
     ]
-    assert second_reactions[0] == "om_second_route_0"
-    assert len(second_reactions) == turn_start_sync_module.TURN_START_REACTION_ATTEMPT_LIMIT
-    assert second["read_ack_attempt_count"] == 3
+    assert second_reactions == ["om_second_route_0"]
+    assert len(second_reactions) <= turn_start_sync_module.TURN_START_REACTION_ATTEMPT_LIMIT
+    assert second["read_ack_attempt_count"] == 1
     assert second["received_reaction_deferred_count"] == 1
 
 

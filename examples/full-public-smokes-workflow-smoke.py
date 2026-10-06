@@ -29,12 +29,12 @@ def main() -> int:
         "name: Full Public Smokes",
         "workflow_dispatch:",
         "schedule:",
-        "push:",
-        "branches:",
-        "- main",
         "permissions:",
         "contents: read",
         "fail-fast: false",
+        "max-parallel: 2",
+        "needs: chat-bundle",
+        "python scripts/chat_bundle.py verify --source",
         "timeout-minutes: 120",
         "actions/setup-python@",
         "python-version: \"3.11\"",
@@ -56,11 +56,25 @@ def main() -> int:
     ]:
         assert required in text, required
 
+    assert "push:" not in text
     assert "pull_request:" not in text
     assert "contents: write" not in text
     assert "pull-requests: write" not in text
     assert "sec" + "rets." not in text
     assert "mkdir -p smoke-results" not in text
+
+    producer = text.split("  chat-bundle:\n", 1)[1].split("  full-public-smokes:\n", 1)[0]
+    consumers = text.split("  full-public-smokes:\n", 1)[1].split("  smoke-fleet-health:\n", 1)[0]
+    assert text.count("chat_bundle.py build --install") == 1
+    assert producer.index("chat_bundle.py verify --source") < producer.index("actions/upload-artifact")
+    assert "if-no-files-found: error" in producer
+    assert "chat_bundle.py build" not in consumers
+    assert "npm --prefix apps/presentation/dashboard ci --ignore-scripts" in consumers
+    assert "actions/download-artifact@" in consumers
+    for job in (producer, consumers):
+        assert "name: full-public-chat-${{ github.sha }}" in job
+        assert "path: loopx/web/chat/" in job
+        assert "chat_bundle.py verify --source" in job
 
     matrix = [
         (int(match.group("shard")), int(match.group("offset")))

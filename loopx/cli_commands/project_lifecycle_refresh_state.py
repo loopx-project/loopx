@@ -82,7 +82,13 @@ def register_refresh_state_command(
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     context_parser = subparsers.add_parser(
-        "checkpoint-context", help="Read a fresh decision basis for an existing Turn's missing checkpoint.",
+        "checkpoint-context", help="Recover a missing checkpoint after a committed Turn writeback.",
+        description=(
+            "Recovery only: requires the original committed refresh-state writeback. "
+            "For the first writeback, supply the vision with refresh-state directly. "
+            "Use this command only when recovery requests a fresh checkpoint context; "
+            "reuse the original Turn identity."
+        ),
     )
     add_subcommand_format(context_parser)
     for option in ("goal-id", "agent-id", "turn-instance-id"):
@@ -126,7 +132,9 @@ def register_refresh_state_command(
         "--next-action",
         help=(
             "Record a next step bound to this agent's selected advancement Todo in "
-            "the existing recommendation receipt. Does not overwrite Markdown "
+            "the existing recommendation receipt; at most 1200 characters after "
+            "trimming. Keep detailed evidence in artifacts and summarize the next step. "
+            "Does not overwrite Markdown "
             "Next Action, select another task, or grant execution authority."
         ),
     )
@@ -158,7 +166,10 @@ def register_refresh_state_command(
         help=(
             "Typed semantic boundary for vision checkpointing. Defaults to "
             "semantic_closeout; in_flight_continuation is valid only for an "
-            "open agent-bound Todo reporting outcome_progress."
+            "open agent-bound Todo reporting outcome_progress. A within-Todo "
+            "--next-action is allowed; Todo completion, durable shared Next Action "
+            "updates and --autonomous-replan-recorded require semantic_closeout "
+            "with its vision checkpoint. Choose the boundary from the actual work."
         ),
     )
     refresh_state_parser.add_argument(
@@ -199,7 +210,9 @@ def register_refresh_state_command(
         action="store_true",
         help=(
             "Mark this refresh as the explicit autonomous replan ACK. "
-            "Use only after the agent has performed and written back the bounded replan slice."
+            "Use only after the agent has performed and written back the bounded replan slice. "
+            "Requires --delivery-boundary semantic_closeout (the default); do not "
+            "add this ACK to an ordinary in_flight_continuation."
         ),
     )
     refresh_state_parser.add_argument(
@@ -219,6 +232,12 @@ def register_refresh_state_command(
         "--progress-evidence-id",
         dest="progress_evidence_ids",
         action="append",
+        help=(
+            "Opaque public-safe evidence identifier, 1-128 characters; start with an "
+            "ASCII letter or digit, then use letters, digits, '.', '_', ':', '/', '-'. "
+            "For example evidence:validation-1, not a leading-dot file path. "
+            "Repeat for additional evidence; this identifier does not upload a file."
+        ),
     )
     refresh_state_parser.add_argument(
         "--progress-coverage-complete",
@@ -301,7 +320,11 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument(
         "--vision-todo-delta",
         action="append",
-        help="Compact todo delta for an inline vision patch. Repeat for multiple deltas.",
+        help=(
+            "Compact todo delta for an inline vision patch, at most 80 characters "
+            "per item. Repeat for multiple deltas; only the first 8 are retained. "
+            "The whole vision packet must also fit its shared text budget."
+        ),
     )
     refresh_state_parser.add_argument(
         "--vision-unchanged-reason",

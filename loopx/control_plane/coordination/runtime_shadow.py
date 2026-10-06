@@ -19,7 +19,6 @@ from .coordination_state_contract_generated import (
     COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA as RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA,
-    COORDINATION_RUNTIME_SHADOW_COMMIT_REQUEST_SCHEMA as RUNTIME_SHADOW_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA as RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA as RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA_VERSION,
@@ -35,7 +34,6 @@ from .coordination_state_contract_generated import (
 
 
 RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION = "loopx_coordination_runtime_shadow_config_v0"
-RUNTIME_SHADOW_METHOD = "coordination.runtime_shadow.commit"
 RUNTIME_SHADOW_INSPECT_METHOD = "coordination.runtime_shadow.inspect"
 RUNTIME_SHADOW_BOOTSTRAP_METHOD = "coordination.runtime_shadow.bootstrap"
 RUNTIME_SHADOW_ROLLBACK_METHOD = "coordination.runtime_shadow.rollback"
@@ -387,60 +385,6 @@ def _build_runtime_shadow_source_snapshot(
         "state_bytes_sha256": "sha256:" + hashlib.sha256(state_bytes).hexdigest(),
         "lease_inventory": inventory, "projection_sha256": hashlib.sha256(canonical_bytes(projection)).hexdigest(),
         "evidence_files": evidence}
-
-
-def dispatch_coordination_runtime_shadow(
-    *,
-    goal: Mapping[str, Any] | None,
-    runtime_root: Path,
-    goal_id: str,
-    operation_id: str,
-    event_kind: str,
-    source_version: str,
-    projection: Mapping[str, Any],
-    runtime_invoker: RuntimeInvoker = effect_runtime_result,
-) -> dict[str, object]:
-    """Mirror a committed mutation, isolating all shadow failures from truth."""
-
-    config = resolve_coordination_runtime_shadow_config(goal)
-    if not config.enabled:
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_dispatch_v0",
-            "status": "disabled",
-            "reason_code": config.reason_code,
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-
-    request = {
-        "schema_version": RUNTIME_SHADOW_REQUEST_SCHEMA_VERSION,
-        "runtime_root": str(runtime_root.expanduser().absolute()),
-        "goal_id": goal_id,
-        "operation_id": operation_id,
-        "event_kind": event_kind,
-        "source_version": source_version,
-        "projection": dict(projection),
-    }
-    try:
-        result = runtime_invoker(RUNTIME_SHADOW_METHOD, request)
-    except Exception as exc:
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_dispatch_v0",
-            "status": "failed",
-            "reason_code": "shadow_runtime_unavailable",
-            "reason": str(exc),
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-    if not isinstance(result, Mapping):
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_dispatch_v0",
-            "status": "failed",
-            "reason_code": "shadow_runtime_result_invalid",
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-    return dict(result)
 
 
 def bootstrap_coordination_runtime_shadow(

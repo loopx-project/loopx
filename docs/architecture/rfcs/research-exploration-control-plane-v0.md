@@ -144,6 +144,7 @@ milestone status.
 | Explore evidence | Explore owns append-only nodes, edges, findings, and bounded public-safe projections. |
 | Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
+| Evidence in turn context | Planning-mode turn-start reads retain bounded explicit Todo/node evidence diagnostics and existing exploring frontier nodes. Findings are resolved before recent-history truncation. This delivers decision input, not the §11.5 adoption gate or proof of model behavior. |
 | Model behavior qualification | Real function-tool conversations can test whether a model reads an actual packet and selects a real semantic writeback. |
 
 ### 5.2 What is missing
@@ -1037,6 +1038,17 @@ This is a living RFC, not an append-only diary.
 | 2026-08-13 | Adopt Explore as the canonical research-topology owner; choose explicit-only composition candidates for v0; represent joint work as an experiment node; defer shared-constraint inference to shadow qualification. |
 | 2026-08-13 | Separate eligibility from ranking: the control plane owns a legal bounded candidate set, while the model autonomously prioritizes among multiple eligible candidates. A selection receipt proves a scheduling choice, not research truth. Defer the protocol to M4 rather than adding it to the #3173 runtime slice. |
 | 2026-10-04 | Propose §11.5 as a bounded M3 prerequisite: exact result -> scoped interpretation -> adopted task step/successor. Reuse Explore and task/replan receipts; keep Turn settlement, native scoring and scientific qualification independent. This RFC update delivers no automatic policy. |
+
+The Explore Harness product entry now groups evidence-only and evidence-with-planning
+modes under the existing `explore` capability. The typed configuration owner retains
+legacy storage and flags; planning includes the graph without granting spawn or
+publication authority. A turn-start hook requests bounded evidence and branch context
+through the existing hook contract. This is an M3 entry/adoption prerequisite, not
+qualification of experiment selection, result interpretation or scientific benefit.
+CLI/file-state and packaged settings verify mode changes, stale-preview recovery and
+feature-off behavior; live long-horizon trajectories must still establish actual
+model adoption and continuation. The mode vocabulary is local to Explore configuration,
+not a new kernel lifecycle or scheduler contract.
 
 ## 20. Acceptance Criteria for the RFC
 

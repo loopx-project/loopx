@@ -17,6 +17,9 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
     enforce_open_replan_writeback,
 )
+from tests.control_plane.test_quota_settlement_cli import (
+    _bind_selected_replan_guard,
+)
 
 GOAL = "successor-review-fixture"
 AGENT = "fixture-agent"
@@ -201,6 +204,17 @@ def test_canonical_periodic_successor_settles_original_open_validation_todo(
     guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", "turn-original-periodic-review")
     assert guard["selected_todo"]["todo_id"] == original_todo
+    assert guard["heartbeat_receipt"]["settlement_binding_owed"] is True
+    # Selection is display until the caller binds the existing Todo explicitly.
+    guard = _bind_selected_replan_guard(
+        registry,
+        runtime,
+        project,
+        "turn-original-periodic-review",
+        goal_id=GOAL,
+        agent_id=AGENT,
+        todo_id=original_todo,
+    )
     obligation = guard["autonomous_replan_obligation"]
     added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
         "--text", "Verify an independent source artifact",

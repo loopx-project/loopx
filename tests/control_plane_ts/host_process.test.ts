@@ -23,6 +23,16 @@ test("Host output is streamed with UTF-8 boundaries and stdin EOF", async () => 
   assert.equal(result.outcome, "exited"); assert.equal(result.returncode, 0); assert.equal(result.output_complete, true);
 });
 
+test("null execution deadline waits for natural completion", async () => {
+  const value = decodeHostProcessRequest(request(
+    "setTimeout(()=>process.stdout.write('finished'),150)", {timeout_ms: null}));
+  let text = "";
+  const result = await runHostProcess(value, async item => { text += item.text; });
+  assert.equal(text, "finished");
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.returncode, 0);
+});
+
 test("invalid requests and absent executables cannot be mistaken for success", async () => {
   for (const change of [{argv: []}, {argv: [""]}, {timeout_ms: Infinity}, {timeout_ms: 0}, {stdout_limit_bytes: -1}, {drain_timeout_ms: -1}, {unexpected: true}]) {
     assert.throws(() => decodeHostProcessRequest({...request(""), ...change}), /invalid/);
@@ -76,7 +86,7 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
         return timer(() => { controller.abort(); }, 3000); // fixture readiness watchdog
       });
     }
-    const result = await runHostProcess(request(script, {timeout_ms: mode === "timeout" ? 500 : 3000}), async item => {
+    const result = await runHostProcess(request(script, {timeout_ms: mode === "timeout" ? 500 : mode === "abort" ? null : 3000}), async item => {
       if (item.text.includes("ready")) {
         ready = true;
         if (mode === "abort") controller.abort();

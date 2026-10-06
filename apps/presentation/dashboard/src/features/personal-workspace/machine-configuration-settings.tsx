@@ -17,7 +17,7 @@ import {
   type MachineConfigurationRollbackPlan,
   type MachineConfigurationTransaction,
 } from "../../data/chat";
-import { projectEditableCapabilityConfiguration } from "../../data/capability-configuration";
+import { projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
@@ -51,12 +51,19 @@ function completeMachineConfiguration(
     ...configurationObject(current),
     ...draft,
   };
+  if (capability.capability_id === "pull_request_review" && Object.hasOwn(draft, "review_order")) {
+    delete complete.review_priority;
+  }
   // The guided steward editor owns the v1 selection-policy fields. Opening an
   // installed v0 preference in that form is an explicit migration preview;
   // JSON mode can still submit the legacy shape unchanged when needed.
   if (capability.capability_id === "goal_storage" || (capability.capability_id === "steward_executor"
     && (Object.hasOwn(draft, "selection_policy") || Object.hasOwn(draft, "eligible_endpoints")))) {
     complete.schema_version = configurationObject(capability.default).schema_version;
+  }
+  if (capability.capability_id === "todo_replan_cadence" && Object.hasOwn(draft, "count_unit")) {
+    complete.schema_version = configurationObject(capability.default).schema_version;
+    delete complete.completed_todos;
   }
   return complete;
 }
@@ -188,7 +195,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     const current = currentConfiguration(inspection, selected);
     const editable = projectEditableCapabilityConfiguration(
       selected.configuration_editor,
-      current ?? selected.default,
+      selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current ?? selected.default) : current ?? selected.default,
       selected.default,
     );
     const complete = completeMachineConfiguration(selected, current, editable);
@@ -220,7 +227,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     } else if (parsedJsonDraft) {
       setDraft(projectEditableCapabilityConfiguration(
         selected.configuration_editor,
-        parsedJsonDraft,
+        selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(parsedJsonDraft) : parsedJsonDraft,
         selected.default,
       ));
     } else {

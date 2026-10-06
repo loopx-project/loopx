@@ -5,6 +5,27 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireStringArray } from "../runtime_decode.ts";
 import { compactPythonWhitespace, stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { normalizeWriteScopes } from "../work_items/task_lease_acquire.ts";
+import { isAbsolute, resolve, sep } from "node:path";
+
+/** Goal scope projection preserves existing relative scopes. Absolute grants
+ * are projected only against the observed local Goal root, never by suffix or
+ * against a different repository. This is a read projection, not a grant. */
+export function projectGoalWriteScopes(value: JsonObject): JsonObject {
+  const root = optionalNonEmptyString(value.project_root, "project_root");
+  if (!root || !isAbsolute(root)) return { allowed_write_scopes: [] };
+  const prefix = resolve(root).replaceAll(sep, "/").replace(/\/+$/, "") + "/";
+  const allowed: string[] = [];
+  for (const raw of requireStringArray(value.allowed_scopes ?? [], "allowed_scopes")) {
+    const scope = raw.replaceAll(sep, "/");
+    // Only strip the registered root. Preserve the existing relative/glob
+    // semantics; the boundary guard, not this projection, checks coverage.
+    const relative = isAbsolute(scope)
+      ? (scope.startsWith(prefix) ? scope.slice(prefix.length) : "")
+      : scope;
+    if (normalizeWriteScopes([relative]).length && !allowed.includes(relative)) allowed.push(relative);
+  }
+  return { allowed_write_scopes: allowed };
+}
 
 function optionalText(value: unknown, label: string): string | null {
   const raw = optionalNonEmptyString(value, label);
