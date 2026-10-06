@@ -120,16 +120,21 @@ def _evaluate(request: dict[str, Any]) -> dict[str, Any]:
             reasons.append(code)
 
     observation_times = []
+    position_verified = True
     for row in receipts:
-        if (row["trade_id"] != trade["trade_id"] or row["asset"] != trade["asset"]
-            or row["account_scope_digest"] != trade["account_scope_digest"]):
+        identity_matches = (row["trade_id"] == trade["trade_id"] and row["asset"] == trade["asset"]
+                            and row["account_scope_digest"] == trade["account_scope_digest"])
+        if not identity_matches:
             reason("receipt_identity_mismatch")
         observed = _time(row["observed_at"])
         observation_times.append(observed)
-        if observed > decision or decision - observed > timedelta(seconds=payload["max_age_seconds"]):
+        fresh = observed <= decision and decision - observed <= timedelta(seconds=payload["max_age_seconds"])
+        if not fresh:
             reason("receipt_stale_or_future")
         if not row["complete"]:
             reason("receipt_incomplete")
+        if row["kind"] == "position":
+            position_verified = identity_matches and fresh and row["complete"]
     if max(observation_times) - min(observation_times) > timedelta(seconds=payload["max_skew_seconds"]):
         reason("receipt_snapshot_skew")
     evidence_valid = not reasons
@@ -144,6 +149,7 @@ def _evaluate(request: dict[str, Any]) -> dict[str, Any]:
         reason("position_side_mismatch")
     if quantity > entry_quantity:
         reason("position_increased_or_episode_mismatch")
+    position_verified = position_verified and position["side"] == trade["side"] and quantity <= entry_quantity
     ids: dict[str, dict[str, Any]] = {}
     for fill in fill_data["fills"]:
         prior = ids.get(fill["fill_id"])
@@ -242,9 +248,13 @@ def _evaluate(request: dict[str, Any]) -> dict[str, Any]:
         state, action = "closed_verified", "propose_close_monitor"
     elif quantity == 0:
         state, action = "closure_unverified", "reconcile_exit_and_residual_orders"
+    elif "maximum_hold_reached" in reasons:
+        # The holding obligation survives late polling and missing evidence.
+        # Verification still gates estimates, draft quantity and closure.
+        state, action = "exit_review_required", "prepare_human_exit_draft"
     elif not evidence_valid or verification_errors:
         state, action = "attention_required", "refresh_or_repair_readback"
-    elif "maximum_hold_reached" in reasons or "estimated_stop_loss_exceeds_budget" in reasons:
+    elif "estimated_stop_loss_exceeds_budget" in reasons:
         state, action = "exit_review_required", "prepare_human_exit_draft"
     elif "review_due" in reasons:
         state, action = "review_due", "review_position"
@@ -252,7 +262,7 @@ def _evaluate(request: dict[str, Any]) -> dict[str, Any]:
         state, action = "protected_open", "keep_core_monitor"
     # No order payload, click instruction, signature or submit authority.
     draft = None
-    if state == "exit_review_required":
+    if state == "exit_review_required" and position_verified:
         draft = {"status": "manual_final_check_required", "asset": trade["asset"],
                  "side": expected_exit_side, "quantity": _amount(quantity), "reduce_only": True,
                  "financial_authority": "human_final_submit", "price_terms": "fresh_venue_preview_required"}

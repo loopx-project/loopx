@@ -42,6 +42,40 @@ authenticity of a provider declaration or an atomic venue snapshot.
 保护有效或已平仓。这些检查证明一致性，不能认证 provider 的声明真实性，
 也不能把分次读回变成交易所原子快照。
 
+### Holding deadline precedence (0.8.7 candidate) / 持有期限优先级
+
+At or after `max_hold_until`, reported open exposure always returns
+`exit_review_required`. A later `next_due_at`, missing costs, incomplete orders
+or an expired monitor cannot reduce that obligation to a readback repair.
+All verification reasons remain visible and unverified risk estimates stay
+null. An exit draft is withheld unless the position receipt is complete,
+fresh, bound to the episode/account/asset, and has matching side and a quantity
+no larger than the opening quantity. A draft remains a human final check,
+never an executable order or authority grant.
+
+到达或超过 `max_hold_until` 后，读回的开放敞口始终产生退出复核义务。
+下一次轮询较晚、成本缺证、订单不完整或监控过期不能把它降成仅修复读回。
+所有缺证原因仍保留，未核实风险金额为 null。只有持仓回执完整、新鲜、
+账户/资产/周期绑定正确、方向相符且数量不超过初始数量才生成草案；草案
+仍须本人最终核对，不授权下单。
+
+Callers must include the holding deadline and its current disposition in the
+material observation they pass to Core's existing monitor followthrough.
+Price/position equality alone does not establish no change across a deadline.
+A decision receipt does not discharge an open or partially exited position.
+Only verified flat exposure with reconciled fills and no residual orders can
+propose monitor closure. A human-admitted extension is a separate upstream
+decision with retained provenance: changing the poll schedule does not extend
+the frozen deadline. This reducer neither authenticates extensions nor owns
+Todo, lease, notification or trading authority.
+
+调用者须把持有期限及当前处置状态纳入已有 Core monitor followthrough 的
+材料观察。价格/仓位相同不能证明跨期限无变化；裁决回执或部分退出不解除
+剩余义务。完整退出对账与无残余订单才可建议关闭。显式人工延期由上游准入并
+保留依据；轮询时间变动不延长原期限。本 reducer 不认证延期或接管 Todo、
+lease、通知及交易权限。CLI/managed 修复仍是后端切片，App/Lark 与真实场所
+消费者须沿原 owner 单独验收。
+
 - Stop and take-profit coverage are checked separately. Each accepted leg must
   independently cover the remaining position, use the opposite side and
   `reduce_only=true`, and match the frozen price and normalized trigger basis.

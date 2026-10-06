@@ -178,6 +178,142 @@ def test_monitor_after_deadline_and_wrong_owner_target_are_not_ready():
     assert "monitor_binding_unverified" in evaluate(r)["reasons"]
 
 
+@pytest.mark.parametrize("deadline,expected", [
+    ("2026-01-03T12:00:01Z", "attention_required"),
+    (NOW, "exit_review_required"),
+    ("2026-01-03T11:59:59Z", "exit_review_required"),
+])
+def test_hold_deadline_is_independent_of_later_poll(deadline, expected):
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = deadline
+    receipt(r, "monitor")["data"]["next_due_at"] = "2026-01-03T12:30:00Z"
+    out = evaluate(r)
+    assert out["state"] == expected
+    assert "monitor_misses_hold_deadline" in out["reasons"]
+    assert out["monitor_projection"]["keep_monitor_open"]
+    assert not any(out["effects"].values())
+    if expected == "exit_review_required":
+        assert "maximum_hold_reached" in out["reasons"]
+        assert out["next_action"] == "prepare_human_exit_draft"
+        assert out["exit_draft"]["quantity"] == "10"
+
+
+def test_expiry_is_material_even_with_unchanged_price_and_position(monkeypatch):
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
+    r["input"]["decision_at"] = "2026-01-03T11:59:59Z"
+    for row in r["input"]["receipts"]:
+        row["observed_at"] = r["input"]["decision_at"]
+    # Only the decision/read clocks advance; price, quantity and deadline stay.
+    receipt(r, "monitor")["data"]["next_due_at"] = NOW
+    monkeypatch.setattr(guard, "_utc_now", lambda: datetime(2026, 1, 3, 11, 59, 59, tzinfo=UTC))
+    before = evaluate(r)
+    r["input"]["decision_at"] = NOW
+    for row in r["input"]["receipts"]:
+        row["observed_at"] = NOW
+    monkeypatch.setattr(guard, "_utc_now", lambda: datetime(2026, 1, 3, 12, tzinfo=UTC))
+    after = evaluate(r)
+    assert before["state"] == "protected_open"
+    assert after["state"] == "exit_review_required"
+    assert before["open_quantity"] == after["open_quantity"]
+    assert before["monitor_projection"]["keep_monitor_open"]
+    assert after["monitor_projection"]["keep_monitor_open"]
+
+
+@pytest.mark.parametrize("missing", ["costs", "orders", "expired_monitor"])
+def test_missing_verification_does_not_erase_expiry_review(missing):
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
+    if missing == "costs":
+        receipt(r, "fills")["data"]["costs_complete"] = False
+    elif missing == "orders":
+        receipt(r, "orders")["data"]["orders"] = []
+        receipt(r, "orders")["complete"] = False
+    else:
+        receipt(r, "monitor")["data"]["expires_at"] = NOW
+    out = evaluate(r)
+    assert out["state"] == "exit_review_required"
+    assert out["risk_estimate"]["estimated_stop_loss_cash"] is None
+    assert out["exit_draft"]["status"] == "manual_final_check_required"
+    assert out["exit_draft"]["financial_authority"] == "human_final_submit"
+    assert out["monitor_projection"]["keep_monitor_open"]
+    assert not any(out["effects"].values())
+
+
+@pytest.mark.parametrize("invalid", ["identity", "stale", "incomplete", "side", "increased"])
+def test_expiry_survives_untrusted_position_but_draft_is_withheld(invalid):
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
+    p = receipt(r, "position")
+    if invalid == "identity":
+        p["account_scope_digest"] = "sha256:" + "b" * 64
+    elif invalid == "stale":
+        p["observed_at"] = "2026-01-03T11:50:00Z"
+    elif invalid == "incomplete":
+        p["complete"] = False
+    elif invalid == "side":
+        p["data"]["side"] = "short"
+    else:
+        p["data"]["quantity"] = "11"
+    out = evaluate(r)
+    assert out["state"] == "exit_review_required" and out["urgent"]
+    assert "maximum_hold_reached" in out["reasons"]
+    assert out["exit_draft"] is None
+    assert out["monitor_projection"]["keep_monitor_open"]
+    assert out["risk_estimate"]["estimated_stop_loss_cash"] is None
+    assert not any(out["effects"].values())
+    p.update(deepcopy(receipt(example(), "position")))
+    assert evaluate(r)["exit_draft"]["quantity"] == "10"
+
+
+def test_expiry_tracks_partial_exit_until_verified_flat():
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
+    # Returning a decision/draft does not change the input or discharge it.
+    original = deepcopy(r)
+    assert evaluate(r)["state"] == "exit_review_required"
+    assert r == original
+    assert evaluate(r)["state"] == "exit_review_required"
+    receipt(r, "position")["data"]["quantity"] = "4"
+    receipt(r, "fills")["data"]["fills"].append(
+        {"fill_id": "exit-1", "role": "exit", "quantity": "6", "price": "102",
+         "fee_cash": "1", "filled_at": NOW}
+    )
+    out = evaluate(r)
+    assert out["state"] == "exit_review_required"
+    assert out["exit_draft"]["quantity"] == "4"
+    assert out["monitor_projection"]["keep_monitor_open"]
+    receipt(r, "position")["data"]["quantity"] = "0"
+    assert evaluate(r)["state"] == "closure_unverified"
+    receipt(r, "orders")["data"]["orders"] = []
+    receipt(r, "fills")["data"]["fills"].append(
+        {"fill_id": "exit-2", "role": "exit", "quantity": "4", "price": "102",
+         "fee_cash": "1", "filled_at": NOW}
+    )
+    assert evaluate(r)["state"] == "closed_verified"
+
+
+def test_caller_admitted_new_deadline_does_not_close_open_position():
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
+    assert evaluate(r)["state"] == "exit_review_required"
+    # Admission/provenance of a human extension belongs to the caller. Polling
+    # alone cannot modify this frozen trade field or manufacture an extension.
+    r["input"]["trade"]["max_hold_until"] = "2026-01-04T12:00:00Z"
+    out = evaluate(r)
+    assert out["state"] == "protected_open"
+    assert out["monitor_projection"]["keep_monitor_open"]
+    assert not any(out["effects"].values())
+
+
+def test_expiry_cannot_accept_an_execution_authority_override():
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
+    r["input"]["trade"]["financial_authority"] = "automatic_submit"
+    with pytest.raises(ValueError, match="schema admission"):
+        evaluate(r)
+
+
 def test_flat_requires_complete_fills_and_no_residual_orders():
     r = example()
     receipt(r, "position")["data"]["quantity"] = "0"
