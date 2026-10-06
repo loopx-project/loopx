@@ -208,10 +208,17 @@ def delivery_result_context_input(
     The native owner recovers a historical receipt before checking capture
     errors. Every validation continuation recaptures sources under short locks.
     """
-    if not read_context_id and not direction_read_context_id and not first_delivery_context_enrolled(runtime_root, identity):
-        return None
     result: dict[str, Any] = {"identity": identity.as_dict(),
         "read_context_id": read_context_id or "missing", "state_file": str(state_file.resolve())}
+    if not read_context_id and not direction_read_context_id:
+        try:
+            if not first_delivery_context_enrolled(runtime_root, identity):
+                return None
+        except (ValueError, OSError) as error:
+            # Preserve the ordinary request fingerprint for receipt-first
+            # recovery. Only the native owner can prove an unreadable shared
+            # supplement optional; this is not evidence of non-enrollment.
+            return {**result, "read_context_id": None, "capture_error": str(error)}
     if direction_read_context_id:
         result["direction_read_context_id"] = direction_read_context_id
     index = runtime_root / "goals" / identity.goal_id / "runs" / "index.jsonl"

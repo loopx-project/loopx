@@ -1100,7 +1100,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
     head = observation.authority;
   }
-  if (input.delivery_read_context_id !== undefined) {
+  if (input.delivery_read_context_id !== undefined || deliveryBasisCheck !== undefined) {
     if (deliveryBasisCheck === undefined) return terminalFailure("delivery_basis_check_required",
       "Protected completion requires its source and provider basis check.", {}, "decision_rejection");
     const basis = await deliveryBasisCheck(head);

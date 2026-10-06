@@ -1301,7 +1301,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
       sourceAuthority = sourceAuthorityFor(store);
       providerEvidence.source_authority = sourceAuthority;
       const execute = () => executeCoordinationTodoTerminalLifecycle(store, {
-        ...(input.delivery_context == null ? {} : {delivery_read_context_id:
+        ...(input.delivery_context == null || requireJsonObject(input.delivery_context, "delivery context").read_context_id == null ? {} : {delivery_read_context_id:
           requireAuthorityStoreId(requireJsonObject(input.delivery_context, "delivery context").read_context_id, "delivery read context id")}),
         ...(input.delivery_context == null || requireJsonObject(input.delivery_context, "delivery context").direction_read_context_id == null ? {} : {
           delivery_direction_context_id: requireAuthorityStoreId(requireJsonObject(input.delivery_context, "delivery context").direction_read_context_id, "direction read context id")}),

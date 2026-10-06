@@ -16,6 +16,8 @@ import {legacyCoordinationTodoLockPath} from "./legacy_writer_lock_paths.ts";
 import {checkpointProviderFacts} from "../goals/checkpoint_authority.ts";
 import {evaluateCheckpointReadContext} from "../goals/checkpoint_read_context.ts";
 import {inspectCheckpointReplay} from "../goals/checkpoint_commit.ts";
+import {QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, readQuotaSettlementFromSnapshot,
+  readQuotaSettlementSnapshot} from "../quota/settlement_readback.ts";
 
 const digest = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 function bytes(path: string): Buffer {
@@ -53,13 +55,38 @@ export function terminalDeliveryBasisCheck(root: string, input: JsonObject, stor
   const rejected = (code: string, error: string): JsonObject => ({ok: false, error_code: code,
     error, reread_required: true, next_action: "Read delivery_result context for the original Turn; recheck the candidate and validation before retrying."});
   return async head => {
-    if (context.capture_error != null) return rejected("delivery_source_unavailable", String(context.capture_error));
-    const facts = requireJsonObject(context.facts, "delivery source facts");
     if (canonicalAuthoritySha256(binding) !== canonicalAuthoritySha256(settlementIdentityPayload(identity)) ||
         identity.goal_id !== input.goal_id || identity.todo_id !== input.todo_id || identity.agent_id !== input.actor_agent_id ||
         ![identity.effect_id, identity.turn_instance_id].includes(String(input.requested_completion_turn_key))) {
       return rejected("delivery_identity_mismatch", "Delivery basis belongs to another Goal, Agent, Todo or Turn.");
     }
+    const receiptPath = join(root, "goals", identity.goal_id, "checkpoint-contexts",
+      `${createHash("sha256").update(identity.effect_id + ":delivery_result").digest("hex")}.json`);
+    if (context.read_context_id == null) {
+      // A malformed shared supplement is optional only when the original
+      // writeback proves the ordinary path. A first-delivery read cannot be
+      // admitted after that writeback; absent history is not such proof.
+      const unknown = () => rejected("checkpoint_commit_unknown",
+        "Cannot establish optional enrollment from the original Turn; preserve its receipts and reconcile before retrying.");
+      try {
+        try { readFileSync(receiptPath); return unknown(); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        const snapshot = await readQuotaSettlementSnapshot(root, identity.goal_id);
+        const readback = readQuotaSettlementFromSnapshot({
+          ...binding, schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, runtime_root: root,
+          infer_turn_instance_id: false, allow_unbound_binding: false,
+        }, snapshot);
+        const prior = jsonObject(readback.writeback_run);
+        const writeback = jsonObject(jsonObject(readback.writeback)?.result);
+        const purpose = jsonObject(jsonObject(prior?.vision_checkpoint)?.read_context)?.purpose;
+        if (prior === null || writeback?.failure !== null ||
+            (purpose != null && purpose !== "supplement_checkpoint")) return unknown();
+        inspectCheckpointReplay({runtime_root: root, goal_id: identity.goal_id, prior});
+        return {ok: true};
+      } catch { return unknown(); }
+    }
+    if (context.capture_error != null) return rejected("delivery_source_unavailable", String(context.capture_error));
+    const facts = requireJsonObject(context.facts, "delivery source facts");
     const authority = authorityStoreSourceAuthority(store);
     if (authority !== "file_v0" && authority !== "sqlite_v0") {
       return rejected("delivery_provider_unsupported", "Delivery freshness requires File or SQLite authority.");
@@ -73,8 +100,6 @@ export function terminalDeliveryBasisCheck(root: string, input: JsonObject, stor
     }
     const storeId = await store.storeIdentity();
     if (storeId.status !== "available") return rejected("delivery_store_unavailable", "Cannot establish the current authority store identity.");
-    const receiptPath = join(root, "goals", identity.goal_id, "checkpoint-contexts",
-      `${createHash("sha256").update(identity.effect_id + ":delivery_result").digest("hex")}.json`);
     let receipt: JsonObject | null = null;
     try { receipt = jsonObject(JSON.parse(readFileSync(receiptPath, "utf8"))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }

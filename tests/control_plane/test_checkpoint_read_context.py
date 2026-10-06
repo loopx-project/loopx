@@ -98,6 +98,7 @@ def test_first_delivery_context_cli_rejects_stale_and_replays_success(tmp_path, 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_delivery_result_basis_precedes_cas_and_replays_before_current_freshness(tmp_path, monkeypatch, provider):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -118,11 +119,20 @@ def test_delivery_result_basis_precedes_cas_and_replays_before_current_freshness
     rc, context = _run_cli(registry, runtime, *read, cwd=project)
     assert rc == 0, context
     complete = ("todo", "complete", *binding, "--note", "Validated the candidate; direction review remains.")
+    index = runtime / "goals" / GOAL_ID / "runs/index.jsonl"
+    def committed_sources():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID), index.read_bytes() if index.exists() else None, _spend_run_count(runtime)
+    before = committed_sources()
     rc, missing = _run_cli(registry, runtime, *complete, cwd=project)
     assert rc == 1 and missing.get("error_code") == "checkpoint_read_context_unknown_or_replaced", missing
+    assert committed_sources() == before
+    rc, unknown = _run_cli(registry, runtime, *complete, "--delivery-read-context", "unknown-context", cwd=project)
+    assert rc == 1 and unknown.get("error_code") == "checkpoint_read_context_unknown_or_replaced", unknown
+    assert committed_sources() == before
     state.write_text(state.read_text(encoding="utf-8") + "\n## Acceptance\n\nAdditional acceptance requirement.\n", encoding="utf-8")
     rc, stale = _run_cli(registry, runtime, *complete, "--delivery-read-context", context["read_context_id"], cwd=project)
     assert rc == 1 and stale.get("error_code") == "checkpoint_read_context_stale", json.dumps(stale)
+    assert committed_sources() == before
     rc, context = _run_cli(registry, runtime, *read, cwd=project)
     assert rc == 0, context
     commit = (*complete, "--delivery-read-context", context["read_context_id"])
