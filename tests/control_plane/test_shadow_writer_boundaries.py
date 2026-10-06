@@ -113,16 +113,16 @@ def test_corrupt_management_state_blocks_before_transaction_body(tmp_path: Path)
 def test_atomic_state_writer_keeps_original_on_failed_replace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx.control_plane.todos import active_state_editing
+    from loopx.control_plane.runtime import document_io
 
-    write = getattr(active_state_editing, "atomic_write_state_text", None)
+    write = getattr(document_io, "atomic_write_state_text", None)
     assert callable(write), "all state writers need the shared durable text primitive"
     state = tmp_path / "state.md"
     state.write_bytes(b"original\r\n")
     state.chmod(0o640)
     def fail_replace(*_args: object) -> None:
         raise OSError("replacement unavailable")
-    monkeypatch.setattr(active_state_editing.os, "replace", fail_replace)
+    monkeypatch.setattr(document_io.os, "replace", fail_replace)
     with pytest.raises(OSError, match="replacement unavailable"):
         write(state, "replacement\r\n")
     assert state.read_bytes() == b"original\r\n"
@@ -237,7 +237,7 @@ def test_real_process_kill_around_state_replace_preserves_complete_bytes(tmp_pat
     code = """
 import sys
 from pathlib import Path
-from loopx.control_plane.todos import active_state_editing as editing
+from loopx.control_plane.runtime import document_io as editing
 original = editing.os.replace
 def replace(source, target):
     if sys.argv[2] == 'after': original(source, target)
@@ -330,13 +330,13 @@ def test_real_writer_commits_before_a_later_fence_is_published(tmp_path: Path, o
     registry, state, root = fixture(tmp_path)
     writer_code = """
 import sys
-from loopx.control_plane.todos import active_state_editing
-original = active_state_editing.atomic_write_state_text
+from loopx.control_plane.runtime import document_io
+original = document_io.atomic_write_state_text
 def paused(*args):
     print('primary-write-cut', flush=True)
     sys.stdin.readline()
     return original(*args)
-active_state_editing.atomic_write_state_text = paused
+document_io.atomic_write_state_text = paused
 from loopx.entrypoint import main
 raise SystemExit(main(sys.argv[1:]))
 """
@@ -384,7 +384,7 @@ raise SystemExit(main(sys.argv[1:]))
 
 
 def test_failed_primary_replace_never_marks_shadow_committed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from loopx.control_plane.todos import active_state_editing
+    from loopx.control_plane.runtime import document_io
     registry, state, root = fixture(tmp_path)
     value = json.loads(registry.read_text())
     value["goals"][0]["coordination"]["runtime_shadow"] = {
@@ -392,12 +392,12 @@ def test_failed_primary_replace_never_marks_shadow_committed(tmp_path: Path, mon
     registry.write_text(json.dumps(value))
     cli(registry, "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")
     before = state.read_bytes()
-    original = active_state_editing.os.replace
+    original = document_io.os.replace
     def fail_primary(source: object, target: object) -> None:
         if Path(str(target)) == state:
             raise OSError("primary replace refused")
         original(source, target)
-    monkeypatch.setattr(active_state_editing.os, "replace", fail_primary)
+    monkeypatch.setattr(document_io.os, "replace", fail_primary)
     with pytest.raises(OSError, match="primary replace refused"):
         add_goal_todo(
             registry_path=registry, goal_id=GOAL, role="agent",

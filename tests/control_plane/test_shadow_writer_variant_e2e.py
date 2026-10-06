@@ -165,12 +165,12 @@ elif stage == 'reward_write':
         return original(*args, **kwargs)
     feedback.atomic_write_state_text = write
 elif stage == 'handoff_write':
-    from loopx.control_plane.todos import active_state_editing
-    original = active_state_editing.atomic_write_state_text
+    from loopx.control_plane.runtime import document_io
+    original = document_io.atomic_write_state_text
     def write(*args, **kwargs):
         pause('handoff-write')
         return original(*args, **kwargs)
-    active_state_editing.atomic_write_state_text = write
+    document_io.atomic_write_state_text = write
 elif stage == 'handoff_k':
     from loopx import file_lock
     original = file_lock.exclusive_cross_runtime_file_lock
