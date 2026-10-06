@@ -30,17 +30,92 @@ try {
   await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
   const dialog = page.getByRole("dialog", {name: "团队执行情况"});
   const openEvidence = dialog.getByRole("button", {name: "查看证据与反馈", exact: true});
+  const firstRead = page.waitForResponse(response => response.request().method() === "POST"
+    && response.request().postDataJSON()?.operation === "read"
+    && response.request().postDataJSON()?.operation_id === "accepted-analysis");
   await openEvidence.first().click();
+  const legacyReadback = await (await firstRead).json();
   const evidence = dialog.getByRole("region", {name: "执行证据"});
   const original = () => evidence.getByLabel("证据内容: report.json");
   await original().waitFor();
+  // Rechecking the same version must preserve the reader's exact comparison.
+  await evidence.getByRole("button", {name: /^修订依据/}).click();
+  await evidence.getByLabel("对照产物", {exact: false}).selectOption({label: "report.md"});
+  await evidence.getByRole("button", {name: "查看原文差异", exact: true}).click();
+  const selectedOutput = () => evidence.getByLabel("本次产物: report.md", {exact: true});
+  await selectedOutput().waitFor();
   // Older readbacks remain readable without invented provenance.
   await evidence.getByText("本次验收依据", {exact: true}).click();
   await evidence.getByText("此运行时未提供验收依据标识。", {exact: true}).waitFor();
+  // Transport fixtures exercise presentation only; real File/SQLite checks are
+  // qualified by test_local_delegation, never inferred from these synthetic rows.
+  const checkTime = "2026-01-02T03:04:05.123456Z";
+  const outputVersions = [{ref: "report.json", sha256: "d".repeat(64)}, {ref: "report.md", sha256: "9".repeat(64)}];
+  const currentValidation = {source: "goal_acceptance", basis_sha256: "7".repeat(64), check_count: 1,
+    pinned_file_count: 3, checked_at: checkTime, output_versions: outputVersions};
+  let validation = {...currentValidation, checked_at: undefined, output_versions: undefined};
+  let checkUnavailable = false;
+  const checkedRead = route => {
+    const body = route.request().postDataJSON();
+    if (body?.operation !== "read" || body.operation_id !== "accepted-analysis") return route.fallback();
+    api.loopxModeRequests.push({sessionId: configured.sessionId, ...body});
+    return checkUnavailable ? route.fulfill({status: 409, json: {error: "delegation output changed during validation"}})
+      : route.fulfill({json: {...legacyReadback, validation}});
+  };
+  await page.route("**/api/chat/sessions/*/loopx", checkedRead);
+  const recheck = evidence.getByRole("button", {name: "重新读取证据", exact: true});
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await evidence.getByText("未提供与当前产物匹配的检查时间及版本记录。", {exact: true}).waitFor();
+  assert.equal(await evidence.locator("time").count(), 0, "A legacy basis does not invent check records");
+  validation = currentValidation;
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  const checkObservation = evidence.locator("details").filter({has: page.getByText("本次验收依据", {exact: true})});
+  await checkObservation.getByText(checkTime, {exact: true}).waitFor();
+  for (const version of outputVersions) await checkObservation.getByText(version.sha256, {exact: true}).waitFor();
+  assert.equal(await checkObservation.getByText("未提供与当前产物匹配的检查时间及版本记录。", {exact: true}).count(), 0);
+  await mkdir(outputDir, {recursive: true});
+  await checkObservation.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-checked-output-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await page.emulateMedia({reducedMotion: "reduce"});
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await checkObservation.getByText(outputVersions[1].sha256, {exact: true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-checked-output-mobile.png"), animations: "disabled"});
+  await page.setViewportSize({width: 1512, height: 980});
+  // Another version's witness must never appear as a check of this report.
+  validation = {...validation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await evidence.getByText("未提供与当前产物匹配的检查时间及版本记录。", {exact: true}).waitFor();
+  assert.equal(await checkObservation.locator("time").count(), 0);
+  assert.equal(await checkObservation.getByText("f".repeat(64), {exact: true}).count(), 0);
+  checkUnavailable = true;
+  await recheck.click();
+  await evidence.getByRole("alert").filter({hasText: "已清除上次证据"}).waitFor();
+  assert.equal(await original().count(), 0);
+  assert.equal(await evidence.getByText("本次验收依据", {exact: true}).count(), 0);
+  await page.screenshot({path: resolve(outputDir, "team-checked-output-unavailable.png"), animations: "disabled"});
+  checkUnavailable = false;
+  validation = {...validation, output_versions: outputVersions};
+  await recheck.focus();
+  await page.keyboard.press("Enter");
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await checkObservation.getByText(checkTime, {exact: true}).waitFor();
+  await page.unroute("**/api/chat/sessions/*/loopx", checkedRead);
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   const verificationGap = evidence.getByText("当前读回未提供独立验收者与指定版本回执。", {exact: true});
   await verificationGap.waitFor({timeout: 3000});
   await evidence.getByText("后续结果 · 当前验收与采用记录有效", {exact: false}).waitFor();
+  await selectedOutput().waitFor({timeout: 3000});
+  assert.equal(await evidence.getByLabel("对照产物", {exact: false}).inputValue(), "1");
+  assert.equal(await evidence.getByRole("button", {name: /^修订依据/}).getAttribute("aria-pressed"), "true");
+  assert.equal(await selectedOutput().evaluate(el => el.tagName), "PRE", "Same-version checks preserve the reading mode");
   await mkdir(outputDir, {recursive: true});
   await verificationGap.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-verifier-gap-desktop.png"), animations: "disabled"});
@@ -58,6 +133,10 @@ try {
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   const adoptionGap = evidence.getByText("采用证据无法核验", {exact: false});
   await adoptionGap.waitFor({timeout: 3000});
+  await selectedOutput().waitFor({timeout: 3000});
+  await evidence.getByText("版本与采用关系详情", {exact: true}).click();
+  assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0,
+    "The details must reflect the same failed consumer observation as the correction path");
   await verificationGap.waitFor();
   assert.equal(await evidence.getByRole("button", {name: "阅读原始产物", exact: true}).count(), 1);
   assert.equal(await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).count(), 1);
@@ -74,6 +153,7 @@ try {
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await adoptionGap.waitFor({timeout: 3000});
   assert.equal(await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).count(), 0);
+  assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0);
   await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
   await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
@@ -81,6 +161,8 @@ try {
   mode.fixtureAdoptionState = "current";
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).waitFor();
+  await evidence.getByText("版本与采用关系详情", {exact: true}).click();
+  await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).waitFor();
   const unavailableCore = route => route.request().postDataJSON()?.operation === "read"
     && route.request().postDataJSON()?.operation_id === "review-objection"
     ? route.fulfill({status: 409, json: {error: "review version revoked"}}) : route.fallback();
@@ -89,7 +171,11 @@ try {
   await evidence.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
   assert.equal(await verificationGap.count(), 0, "A lost core revision still clears the trace");
   assert.equal(await evidence.getByRole("button", {name: "阅读原始产物", exact: true}).count(), 0);
+  assert.equal(await original().count(), 0, "Core loss clears the surrounding report, not only its trace");
+  assert.equal(await evidence.getByText("本次验收依据", {exact: true}).count(), 0);
   await page.unroute("**/api/chat/sessions/*/loopx", unavailableCore);
+  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).click();
   await evidence.getByLabel("证据内容: objection.json").waitFor();
@@ -168,7 +254,7 @@ try {
   assert.ok(await openEvidence.first().evaluate(el => el === document.activeElement));
   assert.equal(api.turnRequests.length, 0);
   assert.equal(api.loopxModeRequests.filter(row => row.operation === "message").length, 0);
-  console.log("team-evidence-return: passed (packaged navigation, downstream loss/revocation/restoration, core loss, keyboard return, fresh evidence/list, pagination, mobile and no execution)");
+  console.log("team-evidence-return: passed (packaged checked outputs, navigation, downstream loss/revocation/restoration, core loss, keyboard return, fresh evidence/list, pagination, mobile and no execution)");
 } finally {
   await workspace?.close();
   await browser?.close();

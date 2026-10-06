@@ -37,7 +37,6 @@ def test_python_facade_preserves_typed_rejection_as_value_error(monkeypatch) -> 
     monkeypatch.setattr(completion_state, "effect_runtime_result", reject)
 
     with pytest.raises(ValueError, match="typed state rejected"):
-        completion_state.completion_continuation_for_write(
-            no_followup=True,
-            has_successor=True,
+        completion_state.require_todo_completion_metadata(
+            "completion_continuation", "implicit",
         )

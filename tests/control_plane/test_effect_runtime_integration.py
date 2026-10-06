@@ -819,6 +819,52 @@ def test_dead_startup_lock_is_reclaimed_without_waiting_for_age_timeout(
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
+def test_live_startup_lock_is_not_reclaimed_after_age_threshold(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "f" * 64
+    info_path = runtime_dir / "runtime.json"
+    lock = runtime_dir / f"start-{fingerprint[:16]}.lock"
+    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    stale = time.time() - 11
+    os.utime(lock, (stale, stale))
+    clock = {"monotonic": 0.0}
+
+    def unexpected_launch(*_args, **_kwargs):
+        raise AssertionError("a live startup lock owner must not be replaced")
+
+    def sleep(seconds: float) -> None:
+        clock["monotonic"] += seconds
+
+    monkeypatch.setattr(effect_runtime, "_node_executable", lambda: "node")
+    monkeypatch.setattr(effect_runtime.subprocess, "Popen", unexpected_launch)
+    monkeypatch.setattr(effect_runtime, "STARTUP_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(effect_runtime, "STARTUP_POLL_SECONDS", 0.005)
+    monkeypatch.setattr(
+        effect_runtime,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock["monotonic"],
+            sleep=sleep,
+            time=time.time,
+        ),
+    )
+
+    with pytest.raises(
+        effect_runtime.EffectRuntimeStartupError,
+        match="startup lock timed out",
+    ):
+        effect_runtime._start_runtime(
+            fingerprint=fingerprint,
+            info_path=info_path,
+        )
+
+    assert lock.read_text(encoding="utf-8") == f"{os.getpid()}\n"
+
+
 def test_runtime_ready_budget_starts_after_start_lock_acquisition(
     tmp_path: Path,
     monkeypatch,

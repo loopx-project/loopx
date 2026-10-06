@@ -10,6 +10,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import pytest
+
+from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
 from loopx.extensions.presentation import publish_extension_projection
 from loopx.extensions.runtime import default_extension_state_file, install_extension
 from loopx.status_server import (
@@ -119,6 +123,7 @@ def _published_projection_server(
     tmp_path: Path,
     *,
     visibility: str = "public-safe",
+    chat: bool = False,
 ) -> Iterator[tuple[str, dict[str, object], dict[str, object]]]:
     runtime_root = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
@@ -144,9 +149,12 @@ def _published_projection_server(
         execute=True,
     )
 
-    server = StatusHTTPServer(("127.0.0.1", 0), StatusRequestHandler)
+    server = (ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler) if chat
+              else StatusHTTPServer(("127.0.0.1", 0), StatusRequestHandler))
     server.registry_path = registry
     server.runtime_root_override = None
+    server.runtime_root = runtime_root
+    server.selected_goal_id = None
     server.scan_roots = [tmp_path]
     server.limit = 5
     server.status_path = DEFAULT_STATUS_PATH
@@ -168,11 +176,15 @@ def _published_projection_server(
         server.server_close()
 
 
+@pytest.mark.parametrize("chat", [False, True])
 def test_status_server_advertises_and_serves_projection_by_exact_ref(
     tmp_path: Path,
+    chat: bool,
 ) -> None:
-    with _published_projection_server(tmp_path) as (base_url, installed, receipt):
-        status, capabilities = _request_json(f"{base_url}/")
+    with _published_projection_server(tmp_path, chat=chat) as (base_url, installed, receipt):
+        status, capabilities = _request_json(f"{base_url}/status.json" if chat else f"{base_url}/")
+        if chat:
+            capabilities = capabilities["local_dashboard_api"]
 
         assert status == 200
         assert capabilities["presentation_surfaces_url"] == (
@@ -217,10 +229,12 @@ def test_status_server_advertises_and_serves_projection_by_exact_ref(
     }
 
 
+@pytest.mark.parametrize("chat", [False, True])
 def test_status_server_projection_route_rejects_non_loopback_origin(
     tmp_path: Path,
+    chat: bool,
 ) -> None:
-    with _published_projection_server(tmp_path) as (base_url, installed, receipt):
+    with _published_projection_server(tmp_path, chat=chat) as (base_url, installed, receipt):
         query = urllib.parse.urlencode(
             {
                 "extension_id": "test-research-extension",
@@ -241,12 +255,15 @@ def test_status_server_projection_route_rejects_non_loopback_origin(
     }
 
 
+@pytest.mark.parametrize("chat", [False, True])
 def test_status_server_projection_route_rejects_owner_only_surface(
     tmp_path: Path,
+    chat: bool,
 ) -> None:
     with _published_projection_server(
         tmp_path,
         visibility="owner-only",
+        chat=chat,
     ) as (base_url, installed, receipt):
         query = urllib.parse.urlencode(
             {
@@ -268,10 +285,12 @@ def test_status_server_projection_route_rejects_owner_only_surface(
     )
 
 
+@pytest.mark.parametrize("chat", [False, True])
 def test_status_server_projection_route_requires_complete_detail_ref(
     tmp_path: Path,
+    chat: bool,
 ) -> None:
-    with _published_projection_server(tmp_path) as (base_url, _installed, _receipt):
+    with _published_projection_server(tmp_path, chat=chat) as (base_url, _installed, _receipt):
         status, payload = _request_json(
             f"{base_url}{DEFAULT_EXTENSION_PROJECTION_PATH}?extension_id=test-research-extension",
             origin="http://localhost:5173",

@@ -5,6 +5,7 @@ from collections.abc import Callable
 import pytest
 
 from loopx.control_plane.todos import decision_scope
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 SCOPE = {
     "schema_version": "decision_scope_v0",
@@ -38,7 +39,6 @@ def _response(value: object) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("invoke", "value"),
     [
-        (lambda: decision_scope.decision_scope_covers(SCOPE, SCOPE), 1),
         (
             lambda: decision_scope.build_required_decision_scope_consistency(
                 {"first_open_items": [AGENT_ITEM]},
@@ -54,14 +54,7 @@ def _response(value: object) -> dict[str, object]:
             ),
             {"schema_version": "wrong_standing_v0"},
         ),
-        (
-            lambda: decision_scope.decision_scope_gate_relation(GATE, AGENT_ITEM),
-            {"schema_version": "todo_gate_relation_v0"},
-        ),
-        (
-            lambda: decision_scope.exact_todo_gate_relation(GATE, AGENT_ITEM),
-            {"schema_version": "decision_scope_relation_v0"},
-        ),
+        (lambda: decision_scope.todo_gate_relation(GATE, AGENT_ITEM), True),
         (
             lambda: decision_scope.todo_gate_relation(GATE, AGENT_ITEM),
             {"schema_version": "unknown_relation_v0"},
@@ -123,7 +116,7 @@ def test_outer_runtime_envelope_fails_closed(
     )
 
     with pytest.raises(TypeError, match="invalid typed decision scope projection"):
-        decision_scope.decision_scope_covers(SCOPE, SCOPE)
+        decision_scope.todo_gate_relation(GATE, AGENT_ITEM)
 
 
 def test_nullable_operations_still_accept_explicit_null(
@@ -135,8 +128,6 @@ def test_nullable_operations_still_accept_explicit_null(
         lambda *_args, **_kwargs: _response(None),
     )
 
-    assert decision_scope.decision_scope_gate_relation(GATE, AGENT_ITEM) is None
-    assert decision_scope.exact_todo_gate_relation(GATE, AGENT_ITEM) is None
     assert decision_scope.todo_gate_relation(GATE, AGENT_ITEM) is None
     assert decision_scope.select_scoped_gate_fallback(
         [GATE], [AGENT_ITEM], agent_id="agent-a", allow_unrelated_gate=True,
@@ -152,3 +143,16 @@ def test_fallback_runtime_result_fails_closed(monkeypatch, value):
             [GATE], [AGENT_ITEM], agent_id="agent-a", allow_unrelated_gate=True,
             monitor_debt_backoff_active=False,
         )
+
+
+@pytest.mark.parametrize("operation", ["covers", "scope_relation", "exact_relation"])
+def test_retired_scalar_operations_are_rejected_by_real_runtime(operation: str) -> None:
+    with pytest.raises(EffectRuntimeRejected, match="unsupported decision scope operation"):
+        effect_runtime_result("todo.decision_scope.evaluate", {
+            "schema_version": "todo_decision_scope_request_v0",
+            "operation": operation,
+            "gate_scope": SCOPE,
+            "required_scope": SCOPE,
+            "gate": {**GATE, "is_gate": True},
+            "item": AGENT_ITEM,
+        })

@@ -186,23 +186,6 @@ def todo_partition_projection(
     })
 
 
-def lease_partition_projection(
-    records: Iterable[tuple[str, object]],
-    *,
-    goal_id: str,
-) -> dict[str, Any]:
-    """The state guarded by the goal's task-lease lock.
-
-    ``records`` pairs each lease file stem with its decoded JSON object.
-    """
-
-    leases = [
-        compact_lease(raw, goal_id=goal_id, file_stem=stem)
-        for stem, raw in sorted(records, key=lambda pair: pair[0])
-    ]
-    return {"leases": leases}
-
-
 def _stable_todos(value: object) -> object:
     """Remove only query-clock observations from Todo authority identity."""
 
@@ -266,7 +249,6 @@ __all__ = [
     "compact_lease",
     "head_comparison_view",
     "head_digest",
-    "lease_partition_projection",
     "partition_comparison_view",
     "partition_digest",
     "sha256_digest",

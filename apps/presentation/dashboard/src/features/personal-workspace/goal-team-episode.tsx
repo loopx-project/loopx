@@ -6,23 +6,25 @@ type Episode = {original: VerifiedLink; response: VerifiedLink;
   adoption: DelegationAdoption | null; downstream: DelegationReadback | null};
 
 /** Resolve only an explicitly requested correction path. Reads are on demand and never start work. */
-export function GoalTeamEpisode({sessionId, result, zh, onInspect}: {
+export function GoalTeamEpisode({sessionId, result, zh, onInspect, onObservation}: {
   sessionId: string; result: DelegationReadback; zh: boolean; onInspect: (operationId: string) => void;
+  onObservation: (result: DelegationReadback | null) => void;
 }) {
   const original = result.dependencies?.find(link => link.relation === "revises");
   const response = result.dependencies?.find(link => link.relation === "responds_to" && link.operation_id !== original?.operation_id);
   const [episode, setEpisode] = useState<Episode | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const generation = useRef(0);
   useEffect(() => {
-    generation.current++; setEpisode(null); setError(""); setBusy(false);
+    generation.current++; setEpisode(null); setBusy(false);
     return () => {generation.current++;};
-  }, [result, sessionId]);
+  // A checked observation updates the surrounding evidence too. Keep this
+  // trace mounted for that same execution; changing executions resets it.
+  }, [sessionId, result.operation_id, result.request_id]);
   if (!original || !response) return null;
   async function trace() {
     const current = ++generation.current;
-    setEpisode(null); setError(""); setBusy(true);
+    setEpisode(null); setBusy(true);
     try {
       const [first, challenge, revised] = await Promise.all([
         readLoopXTeamWork(sessionId, original!.operation_id),
@@ -68,11 +70,22 @@ export function GoalTeamEpisode({sessionId, result, zh, onInspect}: {
       const sourceMatchesReceipt = refreshedAdoption && refreshedAdoption.source_artifacts.length > 0
         && refreshedAdoption.source_artifacts.every(expected => revised.artifacts?.some(
         artifact => artifact.ref === expected.ref && artifact.sha256 === expected.sha256));
-      if (current === generation.current) setEpisode({original: {link: original!, source: first},
-        response: {link: response!, source: challenge}, adoption,
-        downstream: sourceMatchesReceipt && downstreamBindsRevision && downstreamMatchesReceipt ? downstream : null});
+      const verifiedDownstream = sourceMatchesReceipt && downstreamBindsRevision && downstreamMatchesReceipt ? downstream : null;
+      if (current === generation.current) {
+        // This read-only projection includes the consumer observation. A
+        // transport failure cannot leave its earlier success in the details.
+        onObservation({...revised, adoptions: revised.adoptions?.map(row => row === adoption && !verifiedDownstream
+          ? {...row, state: "unavailable"} : row)});
+        setEpisode({original: {link: original!, source: first},
+          response: {link: response!, source: challenge}, adoption,
+          downstream: verifiedDownstream});
+      }
     } catch {
-      if (current === generation.current) setError(zh ? "关联执行或版本已变化；请重新读取证据。" : "A linked execution or version changed; recheck the evidence.");
+      if (current === generation.current) {
+        // A failed core check invalidates the whole evidence view, including
+        // earlier acceptance, comparison and adoption details.
+        onObservation(null);
+      }
     } finally {if (current === generation.current) setBusy(false);}
   }
   return <section className="goal-team-episode" aria-label={zh ? "纠偏证据路径" : "Correction evidence path"} aria-busy={busy}>
@@ -81,7 +94,6 @@ export function GoalTeamEpisode({sessionId, result, zh, onInspect}: {
     <p>{zh ? "按需核验原始版本、复核回应、修订及后续采用。关系和验收不能替代对异议内容的判断。"
       : "Verify the original version, review response, revision and downstream use on demand. Relationships and acceptance do not judge the objection's content."}</p>
     {busy ? <p role="status">{zh ? "正在核验关联执行与指定版本…" : "Checking linked executions and exact versions…"}</p> : null}
-    {error ? <p role="alert">{error}</p> : null}
     {episode ? <ol>
       <li><span>01 · {zh ? "原始版本" : "Original version"}</span><strong>{episode.original.source.agent_id}</strong>
         <button type="button" onClick={() => onInspect(episode.original.link.operation_id)}>{zh ? "阅读原始产物" : "Read original"}</button></li>

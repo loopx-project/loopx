@@ -40,6 +40,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"codex-cli-visible-driver-run",
 		"codex-cli-visible-driver-plan",
 		"codex-cli-visible-session-proof",
+		"commands",
 		"demo",
 		"doctor",
 		"first-run-report",

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { goalCreateRequest } from "./goal-create-request.ts";
+import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -8,6 +9,7 @@ const answerText = source("./answer-text.ts");
 const model = source("./personal-workspace-model.ts");
 const activity = source("./goal-activity.ts");
 const drawer = source("./context-drawer.tsx");
+const attentionActions = source("./attention-actions.tsx");
 const header = source("./channel-header.tsx");
 const sidebar = source("./goal-sidebar.tsx");
 const actionForm = source("./workspace-action-form.tsx");
@@ -53,11 +55,17 @@ assert.match(drawer, /actionKind: "todo\.create"/, "Todo successor uses the cano
 for (const field of ["evidence", "explanation"]) {
   assert.match(model, new RegExp(`${field}\\??:`), `Decision exposes ${field}`);
 }
+assert.match(drawer, /<AttentionActions /, "The needs-you drawer delegates owner actions to one component");
 for (const decision of ["approve", "reject", "cancel"]) {
-  assert.match(drawer, new RegExp(`previewDecision\\(selection\\.item, "${decision}"`), `Decision ${decision} uses a typed preview`);
+  assert.match(attentionActions, new RegExp(`previewDecision\\(item, "${decision}"`), `Decision ${decision} uses a typed preview`);
 }
-assert.doesNotMatch(drawer, /previewDecision\([^)]*"defer"/, "Deferring records no decision, so the drawer does not offer it as one");
-assert.match(drawer, /canDecideAttention\(attention\)/, "Only a typed User gate can be decided from the drawer");
+assert.doesNotMatch(attentionActions, /previewDecision\([^)]*"defer"/, "Deferring records no decision, so the drawer does not offer it as one");
+assert.match(attentionActions, /canDecideAttention\(attention\)/, "Only a typed User gate can be decided from the drawer");
+for (const operation of ["complete", "defer", "cancel"]) {
+  assert.match(attentionActions, new RegExp(`previewUserAction\\(item, "${operation}"`), `User action ${operation} uses a typed preview`);
+}
+assert.match(attentionActions, /canHandleUserAction\(attention\)/, "Only a typed User action with a stable id is handled from the drawer");
+assert.match(page, /onReplyToAttention: callbacks\.onReplyToAttention \?\? draftAttentionMessage/, "Reply drafts in the Goal conversation without sending");
 
 for (const callback of ["onRetryResumeRun", "onStartNewRunSession", "onCloseRunSession"]) {
   assert.match(model, new RegExp(`${callback}\\??:`), `Run exposes ${callback}`);
@@ -294,7 +302,7 @@ assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Work
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
 assert.match(dashboard, /if \(\(selectedRoute\.agentId === "status-only" && targetContext\.kind !== "project"\)\s*\|\| \(targetContext\.kind === "goal" && !targetGoal\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback; a workspace conversation never answers from the Goal projection");
-assert.match(drawer, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
+assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
 assert.match(drawer, /t\("drawer\.runRecordEmpty"\)/, "A truly empty Session still explains why there is no timeline yet");
@@ -428,7 +436,14 @@ assert.match(machineSettings, /periodicReportActivationDescription/, "Machine pe
 assert.match(i18n, /Enabled means automatic delivery at validated stage boundaries/, "English machine settings name automatic stage delivery");
 assert.match(i18n, /开启后将在已验证的阶段节点自动投递/, "Chinese machine settings name automatic stage delivery");
 assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale\)/, "Machine capability fields follow the selected locale");
-assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/, "Goal capability fields follow the selected locale and capability");
+assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/,
+  "Goal fields use the selected locale and capability-specific vocabulary");
+assert.deepEqual(localizedCapabilityFieldCopy("en", "explore_harness").mode.options,
+  { off: "Off", evidence: "Evidence only", planning: "Evidence and planning" });
+assert.deepEqual(localizedCapabilityFieldCopy("zh-CN", "explore_harness").mode.options,
+  { off: "关闭", evidence: "仅记录证据", planning: "证据与规划" });
+assert.equal(localizedCapabilityFieldCopy("en", "explore_harness").enabled.label, "Enabled");
+assert.equal(localizedCapabilityFieldCopy("zh-CN", "explore_harness").enabled.label, "启用");
 assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");

@@ -52,6 +52,8 @@ export type WorkspaceAgentTodo = {
   requestText?: string;
   /** The authority id, absent when a legacy projection needs a display-only id. */
   sourceTodoId?: string | null;
+  /** Local map fallback: exact request reading without current-state actions. */
+  detailMode?: "request_only";
   text: string;
   todoId: string;
   validationDigest?: string | null;
@@ -490,6 +492,8 @@ export type PersonalWorkspaceCallbacks = {
   onCorrectRun?: (run: WorkspaceRun, message: string) => void | Promise<void>;
   onCloseRunSession?: (run: WorkspaceRun) => void | Promise<void>;
   onExplainDecision?: (attention: WorkspaceAttention) => void | Promise<void>;
+  /** Open the item's Goal conversation with an editable draft; never sends. */
+  onReplyToAttention?: (attention: WorkspaceAttention, intent: "reply" | "explain") => void;
   onExportOutput?: (output: WorkspaceOutput) => void | Promise<void>;
   onInterruptRun?: (run: WorkspaceRun) => void | Promise<void>;
   onCancelConversationPreparation?: (contextId: string) => void;

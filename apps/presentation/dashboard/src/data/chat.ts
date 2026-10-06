@@ -1144,7 +1144,8 @@ export type DelegationReadback = {
   status: string; worker_active: boolean; recovery_required: boolean;
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
-    check_count: number; pinned_file_count: number};
+    check_count: number; pinned_file_count: number; checked_at?: string;
+    output_versions?: Array<{ref: string; sha256: string}>};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
 export function readLoopXTeamWork(sessionId: string, operationId: string) {

@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .quota_capture import capture_decision, prepare_decision_capture
+from .quota_capture import bind_capture_selection_transport, capture_decision, prepare_decision_capture
 from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
@@ -443,6 +443,7 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
+    bind_capture_selection_transport(payload, args)
     capture_decision(capture_directory, payload)
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
@@ -485,7 +486,10 @@ def handle_quota_command(
     context: QuotaCommandContext | None = None
     goal_ref: dict[str, str] | None = None
     try:
-        if capture_directory is None and getattr(args, "decision_output_dir", None) is not None:
+        if capture_directory is None and (
+            getattr(args, "decision_output_dir", None) is not None
+            or getattr(args, "decision_output_root", None) is not None
+        ):
             validate_quota_command_context_request(args)
             capture_directory = prepare_decision_capture(args)
         goal_ref, turn_start_hook_dispatch, context = (

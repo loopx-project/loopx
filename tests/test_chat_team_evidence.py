@@ -53,6 +53,14 @@ def test_chat_and_cli_read_same_accepted_artifact_and_reject_stale_scope(service
     # not momentary liveness sampled at different times.
     for key in ("operation_id", "request_id", "agent_id", "todo_id", "artifacts"):
         assert observed[key] == cli_result[key] == accepted[key]
+    # Every transport reruns real checks; time is fresh, the checked versions
+    # and current rule definition match the report actually returned.
+    for result in (observed, cli_result, accepted):
+        assert result["validation"]["checked_at"].endswith("Z")
+        assert result["validation"]["output_versions"] == [
+            {"ref": row["ref"], "sha256": row["sha256"]} for row in result["artifacts"]]
+    assert {key: value for key, value in observed["validation"].items() if key != "checked_at"} == {
+        key: value for key, value in cli_result["validation"].items() if key != "checked_at"}
     assert observed["artifacts"][0]["text"] == (root / "analyst/initial/output.json").read_text()
     assert store.load_session(sid) == before
     assert (root / "analyst/initial/host-invocations").read_text() == "1"

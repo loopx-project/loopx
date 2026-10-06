@@ -1,6 +1,7 @@
 /** Compact Explore read model. Existing Graph/Harness owners retain all gates. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
+import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -9,21 +10,34 @@ function compact(row: JsonObject, fields: string[]): JsonObject {
   return Object.fromEntries(fields.filter(key => row[key] !== undefined)
     .map(key => [key, typeof row[key] === "string" ? (row[key] as string).slice(0, 240) : row[key]]));
 }
+function evidenceCount(audit: JsonObject, kind: string, detailCount: number): number {
+  if (audit.status_counts == null) return detailCount;
+  const counts = requireJsonObject(audit.status_counts, "Explore evidence status counts");
+  if (counts[kind] == null) return detailCount;
+  const statuses = requireJsonObject(counts[kind], `Explore ${kind} status counts`);
+  let total = 0;
+  for (const value of Object.values(statuses)) {
+    const count = requireInteger(value, `Explore ${kind} count`);
+    if (count < 0) throw new EffectRuntimeRequestError(`Explore ${kind} count must be nonnegative`);
+    total += count;
+  }
+  return Math.max(detailCount, total);
+}
 function branchContext(row: JsonObject): JsonObject {
   const result = compact(row, ["todo_id", "text", "branch_role", "score", "confidence"]);
   if (row.typed_evidence_audit == null) return result;
   const audit = requireJsonObject(row.typed_evidence_audit, "Explore evidence audit");
   const nodes = rows(audit.nodes), findings = rows(audit.findings), edges = rows(audit.relevant_edges);
   // Preserve the existing diagnostic owner: no score change, inferred links or
-  // new execution gate. Counts describe this already bounded upstream audit.
+  // new execution gate. Full status counts include details omitted upstream.
   result.typed_evidence_audit = {
     ...compact(audit, ["mode", "score_delta", "requested_node_refs", "unknown_node_refs", "hazards"]),
     nodes: nodes.slice(0, 3).map(node => compact(node, ["node_id", "title", "status"])),
     findings: findings.slice(0, 3).map(finding => compact(finding, ["finding_id", "node_id", "finding", "status"])),
     relevant_edges: edges.slice(0, 3).map(edge => compact(edge, ["from_node", "to_node", "edge_type"])),
     omitted_audit_nodes: Math.max(0, nodes.length - 3),
-    omitted_audit_findings: Math.max(0, findings.length - 3),
-    omitted_audit_edges: Math.max(0, edges.length - 3),
+    omitted_audit_findings: Math.max(0, evidenceCount(audit, "findings", findings.length) - 3),
+    omitted_audit_edges: Math.max(0, evidenceCount(audit, "edges", edges.length) - 3),
   };
   return result;
 }

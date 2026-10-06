@@ -3,6 +3,7 @@ import { replanCadenceScenario } from "./personal-workspace-browser/replan-caden
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
 import {privateStewardScopeScenario} from "./personal-workspace-browser/private-steward-scope.mjs";
 import {configurationBackupScenario} from "./personal-workspace-browser/configuration-backup.mjs";
+import {attentionUserActionScenario} from "./personal-workspace-browser/attention-user-action.mjs";
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
@@ -45,6 +46,7 @@ import { blockedReasonReadbackScenario } from "./personal-workspace-browser/bloc
 import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence.mjs";
 import { taskInspectorReturnScenario } from "./personal-workspace-browser/task-inspector-return.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
+import { researchResultsScenario } from "./personal-workspace-browser/research-results.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
 import { progressiveLoadingScenario } from "./personal-workspace-browser/progressive-loading.mjs";
 import { stewardJourneyScenario } from "./personal-workspace-browser/steward-journey.mjs";
@@ -85,6 +87,8 @@ scenarioCatalog.push(nativeChildActivityScenario);
 scenarioCatalog.push(privateStewardScopeScenario);
 scenarioCatalog.push(externalEvidenceReadbackScenario);
 scenarioCatalog.push(configurationBackupScenario);
+scenarioCatalog.push(attentionUserActionScenario);
+scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);

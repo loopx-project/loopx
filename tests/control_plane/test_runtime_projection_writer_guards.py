@@ -131,6 +131,25 @@ def test_unpatched_append_projects_and_reads_back(tmp_path: Path) -> None:
     assert len(_index_rows(tmp_path)) == 1
 
 
+@pytest.mark.parametrize("missing_path_key", ["json_path", "markdown_path"])
+def test_matching_marker_with_missing_artifact_is_reprojected(
+    tmp_path: Path,
+    missing_path_key: str,
+) -> None:
+    first = _call(tmp_path)
+    Path(first[missing_path_key]).unlink()
+
+    retried = _call(tmp_path)
+
+    assert retried["status"] == "projected"
+    assert retried["readback_verified"] is True
+    assert Path(retried["json_path"]).exists()
+    assert Path(retried["markdown_path"]).exists()
+    assert retried["json_path"] != first["json_path"]
+    assert retried["markdown_path"] != first["markdown_path"]
+    assert len(_index_rows(tmp_path)) == 2
+
+
 def test_readback_mismatch_fails_closed_after_append(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

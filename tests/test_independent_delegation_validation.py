@@ -18,6 +18,51 @@ from test_local_delegation import brief, demo, service as delegation_service, wa
 service = delegation_service
 
 
+@pytest.mark.parametrize("source", ["goal_acceptance", "todo_validation"])
+def test_other_task_commit_during_checks_preserves_current_task_evidence(service, monkeypatch, source):
+    """A peer's real canonical commit cannot invalidate a stable scoped check."""
+    from loopx.control_plane.collaboration import delegation_validation
+
+    root, runner = service
+    if source == "todo_validation":
+        independent_binding(service)
+    else:
+        basis = inspect_goal_acceptance(registry_path=runner.registry, goal_id=runner.goal_id,
+                                        runtime_root=str(runner.root))
+        document = basis["contract"]
+        document["scope"] = {"kind": "selected_work", "todo_ids": ["todo_analyst-initial"]}
+        document["bindings"] = [row for row in document["bindings"]
+                                if row["todo_id"] == "todo_analyst-initial"]
+        configure_goal_acceptance(registry_path=runner.registry, goal_id=runner.goal_id,
+            runtime_root=str(runner.root), document=document,
+            expected_provider_revision=basis["provider_revision"], execute=True)
+    binding = runner.binding("analysis", require_active=True)
+    before = delegation_validation.capture(runner, binding)
+    execute = delegation_validation.run_goal_acceptance_validation_effect
+    commits = []
+
+    def checked_with_peer_progress(**kwargs):
+        result = execute(**kwargs)  # Real configured validator, not a supplied pass.
+        assert result["passed"]
+        if not commits:
+            committed = demo.cli(root, "todo", "add", "--goal-id", runner.goal_id, "--role", "agent",
+                                 "--text", "Review an unrelated result", "--claimed-by", "reviewer")
+            assert committed["ok"], committed
+            commits.append(committed["todo_id"])
+        return result
+
+    monkeypatch.setattr(delegation_validation, "run_goal_acceptance_validation_effect", checked_with_peer_progress)
+    validated = runner._validate(binding)
+    after = delegation_validation.capture(runner, binding)
+    assert before["basis"]["provider_revision"] != after["basis"]["provider_revision"]
+    assert before["basis"]["todo"] == after["basis"]["todo"]
+    assert commits[0] != binding["todo_id"]
+    assert validated["plan"]["source"] == source
+    assert before["plan"] == after["plan"] and before["files_current"] and after["files_current"]
+    assert not after["basis"]["todo"]["done"]
+    assert not (root / "analyst/initial/host-invocations").exists()
+
+
 def independent_binding(service, *, declared=True, task_repository=None, validation_argv=None):
     root, runner = service
     basis = inspect_goal_acceptance(registry_path=runner.registry, goal_id=runner.goal_id,
@@ -43,6 +88,43 @@ def independent_binding(service, *, declared=True, task_repository=None, validat
     config["bindings"][0]["todo_id"] = todo_id
     runner.config.write_text(json.dumps(config))
     return todo_id
+
+
+@pytest.mark.parametrize("change", ["note", "text", "claim"])
+def test_current_task_observation_isolated_but_work_and_claim_changes_reject(service, monkeypatch, change):
+    from loopx.control_plane.collaboration import delegation_validation
+    from loopx.control_plane.todos.provider_update import update_canonical_todo_if_promoted
+
+    root, runner = service
+    todo_id = independent_binding(service)
+    binding = runner.binding("analysis", require_active=True)
+    execute = delegation_validation.run_goal_acceptance_validation_effect
+
+    def checked_with_task_change(**kwargs):
+        result = execute(**kwargs)
+        assert result["passed"]
+        updated = update_canonical_todo_if_promoted(
+            registry_path=runner.registry, runtime_root=runner.root, goal_id=runner.goal_id,
+            todo_id=todo_id, actor_agent_id="analyst", role="agent", dry_run=False,
+            text="Validate a different requested result" if change == "text" else None,
+            note="Current progress observation" if change == "note" else None,
+            planning_intent={"claimed_by": "reviewer"} if change == "claim" else None,
+        )
+        assert updated["status"] == "applied", updated
+        return result
+
+    monkeypatch.setattr(delegation_validation, "run_goal_acceptance_validation_effect", checked_with_task_change)
+    if change == "note":
+        assert runner._validate(binding)["plan"]["source"] == "todo_validation"
+    else:
+        with pytest.raises(ValueError, match="task acceptance changed during validation"):
+            runner._validate(binding)
+    current = demo.canonical_tasks(root)[todo_id]
+    field = {"note": "note", "text": "text", "claim": "claimed_by"}[change]
+    assert current[field] == {"note": "Current progress observation", "text": "Validate a different requested result",
+                              "claim": "reviewer"}[change]
+    assert not current["done"]
+    assert not (root / "analyst/initial/host-invocations").exists()
 
 
 def test_independent_validator_qualifies_preflight_without_owner_rebinding(service):

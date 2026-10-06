@@ -140,3 +140,27 @@ def test_full_display_is_unchanged_by_capture_location():
     captured = _project_quota_cli_payload(source, args, frozenset(), None,
                                          captured_decision_path='/tmp/observation/decision.json')
     assert captured == baseline
+
+
+@pytest.mark.parametrize('kind', ['missing', 'file', 'symlink'])
+def test_capture_root_rejects_invalid_destination(tmp_path, kind):
+    root = tmp_path / 'root'
+    if kind == 'file':
+        root.write_text('unchanged')
+    elif kind == 'symlink':
+        root.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(QuotaCommandValidationError):
+        prepare_decision_capture(request(None, decision_output_root=root))
+    assert not list(tmp_path.glob('decision-*'))
+
+
+def test_capture_root_allocates_private_distinct_children(tmp_path):
+    args = request(None, decision_output_root=tmp_path)
+    first = prepare_decision_capture(args)
+    second = prepare_decision_capture(args)
+    assert first != second
+    assert first.parent == second.parent == tmp_path
+    if os.name != 'nt':
+        assert first.stat().st_mode & 0o777 == 0o700
+    with pytest.raises(QuotaCommandValidationError):
+        prepare_decision_capture(request(None, decision_output_root=tmp_path, turn_instance_id=None))

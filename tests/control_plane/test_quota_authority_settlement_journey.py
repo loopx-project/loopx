@@ -28,11 +28,14 @@ def _row(todo_id: str, *, status: str = "open", extra: str = "") -> str:
 
 
 def _source(root: Path, *, provider: str, status: str = "open", extra: str = "", empty: bool = False,
-            handoff_mode: str = "soft_claim"):
+            handoff_mode: str = "soft_claim", user_rows: str = ""):
     project, runtime, registry = cli._write_fixture(root)
     goal = json.loads(registry.read_text())["goals"][0]
     path = project / goal["state_file"]
-    prefix = path.read_text().split("## Agent Todo")[0] + "## Agent Todo\n\n"
+    prefix = path.read_text().split("## Agent Todo")[0]
+    if user_rows:
+        prefix += "## User Todo / Owner Review Reading Queue\n\n" + user_rows + "\n"
+    prefix += "## Agent Todo\n\n"
     rows = "".join(_row(f"todo_ready_{i}") for i in range(35))
     path.write_text(prefix + ("" if empty else rows + _row(cli.TODO_ID, status=status, extra=extra)))
     if provider != "legacy":
@@ -40,7 +43,9 @@ def _source(root: Path, *, provider: str, status: str = "open", extra: str = "",
         initialize_canonical_authority(
             runtime, cli.GOAL_ID,
             build_todo_runtime_shadow_projection(
-                goal_id=cli.GOAL_ID, todos=fields["agent_todos"]["items"], handoff_mode=handoff_mode,
+                goal_id=cli.GOAL_ID,
+                todos=fields["agent_todos"]["items"] + fields.get("user_todos", {}).get("items", []),
+                handoff_mode=handoff_mode,
             ),
             state_path=path, provider=provider,
         )
@@ -81,6 +86,38 @@ def test_exact_selection_reaches_work_beyond_display_limits(tmp_path, provider):
     assert guard["decision"] == "run"
     assert guard["selected_todo"]["todo_id"] == cli.TODO_ID
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("conflicting_target", [False, True])
+def test_canonical_decision_gate_cannot_be_bypassed_by_exact_selection(
+    tmp_path, provider, conflicting_target,
+):
+    target = "todo_other" if conflicting_target else cli.TODO_ID
+    user_rows = (
+        "- [ ] [P0] Decide whether the selected write may proceed.\n"
+        f"  <!-- loopx:todo todo_id=todo_gate status=open task_class=user_gate "
+        f"blocks_agent={cli.AGENT_ID} decision_scope=write_scope:action:release "
+        f"unblocks_todo_id={target} -->\n"
+    )
+    project, runtime, registry, path, prefix = _source(
+        tmp_path, provider=provider,
+        extra=f"claimed_by={cli.AGENT_ID} required_decision_scopes=write_scope:action:release",
+        user_rows=user_rows,
+    )
+    # An apparently unblocked display cannot erase the canonical gate/requirement.
+    path.write_text(prefix.split("## User Todo")[0] + "## Agent Todo\n\n" + _row(cli.TODO_ID))
+    _, guard = _guard(project, runtime, registry)
+    assert guard["normal_delivery_allowed"] is False, guard
+    if conflicting_target:
+        consistency = guard["todo_decision_scope_consistency"]
+        assert consistency["ok"] is False
+        assert any(error["reason_code"] == "required_decision_scope_target_mismatch"
+                   for error in consistency["errors"])
+    current = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                             runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)["todo"]
+    assert current["required_decision_scopes"][0]["scope_key"] == "release"
+    assert cli._spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])

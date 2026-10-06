@@ -74,20 +74,6 @@ SHADOW_DRAIN_SCHEMA = "loopx_shadow_drain_v0"
 SHADOW_EXACT_DRAIN_SCHEMA = "loopx_shadow_drain_v1"
 RETENTION_PRESSURE_BYTES = 8 * 1024 * 1024
 _SEED_WRITE_CLASSES = {"seed", "reseed_after_crash_gap"}
-_EVIDENCE_V1_OUTCOMES = {
-    "delivered",
-    "replayed",
-    "ambiguous_reconciled",
-    "pending",
-    "drain_deferred",
-    "no_transaction",
-    "capture_failed",
-    "ambiguous_unproved",
-    "unavailable",
-    "failed",
-    "protocol_mismatch",
-    "conflict_retry_required",
-}
 
 
 @dataclass
@@ -485,34 +471,6 @@ def capture_evidence(
     }
 
 
-def valid_evidence_v1(result: object, *, goal_id: str) -> bool:
-    """Closed-shape check for evidence v1 as attached to writer payloads."""
-
-    if not isinstance(result, dict):
-        return False
-    entry = result.get("entry")
-    return (
-        result.get("schema_version") == LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA_V1
-        and result.get("outcome") in _EVIDENCE_V1_OUTCOMES
-        and result.get("goal_id") == goal_id
-        and isinstance(entry, dict)
-        and result.get("capture_kind") == "source_transaction_outbox"
-        and isinstance(result.get("source_transaction_correlated"), bool)
-        and isinstance(result.get("durable_source_outbox"), bool)
-        and result.get("source_candidate_compared") is False
-        and result.get("parity_verdict") == "not_evaluated"
-        and result.get("primary_authority") == "legacy_local"
-        and result.get("candidate_provider") == "file"
-        and result.get("candidate_read_for_decision") is False
-        and result.get("provider_to_local_writes") is False
-        and result.get("primary_writeback_preserved") is True
-        and (
-            result.get("reason_code") is None
-            or isinstance(result.get("reason_code"), str)
-        )
-    )
-
-
 __all__ = [
     "effective_runtime_root",
     "CLI_DRAIN_LOCK_TIMEOUT_SECONDS",
@@ -530,5 +488,4 @@ __all__ = [
     "drain_local_authority_shadow_outbox",
     "local_authority_shadow_status",
     "read_local_authority_shadow",
-    "valid_evidence_v1",
 ]

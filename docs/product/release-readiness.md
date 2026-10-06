@@ -199,6 +199,20 @@ attestation separately binds those bytes to the repository, workflow, commit,
 and build event; neither mechanism claims that the package is vulnerability
 free.
 
+Before a recovery dispatch, inspect the existing `pypi` environment's allowed
+branch/tag refs as well as the Trusted Publisher and enabled variable:
+
+```bash
+gh api repos/loopx-project/loopx/environments/pypi/deployment-branch-policies
+gh api repos/loopx-project/loopx/actions/variables/PYPI_PUBLISH_ENABLED
+```
+
+The workflow ref must satisfy that existing deployment policy. For a tag-only
+policy, use an explicitly labelled release-tooling tag pinned to the reviewed
+workflow commit, separately from the immutable product tag passed as `tag`.
+Retain the tooling ref for provenance verification; do not move the product tag,
+relax the environment policy, or replace Trusted Publishing with a token.
+
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,
@@ -231,9 +245,11 @@ release workflow publishes only when maintainers have configured all of these:
   Publisher configuration;
 - the repository variable `PYPI_PUBLISH_ENABLED=true`.
 
-Do not add a long-lived PyPI token. Without every condition above, GitHub
-Release packages and their verification material are still produced, while
-the PyPI job remains skipped.
+Do not add a long-lived PyPI token. Without the enabled variable, the PyPI
+job is skipped. With publication enabled, a disallowed workflow ref or invalid
+Trusted Publisher configuration fails closed; it does not become a successful
+or skipped publication. GitHub packages and PyPI publication retain separate
+readbacks.
 
 ## Public Release Timeline
 
@@ -708,6 +724,25 @@ path, and canary route rather than as a user-facing release baseline.
   `fc42b84cedb21a56c15ca3b4af5eab0407829cf8`. See the
   [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.4)
   for its shipped capability usage and qualification limits.
+
+- `v1.3.0` on 2026-10-06 09:41 +08:00: long-horizon benchmark findings and
+  Astra-assisted semantic control-plane engineering, with continuing-work
+  ownership, evidence-driven replanning and recoverable workspace interaction
+  at commit `e1dd9e519c3057fda4b3765d0c93e7ae793608bf`. The
+  [published release](https://github.com/loopx-project/loopx/releases/tag/v1.3.0)
+  contains bilingual operating instructions and annotated community credits;
+  the [personal illustrated guide](https://my.feishu.cn/docx/Rlg0d9pvAo6zXExWTvWcv0ben0f)
+  was read back with the released UI. Eight source-qualification lanes passed,
+  including the full Python/public smoke suites, installed wheel upgrade and
+  isolated real-model validation. Package checksums, PyPI hashes, hosted
+  attestations, desktop assets, signed update feed and the fast-forwarded
+  `stable` installation were independently verified. The attested source
+  record distinguishes immutable product source from reviewed workflow and
+  browser-fixture corrections. Native desktop builds passed; the maintainer
+  published verified CI outputs after cancelling queued publication jobs.
+  Windows execution, Apple Developer ID/notarization, live Lark/Bot channels
+  and unavailable Harbor/SForge/PostgreSQL/NoKV environments remain unqualified.
+  This release does not claim a paired-version benchmark uplift.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

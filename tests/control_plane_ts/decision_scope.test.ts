@@ -67,8 +67,19 @@ test("complete production-scale history preserves the conflict beyond display li
 
 test("batched relations preserve pair ordering and fail on unknown protocol operations", () => {
   const result = evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0", operation: "relations", gates: [gate], items: [item, {...item, required_decision_scopes: []}]});
-  assert.deepEqual(result.result, [[todoGateRelation(gate, item), todoGateRelation(gate, {...item, required_decision_scopes: []})]]);
+  const matrix = result.result as JsonObject[][];
+  assert.deepEqual(matrix.map(row => row.map(relation => relation.state)), [["gate_covers_action", "independent"]]);
+  assert.deepEqual(matrix.map(row => row.map(relation => relation.agent_todo_id)), [["todo_work", "todo_work"]]);
   assert.throws(() => evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0", operation: "approve"}), /unsupported/);
+});
+
+test("retired scalar transport operations fail closed while internal rules remain available", () => {
+  for (const operation of ["covers", "scope_relation", "exact_relation"]) {
+    assert.throws(() => evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0",
+      operation, gate_scope: scope, required_scope: scope, gate, item}), /unsupported decision scope operation/);
+  }
+  assert.equal(decisionScopeCovers(scope, scope), true);
+  assert.equal(todoGateRelation({...gate, unblocks_todo_id: "todo_other"}, item)?.state, "projection_repair_required");
 });
 
 

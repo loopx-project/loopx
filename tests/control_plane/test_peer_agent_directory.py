@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
+from loopx.control_plane.agents.management_projection import (
+    build_agent_management_projection,
+    projected_agent_goals,
+)
 from loopx.control_plane.agents.directory import (
     GAP_AUDIENCE_NOT_AUTHORIZED,
     LIMITATION_CALLER_IDENTITY_NOT_SUPPLIED,
@@ -240,3 +246,51 @@ def test_the_published_candidate_list_respects_its_budget() -> None:
         "thread-2",
     ]
     assert "withheld_candidate_count" not in route
+
+
+@pytest.mark.parametrize("status", ["blocked", "deferred", "done"])
+def test_canonical_identity_wins_over_stale_display_variants(status: str) -> None:
+    payload = _status_payload([WORKING_AGENT])
+    current = dict(payload["todo_index"]["items"][0], status=status, done=status in ("deferred", "done"))
+    stale = dict(current, status="open", done=False, index=99,
+        text="Old shorter display", selected_by="current_agent_claimed_todo")
+    payload["attention_queue"] = {"items": [{"goal_id": GOAL_ID,
+        "agent_todos": {"items": [current], "first_open_items": [stale]},
+        "agent_lane_next_action": stale,
+        "project_asset": {"agent_todos": {"items": [stale]}}}]}
+    payload["todo_index"] = {"items": [dict(stale, source="attention_queue")]}
+
+    management = build_agent_management_projection(payload)
+    row = next(row for row in management["agents"] if row["agent_id"] == WORKING_AGENT)
+    work = _rows_by_agent(build_peer_agent_directory(payload))[WORKING_AGENT]["work"]
+    if status == "done":
+        assert "current_todo" not in row
+        assert work is None
+        assert projected_agent_goals(payload)[GOAL_ID][WORKING_AGENT]["open_todo_ids"] == []
+    else:
+        assert row["current_todo"]["status"] == status
+        assert work["todo_status"] == status
+
+
+def test_stale_hint_cannot_restore_a_cleared_claim() -> None:
+    payload = _status_payload([WORKING_AGENT])
+    current = dict(payload["todo_index"]["items"][0])
+    current.pop("claimed_by")
+    stale = dict(current, claimed_by=WORKING_AGENT, agent_id=WORKING_AGENT)
+    payload["attention_queue"] = {"items": [{"goal_id": GOAL_ID,
+        "agent_todos": {"items": [current]}, "agent_lane_next_action": stale}]}
+    payload["todo_index"] = {"items": []}
+    assert _rows_by_agent(build_peer_agent_directory(payload))[WORKING_AGENT]["work"] is None
+    assert projected_agent_goals(payload)[GOAL_ID][WORKING_AGENT]["open_todo_ids"] == []
+
+
+def test_unavailable_source_does_not_resurrect_project_asset_or_hint() -> None:
+    payload = _status_payload([WORKING_AGENT])
+    stale = payload["todo_index"]["items"][0]
+    payload["attention_queue"] = {"items": [{"goal_id": GOAL_ID,
+        "todo_source": "unavailable", "agent_lane_next_action": stale,
+        "project_asset": {"agent_todos": {"items": [stale]}}}]}
+    payload["todo_index"]["items"] = []
+    packet = build_peer_agent_directory(payload)
+    assert _rows_by_agent(packet)[WORKING_AGENT]["work"] is None
+    assert projected_agent_goals(payload)[GOAL_ID][WORKING_AGENT]["open_todo_ids"] == []
