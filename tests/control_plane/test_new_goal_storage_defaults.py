@@ -59,11 +59,81 @@ def test_creation_freezes_target_and_reconnect_does_not_follow_changed_defaults(
 
 
 def test_existing_implicit_file_goal_is_not_retargeted(environment):
-    configure, bootstrap, marker, _, _ = environment
-    assert bootstrap()["storage_target"] is None
+    configure, bootstrap, marker, project, _ = environment
+    # A supported historical Goal has no creation target, independently of the
+    # current release's default for a new Goal.
+    configure("file")
+    bootstrap()
+    registry = project / ".loopx/registry.json"
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"].pop("storage_target")
+    registry.write_text(json.dumps(data))
     configure("sqlite")
+    assert bootstrap("first", "--dry-run")["storage_target"] is None
     assert bootstrap()["storage_selection"] is None
     assert not marker().exists()
+
+
+@pytest.mark.parametrize("configuration_present", [False, True])
+def test_unconfigured_new_goal_defaults_to_canonical_sqlite_and_retains_later_writes(environment, configuration_present):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, bootstrap, _, project, runtime = environment
+    configuration = runtime / "machine/configuration.json"
+    if configuration_present:
+        configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+            "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v1", "count_unit": "completed_todos", "count": 5}}}))
+    target = {"schema_version": "loopx_new_goal_storage_target_v1", "provider": "sqlite", "handoff_mode": "hard_lease"}
+    assert bootstrap("first", "--dry-run")["storage_target"] == target
+    assert not (runtime / "authority-transition").exists()
+    created = bootstrap()
+    assert created["storage_target"] == target
+    assert created["storage_selection"]["authority_initialized"] is True
+    added = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(project / ".loopx/registry.json"),
+        "--runtime-root", str(runtime), "--format", "json", "todo", "add", "--goal-id", "first", "--role", "agent",
+        "--text", "Retain the default Goal's later work"], capture_output=True, text=True, timeout=60)
+    assert added.returncode == 0, added.stdout + added.stderr
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="first", include_leases=True)
+    assert before["source_authority"] == "sqlite_v0"
+    assert before["handoff_mode"] == "hard_lease"
+    assert len(before["todos"]) == 1
+    configure("file", mode="soft_claim")
+    Path(created["state_file"]).unlink()
+    restart_effect_runtime()
+    retried = bootstrap()
+    assert retried["storage_selection"]["creation_operation_id"] == created["storage_selection"]["creation_operation_id"]
+    assert retried["storage_target"] == target
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="first", include_leases=True) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_canonical_creation_disabled_remains_target_only(environment, provider):
+    _, bootstrap, _, _, runtime = environment
+    configuration = runtime / "machine/configuration.json"
+    configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": provider,
+                         "canonical_creation": False, "new_goal_handoff_mode": "soft_claim"}}}))
+    created = bootstrap()
+    assert created["storage_target"] == {"schema_version": "loopx_new_goal_storage_target_v0", "provider": provider}
+    assert created["storage_selection"]["promotion_performed"] is False
+    assert "authority_initialized" not in created["storage_selection"]
+
+
+@pytest.mark.parametrize("invalid_configuration", ["invalid_json", "invalid_namespace", "directory", "broken_symlink"])
+def test_invalid_configuration_does_not_become_an_unconfigured_default(environment, invalid_configuration):
+    _, bootstrap, _, project, runtime = environment
+    configuration = runtime / "machine/configuration.json"
+    if invalid_configuration == "directory":
+        configuration.mkdir()
+    elif invalid_configuration == "broken_symlink":
+        configuration.symlink_to(configuration.parent / "missing-configuration.json")
+    else:
+        configuration.write_text("{" if invalid_configuration == "invalid_json" else json.dumps({
+            "schema_version": "loopx_machine_configuration_v0", "namespaces": {"goal_storage": None}}))
+    rejected = bootstrap(expected_code=1)
+    assert rejected["ok"] is False
+    assert not (project / ".loopx/registry.json").exists()
+    assert not (runtime / "authority-transition").exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -166,6 +236,7 @@ def test_cli_creation_recovery_cannot_recreate_or_adopt_authority(environment, p
 def test_pending_creation_uses_frozen_intent_after_machine_default_changes(environment):
     configure, bootstrap, marker, project, _ = environment
     # Independently model the durable boundary: registry/state published, selector absent.
+    configure("file")
     bootstrap()
     registry = project / ".loopx/registry.json"
     data = json.loads(registry.read_text())
@@ -219,7 +290,7 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
     from loopx.capabilities.machine_configuration import goal_storage
     from loopx.todos import add_goal_todo
 
-    configure, _, marker, project, _ = environment
+    configure, _, marker, project, runtime = environment
     store, request = app
     configure(provider, mode=mode)
     registry = project / ".loopx/registry.json"
@@ -228,6 +299,8 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
     if relative_runtime:
         data = json.loads(registry.read_text())
         data["common_runtime_root"] = "../runtime"
+        from loopx.paths import resolve_runtime_root
+        assert resolve_runtime_root(data, registry_path=registry).resolve() == runtime.resolve()
         registry.write_text(json.dumps(data))
     unavailable = True
     selections = []
@@ -265,10 +338,12 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
             proposal = store.load(proposal_id)
             assert proposal["status"] == "failed"
             assert "goal_bootstrapped" not in proposal["checkpoint"]["steps"]
-            assert not marker("recovery").exists()
+            assert not marker("recovery").exists(), failure
             add.assert_not_called()
 
-        goal = next(g for g in json.loads(registry.read_text())["goals"] if g["id"] == "recovery")
+        goals = json.loads(registry.read_text())["goals"]
+        assert any(g["id"] == "recovery" for g in goals), failure
+        goal = next(g for g in goals if g["id"] == "recovery")
         assert goal["coordination"]["storage_target"]["provider"] == provider
         assert goal["creation_operation_id"] == proposal_id
         configure("file" if provider == "sqlite" else "sqlite")
@@ -315,7 +390,7 @@ def test_canonical_creation_force_rebuild_is_rejected_without_changing_todos(env
 def test_app_creation_cannot_adopt_a_competing_goal(environment, app, monkeypatch, provider, collision):
     from loopx import chat_actions
 
-    _, bootstrap, marker, project, _ = environment
+    configure, bootstrap, marker, project, _ = environment
     store, request = app
     registry = project / ".loopx/registry.json"
     other_project = project if collision == "same_workspace" else project.parent / "other"
@@ -337,6 +412,7 @@ def test_app_creation_cannot_adopt_a_competing_goal(environment, app, monkeypatc
     def create_competitor():
         # Real CLI registration, then model its durable pre-initialization
         # boundary independently. No fake success receipt or provider is used.
+        configure("file")
         bootstrap("competing", "--project", str(other_project))
         data = json.loads(registry.read_text())
         goal = next(g for g in data["goals"] if g["id"] == "competing")

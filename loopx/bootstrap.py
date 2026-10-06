@@ -350,7 +350,7 @@ def bootstrap_project(
     if not state_file.is_absolute():
         state_file = project / state_file
     goal_doc = resolve_project_path(project, goal_doc)
-    runtime_root = resolve_runtime_root(read_json_if_exists(registry_path), str(runtime_root) if runtime_root else None, registry_path=registry_path)
+    runtime_root = resolve_runtime_root(read_json_if_exists(registry_path), str(runtime_root) if runtime_root else None, registry_path=registry_path).resolve()
     updated_at = now_iso()
     execution_profile = build_execution_profile(
         minimum_scale=execution_minimum_scale,
@@ -568,7 +568,7 @@ def bootstrap_project(
             # A first explicit bootstrap has no previous Goal authority to fence.
             # Existing Goals still resolve and authorize their original route.
             if current_registry.get("goals"):
-                previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
+                previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path).resolve()
                 if previous_root != runtime_root:
                     for previous_goal in current_registry["goals"]:
                         if isinstance(previous_goal, dict) and previous_goal.get("id"):

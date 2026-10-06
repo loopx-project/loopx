@@ -98,7 +98,7 @@ def capability_configuration_editor(
                               options=["file", "sqlite"], required=True,
                               description="Fixed at creation. Existing Goals need a separate backed-up migration."),
                        _field("canonical_creation", "Create canonical authority", "boolean", required=True,
-                              description="Explicit opt-in for future Goals. Disabled retains the post-promotion target behavior."),
+                              description="Enabled by default for new Goals. Disabled retains the post-promotion target behavior."),
                        _field("new_goal_handoff_mode", "New Goal execution policy", "select",
                               options=["soft_claim", "hard_lease"], required=True,
                               description="Used only with canonical creation. Agents inherit the Goal policy; this grants no tool permissions.")],

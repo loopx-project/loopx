@@ -17,7 +17,7 @@ import {
   type MachineConfigurationRollbackPlan,
   type MachineConfigurationTransaction,
 } from "../../data/chat";
-import { projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
+import { goalStorageEditorValue, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
@@ -195,7 +195,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     const current = currentConfiguration(inspection, selected);
     const editable = projectEditableCapabilityConfiguration(
       selected.configuration_editor,
-      selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current ?? selected.default) : current ?? selected.default,
+      selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current ?? selected.default)
+        : selected.capability_id === "goal_storage" ? goalStorageEditorValue(current ?? selected.default) : current ?? selected.default,
       selected.default,
     );
     const complete = completeMachineConfiguration(selected, current, editable);
@@ -227,7 +228,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     } else if (parsedJsonDraft) {
       setDraft(projectEditableCapabilityConfiguration(
         selected.configuration_editor,
-        selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(parsedJsonDraft) : parsedJsonDraft,
+        selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(parsedJsonDraft)
+          : selected.capability_id === "goal_storage" ? goalStorageEditorValue(parsedJsonDraft) : parsedJsonDraft,
         selected.default,
       ));
     } else {

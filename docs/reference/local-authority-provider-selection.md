@@ -44,7 +44,7 @@ authenticated service or grant an Agent database access.
 
 The default profile is a routing decision, not a migration. Existing Markdown
 state, writer fences, qualification gates, and explicit File/SQLite promotion
-holds remain unchanged. SQLite stays an opt-in qualified candidate until the
+holds remain unchanged. The released SQLite profile remains opt-in until the
 shared-authority RFC's D2 evidence and owner approval are complete. PostgreSQL
 remains an independent service-provider qualification path.
 
@@ -62,15 +62,23 @@ See [reviewed promotion and recovery](reviewed-coordination-promotion.md) for th
 ## New Goal authority (machine setting)
 
 **Settings → Capability Center → Device defaults → New Goal authority** selects
-File or SQLite independently of the execution policy. Enable **Create canonical
-authority** to initialize future empty Goals directly with `soft_claim` or
-`hard_lease`. Agents inherit the Goal policy; this grants no tool, repository,
+File or SQLite independently of the execution policy. In the new-Goal default
+candidate, a device without a `goal_storage` namespace creates canonical SQLite
+with `hard_lease`; CLI bootstrap and App creation reuse the same configuration
+and typed initialization owner. **Create canonical authority** can be disabled
+explicitly, or used with File and either `soft_claim` or `hard_lease`. Agents
+inherit the Goal policy; this grants no tool, repository,
 scheduler, account or network permission and does not migrate existing data.
 
-Canonical creation is default-off. An absent namespace, the released v0 shape,
-or v1 with `canonical_creation=false` retains the post-promotion target behavior.
+The candidate changes only unconfigured new creation. Released v0 settings and
+v1 with `canonical_creation=false` retain the post-promotion target behavior.
 Opening v0 in the guided editor previews a v1 envelope upgrade with creation
-still disabled. The CLI continues to accept v0.
+still disabled; switching editor modes cannot enable it through the new default.
+The CLI continues to accept v0. Existing Goals keep their recorded target,
+including its absence, even when device settings change. Invalid configuration
+fails before registry publication rather than being treated as an absent setting.
+Registry-relative runtime paths are compared by their resolved filesystem
+location, so an equivalent spelling cannot masquerade as an authority move.
 
 Save this namespace document as `goal-storage.json`:
 
@@ -116,36 +124,33 @@ cannot adopt it. The original receipt survives later native writes, so replay
 cannot erase Todos or repeat their creation. An unavailable selected provider
 fails visibly without Markdown fallback. Lost completed authority requires full
 backup recovery and cannot be treated as empty creation. Generic forced
-bootstrap cannot rebuild an opted-in Goal.
+bootstrap cannot rebuild a canonically created Goal.
 
 <details>
 <summary>Settings and recovery views / 设置与恢复界面</summary>
 
-Synthetic workspace data; the settings use a real isolated backend. The first
-view is the released v0 editor; the remaining views show the proposed v1 path.
+Synthetic workspace data on the candidate's packaged App and installed wheel;
+model execution is disabled in this isolated creation/configuration rehearsal.
 
-Before: the provider setting only chooses the post-promotion target.
+Released v0 preferences remain target-only when opened in the candidate editor.
 
-![Released target-only editor](images/new-goal-authority/before.png)
+![Existing File preference stays disabled](images/new-goal-authority/v0-retained.png)
 
-After: provider, explicit canonical opt-in and execution policy, with applied
-configuration readback.
+Removing that preference restores canonical SQLite/hard-lease defaults, with
+native removal readback. It does not migrate the existing Goals.
 
-![Canonical creation settings and readback](images/new-goal-authority/after.png)
+![Candidate SQLite defaults after preference removal](images/new-goal-authority/sqlite-default.png)
 
-An unsupported `legacy` policy is rejected before apply; the previous valid
-configuration remains. Correcting the policy allows preview and apply again.
-
-![Invalid policy rejected](images/new-goal-authority/invalid-policy.png)
-
-The same device settings at a narrow viewport:
-
-![Narrow device settings](images/new-goal-authority/mobile.png)
+The existing preview/apply revision gate is unchanged. Unsupported `legacy`
+policy is rejected before apply; correct the policy and preview again. No new
+layout or responsive navigation is introduced.
 
 </details>
 
 To disable future canonical creation, preview and apply the same v1 document
-with `canonical_creation=false`. To remove the whole preference:
+with `canonical_creation=false`. Removing the preference restores the candidate
+SQLite/hard-lease default for future new Goals; removal is **not** opt-out.
+To remove the whole preference:
 
 ```sh
 loopx machine-config remove --namespace goal_storage
@@ -162,15 +167,18 @@ already-canonical Goals use the [reviewed File/SQLite cutover](file-authority-st
 Retain verified backups, stop writers, settle leases and preserve newer writes
 on reverse migration. Supported historical backup/format/receipt readers remain.
 
-This opt-in path does not close full existing-Goal upgrade, D2 sustained
-qualification or the release-default decision. Trial admission and release
+This implementation candidate does not close full existing-Goal upgrade, D2
+sustained qualification or authorize release-default activation. Trial admission and release
 default admission remain separate; the existing RFC acceptance is unchanged.
 
 ### 新 Goal 的权威存储
 
 在“设置 → 能力中心 → 此设备默认 → 新 Goal 的权威存储”中，分别选择 File/SQLite
-和 `soft_claim`/`hard_lease`，并显式启用 canonical 创建。默认关闭；旧 v0 或关闭
-状态仍只固定晋升后的目标。表单以关闭状态预览 v1 升级，CLI 继续接受旧格式。
+和 `soft_claim`/`hard_lease`。候选实现让未配置此命名空间的新 Goal 默认建立
+canonical SQLite、使用 `hard_lease`，CLI 与 App 共用配置和类型化创建归属。
+旧 v0 或显式关闭状态仍只固定晋升后的目标；表单以关闭状态预览 v1 升级，
+切换编辑模式也不会自动启用。CLI 继续接受旧格式，已有 Goal 保留原路径。
+Registry 中的相对 runtime 路径按实际文件位置比较；等价路径不会误触发权威迁移检查。
 Agent 继承 Goal 策略；此设置不授予工具、仓库、账户或网络权限。
 
 CLI 使用上面的完整 JSON 和 preview/apply/inspect/bootstrap 命令；App 用现有
@@ -184,10 +192,11 @@ CLI 使用上面的完整 JSON 和 preview/apply/inspect/bootstrap 命令；App 
 后的存储丢失须恢复完整备份，不能重新创建空库；通用 force 不能重建。原回执在
 后续写入后仍可读回，重试不得丢失或重复 Todo。
 
-关闭或按上面的 remove 预览/执行命令删除偏好，只影响之后新建；不会迁回已有数据、
+显式设置 `canonical_creation=false` 才关闭之后的新建；remove 删除偏好会恢复候选
+SQLite/hard-lease 默认，不能用于关闭。两者均不会迁回已有数据、
 删除 fence 或重新开放旧 writer。既有 Goal 升级仍需备份、停止写入、结算租约和
 审核计划；反向迁移须保留新增写入。受支持的旧备份、格式和原回执恢复能力保留。
-此路径不代表完整升级、D2 长期资格或发布默认已通过。
+配置损坏明确失败，不视为未配置；候选实现不代表完整升级、D2 长期资格或发布默认已通过。
 
 Prose-only source maintenance compares the exact canonical JSON bytes of the
 existing stable partition view. Only the resume evaluation clock is excluded;

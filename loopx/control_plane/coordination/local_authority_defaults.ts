@@ -25,7 +25,7 @@ export async function manageNewGoalStorage(request: JsonObject): Promise<JsonObj
     }
     if (canonical && (typeof config.canonical_creation !== "boolean" ||
         !EXECUTION_HANDOFF_MODES.some(mode => mode === config.new_goal_handoff_mode))) {
-      throw new Error("Canonical creation requires a boolean opt-in and soft_claim or hard_lease policy");
+      throw new Error("Canonical creation requires a boolean setting and soft_claim or hard_lease policy");
     }
     if (canonical && config.canonical_creation === true) return {
       schema_version: CANONICAL_NEW_GOAL_STORAGE_TARGET_SCHEMA, provider: provider(config.new_goal_provider),

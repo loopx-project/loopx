@@ -12,7 +12,7 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
-    goal_storage: { displayName: "New Goal authority", description: "Opt in to canonical creation and choose the storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
+    goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
       displayName: "Runtime",
       description: "Selects the persistent host-tool profile used by owner manager conversations.",
@@ -78,7 +78,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
-    goal_storage: { displayName: "新 Goal 的权威存储", description: "可启用 canonical 创建，选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
+    goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
       displayName: "运行环境",
       description: "选择管家会话持续生效的宿主工具模式。",

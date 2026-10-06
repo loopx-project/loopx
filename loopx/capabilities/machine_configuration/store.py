@@ -106,6 +106,8 @@ def read_machine_configuration(
 ) -> dict[str, Any] | None:
     path = machine_configuration_store_path(runtime_root)
     if not path.is_file():
+        if path.exists() or path.is_symlink():
+            raise ValueError("machine configuration must be a readable file")
         return None
     normalized: dict[str, Any] = normalize_machine_configuration(
         read_json(path), registry=registry
