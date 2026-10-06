@@ -301,15 +301,19 @@ by the ordinary update transaction. Permanent rendering and private command
 execution still have real Python callers and are not retirement candidates.
 
 Canonical Todo creation, update, completion, supersession and archive do not
-import the Markdown line writer during CLI registration. The source adapter
-loads it only when an unpromoted operation needs it. Explicit historic imports
+import the Markdown line writer or source Todo capture producers during CLI
+registration. Bootstrap loads capture producers only for a source-state write;
+canonical creation and original-operation recovery do not need them. The source
+adapter loads them only when an unpromoted operation needs them. Explicit historic imports
 from `loopx.todos` still resolve to the same functions in
 `control_plane.todos.line_update`; they do not create another decision owner.
 Provider failure still rejects the canonical operation without a source write.
 
 The absence regression runs real File/SQLite new-Goal creation and Todo
-lifecycle commands with the line writer physically removed from a disposable
-package. Original creation recovery preserves later work when the display is
+lifecycle commands with the line writer and four source Todo capture producer
+functions physically removed from a disposable package. Prose write guards and
+lease capture evidence remain in their owning adapter and keep their live callers.
+Original creation recovery preserves later work when the display is
 missing and device defaults change; an unavailable selected provider requires
 restoration rather than rebuilding source authority. It qualifies that caller
 boundary, not deletion of the supported Markdown writer, backup readers or
@@ -319,11 +323,14 @@ writeback, one quota settlement and exact retry. Missing leases and provider
 outages still reject; rebuilding the display does not make it fallback authority.
 
 canonical Todo 创建、更新、完成、替代和归档不再在 CLI 注册时导入 Markdown
-行写入器；未迁移操作实际需要它时才加载。`loopx.todos` 的历史显式导入仍指向
+行写入器或旧源 Todo capture producer；bootstrap 仅在源状态写入时加载 capture，
+canonical 创建和原操作恢复不依赖它。未迁移操作实际需要旧路径时才加载。
+`loopx.todos` 的历史显式导入仍指向
 同一实现，不新增决策 owner。provider 失效仍拒绝 canonical 写入，不回退到旧源。
-缺失模块回归在一次性包中物理移除行写入器，并运行真实 File/SQLite 新 Goal 创建与
+缺失模块回归在一次性包中物理移除行写入器及四个旧源 Todo capture 函数，并运行真实 File/SQLite 新 Goal 创建与
 Todo 生命周期。显示源缺失且设备默认值改变后，原创建操作恢复仍保留后续工作；所选
 provider 不可用时要求恢复，不重建旧源权威。
+同一 adapter 中仍有真实调用方的 prose 写入边界和 lease capture evidence 保留。
 相同缺失模块检查覆盖 hard-lease 工作的准入、实质 vision 写回、一次额度结算与原
 Turn 重试；缺租约和 provider 失效仍拒绝，重建显示不会使它成为回退权威。
 这验证调用方隔离；仍受支持的 Markdown writer、备份读取和原回执恢复保留各自的

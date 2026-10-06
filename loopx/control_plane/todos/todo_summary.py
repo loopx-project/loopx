@@ -6,8 +6,6 @@ from typing import Any, Callable, Optional, TypeGuard
 
 from ..goals.goal_vision_wait_projection import attach_active_vision_waits
 from .contract import (
-    TODO_STATUS_DONE,
-    TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_USER_ACTION,
     build_todo_id,
@@ -56,10 +54,6 @@ from .todo_semantics import (
     todo_priority_rank as projection_todo_priority_rank,
     todo_presentation_sort_key as projection_todo_presentation_sort_key,
     todo_projection_sort_key as projection_todo_projection_sort_key,
-)
-from .succession_warning import (
-    TODO_SUCCESSION_WARNING_REASON_CODE,
-    TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
 )
 from .resume_condition import evaluate_todo_resume_conditions
 from ..runtime.time import now_utc, now_utc_iso
@@ -140,15 +134,6 @@ def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
     if limit is None or len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
-
-
-def todo_item_status(item: dict[str, Any]) -> str:
-    """Return one Todo's explicit status with marker compatibility."""
-
-    status = normalize_todo_status(item.get("status"))
-    if status:
-        return status
-    return TODO_STATUS_DONE if item.get("done") else TODO_STATUS_OPEN
 
 
 def todo_archive_state(item: dict[str, Any]) -> str:
@@ -778,12 +763,6 @@ def todo_successor_todo_ids(item: dict[str, Any], *, items: list[dict[str, Any]]
     return list(evaluation["successor_todo_ids"])
 
 
-def todo_item_is_succession_tracked_completion(item: dict[str, Any]) -> bool:
-    from .succession_warning import project_succession
-
-    return project_succession([item])[0]["tracked_completion"] is True
-
-
 def _structured_todo_group_items(
     items: list[dict[str, Any]],
     *,
@@ -930,6 +909,10 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
     summary = result.get("fields")
     if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":
         raise ValueError("invalid typed Todo summary fields")
+    warning = summary.get("todo_succession_warning")
+    warning_action = warning.get("recommended_action") if isinstance(warning, dict) else None
+    if summary.get("completed_without_successor_count") and not isinstance(warning_action, str):
+        raise ValueError("invalid typed Todo succession warning")
     for name, lane in lanes.items():
         mode = lane.get("format")
         if mode not in {"raw", "active", "compact", "recent", "gap"}:
@@ -948,11 +931,13 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
                         compact.pop(key, None)
                 if mode == "gap":
                     compact.update(succession_tracked=True,
-                        recommended_action="record no_followup=true or add/link a successor todo")
+                        recommended_action=warning_action)
             else:
                 raise ValueError("invalid Todo summary display format")
             formatted.append(compact)
         summary[name] = formatted
+    if isinstance(warning, dict):
+        warning["items"] = summary["completed_without_successor_items"]
     return {"summary": summary, "items": [items[index] for index in selected],
         "succession": [succession[index] for index in selected],
         "orchestration": {name: [items[index] for index in indices] for name, indices in orchestration.items()}}
@@ -1040,16 +1025,4 @@ def compact_evaluated_todo_group(
             projected["orchestration"], role=role)
     if handoff_gates:
         summary["handoff_gates"] = handoff_gates
-    if summary.get("completed_without_successor_count"):
-        summary["todo_succession_warning"] = {
-            "schema_version": TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
-            "reason_code": TODO_SUCCESSION_WARNING_REASON_CODE,
-            "count": summary["completed_without_successor_count"],
-            "items": summary["completed_without_successor_items"],
-            "recommended_action": (
-                "run loopx todo complete --no-follow-up for the completed Todo, "
-                "or add/link a successor Todo before closing the slice; do not "
-                "invent a user gate"
-            ),
-        }
     return summary

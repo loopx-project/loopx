@@ -249,7 +249,7 @@ def run_once(env: dict[str, str]) -> dict:
         timeout_seconds=(float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"])
                          if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
-        task_entry=env.get("LOOPX_TASK_ENTRY", "seeded-todo"),
+        task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
     )
     stage = env.get("LOOPX_TASK_STAGE", "execute")

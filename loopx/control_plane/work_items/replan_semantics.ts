@@ -34,6 +34,10 @@ const REPLAN_PLANNING_GUIDANCE = [
     "honor user scope, authority, budget and stops.",
   "Claim achieved only with current authoritative evidence for every requirement. " +
     "Empty Todos/replan closure is not proof; unproven/blocked/exhausted/superseded is not achieved.",
+  "Before no_followup, review unmet acceptance against the original authorized goal and evidence. " +
+    "If a reasonable in-scope next step remains, continue or replan without waiting for an assigned successor. " +
+    "An empty Todo queue is not a scope limit. Otherwise explain why no such step remains; " +
+    "do not invent work, exceed authority or consume budget merely to stay active.",
 ];
 
 function object(value: unknown): JsonObject {

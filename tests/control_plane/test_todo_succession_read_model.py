@@ -86,6 +86,30 @@ def test_selection_after_warning_display_cap_keeps_exact_gap():
     assert selected["completed_without_successor_count"] == 1
 
 
+def test_warning_consumers_share_typed_guidance_without_mutating_continuation():
+    from copy import deepcopy
+    from loopx.control_plane.todos.succession_warning import build_todo_succession_warning_lanes
+
+    records = [work("todo_stage", completion_continuation="active_goal"),
+               work("todo_next", status="open", done=False)]
+    before = deepcopy(records)
+    result = summary(records)
+    warning = result["todo_succession_warning"]
+    assert warning["count"] == 1
+    assert "ordinary Todo completion needs no artificial successor" in warning["recommended_action"]
+    assert result["completed_without_successor_items"][0]["recommended_action"] == warning["recommended_action"]
+    assert result["first_executable_items"][0]["todo_id"] == "todo_next"
+    assert "terminal_closure_proof" not in result
+    for cap in (0, 1, 12):
+        projected = build_todo_succession_warning_lanes(result, item_limit=cap)
+        assert projected["completed_without_successor_count"] == 1
+        assert projected["todo_succession_warning"]["recommended_action"] == warning["recommended_action"]
+    legacy = build_todo_succession_warning_lanes({"completed_without_successor_count": 1}, item_limit=0)
+    assert "current quota settlement/replan contract" in legacy["todo_succession_warning"]["recommended_action"]
+    assert "todo complete" not in legacy["todo_succession_warning"]["recommended_action"]
+    assert records == before
+
+
 def test_changed_item_cannot_reuse_old_graph_evaluation():
     result = summary([work("todo_closed", no_followup=True)])
     result["items"][0]["no_followup"] = False

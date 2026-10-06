@@ -4,7 +4,7 @@ from .effective_action import EffectiveAction
 from collections.abc import Mapping
 from pathlib import Path
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ...rollout_event_log import (
     _append_rollout_event_line,
     build_rollout_event,
@@ -213,7 +213,9 @@ def ensure_turn_heartbeat_settlement_receipt(
 
     log_path = rollout_event_log_path(runtime_root, identity.goal_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_file_lock(log_path):
+    with exclusive_cross_runtime_file_lock(
+        log_path, operation="bind_heartbeat_settlement_receipt"
+    ):
         events = load_rollout_events(log_path)
         matching = _heartbeat_receipt_events(
             events,
@@ -323,7 +325,9 @@ def retain_pending_heartbeat_action_selection(
     normalized_reason = str(reason or "current_delivery_gate").strip()
     log_path = rollout_event_log_path(runtime_root, goal_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_file_lock(log_path):
+    with exclusive_cross_runtime_file_lock(
+        log_path, operation="retain_heartbeat_action_selection"
+    ):
         events = load_rollout_events(log_path)
         matching = _heartbeat_receipt_events(
             events,
@@ -434,7 +438,9 @@ def upgrade_identityless_heartbeat_receipt(
 
     log_path = rollout_event_log_path(runtime_root, goal_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_file_lock(log_path):
+    with exclusive_cross_runtime_file_lock(
+        log_path, operation="upgrade_heartbeat_receipt_identity"
+    ):
         events = load_rollout_events(log_path)
         matching = _heartbeat_receipt_events(
             events,

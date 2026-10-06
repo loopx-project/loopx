@@ -93,7 +93,8 @@ def main(argv=None):
     parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
     parser.add_argument("--timeout", type=int,
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
-    parser.add_argument("--task-entry", choices=TASK_ENTRIES, default="seeded-todo")
+    parser.add_argument("--task-entry", choices=TASK_ENTRIES,
+                        help="Heartbeat default: loopx-planned; seeded-todo is an explicit ablation")
     parser.add_argument("--replan-after-turns", type=int, choices=range(1, 6),
                         help="Opt in to settled work Turn cadence for heartbeat profiles")
     parser.add_argument("--eval-interval", type=int,
@@ -104,7 +105,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     args.timeout = _task_default(args.task, "timeout_seconds", args.timeout, DEFAULT_TIMEOUT_SECONDS)
     args.eval_interval = _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300)
-    if args.task_entry != "seeded-todo" and not args.worker.startswith("heartbeat-"):
+    if args.task_entry == "loopx-planned" and not args.worker.startswith("heartbeat-"):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
@@ -159,7 +160,7 @@ def main(argv=None):
             raise RuntimeError(f"Missing native image: {image}")
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
-        "task_entry": args.task_entry,
+        "task_entry": agent.task_entry,
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
         **({"turn_envelope": True} if args.turn_envelope else {}),

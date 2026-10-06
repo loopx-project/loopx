@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
-from .todo_semantics import todo_priority_label
 
 
 def normalize_new_todo(text: str) -> str:
@@ -11,10 +10,6 @@ def normalize_new_todo(text: str) -> str:
     if not compact:
         raise ValueError("todo text must not be empty")
     return compact
-
-
-def todo_priority_prefix(text: str | None) -> str | None:
-    return todo_priority_label({"text": str(text or "")})
 
 
 def plan_todo_priority(todo: dict[str, Any], intent: dict[str, Any]) -> dict[str, Any]:

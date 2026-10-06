@@ -16,6 +16,7 @@ import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
 export const HEARTBEAT_RECEIPT_EVENT_KIND = "quota_should_run";
+export type HeartbeatReceiptStatus = "fresh" | "missing" | "stale";
 
 /**
  * One parse of a Goal's rollout-event log.
@@ -142,4 +143,27 @@ export async function readGoalHeartbeatReceipts(
     goalId,
     agentId,
   );
+}
+
+export async function heartbeatReceiptStatus(params: {
+  runtimeRoot: string;
+  goalId: string;
+  agentId: string;
+  turnInstanceId: string;
+}): Promise<HeartbeatReceiptStatus> {
+  const receipts = await readGoalHeartbeatReceipts(
+    params.runtimeRoot,
+    params.goalId,
+    params.agentId,
+  );
+  if (receipts === null) return "missing";
+  const firstMatch = receipts.findIndex(
+    (event) => event.run_id === params.turnInstanceId,
+  );
+  if (firstMatch < 0) return "missing";
+  return receipts.slice(firstMatch + 1).some(
+      (event) => event.run_id !== params.turnInstanceId,
+    )
+    ? "stale"
+    : "fresh";
 }

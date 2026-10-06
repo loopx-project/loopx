@@ -85,6 +85,32 @@ test("one whole-source projection computes counts, visibility and closure before
   }
 });
 
+test("succession diagnostics guide continuation without authorizing terminal closeout", () => {
+  const facts = [{todo_id: "todo_stage", status: "done", active: true, advancement: true,
+    no_followup: false, successors: [], superseded_by: null, unblocks: null, resumes: null,
+    handoff: false, context_fields: ["claimed_by"]}];
+  const stage = done({todo_id: "todo_stage", no_followup: false, successor_gap: true});
+  for (const limit of [null, 0, 1]) {
+    const carrier = fused([stage], facts);
+    const source = structuredClone(carrier);
+    const result = projectTodoSummary({...carrier, item_limit: limit});
+    assert.deepEqual(result, projectTodoSummary(request([stage], {item_limit: limit})));
+    assert.equal(result.fields.completed_without_successor_count, 1);
+    assert.equal(result.fields.terminal_closure_proof, undefined);
+    const warning = result.fields.todo_succession_warning as JsonObject;
+    assert.equal(warning.count, 1);
+    assert.match(String(warning.recommended_action), /Review remaining authorized Goal acceptance/);
+    assert.match(String(warning.recommended_action), /runnable frontier/);
+    assert.match(String(warning.recommended_action), /ordinary Todo completion needs no artificial successor/);
+    assert.match(String(warning.recommended_action), /only for final scope closeout.*current settlement contract/);
+    assert.deepEqual(carrier, source, "read guidance must not add successor or terminal facts");
+  }
+  const continuing = projectTodoSummary(request([stage, row({todo_id: "todo_next"})]));
+  assert.equal(continuing.fields.completed_without_successor_count, 1);
+  assert.deepEqual(continuing.lanes.first_executable_items.indices, [1]);
+  assert.equal(continuing.fields.terminal_closure_proof, undefined);
+});
+
 test("recent completion orders true microsecond instants and ignores later edits", () => {
   const rows = [done({completed_at: "2026-01-01T10:00:00.000001+08:00", updated_at: "2026-12-01T00:00:00Z"}),
     done({completed_at: "2026-01-01T02:00:00.000002Z"}), done({completed_at: "invalid"})];

@@ -87,6 +87,7 @@ def test_worker_completion_authority(profile, resumes, monkeypatch):
                           profile=profile, cwd="/task")
     assert (worker.resume_cmd is not None) is resumes
     assert worker.timeout_seconds == 64800
+    assert worker.task_entry == ("loopx-planned" if profile.startswith("heartbeat-") else "seeded-todo")
     if profile in {"official", "single"}:
         command = worker.format_run_cmd("/task.md", internet=False)
         assert 'model_reasoning_effort="xhigh"' in command
@@ -396,13 +397,14 @@ def test_edgebench_rejects_envelope_before_creating_trial(tmp_path):
 
 
 @pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 300),
     ("portfolio_risk_calibration", [], 43200, 300),
     ("lean_analysis_proofs", [], 64800, 1800),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 64800, 0)])
-def test_edgebench_receipt_records_only_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval):
+def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -415,7 +417,7 @@ def test_edgebench_receipt_records_only_enabled_treatment(tmp_path, monkeypatch,
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
         cwd="/task", work_image_key="work", judge_image_key="judge", internet=False))
-    monkeypatch.setattr(run, "SForgeWorker", lambda *a, **k: SimpleNamespace(resume_cmd="resume"))
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
     def stop_before_solver(**kwargs):
         assert kwargs["timeout"] == kwargs["config"].agent_timeout == expected
@@ -425,9 +427,12 @@ def test_edgebench_receipt_records_only_enabled_treatment(tmp_path, monkeypatch,
     args = ["--task", task, "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "receipt", "--worker", "heartbeat-resume", "--model", "fixture",
             "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
+    if entry:
+        args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
         run.main(args + timeout_args + (["--turn-envelope"] if enabled else []))
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
+    assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
     assert receipt["eval_interval"] == interval
     assert ("turn_envelope" in receipt) is enabled

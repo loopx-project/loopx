@@ -29,6 +29,16 @@ def test_invalid_entry_rejected_before_model_call(kwargs):
         Execution(**kwargs)
 
 
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "loopx-goal", "plain", "native-goal"])
+def test_task_entry_defaults_to_planning_only_for_loopx_modes(mode):
+    kwargs = {"mode": mode}
+    if mode == "turn":
+        kwargs["validation_command"] = ("python", "validate.py")
+    expected = "loopx-planned" if mode in {"heartbeat", "turn", "loopx-goal"} else "seeded-todo"
+    assert Execution(**kwargs).task_entry == expected
+    assert Execution(**kwargs, task_entry="seeded-todo").task_entry == "seeded-todo"
+
+
 @pytest.fixture
 def planning_env(tmp_path):
     project = tmp_path / "project"
@@ -114,6 +124,8 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
     planning_env, context
 ):
     planning_env["LOOPX_ITERATION_CONTEXT"] = context
+    if context == "fresh":
+        planning_env.pop("LOOPX_TASK_ENTRY")  # Omitted worker setting uses the same planner.
     ids = []
     for invocation in range(2):
         receipt = run_once(planning_env)
@@ -240,7 +252,6 @@ def test_planning_budget_and_blocked_handoff_use_the_real_adapter_run(
     agent = harbor.BenchmarkCodex(
         logs_dir=tmp_path,
         model_name="openai/fixture",
-        task_entry="loopx-planned",
         turn_timeout_sec=250,
         scheduler_timeout_sec=500,
     )
@@ -395,7 +406,7 @@ def test_remaining_phase_time_caps_later_host_windows(planning_env, monkeypatch)
 
 
 @pytest.mark.parametrize("status", ["open", "blocked", "done", "deferred"])
-def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
+def test_seeded_task_acceptance_survives_phase_update_without_reviving_terminal_work(
     planning_env, tmp_path, monkeypatch, status
 ):
     import contextlib
@@ -424,6 +435,9 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
         agent._phase_number = 1
         await agent._seed_phase(None, cwd=planning_env["LOOPX_PROJECT"])
         original = agent._seeded_todo_id
+        first = await cli(None, ["todo", "list", "--goal-id", "planning-goal",
+                                "--role", "agent", "--todo-id", original])
+        initial_text = first["todos"][0]["text"]
         transition = (["complete", "--no-follow-up", "--note", "Synthetic task independently validated; no remaining work"]
                       if status == "done" else ["update", "--status", status])
         if status == "deferred":
@@ -434,12 +448,16 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
         await agent._seed_phase(None, cwd=planning_env["LOOPX_PROJECT"])
         listed = await cli(None, ["todo", "list", "--goal-id", "planning-goal", "--role", "agent"])
         todos = {t["todo_id"]: t for t in listed["todos"]}
-        # Read back the exact minimal seed through the real Todo owner. Phase
-        # updates must not add task-decomposition advice to the benchmark task.
+        # Both the first task and a later phase keep the native task's full
+        # acceptance in scope, without preplanning a successor or reviving work.
         assert todos[agent._seeded_todo_id]["text"] == (
-            "[P0] Execute benchmark phase 2. Read the exact "
-            "current task from /opt/loopx-benchmark/control/task-phase-002.md; "
-            "inspect the workspace, implement and validate it."
+            "[P0] Complete the task in /opt/loopx-benchmark/control/task-phase-002.md. "
+            "Inspect the workspace, implement and validate against the task's full "
+            "requirements and acceptance criteria. Keep unmet requirements explicit "
+            "when judging task completion."
+        )
+        assert initial_text == todos[agent._seeded_todo_id]["text"].replace(
+            "task-phase-002.md", "task-phase-001.md"
         )
         if status in {"open", "blocked"}:
             assert agent._seeded_todo_id == original and len(todos) == 1

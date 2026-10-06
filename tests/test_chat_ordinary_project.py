@@ -23,6 +23,16 @@ def ordinary(tmp_path, monkeypatch):
     source = source.replace('    method = request.get("method")',
         f'    with open({str(capture)!r}, "a") as output:\n        output.write(json.dumps(request) + "\\n")\n'
         '    method = request.get("method")')
+    source = source.replace('    elif method in {"thread/start", "thread/resume"}:',
+        '    elif method == "config/read":\n'
+        '        import pathlib\n'
+        '        config = pathlib.Path(request["params"]["cwd"]) / "effective-config.json"\n'
+        '        result = {"config": json.loads(config.read_text()) if config.exists() else {}}\n'
+        '    elif method in {"thread/start", "thread/resume"}:')
+    source = source.replace('        result = {"thread": {"id": "durable-thread"}}',
+        '        result = {"thread": {"id": "durable-thread"},\n'
+        '                  "model": request["params"].get("model", "old-model"),\n'
+        '                  "reasoningEffort": request["params"].get("config", {}).get("model_reasoning_effort", "xhigh")}')
     fake = tmp_path / "codex"
     fake.write_text(source)
     fake.chmod(0o700)
@@ -110,6 +120,42 @@ def test_project_grants_cannot_be_forged_widened_or_reused_after_revocation(ordi
     assert store.turn_for_client(sid, "revoked") is None
     with pytest.raises(ValueError):
         store.create_session(goal_id=None, agent_id="codex", adapter_kind="codex_app_server", upstream_thread_id="forged")
+
+
+def test_project_configuration_change_reaches_resumed_native_turn(ordinary):
+    store, runtime, contexts, request, capture, fake, workspace = ordinary
+    ref = contexts.available()[0]["project_ref"]
+    _, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": ref})
+    sid = opened["session_id"]
+    original = store.load_session(sid)["upstream_thread_id"]
+    assert runtime.adapters[sid].session.reasoning_effort == "xhigh"
+    runtime.close()
+    # Independent host observation changes between processes. The original
+    # thread still reports xhigh unless the adapter applies that observation.
+    (workspace / "effective-config.json").write_text(json.dumps({
+        "model": "current-project-model", "model_reasoning_effort": "high",
+        "sandbox_mode": "danger-full-access",
+    }))
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent),
+        codex_bin=str(fake), project_contexts=contexts)
+    try:
+        resumed, was_resumed = restarted.open_session(goal_id=None, agent_id="codex",
+            work_dir=workspace, objective="continue", mode="resume_latest", project_ref=ref)
+        assert was_resumed and resumed["session_id"] == sid
+        assert resumed["upstream_thread_id"] == original
+        turn, _ = restarted.submit_turn(session_id=sid, client_turn_id="after-config-change",
+            message="Continue the original request.", work_dir=workspace, objective="continue")
+        assert restarted.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+    finally:
+        restarted.close()
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(r.get("method") == "thread/start" for r in requests) == 1
+    resume = next(r for r in requests if r.get("method") == "thread/resume")["params"]
+    assert resume["threadId"] == original and resume["sandbox"] == "read-only"
+    turn = next(r for r in requests if r.get("method") == "turn/start")["params"]
+    assert turn["threadId"] == original
+    assert turn["model"] == "current-project-model" and turn["effort"] == "high"
+    assert len(store.list_sessions()) == 1 and store.load_session(sid)["goal_id"] is None
 
 
 @pytest.mark.parametrize("messages", [
