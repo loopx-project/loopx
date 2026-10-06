@@ -82,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
 			print(f"loopx runtime error: {exc}", file=sys.stderr)
 			return 2
 		if native_argv is not None:
+			if os.name == "nt":
+				# Windows execv does not propagate the replaced process's status.
+				# Wait for the typed owner so rejected writes remain CLI failures.
+				import subprocess
+				return subprocess.call(native_argv)
 			os.execv(native_argv[0], native_argv)
 
 	from .cli_runtime import main as runtime_main

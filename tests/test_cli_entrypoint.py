@@ -697,6 +697,25 @@ def test_explicit_main_argv_remains_an_in_process_compatibility_call(
     assert seen == [["--format", "json", "version"]]
 
 
+def test_windows_native_scheduler_followup_preserves_child_exit_status(
+    monkeypatch, capfd,
+) -> None:
+    from loopx import entrypoint
+
+    native_argv = [
+        sys.executable, "-c",
+        "import sys; print('native refusal'); sys.exit(73)",
+    ]
+    with monkeypatch.context() as patch:
+        patch.setattr(entrypoint.os, "name", "nt")
+        patch.setattr(sys, "argv", ["loopx", "quota", "scheduler-ack-current"])
+        patch.setattr(entrypoint, "_native_scheduler_followup_argv", lambda _args: native_argv)
+        result = entrypoint.main()
+
+    assert result == 73
+    assert capfd.readouterr().out.strip() == "native refusal"
+
+
 def test_console_native_scheduler_followup_fails_closed_without_node(
     monkeypatch, capsys
 ) -> None:
