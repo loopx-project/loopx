@@ -1297,9 +1297,15 @@ export const typedActionsScenario = {
       await replanUnit.waitFor({ state: "visible" });
       await replanCount.waitFor({ state: "visible" });
       // A current editor must retain the fixture's installed v0 Todo policy.
+      // Selection mounts the fields before its effect synchronizes the draft.
+      await page.waitForFunction(() => [...document.querySelectorAll(".personal-capability-detail input[type=number]")]
+        .some((input) => input.value === "3"));
       if (await replanUnit.inputValue() !== "completed_todos" || await replanCount.inputValue() !== "3"
           || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
-        throw new Error("Opening the current cadence editor reinterpreted or wrote the legacy policy");
+        throw new Error(`Opening the current cadence editor reinterpreted or wrote the legacy policy: ${JSON.stringify({
+          unit: await replanUnit.inputValue(), count: await replanCount.inputValue(),
+          requestsBefore: requestsBeforeReadOnly, requestsAfter: api.machineConfigurationRequests.length,
+        })}`);
       }
       await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
       await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
