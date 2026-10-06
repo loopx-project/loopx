@@ -3,6 +3,7 @@ import { replanCadenceScenario } from "./personal-workspace-browser/replan-caden
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
 import {privateStewardScopeScenario} from "./personal-workspace-browser/private-steward-scope.mjs";
 import {configurationBackupScenario} from "./personal-workspace-browser/configuration-backup.mjs";
+import {attentionUserActionScenario} from "./personal-workspace-browser/attention-user-action.mjs";
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
@@ -86,6 +87,7 @@ scenarioCatalog.push(nativeChildActivityScenario);
 scenarioCatalog.push(privateStewardScopeScenario);
 scenarioCatalog.push(externalEvidenceReadbackScenario);
 scenarioCatalog.push(configurationBackupScenario);
+scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);

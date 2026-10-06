@@ -1,5 +1,7 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -47,8 +49,6 @@ def test_same_message_id_same_payload_returns_existing_row(tmp_path: Path) -> No
         turn_id="turn-one",
         message_id="replay-same",
     )
-    # Append-side replay-ignore is intentional base semantics: a same-id
-    # retry stays idempotent at the transcript layer, whatever the payload.
     replayed = store.append_message(
         session_id,
         role="agent",
@@ -60,47 +60,45 @@ def test_same_message_id_same_payload_returns_existing_row(tmp_path: Path) -> No
     assert store.messages(session_id) == [first]
 
 
-def test_same_message_id_different_text_replay_returns_existing_row(
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    [
+        ("role", {"role": "user"}),
+        ("text", {"text": "rewritten text"}),
+        ("turn_id", {"turn_id": "turn-two"}),
+        ("origin", {"origin": "another-runtime"}),
+        ("attachments", {"attachments": [{"name": "changed.txt"}]}),
+        ("goal_draft", {"goal_draft": {"objective": "Changed objective"}}),
+    ],
+)
+def test_same_message_id_different_payload_raises_conflict(
     tmp_path: Path,
+    field: str,
+    changed: dict[str, object],
 ) -> None:
     store, session_id = _dedup_store(tmp_path)
+    original = {
+        "role": "agent",
+        "text": "original text",
+        "turn_id": "turn-one",
+        "origin": "runtime",
+        "attachments": [{"name": "original.txt"}],
+        "goal_draft": {"objective": "Original objective"},
+    }
     first = store.append_message(
         session_id,
-        role="agent",
-        text="original text",
+        **original,
         message_id="replay-text",
     )
-    # The store deliberately ignores same-id replays without comparing
-    # payloads: conflict detection for manager return delivery lives on the
-    # drain side, so the append path must stay replay-ignore (this pins the
-    # base semantics the generic transcript tests rely on).
-    replayed = store.append_message(
-        session_id,
-        role="agent",
-        text="rewritten text",
-        message_id="replay-text",
-    )
-    assert replayed == first
-    assert store.messages(session_id) == [first]
+    replay = {**original, **changed}
 
+    with pytest.raises(ValueError, match=rf"message_id.*{field}"):
+        store.append_message(
+            session_id,
+            **replay,
+            message_id="replay-text",
+        )
 
-def test_same_message_id_different_role_replay_returns_existing_row(
-    tmp_path: Path,
-) -> None:
-    store, session_id = _dedup_store(tmp_path)
-    first = store.append_message(
-        session_id,
-        role="user",
-        text="hello there",
-        message_id="replay-role",
-    )
-    replayed = store.append_message(
-        session_id,
-        role="agent",
-        text="hello there",
-        message_id="replay-role",
-    )
-    assert replayed == first
     assert store.messages(session_id) == [first]
 
 
@@ -131,3 +129,40 @@ def test_only_created_at_difference_is_not_a_conflict(
     assert replayed == first
     assert replayed["created_at"] == "2026-01-01T00:00:00+00:00"
     assert store.messages(session_id) == [first]
+
+
+def test_concurrent_message_id_conflict_appends_only_one_payload(
+    tmp_path: Path,
+) -> None:
+    first_store, session_id = _dedup_store(tmp_path)
+    second_store = ChatSessionStore(tmp_path)
+    barrier = Barrier(2)
+
+    def append(store: ChatSessionStore, text: str) -> tuple[str, str]:
+        barrier.wait()
+        try:
+            store.append_message(
+                session_id,
+                role="agent",
+                text=text,
+                message_id="concurrent-replay",
+            )
+        except ValueError as exc:
+            return "conflict", str(exc)
+        return "appended", text
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = [
+            future.result()
+            for future in (
+                pool.submit(append, first_store, "first candidate"),
+                pool.submit(append, second_store, "second candidate"),
+            )
+        ]
+
+    assert sorted(outcome[0] for outcome in outcomes) == ["appended", "conflict"]
+    [stored] = first_store.messages(session_id)
+    assert stored["text"] in {"first candidate", "second candidate"}
+    assert ("appended", stored["text"]) in outcomes
+    conflict = next(detail for status, detail in outcomes if status == "conflict")
+    assert "message_id" in conflict and "text" in conflict

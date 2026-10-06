@@ -396,8 +396,13 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     # The fixture rule pins the validator, oracle module and source material.
     assert validation["check_count"] == 1 and validation["pinned_file_count"] == 3
     assert len(validation["basis_sha256"]) == 64
-    assert set(validation) == {"source", "check_count", "pinned_file_count", "basis_sha256"}
-    assert reconnected.read("analysis-1")["validation"] == validation
+    assert set(validation) == {"source", "check_count", "pinned_file_count", "basis_sha256", "checked_at", "output_versions"}
+    assert validation["checked_at"].endswith("Z")
+    assert validation["output_versions"] == [{"ref": row["ref"], "sha256": row["sha256"]} for row in result["artifacts"]]
+    fresh_validation = reconnected.read("analysis-1")["validation"]
+    assert fresh_validation["checked_at"] > validation["checked_at"]
+    assert {key: value for key, value in fresh_validation.items() if key != "checked_at"} == {
+        key: value for key, value in validation.items() if key != "checked_at"}
     assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
     assert not (root / "analyst" / "initial" / "DELEGATION.json").exists()
     assert demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
@@ -431,6 +436,66 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     output.write_text("{}")
     with pytest.raises(ValueError, match="acceptance rejected"):
         reconnected.read("analysis-1")
+
+
+def test_accepted_output_cannot_change_between_check_and_return(service, monkeypatch):
+    """Real owner checks; inject a writer at the subsequent artifact-read boundary."""
+    root, runner = service
+    runner.start("analysis", "analysis-1", brief())
+    assert wait(runner)["status"] == "accepted"
+    binding = runner._bound(_read(runner.path("analysis-1")))
+    output = root / "analyst" / "initial" / "output.json"
+    original = output.read_bytes()
+    validate = runner._validate
+
+    def change_after_checks(value):
+        checked = validate(value)  # Execute the real configured oracle first.
+        output.write_text("{}")
+        return checked
+
+    monkeypatch.setattr(runner, "_validate", change_after_checks)
+    try:
+        # _accepted also feeds the first journaled return, before a saved hash exists.
+        with pytest.raises(Exception, match="output changed during validation"):
+            runner._accepted(binding)
+    finally:
+        output.write_bytes(original)
+        monkeypatch.setattr(runner, "_validate", validate)
+    assert runner.read("analysis-1")["artifacts"][0]["text"] == original.decode()
+    assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
+
+
+def test_first_return_withholds_changed_output_and_recovers_same_operation(service, monkeypatch):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _operation_id: None)
+    output = root / "analyst" / "initial" / "output.json"
+    original = output.read_bytes()
+    validate = runner._validate
+
+    def change_before_first_return(value):
+        checked = validate(value)
+        if checked["plan"]["canonical_done"]:
+            output.write_text("{}")
+        return checked
+
+    monkeypatch.setattr(runner, "_validate", change_before_first_return)
+    runner.start("analysis", "analysis-1", brief())
+    try:
+        runner.execute("analysis-1")
+        journal = _read(runner.path("analysis-1"))
+        assert journal["status"] != "accepted"
+        assert not journal.get("artifacts")
+        assert "output changed during validation" in journal["error"]
+    finally:
+        output.write_bytes(original)
+        monkeypatch.setattr(runner, "_validate", validate)
+    runner.resume("analysis-1")
+    runner.execute("analysis-1")
+    result = runner.read("analysis-1")
+    assert result["status"] == "accepted", result
+    assert result["artifacts"][0]["text"] == original.decode()
+    assert result["validation"]["output_versions"][0]["sha256"] == result["artifacts"][0]["sha256"]
+    assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
 
 
 def test_host_timeout_removes_private_delegation_bootstrap(service, monkeypatch):

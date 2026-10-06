@@ -62,6 +62,41 @@ class TodoReviewPreviewConflict(ValueError):
         self.receipt = receipt
 
 
+class ChatMessagePayloadConflictError(ValueError):
+    def __init__(self, message_id: str, field: str) -> None:
+        self.message_id = message_id
+        self.field = field
+        message = f"message_id conflicts with existing message payload field: {field}"
+        super().__init__(message)
+
+
+_MESSAGE_PAYLOAD_FIELDS = (
+    "role",
+    "text",
+    "turn_id",
+    "origin",
+    "attachments",
+    "goal_draft",
+)
+
+
+def require_matching_message_replay(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> None:
+    for field in _MESSAGE_PAYLOAD_FIELDS:
+        existing_value = existing.get(field)
+        candidate_value = candidate.get(field)
+        if field == "attachments":
+            existing_value = [] if existing_value is None else existing_value
+            candidate_value = [] if candidate_value is None else candidate_value
+        if existing_value != candidate_value:
+            raise ChatMessagePayloadConflictError(
+                str(candidate["message_id"]),
+                field,
+            )
+
+
 def require_matching_replay(
     existing: Mapping[str, Any], *, identity: str, request: Mapping[str, Any]
 ) -> None:

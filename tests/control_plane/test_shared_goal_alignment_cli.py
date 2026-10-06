@@ -214,6 +214,43 @@ def test_cli_missing_state_file_fails_closed(
     assert "missing" in payload["error"]
 
 
+def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
+    registry = json.loads(paths["registry"].read_text(encoding="utf-8"))
+    goal = next(item for item in registry["goals"] if item["id"] == GOAL_ID)
+    goal["repo"] = str(tmp_path / "missing-registered-project")
+    paths["registry"].write_text(json.dumps(registry), encoding="utf-8")
+
+    foreign_project = tmp_path / "foreign-project"
+    foreign_state = foreign_project / Path(goal["state_file"])
+    foreign_state.parent.mkdir(parents=True)
+    foreign_state.write_text(
+        paths["state_file"].read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(foreign_project)
+
+    exit_code, payload, _ = _run_alignment_cli(
+        capsys,
+        paths["registry"],
+        "shared-goal-alignment",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        "agent-a",
+        "--format",
+        "json",
+    )
+
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert "goal state file is missing" in payload["error"]
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("command", ["shared-goal-alignment", "goal-alignment"])
 def test_cli_preserves_selected_canonical_basis_without_display(tmp_path, monkeypatch, capsys, provider, command):

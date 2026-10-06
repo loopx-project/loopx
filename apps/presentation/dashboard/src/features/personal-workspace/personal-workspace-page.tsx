@@ -57,6 +57,7 @@ import type {
   PersonalWorkspaceCallbacks,
   WorkspaceAgentOption,
   WorkspaceActionPreview,
+  WorkspaceAttention,
   WorkspaceActionPreviewRequest,
   WorkspaceDrawerSelection,
   WorkspaceGoal,
@@ -915,6 +916,22 @@ export function PersonalWorkspacePage({
     setComposer(composer ? `${composer}\n${text}` : text);
     composerRef.current?.focus();
   }
+  // A draft for another Goal waits until that Goal's composer is the visible one.
+  const [composerPrefill, setComposerPrefill] = useState<{ goalId: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!composerPrefill || composerPrefill.goalId !== selectedGoalId) return;
+    setComposerPrefill(null);
+    suggestReply(composerPrefill.text);
+  }, [composerPrefill, selectedGoalId]);
+  function draftAttentionMessage(attention: WorkspaceAttention, intent: "reply" | "explain") {
+    const task = attention.text.length > 120 ? `${attention.text.slice(0, 119)}…` : attention.text;
+    const key = intent === "reply" ? "drawer.attentionReplyPrefill"
+      : attention.details?.interaction === "decision" ? "drawer.decisionExplainPrefill" : "drawer.attentionExplainPrefill";
+    if (attention.goalId !== selectedGoalId) selectGoal(attention.goalId, "chat");
+    openGoalConversation();
+    setSelection(null);
+    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) });
+  }
   // The steward prompt set is owned by the client model; the quick-prompt row
   // reuses it so one affordance answers "what now / what blocks / what is proven".
   function stewardPromptText(id: string) {
@@ -1583,6 +1600,8 @@ export function PersonalWorkspacePage({
       callbacks.onOpenOutput?.(output);
     },
     onApplyProposal: applyProposal,
+    onExplainDecision: callbacks.onExplainDecision ?? ((attention) => draftAttentionMessage(attention, "explain")),
+    onReplyToAttention: callbacks.onReplyToAttention ?? draftAttentionMessage,
     onCancelProposal: async (proposal) => {
       setSelection(null);
       setProposals((current) => {
@@ -1857,7 +1876,7 @@ export function PersonalWorkspacePage({
       notice={serviceNotice}
       drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
-          goal.goalId === drawerSelection.item.goalId && (drawerSelection.item.done
+          goal.goalId === drawerSelection.item.goalId && (drawerSelection.item.detailMode === "request_only" || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
         proposalReadbackUnavailable={actionReadback.isError || !actionReadback.data
           || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}

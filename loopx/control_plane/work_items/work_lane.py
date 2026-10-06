@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeGuard
 
 from ..effect_program import ReceiptBoundMonitorPhase
 from ..todos.contract import TODO_TASK_CLASS_MONITOR, normalize_todo_id
@@ -146,7 +146,7 @@ def work_lane_contract_requires_current_agent_attempt(
 
 def work_lane_contract_is_due_monitor_attempt(
     contract: dict[str, Any] | None,
-) -> bool:
+) -> TypeGuard[dict[str, Any]]:
     return bool(
         isinstance(contract, dict)
         and contract.get("monitor_kind") == WORK_LANE_TODO_MONITOR_DUE_KIND

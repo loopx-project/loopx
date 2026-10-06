@@ -498,6 +498,17 @@ class ChatLoopXMode:
         wake_turn = None
         if existing:
             request = existing.get("loopx_request") or {}
+            replay_settings = request.get("settings") or {}
+            replay_budget = replay_settings.get("token_budget")
+            request_matches = (
+                request.get("operation") == "wake"
+                and replay_settings.get("agent_id")
+                == (intent.get("requester") or {}).get("agent_id")
+                and isinstance(replay_budget, int)
+                and not isinstance(replay_budget, bool)
+                and existing.get("message")
+                == f"/goal resume --tokens {replay_budget}"
+            )
             wake_turn = {
                 "turn_id": existing.get("turn_id"),
                 "status": existing.get("status"),
@@ -508,6 +519,7 @@ class ChatLoopXMode:
                 "loopx_execution": existing.get("loopx_execution") is True,
                 "operation": request.get("operation"),
                 "intent_id": (request.get("wake") or {}).get("intent_id"),
+                "request_matches": request_matches,
             }
         mode = session.get("loopx_mode") or {}
         settings = mode.get("settings") or {}
@@ -964,6 +976,7 @@ def pump_delegation_wakes(
     # is already a lazy dependency of LoopXMode.
     from .chat_runtime import ChatTurnAcceptanceUnavailableError
     from .collaboration_mcp import execution_row_path, record_wake, wake_receipt
+    from .control_plane.chat_turn_acceptance import ManagedTurnReplayConflictError
 
     store = controller.store
     root = store.root.parent
@@ -992,6 +1005,26 @@ def pump_delegation_wakes(
                 )
         except LockAcquireTimeoutError:
             continue  # a worker or decision holds the record; retry next tick
+        except ManagedTurnReplayConflictError:
+            try:
+                receipt = record_wake(
+                    record,
+                    lambda wake: wake_receipt(
+                        wake,
+                        "refused",
+                        reason="wake_identity_conflict",
+                        refused_at=time.time(),
+                    ),
+                )
+            except LockAcquireTimeoutError:
+                continue  # another decision holds the record; retry next tick
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                    ChatTurnAcceptanceUnavailableError) as exc:
+                _LOG.warning(
+                    "Delegation wake refusal could not be recorded (%s); retrying",
+                    type(exc).__name__,
+                )
+                continue
         except (OSError, ValueError, KeyError, TypeError, RuntimeError,
                 ChatTurnAcceptanceUnavailableError) as exc:
             # Isolate one record; the others still progress this tick.

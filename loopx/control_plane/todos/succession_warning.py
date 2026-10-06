@@ -202,9 +202,12 @@ def succession_request(items: list[dict[str, Any]], *, reuse: bool = False) -> d
 
 def succession_evaluations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Carry ephemeral evidence to a fused owner; it must still validate it."""
-    if any(not isinstance(item, _EvaluatedTodo) for item in items):
-        raise ValueError("Todo display requires a matching full-source succession evaluation")
-    return [item.succession_evaluation for item in items]
+    evaluations = []
+    for item in items:
+        if not isinstance(item, _EvaluatedTodo):
+            raise ValueError("Todo display requires a matching full-source succession evaluation")
+        evaluations.append(item.succession_evaluation)
+    return evaluations
 
 
 def project_succession(items: list[dict[str, Any]], *, reuse: bool = False) -> list[dict[str, Any]]:

@@ -67,18 +67,16 @@ def mode(project, monkeypatch):  # noqa: F811
 
     def submit(**kwargs):
         calls.append(kwargs)
-        turn, created = store.create_turn(
+        accepted = store.accept_managed_turn(
             kwargs["session_id"],
             client_turn_id=kwargs["client_turn_id"],
             message=kwargs["message"],
+            attachments=kwargs.get("attachments"),
+            origin=kwargs.get("origin", "web"),
+            loopx_execution=kwargs.get("loopx_execution", False),
+            loopx_request=kwargs.get("loopx_request"),
         )
-        store.update_turn(
-            kwargs["session_id"],
-            turn["turn_id"],
-            loopx_execution=True,
-            loopx_request=kwargs["loopx_request"],
-        )
-        return turn, created
+        return accepted.turn, accepted.created
 
     monkeypatch.setattr(controller, "submit_turn", submit)
     return controller.loopx_mode, session["session_id"], repo, settings, calls

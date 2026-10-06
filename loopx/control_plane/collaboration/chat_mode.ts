@@ -114,6 +114,9 @@ function planDelegationWake(input: JsonObject, session: JsonObject, settings: Js
     if (isTerminalTurnStatus(turn.status)) return outcome("refused", "wake_turn_ended_unstarted");
     // Accepted but not yet dispatched, including a start still activating.
     if (turn.status !== "queued") return outcome("pending", "wake_dispatch_pending");
+    // Replay only the exact message accepted for this wake. A matching client
+    // id and intent do not make divergent queued content safe to dispatch.
+    if (turn.request_matches !== true) return outcome("refused", "wake_identity_conflict");
   }
   if (input.goal_active !== true) return outcome("refused", "goal_stopped");
   if (session.status === "closed" || mode.enabled !== true) return outcome("refused", "no_wake_owner");

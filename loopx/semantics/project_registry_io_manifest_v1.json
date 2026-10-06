@@ -279,7 +279,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/roundtrip.py::<module>.drain::codec_read:load_project_registry#1",
-      "line": 1015,
+      "line": 937,
       "column": 22,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -695,7 +695,7 @@
     },
     {
       "site": "loopx/cli_commands/goal_amendment_proposal.py::<module>._resolve_goal_routing::codec_read:load_registry#1",
-      "line": 247,
+      "line": 249,
       "column": 28,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1087,7 +1087,7 @@
     },
     {
       "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>.local_authority_shadow_status::codec_read:load_registry#1",
-      "line": 315,
+      "line": 301,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

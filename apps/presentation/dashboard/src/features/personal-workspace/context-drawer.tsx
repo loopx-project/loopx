@@ -1,7 +1,7 @@
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
+import { AttentionActions } from "./attention-actions";
 import { AttentionDetailCard } from "./attention-detail-card";
-import type {DecisionOutcome} from "../../../../../../loopx/control_plane/todos/user_completion_types.js";
-import { attentionSuccessor, canDecideAttention, canReviewAttention } from "./attention-details";
+import { attentionSuccessor } from "./attention-details";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -15,7 +15,6 @@ import {
   Download,
   ExternalLink,
   GitBranch,
-  MessageCircleQuestion,
   Maximize2,
   Minimize2,
   MoreHorizontal,
@@ -418,23 +417,6 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     });
   }
 
-  async function previewDecision(attention: WorkspaceAttention, decision: DecisionOutcome) {
-    if (readOnly || !canDecideAttention(attention)) return;
-    await previewAction({
-      actionKind: "gate.resolve",
-      context: { goal_id: attention.goalId, kind: "todo", todo_id: attention.todoId },
-      idempotencyKey: `workspace-decision-${attention.todoId}-${decision}-${Date.now().toString(36)}`,
-      normalizedParameters: {
-        // Hard-lease Goals attribute the decision to the Agent it unblocks.
-        agent_id: attention.details?.blocksAgent ?? todoAgentId,
-        goal_id: attention.goalId,
-        decision,
-        todo_id: attention.todoId,
-      },
-      summary: attention.text,
-    });
-  }
-
   const currentSubagentConfiguration: WorkspaceGoalSubagentConfiguration = selection.kind === "goal"
     ? verifiedSubagentConfiguration
       ?? selection.item.subagentExecution
@@ -628,28 +610,18 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         {selection.kind === "attention" ? (
           <>
             <AttentionDetailCard item={selection.item} onSelect={onSelectAttention} successor={attentionSuccessor(selection.item, attentionHistory)} />
-            {!readOnly && canDecideAttention(selection.item) ? <>
-              <div className="personal-decision-bar" role="group" aria-label={t("drawer.decisionGroup")}>
-                <button className="personal-primary-action" onClick={() => void previewDecision(selection.item, "approve")} type="button"><Check size={17} />{t("drawer.decisionApprove")}</button>
-                <button className="personal-secondary-action" onClick={() => void previewDecision(selection.item, "reject")} type="button"><X size={17} />{t("drawer.decisionReject")}</button>
-              </div>
-              <details className="personal-compact-menu">
-                <summary><MoreHorizontal size={17} />{t("drawer.decisionMore")}</summary>
-                <div>
-                  <button onClick={() => void callbacks.onExplainDecision?.(selection.item)} type="button"><MessageCircleQuestion size={16} />{t("drawer.explainDecision")}</button>
-                  <button onClick={() => void previewDecision(selection.item, "cancel")} type="button"><Square size={16} />{t("drawer.decisionCancel")}</button>
-                </div>
-              </details>
-            </> : !readOnly && canReviewAttention(selection.item) ? <>
-              <p className="personal-proposal-explainer">{t(selection.item.decisionSource === "run_operator_gate" ? "drawer.decisionRunGate" : "drawer.decisionNotGate")}</p>
-              <button className="personal-secondary-action" onClick={() => void callbacks.onExplainDecision?.(selection.item)} type="button"><MessageCircleQuestion size={16} />{t("drawer.explainDecision")}</button>
-            </> : null}
+            <AttentionActions callbacks={callbacks} fallbackAgentId={todoAgentId} item={selection.item} readOnly={readOnly} />
           </>
         ) : null}
 
         {selection.kind === "todo" ? todoReadbackUnavailable ? (
           <section className="personal-detail-card" role="status">
             <p>{t("drawer.taskReadbackUnavailable")}</p>
+          </section>
+        ) : selection.item.detailMode === "request_only" ? (
+          <section className="personal-task-inspector-summary">
+            <p className="personal-proposal-explainer">{t("drawer.taskRequestOnly")}</p>
+            <TaskRequest todo={selection.item} local={!readOnly} />
           </section>
         ) : (
           <>

@@ -9,6 +9,7 @@ const answerText = source("./answer-text.ts");
 const model = source("./personal-workspace-model.ts");
 const activity = source("./goal-activity.ts");
 const drawer = source("./context-drawer.tsx");
+const attentionActions = source("./attention-actions.tsx");
 const header = source("./channel-header.tsx");
 const sidebar = source("./goal-sidebar.tsx");
 const actionForm = source("./workspace-action-form.tsx");
@@ -54,11 +55,17 @@ assert.match(drawer, /actionKind: "todo\.create"/, "Todo successor uses the cano
 for (const field of ["evidence", "explanation"]) {
   assert.match(model, new RegExp(`${field}\\??:`), `Decision exposes ${field}`);
 }
+assert.match(drawer, /<AttentionActions /, "The needs-you drawer delegates owner actions to one component");
 for (const decision of ["approve", "reject", "cancel"]) {
-  assert.match(drawer, new RegExp(`previewDecision\\(selection\\.item, "${decision}"`), `Decision ${decision} uses a typed preview`);
+  assert.match(attentionActions, new RegExp(`previewDecision\\(item, "${decision}"`), `Decision ${decision} uses a typed preview`);
 }
-assert.doesNotMatch(drawer, /previewDecision\([^)]*"defer"/, "Deferring records no decision, so the drawer does not offer it as one");
-assert.match(drawer, /canDecideAttention\(attention\)/, "Only a typed User gate can be decided from the drawer");
+assert.doesNotMatch(attentionActions, /previewDecision\([^)]*"defer"/, "Deferring records no decision, so the drawer does not offer it as one");
+assert.match(attentionActions, /canDecideAttention\(attention\)/, "Only a typed User gate can be decided from the drawer");
+for (const operation of ["complete", "defer", "cancel"]) {
+  assert.match(attentionActions, new RegExp(`previewUserAction\\(item, "${operation}"`), `User action ${operation} uses a typed preview`);
+}
+assert.match(attentionActions, /canHandleUserAction\(attention\)/, "Only a typed User action with a stable id is handled from the drawer");
+assert.match(page, /onReplyToAttention: callbacks\.onReplyToAttention \?\? draftAttentionMessage/, "Reply drafts in the Goal conversation without sending");
 
 for (const callback of ["onRetryResumeRun", "onStartNewRunSession", "onCloseRunSession"]) {
   assert.match(model, new RegExp(`${callback}\\??:`), `Run exposes ${callback}`);
@@ -295,7 +302,7 @@ assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Work
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
 assert.match(dashboard, /if \(\(selectedRoute\.agentId === "status-only" && targetContext\.kind !== "project"\)\s*\|\| \(targetContext\.kind === "goal" && !targetGoal\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback; a workspace conversation never answers from the Goal projection");
-assert.match(drawer, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
+assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
 assert.match(drawer, /t\("drawer\.runRecordEmpty"\)/, "A truly empty Session still explains why there is no timeline yet");

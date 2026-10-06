@@ -30,7 +30,11 @@ try {
   await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
   const dialog = page.getByRole("dialog", {name: "团队执行情况"});
   const openEvidence = dialog.getByRole("button", {name: "查看证据与反馈", exact: true});
+  const firstRead = page.waitForResponse(response => response.request().method() === "POST"
+    && response.request().postDataJSON()?.operation === "read"
+    && response.request().postDataJSON()?.operation_id === "accepted-analysis");
   await openEvidence.first().click();
+  const legacyReadback = await (await firstRead).json();
   const evidence = dialog.getByRole("region", {name: "执行证据"});
   const original = () => evidence.getByLabel("证据内容: report.json");
   await original().waitFor();
@@ -43,6 +47,67 @@ try {
   // Older readbacks remain readable without invented provenance.
   await evidence.getByText("本次验收依据", {exact: true}).click();
   await evidence.getByText("此运行时未提供验收依据标识。", {exact: true}).waitFor();
+  // Transport fixtures exercise presentation only; real File/SQLite checks are
+  // qualified by test_local_delegation, never inferred from these synthetic rows.
+  const checkTime = "2026-01-02T03:04:05.123456Z";
+  const outputVersions = [{ref: "report.json", sha256: "d".repeat(64)}, {ref: "report.md", sha256: "9".repeat(64)}];
+  const currentValidation = {source: "goal_acceptance", basis_sha256: "7".repeat(64), check_count: 1,
+    pinned_file_count: 3, checked_at: checkTime, output_versions: outputVersions};
+  let validation = {...currentValidation, checked_at: undefined, output_versions: undefined};
+  let checkUnavailable = false;
+  const checkedRead = route => {
+    const body = route.request().postDataJSON();
+    if (body?.operation !== "read" || body.operation_id !== "accepted-analysis") return route.fallback();
+    api.loopxModeRequests.push({sessionId: configured.sessionId, ...body});
+    return checkUnavailable ? route.fulfill({status: 409, json: {error: "delegation output changed during validation"}})
+      : route.fulfill({json: {...legacyReadback, validation}});
+  };
+  await page.route("**/api/chat/sessions/*/loopx", checkedRead);
+  const recheck = evidence.getByRole("button", {name: "重新读取证据", exact: true});
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await evidence.getByText("未提供与当前产物匹配的检查时间及版本记录。", {exact: true}).waitFor();
+  assert.equal(await evidence.locator("time").count(), 0, "A legacy basis does not invent check records");
+  validation = currentValidation;
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  const checkObservation = evidence.locator("details").filter({has: page.getByText("本次验收依据", {exact: true})});
+  await checkObservation.getByText(checkTime, {exact: true}).waitFor();
+  for (const version of outputVersions) await checkObservation.getByText(version.sha256, {exact: true}).waitFor();
+  assert.equal(await checkObservation.getByText("未提供与当前产物匹配的检查时间及版本记录。", {exact: true}).count(), 0);
+  await mkdir(outputDir, {recursive: true});
+  await checkObservation.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-checked-output-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await page.emulateMedia({reducedMotion: "reduce"});
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await checkObservation.getByText(outputVersions[1].sha256, {exact: true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-checked-output-mobile.png"), animations: "disabled"});
+  await page.setViewportSize({width: 1512, height: 980});
+  // Another version's witness must never appear as a check of this report.
+  validation = {...validation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await evidence.getByText("未提供与当前产物匹配的检查时间及版本记录。", {exact: true}).waitFor();
+  assert.equal(await checkObservation.locator("time").count(), 0);
+  assert.equal(await checkObservation.getByText("f".repeat(64), {exact: true}).count(), 0);
+  checkUnavailable = true;
+  await recheck.click();
+  await evidence.getByRole("alert").filter({hasText: "已清除上次证据"}).waitFor();
+  assert.equal(await original().count(), 0);
+  assert.equal(await evidence.getByText("本次验收依据", {exact: true}).count(), 0);
+  await page.screenshot({path: resolve(outputDir, "team-checked-output-unavailable.png"), animations: "disabled"});
+  checkUnavailable = false;
+  validation = {...validation, output_versions: outputVersions};
+  await recheck.focus();
+  await page.keyboard.press("Enter");
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await checkObservation.getByText(checkTime, {exact: true}).waitFor();
+  await page.unroute("**/api/chat/sessions/*/loopx", checkedRead);
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   const verificationGap = evidence.getByText("当前读回未提供独立验收者与指定版本回执。", {exact: true});
   await verificationGap.waitFor({timeout: 3000});
@@ -189,7 +254,7 @@ try {
   assert.ok(await openEvidence.first().evaluate(el => el === document.activeElement));
   assert.equal(api.turnRequests.length, 0);
   assert.equal(api.loopxModeRequests.filter(row => row.operation === "message").length, 0);
-  console.log("team-evidence-return: passed (packaged navigation, downstream loss/revocation/restoration, core loss, keyboard return, fresh evidence/list, pagination, mobile and no execution)");
+  console.log("team-evidence-return: passed (packaged checked outputs, navigation, downstream loss/revocation/restoration, core loss, keyboard return, fresh evidence/list, pagination, mobile and no execution)");
 } finally {
   await workspace?.close();
   await browser?.close();

@@ -39,6 +39,7 @@ from ...control_plane.collaboration.inbox import (
     prior_result_delivered,
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
+from ...chat import ChatMessagePayloadConflictError
 
 DELIVERY_STATUSES = {
     "admitted",
@@ -623,73 +624,6 @@ def _resolve_delivery_sender(external_sender):
     return None, False
 
 
-_MANAGER_RETURN_PAYLOAD_FIELDS = (
-    "role",
-    "text",
-    "turn_id",
-    "origin",
-    "attachments",
-    "goal_draft",
-)
-
-# Canonical per-field comparison defaults for the delivery-side replay
-# check. The append path drops falsy optional fields together with their
-# column, so rows written through the store never carry literal empty
-# values; externally written or migrated rows can. Folding a missing key
-# and an explicit ``None`` onto each field's canonical empty value keeps
-# the comparison closed over those stored shapes: ``attachments`` is
-# list-valued and normalizes to ``[]``, the scalar fields to ``None``.
-_MANAGER_RETURN_PAYLOAD_DEFAULTS = {
-    "role": None,
-    "text": None,
-    "turn_id": None,
-    "origin": None,
-    "attachments": [],
-    "goal_draft": None,
-}
-
-
-def _normalized_return_field(field, value):
-    """Fold a missing column and an explicit ``None`` into one value."""
-    if value is not None:
-        return value
-    return _MANAGER_RETURN_PAYLOAD_DEFAULTS[field]
-
-
-def _manager_return_payload(text, turn):
-    """The transcript payload this pump is about to append for ``turn``."""
-    return {
-        "role": "agent",
-        "text": text,
-        "turn_id": turn["turn_id"],
-        "origin": "manager_followup",
-    }
-
-
-def _replayed_return_payload_conflict(store, session_id, message_id, incoming):
-    """First divergent field if ``message_id`` is already recorded with
-    different payload, else ``None``.
-
-    Same-id replay at the append layer is intentional replay-ignore
-    semantics: the store returns the existing row without comparing. A
-    silent merge is safe for generic appends but not for manager return
-    delivery, where the same handoff id arriving with a different
-    conclusion must surface as a delivery fault instead of leaving the
-    old text standing behind a delivered receipt. The comparison therefore
-    lives here, on the delivery path, before anything is sent or appended.
-    """
-    for row in store.messages(session_id):
-        if row.get("message_id") != message_id:
-            continue
-        for field in _MANAGER_RETURN_PAYLOAD_FIELDS:
-            existing = _normalized_return_field(field, row.get(field))
-            candidate = _normalized_return_field(field, incoming.get(field))
-            if existing != candidate:
-                return field
-        return None
-    return None
-
-
 def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
     processed = 0
     for path in iter_result_paths(_root(root) / "replies"):
@@ -743,24 +677,20 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
         try:
             if cancelled():
                 return processed
-            conflict_field = _replayed_return_payload_conflict(
-                store,
-                route["session_id"],
-                mid,
-                _manager_return_payload(text, turn),
-            )
-            if conflict_field is not None:
-                # A payload conflict is a data fault, not a transport fault:
-                # the transcript already holds this handoff message_id with
-                # different content. Record the existing explicit_unverified
-                # status with the typed error code instead of delivering or
-                # retrying; a retry can never fix a payload mismatch and
-                # would only multiply the divergence, while a silent merge
-                # would leave the old text behind a delivered receipt.
+            try:
+                store.append_message(
+                    route["session_id"],
+                    role="agent",
+                    text=text,
+                    turn_id=turn["turn_id"],
+                    origin="manager_followup",
+                    message_id=mid,
+                )
+            except ChatMessagePayloadConflictError as exc:
                 logging.getLogger(__name__).warning(
                     "Manager return payload conflict on %s: %s",
                     mid,
-                    conflict_field,
+                    exc.field,
                 )
                 _write_exact_return_state(
                     root,
@@ -773,14 +703,6 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
                 )
                 processed += 1
                 continue
-            store.append_message(
-                route["session_id"],
-                role="agent",
-                text=text,
-                turn_id=turn["turn_id"],
-                origin="manager_followup",
-                message_id=mid,
-            )
             if cancelled():
                 return processed
             if conversation_scope(session)["private_conversation"]:
@@ -1098,24 +1020,20 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                 mid = "handoff." + _hash([row["request_id"], path.stem])
                 if cancelled():
                     return processed
-                conflict_field = _replayed_return_payload_conflict(
-                    store,
-                    route["session_id"],
-                    mid,
-                    _manager_return_payload(text, turn),
-                )
-                if conflict_field is not None:
-                    # Same data-fault rule as the exact loop: the transcript
-                    # already holds this handoff message_id with different
-                    # content. Record the existing explicit_unverified status
-                    # with the typed error code instead of delivering or
-                    # folding the conflict into the transport retry path
-                    # below; a retry can never fix a payload mismatch and
-                    # would only multiply the divergence.
+                try:
+                    store.append_message(
+                        route["session_id"],
+                        role="agent",
+                        text=text,
+                        turn_id=turn["turn_id"],
+                        origin="manager_followup",
+                        message_id=mid,
+                    )
+                except ChatMessagePayloadConflictError as exc:
                     logging.getLogger(__name__).warning(
                         "Manager return payload conflict on %s: %s",
                         mid,
-                        conflict_field,
+                        exc.field,
                     )
                     _write(
                         state_path,
@@ -1126,14 +1044,6 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     )
                     processed += 1
                     continue
-                store.append_message(
-                    route["session_id"],
-                    role="agent",
-                    text=text,
-                    turn_id=turn["turn_id"],
-                    origin="manager_followup",
-                    message_id=mid,
-                )
                 if cancelled():
                     return processed
                 transport = {}

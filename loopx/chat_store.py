@@ -14,7 +14,11 @@ from typing import Any
 import uuid
 from weakref import WeakValueDictionary
 
-from .chat import require_matching_replay, resolve_attached_completion_replay
+from .chat import (
+    require_matching_message_replay,
+    require_matching_replay,
+    resolve_attached_completion_replay,
+)
 from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
@@ -693,6 +697,11 @@ class ChatSessionStore(ChatIngressStore):
         message_id: str | None = None,
         goal_draft: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Append a message, or return an identical explicit-ID retry.
+
+        Reusing an explicit ``message_id`` with a different semantic payload
+        raises ``ValueError``. Generated timestamps do not affect identity.
+        """
         session_dir = self._session_dir(session_id)
         path = session_dir / "messages.jsonl"
         payload = {
@@ -713,6 +722,10 @@ class ChatSessionStore(ChatIngressStore):
             if message_id:
                 for existing in _read_jsonl(path):
                     if existing.get("message_id") == payload["message_id"]:
+                        require_matching_message_replay(
+                            existing,
+                            payload,
+                        )
                         return existing
             _append_jsonl(path, payload)
         return payload

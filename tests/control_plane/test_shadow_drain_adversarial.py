@@ -1,6 +1,7 @@
 """Adversarial recovery ordering through the public CLI and real file provider."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -139,7 +140,7 @@ def test_native_markerless_resolution_requires_source_evidence(
     request = {"schema_version": "loopx_shadow_entry_delivery_request_v0", "runtime_root": str(w.runtime),
                "goal_id": w.goal, "partition": entry.partition, "seq": entry.seq, "entry_id": entry.entry_id,
                "capture_lineage_id": entry.prepared["capture_lineage_id"],
-               "prepared_sha256": outbox.raw_bytes_digest(entry.prepared_path.read_bytes()),
+               "prepared_sha256": "sha256:" + hashlib.sha256(entry.prepared_path.read_bytes()).hexdigest(),
                "committed_sha256": None}
     request["resolution"] = claimed_resolution
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
@@ -148,6 +149,15 @@ def test_native_markerless_resolution_requires_source_evidence(
     assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
     view = adapter.read_local_authority_shadow(runtime_root=w.runtime, goal_id=w.goal, scan_limit=20)
     assert len(view["proof"]["transactions"]) == 1
+
+    # Without the caller flag, the same legal witness derives from source bytes.
+    request.pop("resolution")
+    delivered = adapter.effect_runtime_result("coordination.runtime_shadow.commit_entry", request, timeout=15)
+    assert delivered["outcome"] == "delivered"
+    assert delivered["resolution"] == (
+        "abandoned" if window == "before_replace" else "committed_proven_by_readback"
+    )
+    assert delivered["no_op"] is (window == "before_replace")
 
 
 def test_registry_runtime_override_cannot_bypass_an_active_source_binding(tmp_path: Path) -> None:

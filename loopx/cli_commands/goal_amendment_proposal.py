@@ -197,14 +197,16 @@ def _resolve_project(
     if getattr(args, "project", None):
         return Path(args.project).expanduser()
     if goal_id:
-        try:
-            resolved_project, _ = resolve_todo_state_path(
-                registry_path=registry_path,
-                goal_id=goal_id,
+        resolved_project, _ = resolve_todo_state_path(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            require_existing=False,
+        )
+        if resolved_project is None:
+            raise ValueError(
+                "goal project is not configured in the registry; pass --project"
             )
-            return resolved_project
-        except Exception:
-            pass
+        return resolved_project
     return Path.cwd()
 
 
