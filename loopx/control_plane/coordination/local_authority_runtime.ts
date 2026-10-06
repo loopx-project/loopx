@@ -1303,8 +1303,6 @@ export async function terminalLifecycleLocalCoordinationTodo(
       const execute = () => executeCoordinationTodoTerminalLifecycle(store, {
         ...(input.delivery_context == null || requireJsonObject(input.delivery_context, "delivery context").read_context_id == null ? {} : {delivery_read_context_id:
           requireAuthorityStoreId(requireJsonObject(input.delivery_context, "delivery context").read_context_id, "delivery read context id")}),
-        ...(input.delivery_context == null || requireJsonObject(input.delivery_context, "delivery context").direction_read_context_id == null ? {} : {
-          delivery_direction_context_id: requireAuthorityStoreId(requireJsonObject(input.delivery_context, "delivery context").direction_read_context_id, "direction read context id")}),
         validation_source_provider_revision: input.validation_source_provider_revision == null
           ? null : requireAuthorityStoreId(input.validation_source_provider_revision, "validation source provider revision"),
         validation_declaration_sha256: input.validation_declaration_sha256 == null

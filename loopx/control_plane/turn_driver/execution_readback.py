@@ -9,7 +9,6 @@ from .host_binding import managed_executor_payload_entry, managed_executor_remed
 from .host_failure import project_host_failure
 from .lane_fence import turn_lane_in_flight_projection
 from .transaction import LOOPX_TURN_EXECUTION_SCHEMA_VERSION
-from ..effect_runtime import effect_runtime_result
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -35,16 +34,6 @@ def execution_payload(
         journal.get("completed_phases") or []
     )
     recovery = journal.get("recovery_audit")
-    delivery = {}
-    if plan.get("first_delivery_freshness"):
-        phases = list(journal.get("completed_phases") or [])
-        write_attempt = _mapping(_mapping(journal.get("effect_attempts")).get("durable_writeback"))
-        delivery["first_delivery_progress"] = effect_runtime_result("turn.first_delivery.evaluate", {
-            "phase": "project", "result_committed": _mapping(journal.get("delivery_completion")).get("ok") is True or bool(todo_completion.get("completed")),
-            "direction_committed": "durable_writeback" in phases,
-            "unknown": write_attempt.get("status") == "prepared" and "durable_writeback" not in phases,
-            "quota_spent": quota_spent, "settlement_complete": journal.get("status") == "committed",
-        })
     return {
         "ok": journal.get("status")
         in {
@@ -75,7 +64,6 @@ def execution_payload(
         "scheduler": journal.get("scheduler"),
         **subagent.subagent_execution_payload_projection(journal),
         "effects": dict(effects),
-        **delivery,
         **({"admission": dict(journal["admission"])}
            if isinstance(journal.get("admission"), Mapping) else {}),
         "quota_slot_spend_count": 1 if quota_spent else 0,

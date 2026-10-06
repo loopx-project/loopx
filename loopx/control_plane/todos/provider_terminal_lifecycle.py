@@ -130,7 +130,6 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
         ),
         review_basis=call.get("terminal_review_basis"),
         delivery_read_context_id=call.get("delivery_read_context_id"),
-        delivery_direction_context_id=call.get("delivery_direction_context_id"),
         delivery_settlement_identity=call.get("delivery_settlement_identity"),
         completion_delivery_workspace=(
             call.get("completion_delivery_workspace") if complete else None
@@ -304,7 +303,6 @@ def terminal_canonical_todo_if_promoted(
     dry_run: bool,
     review_basis: Mapping[str, Any] | None = None,
     delivery_read_context_id: str | None = None,
-    delivery_direction_context_id: str | None = None,
     delivery_settlement_identity: Mapping[str, Any] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
@@ -440,7 +438,7 @@ def terminal_canonical_todo_if_promoted(
             "observed_at": now_local(),
         }
     def invoke() -> Any:
-        if (delivery_read_context_id is not None or delivery_direction_context_id is not None) and delivery_settlement_identity is None:
+        if delivery_read_context_id is not None and delivery_settlement_identity is None:
             raise ValueError("delivery read context requires the original settlement identity")
         if delivery_settlement_identity is not None:
             from ..goals.checkpoint_context_io import delivery_result_context_input
@@ -452,7 +450,6 @@ def terminal_canonical_todo_if_promoted(
                 runtime_root=runtime_root, registry_path=registry_path, state_file=state_file,
                 identity=SettlementIdentity.from_runtime_payload(delivery_settlement_identity),
                 read_context_id=delivery_read_context_id,
-                direction_read_context_id=delivery_direction_context_id,
             )
             if context is not None:
                 request["delivery_context"] = context
@@ -466,7 +463,6 @@ def terminal_canonical_todo_if_promoted(
                 runtime_root=runtime_root, registry_path=registry_path, state_file=state_file,
                 identity=SettlementIdentity.from_runtime_payload(delivery_settlement_identity),
                 read_context_id=delivery_read_context_id,
-                direction_read_context_id=delivery_direction_context_id,
             )
 
     result = invoke()

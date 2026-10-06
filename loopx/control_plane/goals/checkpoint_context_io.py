@@ -120,15 +120,12 @@ def first_delivery_progress(
         committed = selected.get("status") == "done" and selected.get("completion_turn_key") in {identity.effect_id, identity.turn_instance_id}
         direction_path = _receipt_path(root, identity)
         direction = _read_context_receipt(direction_path) if direction_path.exists() else {}
-        checkpoint = (readback.writeback_run or {}).get("vision_checkpoint", {})
-        direction_committed = checkpoint.get("satisfied") is True and checkpoint.get("read_context", {}).get("purpose") == "first_delivery"
-        unknown = unknown or (bool(direction.get("commit_attempt")) and not direction_committed)
     except (ValueError, OSError):
-        direction_committed = False
+        direction = {}
         unknown = True
     return effect_runtime_result("turn.first_delivery.evaluate", {
         "phase": "project", "result_committed": committed,
-        "direction_committed": direction_committed, "unknown": unknown,
+        "writeback_run": readback.writeback_run, "direction_receipt": direction, "unknown": unknown,
         "quota_spent": readback.spend_run is not None,
         "settlement_complete": readback.terminal_settlement.failure is None,
     })
@@ -201,7 +198,6 @@ def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | No
 def delivery_result_context_input(
     *, runtime_root: Path, registry_path: Path, state_file: Path,
     identity: SettlementIdentity, read_context_id: str | None,
-    direction_read_context_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Capture IO for the native Todo owner; never refresh the Agent's token.
 
@@ -210,7 +206,7 @@ def delivery_result_context_input(
     """
     result: dict[str, Any] = {"identity": identity.as_dict(),
         "read_context_id": read_context_id or "missing", "state_file": str(state_file.resolve())}
-    if not read_context_id and not direction_read_context_id:
+    if not read_context_id:
         try:
             if not first_delivery_context_enrolled(runtime_root, identity):
                 return None
@@ -219,8 +215,6 @@ def delivery_result_context_input(
             # recovery. Only the native owner can prove an unreadable shared
             # supplement optional; this is not evidence of non-enrollment.
             return {**result, "read_context_id": None, "capture_error": str(error)}
-    if direction_read_context_id:
-        result["direction_read_context_id"] = direction_read_context_id
     index = runtime_root / "goals" / identity.goal_id / "runs" / "index.jsonl"
     try:
         with exclusive_cross_runtime_file_lock(index, operation="delivery-result-capture"):

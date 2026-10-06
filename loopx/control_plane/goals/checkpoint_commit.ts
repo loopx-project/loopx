@@ -341,13 +341,6 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
         purpose: request.purpose, decision_scope: request.decision_scope,
         read_context_id: retry.checkpoint_read_context_id, receipt, facts: current});
       if (context.ok !== true) return context;
-      if (firstDelivery) {
-        context.terminal_versions = checkpointBasisSnapshot({identity: binding,
-          purpose: "first_delivery", decision_scope: request.decision_scope,
-          facts: {...current, agent_vision: request.committed_agent_vision ?? current.agent_vision},
-          dependency_todo_ids: requireJsonObject(receipt, "read receipt").dependency_todo_ids,
-        }).versions;
-      }
       const record = requireJsonObject(request.record, "checkpoint record");
       const row = requireJsonObject(request.index_record, "checkpoint index record");
       for (const projected of [record, row]) {

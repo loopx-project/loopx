@@ -1313,7 +1313,6 @@ def complete_goal_todo(
     completion_identity_source: str | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,
     delivery_read_context_id: str | None = None,
-    delivery_direction_context_id: str | None = None,
     delivery_settlement_identity: Mapping[str, Any] | None = None,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,

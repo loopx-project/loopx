@@ -108,7 +108,6 @@ def register_todo_command(
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
     todo_parser.add_argument("--result-file", help="For todo complete with bound Goal acceptance criteria, bind a bounded local .json, .md or .txt result. A Todo validator alone is insufficient; use --evidence for a local artifact pointer.")
     todo_parser.add_argument("--delivery-read-context", help="Original delivery_result read identity for protected Turn completion.")
-    todo_parser.add_argument("--direction-read-context", help="Committed Goal-scope direction read identity for protected --no-follow-up closeout.")
     todo_parser.add_argument(
         "--validation-command",
         help=(

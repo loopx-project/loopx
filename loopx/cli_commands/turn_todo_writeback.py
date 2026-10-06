@@ -52,7 +52,6 @@ def write_turn_validated_completion(
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
     delivery_read_context_id: str | None = None,
-    delivery_direction_context_id: str | None = None,
     no_followup: bool = False,
     delivery_settlement_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -66,7 +65,6 @@ def write_turn_validated_completion(
         completion_turn_key=completion_turn_key,
         completion_identity_source="turn_settlement",
         delivery_read_context_id=delivery_read_context_id,
-        delivery_direction_context_id=delivery_direction_context_id,
         no_followup=no_followup,
         delivery_settlement_identity=delivery_settlement_identity,
         completion_delivery_workspace=completion_delivery_workspace,

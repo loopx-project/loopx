@@ -632,7 +632,6 @@ def handle_todo_command(
                     completion_result_file=Path(args.result_file).expanduser() if args.result_file else None,
                     completion_turn_key=completion_turn_key,
                     delivery_read_context_id=getattr(args, "delivery_read_context", None),
-                    delivery_direction_context_id=getattr(args, "direction_read_context", None),
                     delivery_settlement_identity=settlement_identity.as_dict() if settlement_identity else None,
                     completion_identity_source=completion_identity_source,
                     completion_delivery_workspace=completion_delivery_workspace,

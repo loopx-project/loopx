@@ -221,7 +221,6 @@
       "input_producer": "loopx/control_plane/turn_driver/transaction.py::_result_kind",
       "producers": [
         "loopx/control_plane/turn_driver/executor.py::_host_result_stage",
-        "loopx/control_plane/turn_driver/executor.py::_first_delivery_stage",
         "loopx/control_plane/turn_driver/executor.py::_run_task_validator",
         "loopx/control_plane/turn_driver/executor.py::_task_validation_receipt",
         "loopx/control_plane/turn_driver/executor.py::_task_validation_stage",

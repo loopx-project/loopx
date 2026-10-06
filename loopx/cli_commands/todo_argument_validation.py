@@ -479,8 +479,6 @@ def validate_todo_update_options(args: argparse.Namespace) -> None:
 
 
 def validate_todo_complete_options(args: argparse.Namespace) -> None:
-    if getattr(args, "direction_read_context", None) and (not args.no_follow_up or not args.turn_instance_id):
-        raise ValueError("--direction-read-context requires Turn-scoped --no-follow-up")
     if getattr(args, "delivery_read_context", None) and not args.turn_instance_id:
         raise ValueError("--delivery-read-context requires the original --turn-instance-id")
     if not args.todo_id:
@@ -570,8 +568,6 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError("--operation-id is supported only by todo receipt and canonical todo add")
     if getattr(args, "delivery_read_context", None) and args.todo_command != "complete":
         raise ValueError("--delivery-read-context is supported only by todo complete")
-    if getattr(args, "direction_read_context", None) and args.todo_command != "complete":
-        raise ValueError("--direction-read-context is supported only by todo complete")
     if args.result_file and args.todo_command != "complete":
         raise ValueError("--result-file is supported only by todo complete")
     agent_id_allowed_for_user_authoring = (

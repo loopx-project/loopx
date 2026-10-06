@@ -80,7 +80,6 @@ type CompletionIdentitySource = typeof COMPLETION_IDENTITY_SOURCES[number];
 interface CoordinationTodoTerminalLifecycleBaseInput {
   /** Immutable read identity, included in the operation payload commitment. */
   readonly delivery_read_context_id?: string;
-  readonly delivery_direction_context_id?: string;
   readonly review_basis?: {readonly provider_revision: string; readonly registry_sha256: string};
   /** Presence selects source-bound validation; null means no effect issued yet. */
   readonly validation_source_provider_revision?: string | null;
@@ -359,12 +358,6 @@ function normalizeTerminalInput(
       throw new AuthorityStoreProtocolError("delivery basis requires an ordinary Turn completion");
     }
   }
-  if (raw.delivery_direction_context_id !== undefined) {
-    requireAuthorityStoreId(raw.delivery_direction_context_id, "delivery direction context id");
-    if (raw.delivery_read_context_id === undefined || !raw.requested_no_followup) {
-      throw new AuthorityStoreProtocolError("direction receipt is only valid for protected terminal closeout");
-    }
-  }
   if (raw.review_basis !== undefined) {
     const basis = canonicalAuthorityObject(raw.review_basis, "terminal review basis");
     if (Object.keys(basis).some(key => !["provider_revision", "registry_sha256"].includes(key)) ||
@@ -490,7 +483,6 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     ...(input.delivery_read_context_id === undefined ? {} : {
       delivery_read_context_id: input.delivery_read_context_id,
       note: input.note, evidence: input.evidence, reason: input.reason,
-      ...(input.delivery_direction_context_id === undefined ? {} : {delivery_direction_context_id: input.delivery_direction_context_id}),
     }),
     // Older receipts deliberately retain their original fingerprint. A reviewed
     // command binds both its approved snapshot and its complete prose intent.
@@ -1320,7 +1312,6 @@ export async function executeCoordinationTodoTerminalLifecycle(
       }
       if (fence.outcome === "continue" && fence.reason === "same_turn_terminal_upgrade") {
         const originalInput = {...input, requested_no_followup: false,
-          delivery_direction_context_id: undefined,
           operation_id: completionTurnOperationId(input, false)};
         const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
         if (original === null) return terminalFailure("terminal_completion_receipt_required",

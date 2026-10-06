@@ -1,4 +1,4 @@
-"""MCP -> real CLI -> local authority phased result/direction settlement."""
+"""Caller-authored direction, real CLI recovery, and one original settlement."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,7 @@ from tests.test_goal_mode_mcp_settlement import GOAL_ID, AGENT_ID, _write_fixtur
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("new_obligation", [False, True])
-def test_mcp_first_delivery_and_terminal_recheck(tmp_path, monkeypatch, provider, new_obligation):
+def test_mcp_first_delivery_recovers_stale_direction_without_repeating_result(tmp_path, monkeypatch, provider, new_obligation):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = _write_fixture(tmp_path)
     registration = json.loads(registry.read_text(encoding="utf-8"))
@@ -32,10 +32,10 @@ def test_mcp_first_delivery_and_terminal_recheck(tmp_path, monkeypatch, provider
     rc, baseline = _run_cli(registry, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--vision-summary", "Verify the bounded output.", "--vision-acceptance", "Output verification passes.",
         "--no-global-sync", "--suppress-external-sinks")
-    assert rc == 0, baseline
+    assert rc == 0, json.dumps(baseline)
     control = _control(registry)
     intent = dict(todo_id=todo_id, agent_id=AGENT_ID, evidence="The bounded output passed verification.",
-        no_follow_up=True, first_delivery=True)
+        next_agent_todo="Verify the remaining bounded output.", first_delivery=True)
     first = json.loads(control.complete_task(**intent))
     assert first["ok"] and first["stage"] == "result_review_pending", first
     result_id = first["context"]["read_context_id"]
@@ -63,12 +63,12 @@ def test_mcp_first_delivery_and_terminal_recheck(tmp_path, monkeypatch, provider
     injected = []
 
     def provider_call(args, **kwargs):
-        output = run_cli(args, **kwargs)
-        if new_obligation and args[:2] == ["quota", "spend-slot"] and not injected:
-            injected.append(add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
-                text="Verify the newly required output.", task_class="advancement_task",
-                claimed_by=AGENT_ID, continuation_policy="same_agent_non_delivery"))
-        return output
+        if new_obligation and args[:1] == ["refresh-state"] and not injected:
+            # Change the relevant basis before the native direction commit.
+            # The original result is already durable; only direction is retried.
+            state.write_text(state.read_text(encoding="utf-8") + "\n## Acceptance update\nVerify an additional bounded output.\n", encoding="utf-8")
+            injected.append(True)
+        return run_cli(args, **kwargs)
 
     control.run_cli = provider_call
     decision = dict(delivery_read_context_id=result_id, read_context_id=direction_id,
@@ -76,12 +76,17 @@ def test_mcp_first_delivery_and_terminal_recheck(tmp_path, monkeypatch, provider
     final = json.loads(control.complete_task(**intent, **decision))
     assert final["ok"] is (not new_obligation), json.dumps(final)
     if new_obligation:
-        assert final["settlement"]["failed_stage"] == "terminal_closeout", final
+        assert final["settlement"]["failed_stage"] == "durable_writeback", final
         assert "checkpoint_read_context_stale" in final["settlement"]["reason"], final
-    else:
-        assert final["settlement"]["terminal_closeout"]["completion_continuation"] == "no_followup", final
-        replay = json.loads(control.complete_task(**intent, **decision))
-        assert replay["ok"], replay
+        control.run_cli = run_cli
+        reread = json.loads(control.review_task_vision(todo_id, AGENT_ID, first_delivery=True))
+        assert reread["ok"], reread
+        decision["read_context_id"] = reread["read_context_id"]
+        decision["vision_unchanged_reason"] = "The updated acceptance was reviewed; the successor retains the additional work."
+        final = json.loads(control.complete_task(**intent, **decision))
+        assert final["ok"], final
+    replay = json.loads(control.complete_task(**intent, **decision))
+    assert replay["ok"] and replay["settlement_identity"] == final["settlement_identity"], replay
     rows = [json.loads(line) for line in (runtime / f"goals/{GOAL_ID}/runs/index.jsonl").read_text().splitlines()]
     assert sum(row["classification"] == "quota_slot_spent" for row in rows) == 1
     assert sum(bool(row.get("vision_checkpoint", {}).get("read_context")) for row in rows) == 1

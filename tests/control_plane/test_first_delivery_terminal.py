@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted, LocalCoordinationAuthorityRejection
 from loopx.control_plane.goals import checkpoint_context_io as context_io
 from loopx.control_plane.quota.settlement import SettlementIdentity
+from loopx.todos import complete_goal_todo
 from tests.control_plane.test_checkpoint_provider_fence import fixture
 from tests.control_plane.checkpoint_process import refresh
 from tests.control_plane.test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _run_cli, _spend_run_count
@@ -27,6 +28,30 @@ def _authority(runtime):
 
 def _identity():
     return SettlementIdentity(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_protected_terminal_is_rejected_before_new_effects(tmp_path, monkeypatch, provider):
+    project, runtime, registry, state, _, _ = fixture(tmp_path, monkeypatch, provider, first_delivery=True)
+    context = context_io.read_checkpoint_context(registry_path=registry, runtime_root_override=str(runtime),
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID, purpose="delivery_result")
+    index = runtime / "goals" / GOAL_ID / "runs/index.jsonl"
+    before = (_authority(runtime), state.read_bytes(), index.read_bytes())
+    rc, rejected = _complete(project, runtime, registry, "--no-follow-up",
+        "--delivery-read-context", context["read_context_id"])
+    # CLI keeps the existing settlement prerequisite before reaching its owner.
+    assert rc == 1 and rejected["settlement_blocked_completion"] is True, rejected
+    with pytest.raises(LocalCoordinationAuthorityRejection) as failure:
+        complete_goal_todo(registry_path=registry, runtime_root_arg=str(runtime),
+            goal_id=GOAL_ID, todo_id=TODO_ID, agent_id=AGENT_ID,
+            completion_turn_key=_identity().effect_id, completion_identity_source="turn_settlement",
+            delivery_read_context_id=context["read_context_id"], delivery_settlement_identity=_identity().as_dict(),
+            task_lease_idempotency_key=f"checkpoint-{TODO_ID}", task_lease_expected_version=1,
+            note="Validated the selected output.", no_followup=True)
+    assert failure.value.code == "delivery_no_followup_unsupported"
+    assert failure.value.payload["delivery_read_context"]["reread_required"] is False
+    assert (_authority(runtime), state.read_bytes(), index.read_bytes()) == before
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

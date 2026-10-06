@@ -86,6 +86,11 @@ export function terminalDeliveryBasisCheck(root: string, input: JsonObject, stor
       } catch { return unknown(); }
     }
     if (context.capture_error != null) return rejected("delivery_source_unavailable", String(context.capture_error));
+    if (input.requested_no_followup === true) {
+      return {...rejected("delivery_no_followup_unsupported",
+        "Protected no-follow-up completion is not admitted in this protocol stage; retain the original identity and receipts."),
+        reread_required: false, next_action: "This protocol stage supports ordinary result delivery; do not retry an unsupported terminal intent or bypass an unresolved Turn."};
+    }
     const facts = requireJsonObject(context.facts, "delivery source facts");
     const authority = authorityStoreSourceAuthority(store);
     if (authority !== "file_v0" && authority !== "sqlite_v0") {
@@ -104,35 +109,6 @@ export function terminalDeliveryBasisCheck(root: string, input: JsonObject, stor
     try { receipt = jsonObject(JSON.parse(readFileSync(receiptPath, "utf8"))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     const current = checkpointProviderFacts(identity.goal_id, facts, head, storeId.store_identity, authority, true);
-    if (input.requested_no_followup === true) {
-      const directionId = context.direction_read_context_id;
-      if (typeof directionId !== "string") return rejected("delivery_direction_receipt_required", "Terminal closeout requires this Turn's committed direction read identity.");
-      const directionPath = join(root, "goals", identity.goal_id, "checkpoint-contexts",
-        `${createHash("sha256").update(identity.effect_id).digest("hex")}.json`);
-      const direction = requireJsonObject(JSON.parse(readFileSync(directionPath, "utf8")), "direction receipt");
-      const prior = requireJsonObject(requireJsonObject(direction.commit_attempt, "committed attempt").index_record, "direction run");
-      inspectCheckpointReplay({runtime_root: root, goal_id: identity.goal_id, prior});
-      const committedContext = requireJsonObject(requireJsonObject(prior.vision_checkpoint, "direction checkpoint").read_context, "committed direction context");
-      if (direction.read_context_id !== directionId || committedContext.read_context_id !== directionId || direction.decision_scope !== "goal") {
-        return rejected("delivery_direction_receipt_mismatch", "Terminal closeout requires the exact committed Goal-scope direction.");
-      }
-      const check = evaluateCheckpointReadContext({phase: "check", purpose: "first_delivery", identity: binding,
-        read_context_id: directionId, decision_scope: "goal", facts: current,
-        receipt: {...direction, commit_attempt: null, versions: committedContext.terminal_versions}});
-      if (check.ok !== true) return check;
-      // Deferred terminal paths have not committed the result yet. Preserve its
-      // original candidate basis as well, allowing only this Turn's own Vision
-      // which was just proven from its indexed direction receipt.
-      const selected = (current.todos as JsonObject[]).find(todo => todo.todo_id === identity.todo_id);
-      if (selected?.status !== "done") {
-        return evaluateCheckpointReadContext({phase: "check", purpose: "delivery_result", identity: binding,
-          read_context_id: context.read_context_id, facts: current, receipt: receipt === null ? null : {
-            ...receipt, versions: {...requireJsonObject(receipt.versions, "result basis versions"),
-              agent_vision: canonicalAuthoritySha256(current.agent_vision)},
-          }});
-      }
-      return check;
-    }
     return evaluateCheckpointReadContext({phase: "check", purpose: "delivery_result", identity: binding,
       read_context_id: context.read_context_id, receipt,
       facts: current});

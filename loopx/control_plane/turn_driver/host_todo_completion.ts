@@ -143,6 +143,9 @@ function decodeRequest(
   const resultContextId = optionalText("delivery_read_context_id");
   if ((value.first_delivery === true || resultContextId) && !firstDelivery) throw new EffectRuntimeRequestError("First delivery requires the v2 host contract.");
   if (firstDelivery && value.first_delivery !== true) throw new EffectRuntimeRequestError("v2 requires explicit first_delivery opt-in.");
+  if (firstDelivery && value.no_follow_up === true) {
+    throw new EffectRuntimeRequestError("Protected no-follow-up completion is not supported by this protocol stage; no effects were admitted. Use the existing ordinary contract or a real successor intent, without changing an unresolved original Turn.");
+  }
   if (visionPath && unchanged) {
     throw new EffectRuntimeRequestError("choose a vision patch or an unchanged reason, not both");
   }
@@ -477,8 +480,6 @@ function providerSteps(
       step_kind: "terminal_closeout",
       args: [
         ...request.completion_args,
-        ...(request.first_delivery ? ["--delivery-read-context", request.delivery_read_context_id ?? "missing",
-          "--direction-read-context", request.checkpoint_read_context_id ?? "missing"] : []),
         "--turn-instance-id",
         turnId,
         ...(request.goal_instance_id
