@@ -29,6 +29,13 @@ from .private_images import private_message_caption, private_message_images
 from .private_progress import UPDATE_INTERVAL_SEC, project_progress
 
 
+def _presentation_text(text: str) -> str:
+    try:
+        return normalize_lark_outbound_text(text, limit=None, preserve_format=True)
+    except LarkOutboundTextError:
+        return safe_lark_plain_text_fallback(text)
+
+
 class LarkPrivateConversations:
     def __init__(self, *, controller: Any, runtime_root: Path, runner: Any, cli_bin: str,
                  reaction_feedback: bool = True) -> None:
@@ -314,10 +321,7 @@ class LarkPrivateConversations:
         # answer stays unchanged. An older frozen intent may contain raw CRLF;
         # preserve it when it still matches Core, letting Inbox verify its wire.
         if phase_state.get("text") != text:
-            try:
-                text = normalize_lark_outbound_text(text, limit=None, preserve_format=True)
-            except LarkOutboundTextError:
-                text = safe_lark_plain_text_fallback(text)
+            text = _presentation_text(text)
         if phase_state.get("text") not in (None, text):
             raise ValueError("delivery content changed after an attempt")
         config = inbox()
@@ -331,7 +335,7 @@ class LarkPrivateConversations:
         if phase in {"terminal", "commission_result"} and progress.get("attempt") and not stream.get("closed") and not phase_state.get("started"):
             # Freeze the known message proof before the first final edit. Later
             # recovery can replace the same ID, never append another answer.
-            edit = {"text": stream.get("confirmed_text") or progress["text"],
+            edit = {"text": _presentation_text(stream.get("confirmed_text") or progress["text"]),
                     "attempt": stream.get("confirmed_attempt") or progress["attempt"]}
             phase_state["edit_from"] = edit
         if edit:
@@ -386,6 +390,7 @@ class LarkPrivateConversations:
         return bool(phase_state["verified"])
 
     def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path]) -> bool:
+        text = _presentation_text(text)
         progress = record["deliveries"].get("progress") or {}
         if not progress.get("verified"):
             return self._deliver(path, record, "progress", text, inbox=inbox)
@@ -398,7 +403,7 @@ class LarkPrivateConversations:
 
         result = update_lark_inbox_reply(project=self.runtime_root, config_path=inbox(),
             message_id=record["event"]["message_id"], text=text,
-            previous_text=stream.get("confirmed_text") or progress["text"],
+            previous_text=_presentation_text(stream.get("confirmed_text") or progress["text"]),
             attempt=stream.get("confirmed_attempt") or progress["attempt"],
             runner=self._reply_runner, source_membership_verifier=lambda: self._source_verified(record),
             before_send=before_send, delivery_attempt_recorder=lambda value: confirmed.update(value))
@@ -422,6 +427,10 @@ class LarkPrivateConversations:
         events = self.core.controller.store.events_after(session_id or record["session_id"],
             turn_id or record["turn_id"], stream.get("cursor"))
         text = project_progress(stream, events)
+        if text:
+            # Journal the exact presentation the sender freezes, not the raw
+            # Core text. The same conversion also recovers older draft proofs.
+            text = _presentation_text(text)
         _atomic_write_json(path, record)
         if not text or text == stream.get("confirmed_text"):
             return

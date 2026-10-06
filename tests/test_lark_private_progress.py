@@ -57,7 +57,7 @@ class StreamingProvider(Provider):
         return result
 
 
-def streaming(fixture):
+def streaming(fixture, first_text="第一段回答。\n"):
     store, runtime, provider, transport = connect(fixture)
     streamed = StreamingProvider()
     # Existing binding observer and source reads must use the same provider.
@@ -71,12 +71,12 @@ def streaming(fixture):
             print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "第一段回答。\\n"}}), flush=True)
             continue
         response =''')
-    fake.write_text(source)
+    fake.write_text(source.replace('"第一段回答。\\n"', json.dumps(first_text, ensure_ascii=False)))
     return store, runtime, streamed, transport
 
 
-def start(fixture, profile="notes-app", name="stream"):
-    store, runtime, provider, transport = streaming(fixture)
+def start(fixture, profile="notes-app", name="stream", first_text="第一段回答。\n"):
+    store, runtime, provider, transport = streaming(fixture, first_text)
     event = provider.event(profile, name, "wait for interrupt")
     transport.admit(profile, event)
     row = transport.core.pending()[0]
@@ -159,6 +159,40 @@ def test_lost_edit_ack_recovered_by_readback_then_exact_stop_closes_draft(ordina
         assert len(provider.edits) == count
         assert _read_json(replay.root / f"{row['request_ref']}.json")["status"] == "delivered"
         assert "第一段回答" not in json.loads(provider.messages["om_out_0"]["body"]["content"])["zh_cn"]["content"][0][0]["text"]
+    finally:
+        runtime.close()
+
+
+def test_literal_mentions_use_exact_wire_proof_through_update_replay_and_final(ordinary):  # noqa: F811
+    fake = ordinary[-2]
+    final = "完整结果：@Fixture 与 @Later 都是普通文字。"
+    fake.write_text(fake.read_text().replace('"message": "Steered response.",', f'"message": {final!r},'))
+    store, runtime, provider, transport, row = start(ordinary, first_text="阅读 @Fixture。\n")
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        path = transport.root / f"{row['request_ref']}.json"
+        record = _read_json(path)
+        assert "＠Fixture" in record["stream"]["confirmed_text"]
+        assert record["stream"]["confirmed_text"] == record["deliveries"]["progress"]["text"]
+        assert "@Fixture" in record["stream"]["answer"]  # Core/view content stays intact.
+        # The first implementation persisted raw text after the sender made
+        # literal mentions inert. An upgrade must recover that old proof too.
+        record["stream"]["confirmed_text"] = record["stream"]["confirmed_text"].replace("＠Fixture", "@Fixture")
+        _atomic_write_json(path, record)
+        store.append_event(sid, tid, kind="answer.delta", payload={"text": "再读 @Later。"})
+        allow_update(transport, row)
+        replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                         runner=provider, cli_bin="lark-cli")
+        replay.reconcile()
+        assert "＠Later" in provider.edits[-1][2]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert replay.reconcile() == 1
+        assert provider.edits[-1][2] == final.replace("@", "＠")
+        assert len(provider.writes) == 1
+        assert _read_json(path)["status"] == "delivered"
+        replay.reconcile()
+        assert len(provider.writes) == 1
     finally:
         runtime.close()
 
