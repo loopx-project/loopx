@@ -142,7 +142,7 @@ def write_captured_todo_state(
 ) -> None:
     """Under the primary lock, prepare before replacement and mark only after durability."""
 
-    from ..todos.active_state_editing import atomic_write_state_text
+    from ..runtime.document_io import atomic_write_state_text
 
     def write() -> None:
         capture.prepare(text)

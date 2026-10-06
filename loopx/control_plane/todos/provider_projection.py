@@ -28,7 +28,7 @@ from .machine_section_projection import (
     render_canonical_todo_sections,
 )
 from .completion_validation_store import load_completion_validation_declarations
-from .active_state_editing import atomic_write_state_text, verify_state_text_durable
+from ..runtime.document_io import atomic_write_state_text, verify_state_text_durable
 from .projection_document import recovered_todo_projection_skeleton
 
 

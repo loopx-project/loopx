@@ -28,9 +28,10 @@ from ..coordination.runtime_shadow_writer_adapter import (
     settle_todo_runtime_shadow_capture,
 )
 from ..todos.path_resolution import resolve_todo_state_path
+from ..runtime.document_io import verify_state_text_durable
 from ..todos.active_state_editing import (
     insert_into_existing_section, insert_new_section, section_bounds,
-    verify_state_text_durable, replace_updated_at,
+    replace_updated_at,
 )
 from ..todos.contract import (
     TODO_ACTION_KIND_ADVANCEMENT_VALUES, format_todo_metadata_line,

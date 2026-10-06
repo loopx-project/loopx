@@ -1791,7 +1791,7 @@
     },
     {
       "site": "loopx/control_plane/work_items/team_plan_adapter.py::<module>.apply_team_plan::codec_read:load_registry#1",
-      "line": 139,
+      "line": 140,
       "column": 31,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1799,7 +1799,7 @@
     },
     {
       "site": "loopx/control_plane/work_items/team_plan_adapter.py::<module>.team_plan_state_fingerprint::codec_read:load_registry#1",
-      "line": 78,
+      "line": 79,
       "column": 31,
       "kind": "codec_read",
       "api": "load_registry",

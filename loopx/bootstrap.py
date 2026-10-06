@@ -17,9 +17,9 @@ from typing import Any
 
 from .control_plane.runtime.time import now_local_iso
 from .control_plane.runtime.public_safety import public_safe_compact_text
+from .control_plane.runtime.document_io import atomic_write_state_text
 from .control_plane.todos.active_state_editing import (
     TODO_SECTION_HEADINGS,
-    atomic_write_state_text,
     insertion_anchor,
     section_bounds,
 )
