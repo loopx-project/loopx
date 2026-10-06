@@ -1,13 +1,18 @@
-# Rendered public-source reading with an existing Ego Page
+# Rendered public-source reading with Ego
 
 The optional `loopx.extensions.ego_source_reader` stdio MCP adapter gives an
 existing Codex host narrow `read_public_url` and `read_public_image` tools when its model shell cannot
-reach Ego's local bootstrap. It reuses an installed Ego browser and an existing
-TaskSpace/Page. It does not replace the Chat Session owner or create a browser,
+reach Ego's local bootstrap. It reuses an installed Ego browser with a reserved
+Page. It does not replace the Chat Session owner or create a browser,
 model thread, background service, material catalog or permission authority.
 
-Operator setup is explicit. Reserve an existing Page for this MCP process and
-allow only the public-source origins needed for the task. Do not reserve a Page
+Operator setup is explicit. Choose `auto` to lazily create one TaskSpace and its
+initial `p1` per MCP process. Ego's named factory can reuse an existing space,
+so the adapter generates a unique host nonce once and keeps that name throughout
+its lifecycle and confirmed-missing recovery. This avoids expired fixed ids and
+keeps concurrent hosts on separate Pages. Alternatively, reserve an existing numeric TaskSpace
+and Page for this process. Allow only the public-source origins needed for the
+task. Do not reserve a Page
 shared with another process or grant a private account/admin origin. Navigation
 may use the existing browser's session; origin configuration does not prove that
 every page on that origin is public. Follow the browser's installed skill for
@@ -25,17 +30,31 @@ tool_timeout_sec = 40
 
 [mcp_servers.loopx_ego_source_read.env]
 LOOPX_EGO_READ_BIN = "/absolute/path/to/installed/ego-browser"
-LOOPX_EGO_READ_TASK_SPACE = "7"
-LOOPX_EGO_READ_PAGE = "p2"
+LOOPX_EGO_READ_TASK_SPACE = "auto"
+LOOPX_EGO_READ_PAGE = "p1"
 LOOPX_EGO_READ_ORIGINS = "https://example.com,https://www.example.org"
 ```
 
 Use a supported LoopX installation containing this module. Restart an idle host
 through its existing service path and resume the original Session. Do not change
 its sandbox, approval policy, workspace grants or authentication to make the
-tool work. No new dependency is needed beyond LoopX's existing MCP dependency.
+tool work. The Python environment needs the optional `loopx[ego-source-reader]`
+extra (`mcp==1.28.1`); the base LoopX CLI has no Python runtime dependencies.
+Keep this environment outside PATH when another installation owns `loopx`.
 Disable by removing only this MCP entry and restarting that idle host. Keep a
 private configuration backup and the installed/source revision for rollback.
+
+In `auto` mode, URL/configuration/origin validation runs before creation.
+The process reuses its space for text and image calls, and replaces it once only
+when Ego explicitly reports `task space not found`. Other browser errors,
+verification walls and user-control stops do not create replacements. An
+ambiguous creation receipt fails closed until the operator inspects/restarts the
+host. On normal MCP shutdown or SIGTERM, it finishes only its own created,
+still-agent-owned space. SIGTERM cleanup can complete while the stdio server
+still waits for its host to close stdin; callers should also close the pipe when
+stopping the process. Configured numeric spaces are never finished by the
+adapter. Shutdown failures may require operator cleanup; a killed process cannot
+guarantee cleanup. No login/profile selection or browser-control tool is exposed.
 
 The tool accepts an HTTPS URL, checks the configured origin before navigation,
 and uses WHATWG URL normalization for the target before checking the exact

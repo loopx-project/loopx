@@ -5,6 +5,11 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
+  goalHeartbeatReceiptsFromSnapshot,
+  readGoalRolloutEventSnapshot,
+  strictGoalRolloutEvents,
+} from "../../loopx/control_plane/rollout_receipt_log.ts";
+import {
   evaluateSchedulerHeartbeatFollowup,
   SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA,
   SCHEDULER_HEARTBEAT_FOLLOWUP_RESULT_SCHEMA,
@@ -195,4 +200,86 @@ test("decision-free compatibility requests can omit a heartbeat receipt", async 
 
   assert.equal(result.ok, true);
   assert.equal((result.scheduler_commit as Record<string, unknown>).status, "written");
+});
+
+test("identity-less quota audits stay visible without superseding a host receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  for (const runId of [undefined, null, "", "   ", 7, {}]) {
+    await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
+      schema_version: "loopx_rollout_event_v0",
+      event_kind: "quota_should_run",
+      goal_id: scope.goal_id,
+      agent_id: scope.agent_id,
+      run_id: runId,
+      status: "skip",
+      details: { error_code: "QUOTA_VALIDATION_FAILED" },
+    })}\n`, { flag: "a" });
+  }
+  const snapshot = await readGoalRolloutEventSnapshot(runtimeRoot, scope.goal_id);
+  assert.equal(strictGoalRolloutEvents(snapshot).length, 7);
+  assert.equal(goalHeartbeatReceiptsFromSnapshot(snapshot, scope.goal_id, scope.agent_id)?.length, 1);
+  const first = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(first.ok, true);
+  const statePath = String(first.scheduler_state_path);
+  const stateBytes = await readFile(statePath, "utf8");
+  const retry = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(retry.ok, true);
+  assert.equal((retry.scheduler_commit as Record<string, unknown>).status, "replayed");
+  assert.equal((retry.scheduler_commit as Record<string, unknown>).written, false);
+  assert.equal(await readFile(statePath, "utf8"), stateBytes);
+
+  // A real newer Turn remains authoritative even after replay of the old Turn.
+  await appendReceipt(runtimeRoot, "turn-followup-2");
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
+  assert.equal(stale.scheduler_state_mutated, false);
+});
+
+test("another Agent receipt cannot supersede ACK or host-failure writeback", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: "other-agent",
+    run_id: "other-turn",
+  })}\n`, { flag: "a" });
+  const base = request(runtimeRoot);
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(base);
+  assert.equal(acknowledged.ok, true);
+  const failed = await evaluateSchedulerHeartbeatFollowup({
+    ...base,
+    host_facts: {
+      ...(base.host_facts as Record<string, unknown>),
+      operation: "host_failure",
+      failure_kind: "timeout",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=3",
+    },
+  });
+  assert.equal(failed.ok, true);
+  assert.equal(failed.failure_count, 1);
+});
+
+test("a quota audit cannot manufacture a missing heartbeat receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const path = receiptPath(runtimeRoot);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: scope.agent_id,
+    status: "skip",
+  })}\n`);
+  const result = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(result.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING");
+  assert.equal(result.scheduler_state_mutated, false);
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id, agentId: scope.agent_id,
+    surface: scope.surface, stateKey: scope.state_key,
+  });
+  await assert.rejects(readFile(statePath, "utf8"), { code: "ENOENT" });
 });

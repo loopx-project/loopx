@@ -18,7 +18,18 @@ loopx todo list --goal-id example-goal --todo-id todo_work
 loopx todo project-markdown --goal-id example-goal --execute
 ```
 
-Use `--no-follow-up` only when no successor is needed. Leased work additionally
+Use `--no-follow-up` only when no successor is needed. At replan, review unmet
+acceptance against the original authorized goal and current evidence. If a
+reasonable in-scope next step remains, continue or replan; a preassigned successor
+is not required. An empty Todo queue alone does not narrow the authorization.
+Otherwise explain why no reasonable in-scope next step remains, preserving unmet
+requirements rather than claiming them achieved. Do not invent work, expand
+authority or consume the remaining budget merely to stay active.
+
+This is agent decision guidance in the shared replan packet, including compact
+CLI and host envelopes. It does not add a machine judge of free-text acceptance,
+change lifecycle admission, or require a successor for every completed Todo.
+Leased work additionally
 requires its current `--task-lease-idempotency-key` and
 `--task-lease-expected-version`; owner confirmation is not a lease or a lifecycle
 grant. Chat users retry the same failed proposal. A stale proposal requires a
@@ -113,13 +124,22 @@ command or transport in this slice.
 
 A declared deliverable passing its validator is not the same event as its Turn
 being settled. The shared TypeScript settlement plan orders ordinary Todo
-completion, durable `refresh-state`, one `quota spend-slot`, then final
-`todo complete --no-follow-up`, all bound to the original Goal, Agent, Todo and
-Turn. Ordinary completion retains `active_goal` continuation without creating
+completion, durable `refresh-state` and one `quota spend-slot`, all bound to the
+original Goal, Agent, Todo and Turn. Final `todo complete --no-follow-up` applies
+only when the current contract permits final scope closeout. Ordinary completion
+retains `active_goal` continuation without creating
 an artificial successor. Its command has the condition
 `todo_deliverable_complete`; required validation is never conditional or waived.
 Qualified `in_flight_continuation` leaves unfinished work open and omits ordinary
 completion rather than pretending the deliverable passed.
+
+The shared Todo summary keeps missing-successor diagnostics and counts, but its
+warning is review guidance, not an obligation to create a successor or terminate
+a completed stage. Review remaining authorized Goal acceptance and the runnable
+frontier; continue existing work or replan while scope remains. An empty queue
+alone does not certify final scope closeout. Graph validation, empty-frontier
+replan and terminal proof remain governed by their existing typed rules. This
+guidance change is shared by CLI, status and quota readback.
 
 If final closeout is attempted before writeback/accounting, CLI JSON and Markdown
 return that same recovery plan. Supplied registry/runtime, project/state routes

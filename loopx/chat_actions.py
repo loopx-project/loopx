@@ -748,6 +748,11 @@ class ChatActionService(
         if agent_id and self.runtime_controller is not None and first_turn_gate is None:
             session, _resumed = self.runtime_controller.open_session(
                 goal_id=goal_id,
+                goal_instance_id=(
+                    str(projected["goal_instance_id"])
+                    if projected.get("goal_instance_id")
+                    else None
+                ),
                 agent_id=agent_id,
                 work_dir=project,
                 objective=objective,
@@ -814,6 +819,20 @@ class ChatActionService(
             "projection_verified": True,
             "resource_ids": {
                 "goal_id": goal_id,
+                **(
+                    {"goal_instance_id": str(projected["goal_instance_id"])}
+                    if projected.get("goal_instance_id")
+                    else {}
+                ),
+                **(
+                    {
+                        "creation_operation_id": str(
+                            projected["creation_operation_id"]
+                        )
+                    }
+                    if projected.get("creation_operation_id")
+                    else {}
+                ),
                 **({"agent_id": agent_id} if agent_id else {}),
                 **({"todo_ids": todo_ids} if todo_ids else {}),
                 **({"session_id": session_id} if session_id else {}),

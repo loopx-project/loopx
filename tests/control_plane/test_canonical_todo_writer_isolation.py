@@ -1,6 +1,7 @@
-"""Canonical callers must not load an unpromoted Goal's line writer."""
+"""Canonical callers must not load unpromoted Todo writers or capture producers."""
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import shlex
@@ -16,13 +17,24 @@ import test_quota_settlement_cli as settlement
 
 
 @pytest.fixture
-def without_source_line_writer(tmp_path, monkeypatch):
+def without_source_todo_writers(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     package_root = tmp_path / "package"
     package = package_root / "loopx"
     shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
                     ignore=shutil.ignore_patterns("__pycache__"))
     (package / "control_plane/todos/line_update.py").unlink()
+    capture_adapter = package / "control_plane/coordination/runtime_shadow_writer_adapter.py"
+    source = capture_adapter.read_text()
+    lines = source.splitlines(keepends=True)
+    producers = {"begin_todo_runtime_shadow_capture", "require_runtime_shadow_capture_prepared",
+                 "write_captured_todo_state", "settle_todo_runtime_shadow_capture"}
+    definitions = [node for node in ast.parse(source).body
+                   if isinstance(node, ast.FunctionDef) and node.name in producers]
+    assert {node.name for node in definitions} == producers
+    for node in reversed(definitions):
+        del lines[node.lineno - 1:node.end_lineno]
+    capture_adapter.write_text("".join(lines))
     monkeypatch.setenv("PYTHONPATH", str(package_root))
     provenance = subprocess.check_output(
         [sys.executable, "-c", "import loopx; print(loopx.__file__)"],
@@ -32,7 +44,7 @@ def without_source_line_writer(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_canonical_cli_lifecycle_without_source_line_writer(tmp_path, provider, without_source_line_writer):
+def test_canonical_cli_lifecycle_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
     registry, _runtime, state = promoted_create_fixture(tmp_path, provider=provider)
 
     def cli(*args):
@@ -80,7 +92,7 @@ def test_canonical_cli_lifecycle_without_source_line_writer(tmp_path, provider, 
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_new_goal_and_original_creation_recovery_without_source_line_writer(tmp_path, provider, without_source_line_writer):
+def test_new_goal_and_original_creation_recovery_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
     project = tmp_path / "project"
     project.mkdir()
     runtime = tmp_path / "runtime"
@@ -144,7 +156,7 @@ def test_new_goal_and_original_creation_recovery_without_source_line_writer(tmp_
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_leased_delivery_settlement_and_recovery_without_source_line_writer(tmp_path, provider, without_source_line_writer):
+def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
     project, runtime, registry, display, _ = _source(
         tmp_path, provider=provider, handoff_mode="hard_lease",
         extra=f"claimed_by={settlement.AGENT_ID}",

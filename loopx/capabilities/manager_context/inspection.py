@@ -178,6 +178,11 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
         "goals": [
             {
                 "goal_id": row["goal_id"],
+                **(
+                    {"goal_instance_id": row["goal_instance_id"]}
+                    if row.get("goal_instance_id")
+                    else {}
+                ),
                 "description": row.get("description"),
                 "activation_state": row.get("activation_state", "unknown"),
                 "quality": row.get("quality"),

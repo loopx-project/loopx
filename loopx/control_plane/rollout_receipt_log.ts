@@ -101,7 +101,7 @@ export function strictGoalRolloutEvents(
   return snapshot?.events ?? [];
 }
 
-/** Filter heartbeat receipts from an already parsed Goal log snapshot. */
+/** Qualify heartbeat receipts without discarding diagnostic quota audit rows. */
 export function goalHeartbeatReceiptsFromSnapshot(
   snapshot: GoalRolloutEventSnapshot | null,
   goalId: string,
@@ -117,6 +117,9 @@ export function goalHeartbeatReceiptsFromSnapshot(
   return snapshot.events.filter((event) =>
     event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
     event.goal_id === goalId &&
+    // A failed invocation without a real Turn identity is an audit, not a
+    // receipt that can grant host writeback or supersede an admitted Turn.
+    typeof event.run_id === "string" && event.run_id.trim().length > 0 &&
     (agentId === undefined || event.agent_id === agentId)
   );
 }

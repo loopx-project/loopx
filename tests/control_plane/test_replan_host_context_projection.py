@@ -131,7 +131,7 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
         "delivered_by": "quota_host_projection",
     }
     assert context["coverage_ledger"][0]["surface_id"] == "surface-existing"
-    assert len(action["planning_guidance"]) == 2
+    assert len(action["planning_guidance"]) == 3
     assert {key: value for key, value in action.items() if key != "planning_guidance"} == {
         "schema_version": "replan_action_packet_v0",
         "decision": "replan_required",
@@ -218,12 +218,16 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
               if vision_gap else _quota_payload())
     guidance = source["replan_action_packet"]["planning_guidance"]
     # These are delivery assertions, not a claim that a model follows the advice.
-    assert len(guidance) == 2
+    assert len(guidance) == 3
     assert "Never shrink requested goals" in guidance[0]
     assert "honor user scope, authority, budget and stops" in guidance[0]
     assert "current authoritative evidence for every requirement" in guidance[1]
     assert "unproven" in guidance[1]
     assert "blocked/exhausted/superseded is not achieved" in guidance[1]
+    assert "review unmet acceptance against the original authorized goal and evidence" in guidance[2]
+    assert "continue or replan without waiting for an assigned successor" in guidance[2]
+    assert "An empty Todo queue is not a scope limit" in guidance[2]
+    assert "do not invent work, exceed authority or consume budget merely to stay active" in guidance[2]
     compact = compact_quota_should_run_cli_payload(source)
     envelope = build_turn_envelope(source)
     for packet in (compact, envelope):
@@ -238,9 +242,10 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     assert turn_envelope_action_signature_document(envelope) == signature
     signature["replan_action_packet"].pop("planning_guidance")
     assert signature == quota_action_signature_document(baseline)
-    # Preserve an existing budget warning; bounded advice adds no more than 360 bytes.
+    # Preserve an existing budget warning; cap the total decision advice,
+    # including the unmet-acceptance review, at 800 bytes.
     assert envelope["compaction"]["within_budget"] == old_envelope["compaction"]["within_budget"]
     assert (envelope["compaction"]["envelope_json_bytes"]
-            - old_envelope["compaction"]["envelope_json_bytes"]) <= 360
+            - old_envelope["compaction"]["envelope_json_bytes"]) <= 800
     envelope["replan_action_packet"].pop("planning_guidance")
     assert envelope["replan_action_packet"] == old_envelope["replan_action_packet"]

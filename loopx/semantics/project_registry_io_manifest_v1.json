@@ -127,7 +127,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.bootstrap_project::codec_transaction:project_registry_transaction#1",
-      "line": 544,
+      "line": 543,
       "column": 14,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",
@@ -135,7 +135,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.read_json_if_exists::codec_read:load_project_registry#1",
-      "line": 86,
+      "line": 85,
       "column": 15,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -478,8 +478,16 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/chat_manager_context.py::<module>.manager_authorization_scope_id_for_registry::codec_read:decode_registry_snapshot#1",
+      "line": 434,
+      "column": 20,
+      "kind": "codec_read",
+      "api": "decode_registry_snapshot",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/chat_manager_context.py::<module>.manager_turn_context::codec_read:decode_registry_snapshot#1",
-      "line": 473,
+      "line": 591,
       "column": 25,
       "kind": "codec_read",
       "api": "decode_registry_snapshot",
@@ -1975,7 +1983,7 @@
     },
     {
       "site": "loopx/goal_portfolio.py::<module>.build_goal_portfolio::codec_read:decode_registry_snapshot#1",
-      "line": 343,
+      "line": 359,
       "column": 20,
       "kind": "codec_read",
       "api": "decode_registry_snapshot",

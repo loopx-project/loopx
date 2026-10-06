@@ -18,7 +18,7 @@ from .chat_manager import (
     manager_answer_readback,
     manager_session_model_allocation,
 )
-from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION
+from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import project_context as project_context_policy
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
@@ -568,6 +568,7 @@ class ChatRuntimeController:
         mode: str,
         channel_id: str | None = None,
         agent_goal_id: str | None = None,
+        goal_instance_id: str | None = None,
         manager_executor_allocation: Mapping[str, Any] | None = None,
         project_ref: str | None = None,
         conversation_binding_id: str | None = None,
@@ -655,6 +656,8 @@ class ChatRuntimeController:
                 # starts a new Session while the old context and history remain intact.
                 if latest is not None and project_context is not None and latest.get("project_context") != project_context:
                     latest = None
+                if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
@@ -680,6 +683,7 @@ class ChatRuntimeController:
             )
             persisted = self.store.create_session(
                 goal_id=goal_id,
+                goal_instance_id=goal_instance_id,
                 agent_id=agent_id,
                 executor_endpoint_id=agent_id,
                 adapter_kind=str(capability["adapter_kind"]),
@@ -1659,14 +1663,9 @@ class ChatRuntimeController:
                 event_buffer.close()
                 return
             if response.get("context_handoff") is not None:
-                from .capabilities.manager_context.execution import handoff_response
-                if scope["kind"] == "unavailable":
-                    raise ValueError("context handoff requires a scoped conversation")
-                response = handoff_response(
-                    self.coordination_runtime_root, self.registry_path, session=session,
-                    turn=self.store.load_turn(session_id, turn_id) or {}, response=response,
-                    source_authorized=lambda: scope["kind"] != "external_audience" or bool(
-                        self.manager_scope_resolver and self.manager_scope_resolver(session)),
+                response = apply_context_handoff(
+                    self, scope, session,
+                    self.store.load_turn(session_id, turn_id) or {}, response, context,
                     execution_allowed=lambda: not execution_ended())
             response = offer_team_plan_confirmation(
                 store=self.store,

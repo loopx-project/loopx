@@ -274,6 +274,9 @@ def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     assert guard["autonomous_replan_obligation"]["triggers"][0]["kind"] == "vision_acceptance_gap"
+    # A real empty-frontier CLI wake still receives the scoped next-step review.
+    assert any("An empty Todo queue is not a scope limit" in item
+               for item in guard["replan_action_packet"]["planning_guidance"])
     binding = ("--goal-id", GOAL, "--agent-id", AGENT,
                "--turn-instance-id", TURN, "--replan-obligation-id", identity["replan_obligation_id"])
     vision = tmp_path / "covered-vision.json"
