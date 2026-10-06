@@ -6,9 +6,8 @@ a proposal, not proof that any write committed.  Durable execution results and
 storage outcomes deliberately live outside this module. Todo lifecycle admission,
 ownership routing and terminal fences adapt to canonical TypeScript decisions.
 Lease and handoff writers use their whole native transactions directly; their
-unconsumed Python decision facades are retired. Python retains live Todo
-snapshot/result adaptation and the explicitly registered legacy lease-mode
-input contract until its semantic-vocabulary retirement review.
+unconsumed Python decision facades and lease-mode input are retired. Python
+retains the live Todo snapshot/result adaptation, not a second lease rule.
 """
 
 from __future__ import annotations
@@ -34,13 +33,6 @@ class TodoAction(StrEnum):
     UPDATE = "update"
     COMPLETE = "complete"
     SUPERSEDE = "supersede"
-
-
-class LeaseAction(StrEnum):
-    ACQUIRE = "acquire"
-    RENEW = "renew"
-    TRANSFER = "transfer"
-    RELEASE = "release"
 
 
 class DecisionOutcome(StrEnum):
@@ -121,14 +113,6 @@ class TodoMutationCommand:
     lease_idempotency_key: str | None = None
     lease_expected_version: int | None = None
     allow_user_gate_auto_acquire: bool = False
-
-
-@dataclass(frozen=True)
-class LeaseModeGateCommand:
-    action: LeaseAction
-
-
-CoordinationCommand = TodoMutationCommand | LeaseModeGateCommand
 
 
 @dataclass(frozen=True)
@@ -382,31 +366,9 @@ def ownership_gate_requirement(
     return OwnershipGate(payload["ownership_gate"])
 
 
-def _lease_handoff_rejection(snapshot: CoordinationSnapshot) -> str | None:
-    if snapshot.handoff_mode is HandoffMode.SOFT_CLAIM:
-        return "handoff_mode_forbids_lease"
-    return None
-
-
-def _decide_lease_mode_gate(
-    snapshot: CoordinationSnapshot,
-    command: LeaseModeGateCommand,
-) -> TransitionPlan:
-    if (
-        command.action is not LeaseAction.RELEASE
-        and (rejection := _lease_handoff_rejection(snapshot)) is not None
-    ):
-        return _result(DecisionOutcome.REJECTED, rejection)
-    return _result(
-        DecisionOutcome.APPLY,
-        "lease_mutation_allowed",
-        next_snapshot=snapshot,
-    )
-
-
 def decide(
     snapshot: CoordinationSnapshot,
-    command: CoordinationCommand,
+    command: TodoMutationCommand,
 ) -> TransitionPlan:
     """Evaluate one normalized command without reading or writing state."""
 
@@ -414,6 +376,4 @@ def decide(
         return _result(DecisionOutcome.REJECTED, "invalid_lease_snapshot")
     if isinstance(command, TodoMutationCommand):
         return _typescript_todo_decision(snapshot, command)
-    if isinstance(command, LeaseModeGateCommand):
-        return _decide_lease_mode_gate(snapshot, command)
     raise TypeError(f"unsupported coordination command: {type(command).__name__}")

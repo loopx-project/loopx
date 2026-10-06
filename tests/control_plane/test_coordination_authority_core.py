@@ -8,9 +8,7 @@ from loopx.control_plane.coordination.authority_core import (
     CoordinationSnapshot,
     DecisionOutcome,
     HandoffMode,
-    LeaseAction,
     LeaseFence,
-    LeaseModeGateCommand,
     LeaseSnapshot,
     LifecycleGrant,
     OwnershipGate,
@@ -357,15 +355,19 @@ def test_exact_user_gate_can_plan_auto_acquire_but_never_displaces_a_live_lease(
     assert foreign_live.code == "lease_fence_required"
 
 
-def test_mode_gate_is_explicit_instead_of_a_synthetic_lease_command() -> None:
-    state = snapshot(handoff_mode=HandoffMode.SOFT_CLAIM)
-    for action in (LeaseAction.ACQUIRE, LeaseAction.RENEW, LeaseAction.TRANSFER):
-        plan = decide(state, LeaseModeGateCommand(action=action))
-        assert plan.outcome is DecisionOutcome.REJECTED
-        assert plan.code == "handoff_mode_forbids_lease"
+@pytest.mark.parametrize("symbol", ["LeaseAction", "LeaseModeGateCommand", "CoordinationCommand"])
+def test_retired_private_lease_input_is_absent(symbol) -> None:
+    import importlib
 
-    release = decide(state, LeaseModeGateCommand(action=LeaseAction.RELEASE))
-    assert release.outcome is DecisionOutcome.APPLY
+    module = "loopx.control_plane.coordination.authority_core"
+    assert not hasattr(importlib.import_module(module), symbol)
+    with pytest.raises(ImportError):
+        exec(f"from {module} import {symbol}")
+
+
+def test_todo_bridge_rejects_commands_outside_its_live_boundary() -> None:
+    with pytest.raises(TypeError, match="unsupported coordination command"):
+        decide(snapshot(), object())
 
 
 def test_core_has_no_storage_or_receipt_version_domain() -> None:
