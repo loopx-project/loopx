@@ -244,6 +244,7 @@ def test_agent_work_summary_bounds_content_without_inventing_execution():
     assert len(summary["todos"][0]["title"]) == 240
     assert summary["todos"][0]["content_truncated"] is True
     assert summary["todos"][0]["status"] == "blocked"
+    assert agent_work_summary(summary) == summary
     assert summary["todos_omitted"] == 0 and "raw_private_body" not in json.dumps(summary)
     tool_index = manager_index({"goals": [{"goal_id": "stopped", "activation_state": "stopped",
                                            "agents": [summary]}]})

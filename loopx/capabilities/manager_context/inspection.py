@@ -20,7 +20,7 @@ READ_TOOL = {
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
         "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. Use view=agent_route with exact goal_id and agent_id to observe an existing local host binding before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
         "For a current-work overview, start with the index's bounded Agent Todo summaries; "
-        "use view=portfolio for omitted Goals and view=todos for needed detail. "
+        "use view=portfolio for source and coverage, and view=todos for needed detail. "
         "Delivery history answers past results, not live activity. "
         "Every portfolio row carries its Goal lifecycle readback: reached milestones with "
         "their evidence refs and the phase (starting/qualifying/waiting_owner/closing/closed), "
@@ -181,8 +181,9 @@ def agent_work_summary(agent: dict[str, Any]) -> dict[str, Any]:
                         "readiness", "next_safe_action")
             if (value := todo.get(key)) is not None
         })
-        if any(isinstance(todo.get(key), str) and len(todo[key]) > 240
-               for key in selected[-1]):
+        if todo.get("content_truncated") is True or any(
+            isinstance(todo.get(key), str) and len(todo[key]) > 240 for key in selected[-1]
+        ):
             selected[-1]["content_truncated"] = True
     return {
         "agent_id": agent.get("agent_id"),

@@ -94,12 +94,16 @@ def test_context_scopes_before_read_and_missing_registry_is_unknown(
     assert missing["warnings"] == ["registry_unavailable"]
 
 
-def test_current_agent_work_reaches_prompt_without_extra_detail_reads(monkeypatch, tmp_path):
+@pytest.mark.parametrize("include_details", [False, True])
+def test_current_agent_work_reaches_prompt_without_extra_detail_reads(
+    monkeypatch, tmp_path, include_details
+):
     from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME, manager_index
 
     todos = [{"todo_id": f"todo_{i}", "title": f"Implement task {i}",
               "status": "in-progress", "priority": "P0", "claimed_by": "worker",
               "readiness": "runnable", "raw_receipt": "excluded"} for i in range(5)]
+    todos[0]["title"] += " with a long constraint" * 100
     source = {"revision": "sha256:fixture", "latest_recorded_at": "2026-01-01T00:00:00Z"}
     monkeypatch.setattr(context, "build_goal_portfolio", lambda **_: {
         "snapshot_id": "fixture", "coverage": {"complete": False},
@@ -109,13 +113,21 @@ def test_current_agent_work_reaches_prompt_without_extra_detail_reads(monkeypatc
                               {"agent_id": "unread", "source_verified": False, "todos": todos}]}],
     })
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("Current-work projection must not add Todo or delivery-history reads")
+    reads = []
 
-    monkeypatch.setattr(context, "read_manager_goal_details", forbidden)
-    monkeypatch.setattr(context, "read_manager_delivery_history", forbidden)
+    def details(*args, **kwargs):
+        reads.append("todos")
+        return {"status": "read", "todos": []}
+
+    def history(*args, **kwargs):
+        reads.append("history")
+        return {"status": "read", "deliveries": []}
+
+    monkeypatch.setattr(context, "read_manager_goal_details", details)
+    monkeypatch.setattr(context, "read_manager_delivery_history", history)
     result = context.manager_turn_context(tmp_path / "registry.json", {"channel_id": "manager"},
-                                         tmp_path, include_details=False)
+                                         tmp_path, include_details=include_details)
+    assert reads == (["history", "todos"] if include_details else [])
     index = manager_index(result)
     row = index["goals"][0]
     assert row["source"] == source and row["quality"] == "stale"
@@ -124,9 +136,12 @@ def test_current_agent_work_reaches_prompt_without_extra_detail_reads(monkeypatc
     assert worker["todo_count_in_projection"] == 5 and worker["todos_omitted"] == 2
     assert [t["todo_id"] for t in worker["todos"]] == ["todo_0", "todo_1", "todo_2"]
     assert all(t["claimed_by"] == "worker" for t in worker["todos"])
+    assert worker["todos"][0]["content_truncated"] is True
     assert unread["todos"] == [] and unread["todo_count_in_projection"] is None
     assert "raw_receipt" not in json.dumps(index)
-    assert result["goals"][0]["current_todos"]["status"] == "not_read"
+    assert result["goals"][0]["current_todos"]["status"] == (
+        "read" if include_details else "not_read"
+    )
     page = ManagerInspection(context=result, registry_path=tmp_path / "registry.json",
                              runtime_root=tmp_path, owner_scope=True,
                              scope_valid=lambda: True, record=lambda _: None).read(TOOL_NAME, {"view": "portfolio"})
