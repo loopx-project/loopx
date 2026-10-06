@@ -342,11 +342,27 @@ provider to npm. [The beta.6 GitHub package](https://github.com/loopx-project/lo
 is published from merged commit `5eee730c2`; downloaded bytes match the built
 artifact. Its [personal illustrated upgrade guide](https://my.feishu.cn/docx/Q8pOdO1jco0y10xBDCkce87Xngc)
 was read back with three real DSH screenshots. The live catalog still selects
-beta.5; [catalog PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
-and [Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) remain upstream
-merge/release gates. Released Hub 1.4.14 plus #98's candidate Client logic passed
-beta.6 install, identity, pinned update and removal through native DSH 0.2;
-that candidate is not an installed-marketplace publication claim.
+beta.5 as of 2026-10-07; [catalog PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+remains open. [Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98)
+is merged and shipped in [Hub 1.5.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.5.0).
+The npm-published 1.5.0 backend and Client helpers passed beta.6 install,
+installed identity, pinned update and removal through native DSH 0.2 HTTP routes
+with the proposed catalog URL. This qualifies published Hub bytes, not adoption
+of beta.6 by the live catalog.
+
+New [#5786](https://github.com/loopx-project/loopx/issues/5786) and
+[#5796](https://github.com/loopx-project/loopx/issues/5796) report
+`ERR_PNPM_MISSING_TARBALL_INTEGRITY` while attempting beta.5. Clean macOS
+profiles install published beta.6 with pnpm 11.25.0 and 12.6.0 using existing
+stores. A synthetic missing-checksum lockfile reproduces the refusal with
+pnpm 12.6.0; `--force` and `--fix-lockfile` also fail. Preserving the old
+lockfile and resolving again restores the checksum and installation with
+integrity checks enabled. The reports do not establish how their lockfiles
+lost the checksum. [Hub #102](https://github.com/dshplugin/dsh-plugin-hub/pull/102)
+proposes accurate policy diagnostics, English/Chinese recovery copy and
+backend-recorded command reporting. Its packed candidate passed the real
+macOS DSH failure dialog and persisted notification readback; it remains an
+upstream proposal, not a released repair for the reported Windows profiles.
 
 The published package passed native CLI URL installation, beta.5-on-compatible-0.1.5
 to beta.6-on-0.2 upgrade/removal, and offline plugin-tarball installation/removal.
