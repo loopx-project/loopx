@@ -438,7 +438,6 @@ def commit_checkpoint_run(
             first_delivery=purpose == "first_delivery",
         ),
         "refresh_retry": refresh_retry, "record": record, "index_record": index_record, "markdown": markdown,
-        "committed_agent_vision": latest_agent_vision_from_runs([index_record], goal_id=identity.goal_id, agent_id=identity.agent_id),
         **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
         **(
             {"source_admission": dict(source_admission)}
