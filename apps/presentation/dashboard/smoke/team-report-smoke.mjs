@@ -35,6 +35,29 @@ assert.equal((links.match(/<a /g) ?? []).length, 4, 'Only explicit web destinati
 assert.equal((links.match(/target="_blank"/g) ?? []).length, 4, 'Opening a destination preserves the current conversation');
 assert.match(links, /<\/a>。English:/);
 assert.doesNotMatch(links, /<script|<img|href="(?:javascript:|ftp:|mailto:)/);
+// linkify-it 5.0.2 stops scanning userinfo at its bound, so an automatic match
+// can end inside a longer address and point at the prefix host. The renderer
+// must link only the addresses it matched completely.
+const badge = "a".repeat(39);
+const longUserinfo = `${badge}.example.org`;
+const boundary = renderToStaticMarkup(createElement(MarkdownText, {text: [
+  `At the bound: https://${"a".repeat(50)}@trusted.example/path`,
+  `Past the bound: https://${longUserinfo}@trusted.example/path`,
+  `Named past the bound: [Named long form](https://${longUserinfo}@trusted.example/path)`,
+  `Recovered: https://example.org/after`,
+].join('\n\n')}));
+assert.match(boundary, new RegExp(`href="https://${"a".repeat(50)}@trusted\\.example/path"`),
+  "Userinfo at the linkify-it bound still opens the address the reader sees");
+assert.doesNotMatch(boundary, new RegExp(`href="https://${badge}\\.example\\.org"`),
+  "A match that stopped inside userinfo never becomes a link to the prefix host");
+assert.ok(boundary.includes(`${longUserinfo}@trusted.example/path`),
+  "The incomplete address stays visible as inert text");
+assert.match(boundary, new RegExp(`href="https://${longUserinfo}@trusted\\.example/path"[^>]*>Named long form</a>`),
+  "An explicit Markdown destination keeps its literal URL");
+assert.match(boundary, /href="https:\/\/example\.org\/after"/, "Normal links after the boundary still render");
+assert.equal((boundary.match(/<a /g) ?? []).length, 3,
+  "Only the complete addresses are links: at the bound, the named form and the recovered one");
+assert.doesNotMatch(boundary, /href="(?:javascript:|ftp:|mailto:)/);
 const json = renderToStaticMarkup(createElement(TeamArtifactContent, {artifact: {...artifact, ref: "report.json"}, label: "JSON"}));
 assert.doesNotMatch(json, /<table>/, "File suffix does not turn JSON evidence into a report");
 console.log("report rendering: readable table, raw fidelity, safe links and inert HTML, chat parity passed");
