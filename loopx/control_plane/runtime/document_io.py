@@ -56,5 +56,3 @@ def verify_state_text_durable(path: Path, text: str) -> None:
             raise RuntimeError("Todo Markdown projection readback mismatch")
         os.fsync(handle.fileno())
     fsync_state_directory(path)
-
-
