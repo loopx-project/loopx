@@ -16,6 +16,7 @@ from loopx.capabilities.explore.result_log import (
 )
 from loopx.control_plane.work_items.progress_observation import (
     build_replan_action_packet,
+    build_replan_context,
 )
 
 GOAL_ID = "composition-frontier-fixture"
@@ -176,9 +177,6 @@ def test_replan_successor_binds_obligation_and_joint_experiment() -> None:
     obligation = {
         "obligation_id": "replan-composition-fixture",
         "agent_id": AGENT_ID,
-        "replan_context": {
-            "uncovered_frontier": {"required_any_of": ["new_runnable_successor"]}
-        },
         "todo_actions": [
             {
                 "action": "add",
@@ -188,8 +186,14 @@ def test_replan_successor_binds_obligation_and_joint_experiment() -> None:
             }
         ],
     }
-    packet = build_replan_action_packet(
+    context = build_replan_context(
         obligation,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        newest_first_runs=[],
+    )
+    packet = build_replan_action_packet(
+        {**obligation, "replan_context": context},
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         bounded_research_frontier=frontier,

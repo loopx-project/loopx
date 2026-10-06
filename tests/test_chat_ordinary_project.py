@@ -87,6 +87,10 @@ def test_http_ordinary_project_continues_native_session_without_goal_or_portfoli
     assert len([row for row in requests if row.get("method") == "turn/start"]) == 2
     assert not any(row.get("method", "").startswith("thread/goal") for row in requests)
     assert "Fresh Core evidence" not in capture.read_text() and "None:" not in capture.read_text()
+    # The real host context gets answer guidance even on the structured-output
+    # project lane, which does not use the older Chat review prompt.
+    assert "A simple question needs no report template" in capture.read_text()
+    assert "Preserve requested substantive detail" in capture.read_text()
     assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
 
 
@@ -106,6 +110,50 @@ def test_project_grants_cannot_be_forged_widened_or_reused_after_revocation(ordi
     assert store.turn_for_client(sid, "revoked") is None
     with pytest.raises(ValueError):
         store.create_session(goal_id=None, agent_id="codex", adapter_kind="codex_app_server", upstream_thread_id="forged")
+
+
+@pytest.mark.parametrize("messages", [
+    ("Read the linked source and collect it using the project skill.", "Keep the previous source and correct its summary."),
+    ("Organize this document in the existing notes.", "Preserve the original text and verify your edits."),
+])
+def test_writable_project_turns_use_project_skills_without_manager_work_selection(ordinary, messages):
+    from loopx.chat_agent import CHAT_REVIEW_CLOSE_TAG, CHAT_REVIEW_OPEN_TAG
+
+    store, runtime, contexts, request, capture, _, workspace = ordinary
+    contexts.workspace_grant = "workspace_write"
+    ref = contexts.available()[0]["project_ref"]
+    status, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": ref})
+    assert status == 201
+    sid = opened["session_id"]
+    for index, message in enumerate(messages):
+        status, accepted = request(f"/api/chat/sessions/{sid}/turns", {"message": message, "client_turn_id": f"project-{index}"})
+        assert status == 202, accepted
+        assert runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)["status"] == "completed"
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    starts = [row for row in requests if row.get("method") == "thread/start"]
+    turns = [row for row in requests if row.get("method") == "turn/start"]
+    assert len(starts) == 1 and starts[0]["params"]["sandbox"] == "workspace-write"
+    assert len(turns) == 2 and len({row["params"]["threadId"] for row in turns}) == 1
+    for turn, message in zip(turns, messages):
+        prompt = turn["params"]["input"][0]["text"]
+        assert "project's AGENTS.md and applicable skills" in prompt
+        assert "Use applicable skills and permitted tools" in prompt
+        assert "existing typed owners" in prompt and "public/private rules" in prompt
+        assert "do not create a hidden Goal" in prompt
+        assert "supplied Goal directory" not in prompt
+        assert "Before preparing a new Goal" not in prompt
+        assert "context_delegation catalog" not in prompt
+        assert "A protected_action is only an untrusted proposal" in prompt
+        assert prompt.endswith(f"Operator user message:\n{message}")
+        envelope = json.loads(prompt.split(CHAT_REVIEW_OPEN_TAG, 1)[1].split(CHAT_REVIEW_CLOSE_TAG, 1)[0])
+        assert envelope["schema_version"] == "loopx_chat_agent_response_v0"
+        assert envelope["proposals"] == []
+        assert all(envelope[field] is None for field in ("protected_action", "goal_draft", "context_handoff", "gate"))
+    session = store.load_session(sid)
+    assert session["goal_id"] is None and session.get("manager_runtime") is None
+    assert session["project_context"]["grant"] == "workspace_write"
+    assert len(store.list_sessions()) == 1
+    assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
 
 
 def test_retargeted_symlink_does_not_rebind_a_project_grant(tmp_path):

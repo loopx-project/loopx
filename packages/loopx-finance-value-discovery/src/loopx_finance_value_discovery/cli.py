@@ -13,6 +13,10 @@ from .attribution import (
     replay_finance_beta_attribution,
 )
 from .contract import FINANCE_CASE_INPUT_SCHEMA_VERSION
+from .cash_reconciliation import (
+    FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION,
+    assess_cash_reconciliation,
+)
 from .contract_liquidity import (
     FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION,
     evaluate_finance_contract_liquidity,
@@ -39,6 +43,10 @@ from .operation_request import (
 )
 from .position_guard import REQUEST_SCHEMA as POSITION_GUARD_INPUT_SCHEMA
 from .position_guard import evaluate_finance_position_guard
+from .period_semantics import (
+    FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
+    assess_period_comparison,
+)
 
 
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
@@ -81,6 +89,16 @@ def _direct_parser() -> argparse.ArgumentParser:
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--doctor", action="store_true")
     sub = parser.add_subparsers(dest="command")
+    period_parser = sub.add_parser(
+        "assess-period",
+        help="Assess frozen source encodings and parent-declared economic periods.",
+    )
+    period_parser.add_argument("--input-json", required=True)
+    cash_parser = sub.add_parser(
+        "assess-cash",
+        help="Reconcile six source-column signed cash amounts and retain unknowns.",
+    )
+    cash_parser.add_argument("--input-json", required=True)
     reduce_parser = sub.add_parser(
         "reduce",
         help="Reduce frozen public-safe evidence into a bounded research packet.",
@@ -176,7 +194,11 @@ def run(argv: Sequence[str] | None = None) -> int:
             if not isinstance(payload, Mapping):
                 raise ValueError("provider input must be a JSON object")
             schema_version = payload.get("schema_version")
-            if schema_version == POSITION_GUARD_INPUT_SCHEMA:
+            if schema_version == FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION:
+                packet = assess_cash_reconciliation(payload)
+            elif schema_version == FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION:
+                packet = assess_period_comparison(payload)
+            elif schema_version == POSITION_GUARD_INPUT_SCHEMA:
                 packet = evaluate_finance_position_guard(payload)
             elif schema_version == FINANCE_CASE_INPUT_SCHEMA_VERSION:
                 packet = build_finance_case_evaluation(payload)
@@ -207,7 +229,11 @@ def run(argv: Sequence[str] | None = None) -> int:
             return 1
         return 0
     try:
-        if args.command == "evaluate-position":
+        if args.command == "assess-period":
+            packet = assess_period_comparison(_load_json(args.input_json))
+        elif args.command == "assess-cash":
+            packet = assess_cash_reconciliation(_load_json(args.input_json))
+        elif args.command == "evaluate-position":
             packet = evaluate_finance_position_guard(_load_json(args.input_json))
         elif args.command == "reduce":
             packet = build_finance_value_discovery_packet(_load_json(args.input_json))
@@ -257,7 +283,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "use --doctor, reduce, evaluate, replay, attribute-beta, "
                 "replay-beta, evaluate-pack, replay-pack, list-packs, "
                 "render-lark-card, build-operation-request, or "
-                "evaluate-contract-liquidity, or evaluate-position"
+                "evaluate-contract-liquidity, evaluate-position, assess-period, or assess-cash"
             )
     except Exception as exc:
         # Position inputs are private; malformed values never enter diagnostics.

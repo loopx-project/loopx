@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -30,6 +31,27 @@ def _wait_for_process(process: subprocess.Popen[bytes], timeout: float) -> bool:
     return True
 
 
+def _darwin_owned_group_has_exited(process: subprocess.Popen[bytes]) -> bool:
+    # Darwin can report EPERM rather than ESRCH for a now-empty process group.
+    # A reaped leader alone does not prove its descendants have exited.
+    if sys.platform != "darwin" or process.poll() is None:
+        return False
+    try:
+        snapshot = subprocess.run(
+            ["/bin/ps", "-axo", "pgid="], capture_output=True, text=True,
+            encoding="utf-8", check=False, timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return False
+    groups = snapshot.stdout.split()
+    return (
+        snapshot.returncode == 0
+        and bool(groups)
+        and all(group.isdecimal() for group in groups)
+        and str(process.pid) not in groups
+    )
+
+
 def _terminate_posix_process_group(
     process: subprocess.Popen[bytes], grace_seconds: float
 ) -> None:
@@ -42,12 +64,20 @@ def _terminate_posix_process_group(
     except ProcessLookupError:
         process.wait()
         return
+    except PermissionError:
+        if not _darwin_owned_group_has_exited(process):
+            raise
+        process.wait()
+        return
     if grace_seconds > 0:
         _wait_for_process(process, grace_seconds)
         try:
             os.killpg(process_group_id, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            if not _darwin_owned_group_has_exited(process):
+                raise
     if process.poll() is None:
         process.kill()
         process.wait()

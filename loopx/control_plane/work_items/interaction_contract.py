@@ -1493,7 +1493,7 @@ def _build_interaction_cli_channel(
             "refresh": (
                 "delivery_workspace; otherwise --delivery-workspace-path"
                 if selected_todo.get("task_repository")
-                else "registered local Goal workspace; follow the current workspace guard and repository rules"
+                else "registered local Goal target; when caller cwd differs, refresh with --delivery-workspace-path for the actual target; spend uses the recorded delivery workspace"
             ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",

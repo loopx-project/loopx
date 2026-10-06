@@ -25,7 +25,7 @@ TURN_START_READS_SCHEMA_VERSION = "lark_event_inbox_turn_start_reads_v0"
 RECEIVED_OPERATION_SCHEMA_VERSION = "lark_event_inbox_received_operation_v0"
 PROCESSED_STATE_FILENAME = "processed.json"
 REACTION_PHASES = {"received", "processing"}
-RECEIVED_OPERATION_PHASES = {"prepared", "created"}
+CREATION_OPERATION_PHASES = {"prepared", "created"}
 REACTION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,200}")
 CommandRunner = Callable[[Sequence[str]], Mapping[str, Any]]
 ReactionCreator = Callable[[str, str], str | None]
@@ -96,6 +96,14 @@ def _contains_string_by_key(value: object, key: str, expected: str) -> bool:
     return False
 
 
+def _has_more_pages(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return value.get("has_more") is True or any(_has_more_pages(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_has_more_pages(child) for child in value)
+    return False
+
+
 def _receipt_path(inbox: Path) -> Path:
     return inbox / "reactions" / "receipts.json"
 
@@ -109,9 +117,11 @@ def _turn_start_reads_path(inbox: Path) -> Path:
     return inbox / "reactions" / "turn-start-reads.json"
 
 
-def _received_operation_path(inbox: Path, message_id: str) -> Path:
+def _reaction_creation_operation_path(inbox: Path, message_id: str, reaction_phase: str = "received") -> Path:
     digest = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
-    return inbox / "reactions" / "received-operations" / f"{digest}.json"
+    if reaction_phase not in REACTION_PHASES:
+        raise ValueError("reaction phase is invalid")
+    return inbox / "reactions" / f"{reaction_phase}-operations" / f"{digest}.json"
 
 
 def _load_turn_start_reads(inbox: Path) -> set[str]:
@@ -194,8 +204,14 @@ def lark_inbox_pending_turn_start_read_message_ids(*, inbox: Path) -> list[str]:
         )
 
 
-def _load_received_operation(*, inbox: Path, message_id: str) -> dict[str, str] | None:
-    path = _received_operation_path(inbox, message_id)
+def _creation_operation_schema(reaction_phase: str) -> str:
+    # Preserve the existing received journal and reuse its lifecycle for processing.
+    return (RECEIVED_OPERATION_SCHEMA_VERSION if reaction_phase == "received"
+            else "lark_event_inbox_processing_operation_v0")
+
+
+def _load_reaction_creation_operation(*, inbox: Path, message_id: str, reaction_phase: str = "received") -> dict[str, str] | None:
+    path = _reaction_creation_operation_path(inbox, message_id, reaction_phase)
     if not path.is_file():
         return None
     try:
@@ -211,9 +227,9 @@ def _load_received_operation(*, inbox: Path, message_id: str) -> dict[str, str] 
     )
     if (
         not isinstance(payload, Mapping)
-        or payload.get("schema_version") != RECEIVED_OPERATION_SCHEMA_VERSION
+        or payload.get("schema_version") != _creation_operation_schema(reaction_phase)
         or payload.get("message_id") != message_id
-        or phase not in RECEIVED_OPERATION_PHASES
+        or phase not in CREATION_OPERATION_PHASES
         or not REACTION_EMOJI_PATTERN.fullmatch(emoji_type)
         or (phase == "created" and not REACTION_ID_PATTERN.fullmatch(reaction_id))
         or (phase == "prepared" and reaction_id)
@@ -225,16 +241,17 @@ def _load_received_operation(*, inbox: Path, message_id: str) -> dict[str, str] 
     return result
 
 
-def _write_received_operation(
+def _write_reaction_creation_operation(
     *,
     inbox: Path,
     message_id: str,
     phase: str,
     emoji_type: str,
     reaction_id: str = "",
+    reaction_phase: str = "received",
 ) -> None:
     payload = {
-        "schema_version": RECEIVED_OPERATION_SCHEMA_VERSION,
+        "schema_version": _creation_operation_schema(reaction_phase),
         "message_id": message_id,
         "phase": phase,
         "emoji_type": emoji_type,
@@ -242,11 +259,11 @@ def _write_received_operation(
     }
     if reaction_id:
         payload["reaction_id"] = reaction_id
-    write_private_json_atomic(_received_operation_path(inbox, message_id), payload)
+    write_private_json_atomic(_reaction_creation_operation_path(inbox, message_id, reaction_phase), payload)
 
 
-def _clear_received_operation(*, inbox: Path, message_id: str) -> None:
-    path = _received_operation_path(inbox, message_id)
+def _clear_reaction_creation_operation(*, inbox: Path, message_id: str, reaction_phase: str = "received") -> None:
+    path = _reaction_creation_operation_path(inbox, message_id, reaction_phase)
     try:
         path.unlink()
     except FileNotFoundError:
@@ -499,6 +516,7 @@ def _delete_reaction(
     payload = _json_object(readback.get("stdout"))
     return bool(
         payload.get("ok") is True
+        and not _has_more_pages(payload)
         and not _contains_string_by_key(payload, "reaction_id", reaction_id)
     )
 
@@ -590,116 +608,67 @@ def ensure_lark_event_inbox_received_reaction_locked(
                 configured=True,
                 captured_pending=False,
             )
-        receipts = lark_inbox_reaction_receipts(
-            inbox=inbox,
-            message_id=message_id,
-        )
-        if receipts.get("received") is not None:
-            _clear_received_operation(inbox=inbox, message_id=message_id)
-            return _received_reaction_result(
-                status="already_received",
-                ok=True,
-                configured=True,
-                captured_pending=True,
-            )
-        if receipts.get("processing") is not None:
-            _clear_received_operation(inbox=inbox, message_id=message_id)
+        receipts = lark_inbox_reaction_receipts(inbox=inbox, message_id=message_id)
+        if receipts.get("received") is None and receipts.get("processing") is not None:
+            _clear_reaction_creation_operation(inbox=inbox, message_id=message_id)
             return _received_reaction_result(
                 status="already_processing",
                 ok=True,
                 configured=True,
                 captured_pending=True,
             )
-        operation = _load_received_operation(inbox=inbox, message_id=message_id)
-        if operation and operation["emoji_type"] != emoji_type:
-            return _received_reaction_result(
-                status="operation_config_changed",
-                ok=False,
-                configured=True,
-                captured_pending=True,
-                blocker="lark_inbox_received_reaction_operation_config_changed",
-            )
-        if operation and operation["phase"] == "prepared":
-            return _received_reaction_result(
-                status="provider_outcome_uncertain",
-                ok=False,
-                configured=True,
-                captured_pending=True,
-                blocker="lark_inbox_received_reaction_provider_outcome_uncertain",
-            )
-        if operation and operation["phase"] == "created":
-            reaction_id = operation["reaction_id"]
-            try:
-                record_lark_inbox_reaction(
-                    inbox=inbox,
-                    message_id=message_id,
-                    phase="received",
-                    reaction_id=reaction_id,
-                    emoji_type=emoji_type,
-                )
-            except (OSError, TypeError, ValueError):
-                return _received_reaction_result(
-                    status="receipt_failed",
-                    ok=False,
-                    configured=True,
-                    captured_pending=True,
-                    external_writes_performed=False,
-                    blocker="lark_inbox_received_reaction_receipt_failed",
-                )
-            _clear_received_operation(inbox=inbox, message_id=message_id)
-            return _received_reaction_result(
-                status="receipt_recovered",
-                ok=True,
-                configured=True,
-                captured_pending=True,
-            )
-        _write_received_operation(
-            inbox=inbox,
-            message_id=message_id,
-            phase="prepared",
-            emoji_type=emoji_type,
+        return _ensure_reaction_creation_locked(
+            inbox=inbox, message_id=message_id, emoji_type=emoji_type, reaction_phase="received",
+            create_reaction=create_reaction, delete_reaction=delete_reaction,
         )
-        created_reaction_id = create_reaction(message_id, emoji_type)
-        if created_reaction_id is None:
-            _clear_received_operation(inbox=inbox, message_id=message_id)
-            return _received_reaction_result(
-                status="failed",
-                ok=False,
-                configured=True,
-                captured_pending=True,
-                blocker="lark_inbox_received_reaction_create_failed",
-            )
-        try:
-            _write_received_operation(
-                inbox=inbox,
-                message_id=message_id,
-                phase="created",
-                emoji_type=emoji_type,
-                reaction_id=created_reaction_id,
-            )
-        except (OSError, TypeError, ValueError):
-            cleaned_up = delete_reaction(message_id, created_reaction_id)
-            if cleaned_up:
-                _clear_received_operation(inbox=inbox, message_id=message_id)
-            return _received_reaction_result(
-                status="operation_receipt_failed",
-                ok=False,
-                configured=True,
-                captured_pending=True,
-                created_count=int(not cleaned_up),
-                external_writes_performed=True,
-                blocker=(
-                    "lark_inbox_received_reaction_operation_receipt_failed"
-                    if cleaned_up
-                    else "lark_inbox_received_reaction_provider_outcome_uncertain"
-                ),
-            )
+
+
+def _ensure_reaction_creation_locked(
+    *, inbox: Path, message_id: str, emoji_type: str, reaction_phase: str,
+    create_reaction: ReactionCreator, delete_reaction: ReactionDeleter,
+) -> dict[str, Any]:
+    """One provider creation lifecycle for received and processing feedback.
+
+    Caller owns the per-source transition/settlement locks. Unknown writes stay
+    prepared; known provider ids recover their receipt without another create.
+    """
+    receipts = lark_inbox_reaction_receipts(
+        inbox=inbox,
+        message_id=message_id,
+    )
+    if receipts.get(reaction_phase) is not None:
+        _clear_reaction_creation_operation(inbox=inbox, message_id=message_id, reaction_phase=reaction_phase)
+        return _received_reaction_result(
+            status=f"already_{reaction_phase}",
+            ok=True,
+            configured=True,
+            captured_pending=True,
+        )
+    operation = _load_reaction_creation_operation(inbox=inbox, message_id=message_id, reaction_phase=reaction_phase)
+    if operation and operation["emoji_type"] != emoji_type:
+        return _received_reaction_result(
+            status="operation_config_changed",
+            ok=False,
+            configured=True,
+            captured_pending=True,
+            blocker=f"lark_inbox_{reaction_phase}_reaction_operation_config_changed",
+        )
+    if operation and operation["phase"] == "prepared":
+        return _received_reaction_result(
+            status="provider_outcome_uncertain",
+            ok=False,
+            configured=True,
+            captured_pending=True,
+            blocker=f"lark_inbox_{reaction_phase}_reaction_provider_outcome_uncertain",
+        )
+    if operation and operation["phase"] == "created":
+        reaction_id = operation["reaction_id"]
         try:
             record_lark_inbox_reaction(
                 inbox=inbox,
                 message_id=message_id,
-                phase="received",
-                reaction_id=created_reaction_id,
+                phase=reaction_phase,
+                reaction_id=reaction_id,
                 emoji_type=emoji_type,
             )
         except (OSError, TypeError, ValueError):
@@ -708,18 +677,84 @@ def ensure_lark_event_inbox_received_reaction_locked(
                 ok=False,
                 configured=True,
                 captured_pending=True,
-                created_count=1,
-                external_writes_performed=True,
-                blocker="lark_inbox_received_reaction_receipt_failed",
+                external_writes_performed=False,
+                blocker=f"lark_inbox_{reaction_phase}_reaction_receipt_failed",
             )
-        _clear_received_operation(inbox=inbox, message_id=message_id)
+        _clear_reaction_creation_operation(inbox=inbox, message_id=message_id, reaction_phase=reaction_phase)
         return _received_reaction_result(
-            status="received",
+            status="receipt_recovered",
             ok=True,
             configured=True,
             captured_pending=True,
-            created_count=1,
         )
+    _write_reaction_creation_operation(
+        inbox=inbox,
+        message_id=message_id,
+        phase="prepared",
+        reaction_phase=reaction_phase,
+        emoji_type=emoji_type,
+    )
+    created_reaction_id = create_reaction(message_id, emoji_type)
+    if created_reaction_id is None:
+        return _received_reaction_result(
+            status="failed",
+            ok=False,
+            configured=True,
+            captured_pending=True,
+            blocker=f"lark_inbox_{reaction_phase}_reaction_create_failed",
+        )
+    try:
+        _write_reaction_creation_operation(
+            inbox=inbox,
+            message_id=message_id,
+            phase="created",
+            reaction_phase=reaction_phase,
+            emoji_type=emoji_type,
+            reaction_id=created_reaction_id,
+        )
+    except (OSError, TypeError, ValueError):
+        cleaned_up = delete_reaction(message_id, created_reaction_id)
+        if cleaned_up:
+            _clear_reaction_creation_operation(inbox=inbox, message_id=message_id, reaction_phase=reaction_phase)
+        return _received_reaction_result(
+            status="operation_receipt_failed",
+            ok=False,
+            configured=True,
+            captured_pending=True,
+            created_count=int(not cleaned_up),
+            external_writes_performed=True,
+            blocker=(
+                f"lark_inbox_{reaction_phase}_reaction_operation_receipt_failed"
+                if cleaned_up
+                else f"lark_inbox_{reaction_phase}_reaction_provider_outcome_uncertain"
+            ),
+        )
+    try:
+        record_lark_inbox_reaction(
+            inbox=inbox,
+            message_id=message_id,
+            phase=reaction_phase,
+            reaction_id=created_reaction_id,
+            emoji_type=emoji_type,
+        )
+    except (OSError, TypeError, ValueError):
+        return _received_reaction_result(
+            status="receipt_failed",
+            ok=False,
+            configured=True,
+            captured_pending=True,
+            created_count=1,
+            external_writes_performed=True,
+            blocker=f"lark_inbox_{reaction_phase}_reaction_receipt_failed",
+        )
+    _clear_reaction_creation_operation(inbox=inbox, message_id=message_id, reaction_phase=reaction_phase)
+    return _received_reaction_result(
+        status=reaction_phase,
+        ok=True,
+        configured=True,
+        captured_pending=True,
+        created_count=1,
+    )
 
 
 def ensure_lark_event_inbox_received_reaction(
@@ -746,6 +781,21 @@ def ensure_lark_event_inbox_received_reaction(
             create_reaction=create_reaction,
             delete_reaction=delete_reaction,
         )
+
+
+def mark_lark_event_inbox_received(
+    *, project: str | Path, config_path: str | Path, event: Mapping[str, Any],
+    runner: CommandRunner = _default_runner,
+) -> dict[str, Any]:
+    config = load_lark_event_inbox_config(project=project, config_path=config_path)
+    profile = str(config["reply"]["sender_profile"])
+    return ensure_lark_event_inbox_received_reaction(
+        project=project, config_path=config_path, event=event,
+        create_reaction=lambda message_id, emoji_type: _create_reaction(
+            runner=runner, profile=profile, message_id=message_id, emoji_type=emoji_type),
+        delete_reaction=lambda message_id, reaction_id: _delete_reaction(
+            runner=runner, profile=profile, message_id=message_id, reaction_id=reaction_id),
+    )
 
 
 def _operation_result(
@@ -798,14 +848,12 @@ def mark_lark_event_inbox_processing(
         raise ValueError("processing requires a valid Lark message id")
     inbox = config["inbox_path"]
     with lark_inbox_reaction_lock(inbox=inbox, message_id=normalized):
-        if not _captured_pending_message(inbox=inbox, message_id=normalized):
-            raise ValueError("processing requires a captured pending inbox message")
-        return _mark_lark_event_inbox_processing_locked(
-            config=config,
-            message_id=normalized,
-            execute=execute,
-            runner=runner,
-        )
+        with exclusive_file_lock(inbox / ".state" / "settlement", operation="lark_inbox_processing_settlement"):
+            if not _captured_pending_message(inbox=inbox, message_id=normalized):
+                raise ValueError("processing requires a captured pending inbox message")
+            return _mark_lark_event_inbox_processing_locked(
+                config=config, message_id=normalized, execute=execute, runner=runner,
+            )
 
 
 def _mark_lark_event_inbox_processing_locked(
@@ -846,50 +894,18 @@ def _mark_lark_event_inbox_processing_locked(
     profile = str(reply["sender_profile"])
     created_count = 0
     if processing is None:
-        reaction_id = _create_reaction(
-            runner=runner,
-            profile=profile,
-            message_id=normalized,
-            emoji_type=processing_emoji,
+        creation = _ensure_reaction_creation_locked(
+            inbox=inbox, message_id=normalized, emoji_type=processing_emoji, reaction_phase="processing",
+            create_reaction=lambda message_id, emoji_type: _create_reaction(
+                runner=runner, profile=profile, message_id=message_id, emoji_type=emoji_type),
+            delete_reaction=lambda message_id, reaction_id: _delete_reaction(
+                runner=runner, profile=profile, message_id=message_id, reaction_id=reaction_id),
         )
-        if reaction_id is None:
-            return _operation_result(
-                operation="processing",
-                status="failed",
-                ok=False,
-                execute=True,
-                configured=True,
-                blocker="lark_inbox_processing_reaction_create_failed",
-            )
-        try:
-            record_lark_inbox_reaction(
-                inbox=inbox,
-                message_id=normalized,
-                phase="processing",
-                reaction_id=reaction_id,
-                emoji_type=processing_emoji,
-            )
-        except (OSError, ValueError):
-            _delete_reaction(
-                runner=runner,
-                profile=profile,
-                message_id=normalized,
-                reaction_id=reaction_id,
-            )
-            return _operation_result(
-                operation="processing",
-                status="failed",
-                ok=False,
-                execute=True,
-                configured=True,
-                created_count=1,
-                blocker="lark_inbox_processing_reaction_receipt_failed",
-            )
-        processing = {
-            "reaction_id": reaction_id,
-            "emoji_type": processing_emoji,
-        }
-        created_count = 1
+        if not creation["ok"]:
+            return _operation_result(operation="processing", status=creation["status"],
+                ok=False, execute=True, configured=True, created_count=creation["created_count"],
+                blocker=creation.get("blocker"))
+        created_count = creation["created_count"]
 
     deleted_count = 0
     if received is not None and config["reply"].get("received_reaction_policy") != "retain":
@@ -960,6 +976,19 @@ def _complete_lark_event_inbox_reactions_locked(
 ) -> dict[str, Any]:
     inbox = config["inbox_path"]
     normalized = message_id
+    operation = _load_reaction_creation_operation(inbox=inbox, message_id=normalized, reaction_phase="processing")
+    if operation and execute:
+        profile = str(config["reply"]["sender_profile"])
+        creation = _ensure_reaction_creation_locked(
+            inbox=inbox, message_id=normalized, emoji_type=operation["emoji_type"], reaction_phase="processing",
+            create_reaction=lambda *_: None,
+            delete_reaction=lambda message_id, reaction_id: _delete_reaction(
+                runner=runner, profile=profile, message_id=message_id, reaction_id=reaction_id),
+        )
+        if not creation["ok"]:
+            return _operation_result(operation="complete", status=creation["status"],
+                ok=False, execute=True, configured=True, created_count=creation["created_count"],
+                blocker=creation.get("blocker"))
     receipts = lark_inbox_reaction_receipts(
         inbox=inbox,
         message_id=normalized,

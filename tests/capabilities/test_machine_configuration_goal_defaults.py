@@ -219,3 +219,59 @@ def test_goal_overrides_win_and_clearing_restores_live_machine_defaults(
     }
     assert "current" not in capabilities["todo_replan_cadence"]
     assert "current" not in capabilities["change_quality_qualification"]
+
+
+def test_effective_turn_machine_default_migration_and_override_readback(tmp_path: Path) -> None:
+    """An explicit unit switch preserves v0 storage until apply and is reversible."""
+    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.capabilities.goal_inspection import inspect_goal_capabilities
+
+    _repo, registry_path, runtime_root = _fixture(tmp_path)
+    machine_registry = build_builtin_machine_configuration_registry()
+    v1 = _machine_configuration()
+    v1["namespaces"]["todo_replan_cadence"] = {
+        "schema_version": "todo_replan_cadence_machine_defaults_v1",
+        "count_unit": "effective_turns", "count": 2,
+    }
+    preview = configure_machine_configuration(runtime_root=runtime_root,
+        registry=machine_registry, configuration=v1)
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_completed_todos"] == 2
+    configure_machine_configuration(runtime_root=runtime_root,
+        registry=machine_registry, configuration=v1, execute=True,
+        expected_plan_revision=preview["plan_revision"])
+    profile = _history_goal(registry_path, runtime_root)["execution_profile"]
+    assert profile["replan_after_effective_turns"] == 2
+    assert "replan_after_completed_todos" not in profile
+
+    options = _goal_capability_options("todo_replan_cadence", {"count_unit": "effective_turns", "count": 3})
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True, **options)
+    inspected = inspect_goal_capabilities(registry_path=registry_path,
+        runtime_root=runtime_root, goal_id=GOAL_ID)["configuration"]
+    cadence = next(c for c in inspected["capability_catalog"]["capabilities"] if c["capability_id"] == "todo_replan_cadence")
+    assert cadence["current"] == {"count_unit": "effective_turns", "count": 3}
+    assert cadence["effective_configuration"]["source"] == "goal_override"
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 3
+
+    # Explicitly selecting legacy mode remains supported; clearing restores live v1.
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True,
+        **_goal_capability_options("todo_replan_cadence", {"completed_todos": 4}))
+    profile = _history_goal(registry_path, runtime_root)["execution_profile"]
+    assert profile["replan_after_completed_todos"] == 4
+    assert "replan_after_effective_turns" not in profile
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True,
+        **_goal_capability_options("todo_replan_cadence", None))
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 2
+
+
+@pytest.mark.parametrize("configuration", [
+    {"count_unit": "turns", "count": 3},
+    {"count_unit": "effective_turns", "count": True},
+    {"count_unit": "effective_turns", "count": 0},
+    {"count_unit": "effective_turns", "count": 3, "completed_todos": 3},
+    {"completed_todos": 3},
+])
+def test_v1_cadence_rejects_ambiguous_units(configuration) -> None:
+    with pytest.raises(ValueError):
+        normalize_todo_replan_cadence_machine_defaults({
+            "schema_version": "todo_replan_cadence_machine_defaults_v1", **configuration,
+        })

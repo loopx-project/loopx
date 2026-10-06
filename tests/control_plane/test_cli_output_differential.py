@@ -91,7 +91,7 @@ def test_readable_peer_admission_growth_is_one_time_and_thin_only(output_format)
     block = (
         "Follow the current quota claim/lease and workspace contract plus repository rules. "
         "Follow todo continuation policy. Task-scoped coordination grants no authority over "
-        "other agents. Keep scope in the heartbeat prompt, not todo metadata."
+        "other agents. Keep scope in this prompt, not todo metadata."
     )
     marker = heartbeat_peer_admission_prompt_revision(block)
     assert marker == "heartbeat_peer_admission_v1"

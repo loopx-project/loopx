@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { outputDir } from "./fixture.mjs";
+import { readFile } from "node:fs/promises";
+import { outputDir, repoRoot } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
 const node = (id, kind, title, state, depth, extra = {}) =>
@@ -39,11 +40,25 @@ export const goalWorkMapScenario = {
   async run({ browser, collectCoverage, url }) {
     let limits = {};
     const reads = [];
-    const routeReview = (_api, page) => page.route("**/api/chat/delivery-review?*", route => {
-      const goalId = new URL(route.request().url()).searchParams.get("goal_id");
-      reads.push(goalId);
-      return route.fulfill({ json: { ok: true, goal_id: goalId, observed_at: new Date().toISOString(), graph: null, goal_map: goalMap(goalId, limits), acceptance: null } });
-    });
+    const statusFixture = JSON.parse(await readFile(resolve(repoRoot, "examples/status.example.json"), "utf8"));
+    const firstGoal = statusFixture.attention_queue.items[0];
+    const sourceTodos = goalMap(firstGoal.goal_id).nodes.filter(item => item.kind === "deliverable").map(item => ({
+      todo_id: item.refs.todo_ids[0], goal_id: firstGoal.goal_id, role: "agent", task_class: "advancement_task",
+      text: item.title, title: item.title, status: item.state, done: item.state === "done", claimed_by: item.owner_agent,
+    }));
+    firstGoal.agent_todos.items.push(...sourceTodos);
+    const routeReview = async (api, page) => {
+      for (const todo of sourceTodos) api.todoRequestTexts.set(JSON.stringify([todo.goal_id, todo.todo_id]), todo.text);
+      await page.route("**/status.json*", route => {
+        if (new URL(route.request().url()).pathname !== "/status.json") return route.fallback();
+        return route.fulfill({ json: statusFixture });
+      });
+      return page.route("**/api/chat/delivery-review?*", route => {
+        const goalId = new URL(route.request().url()).searchParams.get("goal_id");
+        reads.push(goalId);
+        return route.fulfill({ json: { ok: true, goal_id: goalId, observed_at: new Date().toISOString(), graph: null, goal_map: goalMap(goalId, limits), acceptance: null } });
+      });
+    };
     const desktop = await openWorkspacePage(browser, url, { collectCoverage, beforeGoto: routeReview });
     const { page } = desktop;
     await page.locator(".personal-goal-link").first().click();

@@ -12,6 +12,7 @@ import hashlib
 from typing import Any
 
 from ...chat_store import _atomic_write_json, _read_json
+from ...chat_attachments import normalize_chat_image_attachments
 from ...file_lock import exclusive_file_lock
 
 
@@ -24,7 +25,8 @@ class ChatExternalConversations:
         self.actions: Any | None = None
 
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
-              message: str, command: str | None = None) -> dict[str, Any]:
+              message: str, command: str | None = None,
+              attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         import re
         if not re.fullmatch(r"[a-f0-9]{24}", request_ref):
             raise ValueError("invalid external request reference")
@@ -34,7 +36,8 @@ class ChatExternalConversations:
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"), exclusive_file_lock(path, operation="admit_external_chat_request"):
             selected = self.bindings.resolve(binding_id=binding_id, **source)
-            expected = {"binding_id": binding_id, "source": source, "message": message, "command": command}
+            expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
+                        "attachments": normalize_chat_image_attachments(attachments) or None}
             if path.exists():
                 row = _read_json(path)
                 if any(row.get(key) != value for key, value in expected.items()):
@@ -57,6 +60,7 @@ class ChatExternalConversations:
 
     def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
         controller = self.controller
+        self.bindings.ensure_delivery_scope(selected)
         if not row.get("routing_recorded"):
             choices = [item for item in self.pending() if item["binding_id"] == row["binding_id"]
                 and item["source"]["source_ref"] == row["source"]["source_ref"]
@@ -94,8 +98,10 @@ class ChatExternalConversations:
             if controller.store.turn_for_client(current["session_id"], client_id) is not None:
                 # The canonical store validates exact replay before its closed
                 # Session check. Never move an accepted request to a new Session.
+                self._record_steward_ingress(row, selected, current, client_id)
                 turn, _ = controller.store.create_queued_turn(current["session_id"],
                     client_turn_id=client_id, message=row["message"], origin="lark",
+                    attachments=row.get("attachments"),
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
                 _atomic_write_json(path, row)
@@ -107,9 +113,14 @@ class ChatExternalConversations:
             observations = {"context": selected["context"],
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "queued_count": len(controller.store.queued_turns(current["session_id"])) if current else 0,
-                "active_turn": controller.store.load_turn(current["session_id"], active_id) if active_id else None}
+                "active_turn": ({key: value for key, value in controller.store.load_turn(current["session_id"], active_id).items()
+                    if key != "attachments"} if active_id else None)}
+        # Routing needs presence, not private image bytes. Persisted attachments
+        # remain in the native request/Turn and never enter the effect bridge.
         plan = effect_runtime_result("collaboration.conversation.request", {
-            "request": row, "current_session": current, "binding": selected["binding"],
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "attachment_count": len(row.get("attachments") or []),
+            "current_session": current, "binding": selected["binding"],
             "agent_target": target, **observations})
         operation = plan["operation"]
         if operation == "select_recipient":
@@ -176,9 +187,11 @@ class ChatExternalConversations:
                     mode="resume_latest", conversation_binding_id=row["binding_id"], source_context=row["source"])
             row["session_id"] = current["session_id"]
             _atomic_write_json(path, row)
+            self._record_steward_ingress(row, selected, current, plan["client_turn_id"])
             try:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
                     client_turn_id=plan["client_turn_id"], message=row["message"],
+                    attachments=row.get("attachments"),
                     work_dir=Path("."), objective="", origin="lark",
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
@@ -188,6 +201,32 @@ class ChatExternalConversations:
                 row.update(status="rejected", response="队列已满，本条没有被受理；请稍后重新发送。")
         _atomic_write_json(path, row)
         return row
+
+    def _record_steward_ingress(self, row: dict[str, Any], selected: dict[str, Any],
+                               session: dict[str, Any], client_turn_id: str) -> None:
+        if selected["binding"]["context_kind"] != "steward":
+            return
+        if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
+            raise ValueError("the verified steward source belongs to another Session")
+        from ..manager_context import register_ingress
+        from ...control_plane.collaboration.inbox import normalize_source_context
+
+        try:
+            normalize_source_context(row["message"])
+        except ValueError:
+            # Inbox bounds are not ordinary Chat admission bounds. Preserve the
+            # full native message; no provenance means no context delivery.
+            return
+
+        # Persist provenance before enqueue can launch the model. This is the
+        # existing inbox owner, not a delivery grant: its separate sender/target
+        # policy still decides which registered recipient may receive context.
+        # The independently verified App-scoped owner reference is deliberately
+        # used instead of copying another profile's raw provider identity.
+        register_ingress(getattr(self.controller, "coordination_runtime_root", self.controller.store.root.parent),
+            session_id=session["session_id"], client_turn_id=client_turn_id,
+            channel=selected["channel_id"], sender_id=selected["context"]["operator_ref"],
+            message=row["message"], source_id=row["request_ref"])
 
     def pending(self) -> list[dict[str, Any]]:
         return [_read_json(path) for path in sorted(self.root.glob("*.json"))]
@@ -346,8 +385,9 @@ class ChatExternalConversations:
             row["delivery_verified"] = True
             _atomic_write_json(path, row)
 
-    def recover(self) -> None:
-        for row in self.pending():
+    def recover(self, *, request_ref: str | None = None) -> None:
+        rows = self.pending() if request_ref is None else [self.read_request(request_ref)]
+        for row in rows:
             try:
                 if row.get("delivery_verified") and not row.get("commission_adoption_pending"):
                     continue

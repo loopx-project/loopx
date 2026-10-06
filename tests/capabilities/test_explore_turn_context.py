@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
+import sys
 
 import pytest
 
@@ -22,6 +24,7 @@ from loopx.control_plane.effect_runtime import (
     EffectRuntimeRejected,
 )
 from loopx.explore_graph import compact_explore_graph_policy
+from loopx.todos import add_goal_todo
 
 
 def registry(tmp_path, *, graph=False, planning=False):
@@ -217,6 +220,70 @@ def test_public_goal_editor_retains_registered_profiles(tmp_path):
     )
     assert "generic" in profile["options"]
     assert "adaptive-resilient" in profile["options"]
+
+
+def test_hook_cli_preserves_linked_evidence_beyond_recent_window(tmp_path):
+    path = registry(tmp_path, planning=True)
+    root = tmp_path / "runtime"
+    log = explore_result_log_path(root, "research")
+    add_goal_todo(
+        registry_path=path, runtime_root_arg=str(root), goal_id="research",
+        role="agent", text="Test the route under changed input conditions",
+        task_class="advancement_task", claimed_by="worker",
+        explore_result_node_refs=["route-old", "route-missing"],
+    )
+    for i in range(8):
+        node_id = "route-old" if i == 0 else f"route-{i}"
+        append_explore_result_event(log, build_explore_node_event(
+            goal_id="research", node_id=node_id, title=f"Hypothesis {i}",
+            status="resolved" if i == 0 else "exploring",
+        ))
+        event = build_explore_finding_event(
+            goal_id="research", node_id=node_id, title=f"Result {i}",
+            status="refuted" if i == 0 else "confirmed",
+            recorded_at=f"2026-01-01T00:00:{i:02d}+00:00",
+        )
+        # Deterministic ordering: unrelated newer results crowd the recent view.
+        append_explore_result_event(log, event)
+    hook = extend_turn_start_dispatch(
+        {}, registry_path=path, runtime_root=root, goal_id="research", agent_id="worker"
+    )
+    command = shlex.split(hook["required_reads"][0]["command"])
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", *command[1:]],
+        check=True, capture_output=True, text=True,
+    )
+    packet = json.loads(result.stdout)
+    assert "Result 0" not in str(packet["graph"]["recent_findings"])
+    branch = packet["harness"]["selected_branches"][0]
+    audit = branch["typed_evidence_audit"]
+    assert audit["findings"][0]["finding"] == "Result 0"
+    assert audit["findings"][0]["status"] == "refuted"
+    assert "linked_finding_refuted" in audit["hazards"]
+    assert audit["unknown_node_refs"] == ["route-missing"]
+    assert audit["score_delta"] == 0
+    assert branch["todo_id"]
+    assert len(packet["harness"]["frontier"]) == 3
+    assert packet["harness"]["omitted_frontier"] == 4
+    assert packet["harness"]["orchestration_gate"]["state"] == "analysis_only"
+    assert not packet["boundary"]["starts_agents"]
+    for p, content in before.items():
+        assert p.read_bytes() == content
+
+    # Reopening the same hypothesis updates the next read; old refutation remains
+    # scoped evidence and does not make the candidate ineligible.
+    append_explore_result_event(log, build_explore_node_event(
+        goal_id="research", node_id="route-old", title="Changed conditions",
+        status="exploring",
+    ))
+    reopened = explore_turn_context(
+        registry_path=path, runtime_root=root, goal_id="research", agent_id="worker"
+    )["harness"]["selected_branches"][0]
+    assert reopened["todo_id"] == branch["todo_id"]
+    assert reopened["typed_evidence_audit"]["score_delta"] == 0
+    assert reopened["typed_evidence_audit"]["nodes"][0]["status"] == "exploring"
+    assert reopened["typed_evidence_audit"]["findings"][0]["status"] == "refuted"
 
 
 def test_legacy_planning_does_not_grant_existing_sink_publication(tmp_path):

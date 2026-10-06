@@ -346,10 +346,11 @@ def test_manifest_oracle_rejects_false_acceptance(tmp_path, defect):
         runner.verify_manifest_delivery(tmp_path)
 
 
-def test_real_mcp_delivery_completes_and_settles_existing_plan(tmp_path):
+def test_real_mcp_delivery_completes_and_settles_existing_plan(tmp_path, monkeypatch):
     from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 
     project, runtime, launcher = runner.shared.setup(tmp_path)
+    monkeypatch.chdir(project)
     # Real delivery class: do not substitute same_agent_non_delivery to make
     # this acceptance test green. No live model or external side effect.
     (project / "delivery.txt").write_text("synthetic verified delivery\n")

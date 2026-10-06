@@ -15,10 +15,16 @@ export function planChatMode(input: JsonObject): JsonObject {
   const session = requireJsonObject(input.session, "conversation session");
   const operation = input.operation;
   requireThat(["configure", "start", "resume", "pause", "exit", "message", "wake"].includes(String(operation)), "unsupported conversation operation");
-  requireThat(resolveConversationScope(session).kind === "owner_goal"
-    && input.origin === (operation === "wake" ? "host" : "web")
-    && session.session_mode !== "attached_host"
-    && session.agent_id === "codex", "LoopX mode requires a local managed Codex Goal conversation");
+  const localOwner = resolveConversationScope(session).kind === "owner_goal"
+    && session.session_mode !== "attached_host" && session.agent_id === "codex";
+  // External inbox returns have their own exact audience owner. A recorded
+  // conversation is provenance, not authority to resume a native Goal. Settle
+  // this host intent instead of throwing and retrying it on every pump tick.
+  if (operation === "wake" && input.origin === "host" && !localOwner) {
+    return {operation, state: "refused", reason: "no_wake_owner"};
+  }
+  requireThat(localOwner && input.origin === (operation === "wake" ? "host" : "web"),
+    "LoopX mode requires a local managed Codex Goal conversation");
   const settings = requireJsonObject(input.settings, "conversation settings");
   const native = requireJsonObject(input.native ?? {}, "native Goal observation");
   if (operation === "wake") return planDelegationWake(input, session, settings, native);

@@ -19,6 +19,7 @@ from typing import Any, cast
 from .memory_utility import (
     ATTRIBUTION_LEVELS,
     RewardMemoryUtilityObservationValidationError,
+    _SCOPE_FIELDS,
     validate_reward_memory_utility_observation,
 )
 
@@ -39,7 +40,6 @@ MAX_HISTORY_EVIDENCE_REFS = 16
 _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _MEMORY_DIGEST_RE = re.compile(r"^(?:[0-9a-f]{16}|sha256:[0-9a-f]{64})$")
 _OBSERVATION_ID_RE = re.compile(r"^muo_[0-9a-f]{64}$")
-_SCOPE_FIELDS = frozenset({"agent_id", "project_id", "corpus_id", "surface_id"})
 _EVIDENCE_ORDER = (
     "insufficient",
     "evaluator_inference",

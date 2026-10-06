@@ -141,9 +141,32 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn recoverable_backup(root: &Path) -> Option<PathBuf> {
+    let previous = root.join("previous");
+    if previous.join("LoopX.app/Contents/Info.plist").is_file() {
+        return Some(previous);
+    }
+    fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let sequence = entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("older-")?
+                .parse::<u128>()
+                .ok()?;
+            let path = entry.path();
+            path.join("LoopX.app/Contents/Info.plist")
+                .is_file()
+                .then_some((sequence, path))
+        })
+        .max_by_key(|(sequence, _)| *sequence)
+        .map(|(_, path)| path)
+}
+
 pub fn available(app: &AppHandle) -> bool {
-    cfg!(target_os = "macos")
-        && root(app).is_ok_and(|r| r.join("previous/LoopX.app/Contents/Info.plist").is_file())
+    cfg!(target_os = "macos") && root(app).is_ok_and(|root| recoverable_backup(&root).is_some())
 }
 
 pub fn prepare(app: &AppHandle) -> Result<(), String> {
@@ -187,10 +210,10 @@ pub fn restore(app: &AppHandle) -> Result<(), String> {
     // must not require it to be intact; the verified backup source is what
     // must pass verification (`copy` re-checks its codesign signature).
     let executable = std::env::current_exe().map_err(|_| "app_bundle_required")?;
-    let previous = root(app)?.join("previous");
-    let version = fs::read_to_string(previous.join("version")).map_err(|_| "backup_unavailable")?;
+    let backup = recoverable_backup(&root(app)?).ok_or("backup_unavailable")?;
+    let version = fs::read_to_string(backup.join("version")).map_err(|_| "backup_unavailable")?;
     let handle = app.clone();
-    restore_verified_backup(&executable, &previous, move || {
+    restore_verified_backup(&executable, &backup, move || {
         crate::bundled_runtime::record_pending(&handle, version.trim(), "rollback")
     })
 }
@@ -215,22 +238,56 @@ pub(crate) fn restore_verified_backup(
     let candidate = staging.path().join("LoopX.app");
     copy(&previous.join("LoopX.app"), &candidate)?;
     let failed = staging.path().join("failed.app");
-    // Once an installed App can move here, never let TempDir cleanup erase it
-    // on a failed second rename (including a failed restoration rename).
+    // Preserve staging before the swap. After a successful exchange it owns
+    // the displaced App; after an exchange failure it owns the verified copy.
     let _preserved = staging.keep();
     before_swap()?;
     replace_bundle(&target, &candidate, &failed)?;
-    // Keep the failed App recoverable too. Never delete a user's installed App.
+    // Keep the displaced App recoverable too. Never delete an installed App.
     Ok(())
 }
 
 fn replace_bundle(bundle: &Path, candidate: &Path, failed: &Path) -> Result<(), String> {
-    fs::rename(bundle, failed).map_err(|_| "rollback_failed")?;
-    if fs::rename(candidate, bundle).is_err() {
-        let _ = fs::rename(failed, bundle);
-        return Err("rollback_failed".into());
+    #[cfg(target_os = "macos")]
+    {
+        // The staging directory is created beside the installed App, so both
+        // paths are on one volume. RENAME_SWAP keeps the install path occupied
+        // before, during, and after the only commit operation.
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            bundle,
+            rustix::fs::CWD,
+            candidate,
+            rustix::fs::RenameFlags::EXCHANGE,
+        )
+        .map_err(|_| "rollback_failed")?;
+        #[cfg(test)]
+        wait_for_bundle_swap_kill();
+        // The old App is already safe at `candidate`; this rename only gives
+        // it the expected recovery name inside the preserved staging directory.
+        let _ = fs::rename(candidate, failed);
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    {
+        fs::rename(bundle, failed).map_err(|_| "rollback_failed")?;
+        if fs::rename(candidate, bundle).is_err() {
+            let _ = fs::rename(failed, bundle);
+            return Err("rollback_failed".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+fn wait_for_bundle_swap_kill() {
+    let Some(root) = std::env::var_os("LOOPX_TEST_KILL_DURING_BUNDLE_SWAP") else {
+        return;
+    };
+    fs::write(PathBuf::from(root).join("swap-committed"), []).unwrap();
+    loop {
+        std::thread::park();
+    }
 }
 
 // Test-only synthetic App factory shared by the backup and maintenance test
@@ -295,6 +352,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn interrupted_rotation_keeps_the_latest_old_backup_recoverable() {
+        let root = tempfile::tempdir().unwrap();
+        for sequence in [1000, 2000] {
+            let backup = root.path().join(format!("older-{sequence}"));
+            fs::create_dir_all(backup.join("LoopX.app/Contents")).unwrap();
+            fs::write(backup.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
+            fs::write(backup.join("version"), format!("1.0.{sequence}")).unwrap();
+        }
+        let unrelated = root.path().join("older-not-a-sequence");
+        fs::create_dir_all(unrelated.join("LoopX.app/Contents")).unwrap();
+        fs::write(unrelated.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
+
+        assert_eq!(
+            recoverable_backup(root.path()),
+            Some(root.path().join("older-2000"))
+        );
+
+        let previous = root.path().join("previous");
+        fs::create_dir_all(previous.join("LoopX.app/Contents")).unwrap();
+        fs::write(previous.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
+        assert_eq!(recoverable_backup(root.path()), Some(previous));
+    }
+
+    #[test]
     fn failed_replacement_restores_original() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("installed.app");
@@ -307,6 +388,90 @@ mod tests {
         )
         .is_err());
         assert_eq!(fs::read_to_string(app.join("original")).unwrap(), "keep");
+    }
+
+    #[test]
+    fn successful_replacement_preserves_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir.path().join("installed.app");
+        let candidate = dir.path().join("candidate.app");
+        let failed = dir.path().join("failed.app");
+        fs::create_dir(&installed).unwrap();
+        fs::write(installed.join("original"), "original").unwrap();
+        fs::create_dir(&candidate).unwrap();
+        fs::write(candidate.join("replacement"), "replacement").unwrap();
+
+        replace_bundle(&installed, &candidate, &failed).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(installed.join("replacement")).unwrap(),
+            "replacement"
+        );
+        assert_eq!(
+            fs::read_to_string(failed.join("original")).unwrap(),
+            "original"
+        );
+        assert!(!candidate.exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn bundle_swap_keeps_install_path_after_process_kill() {
+        if let Some(root) = std::env::var_os("LOOPX_TEST_KILL_DURING_BUNDLE_SWAP") {
+            let root = PathBuf::from(root);
+            replace_bundle(
+                &root.join("installed.app"),
+                &root.join("candidate.app"),
+                &root.join("failed.app"),
+            )
+            .expect("the test kill point must stop the child first");
+            panic!("bundle swap did not stop at the test kill point");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir.path().join("installed.app");
+        let candidate = dir.path().join("candidate.app");
+        fs::create_dir(&installed).unwrap();
+        fs::write(installed.join("original"), "original").unwrap();
+        fs::create_dir(&candidate).unwrap();
+        fs::write(candidate.join("replacement"), "replacement").unwrap();
+
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "update_backup::tests::bundle_swap_keeps_install_path_after_process_kill",
+                "--nocapture",
+            ])
+            .env("LOOPX_TEST_KILL_DURING_BUNDLE_SWAP", dir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let committed = dir.path().join("swap-committed");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !committed.is_file() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("swap child exited before reaching the kill point: {status}");
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("swap child did not reach the kill point");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+
+        assert_eq!(
+            fs::read_to_string(installed.join("replacement")).unwrap(),
+            "replacement"
+        );
+        assert_eq!(
+            fs::read_to_string(candidate.join("original")).unwrap(),
+            "original"
+        );
     }
 
     #[test]
@@ -553,11 +718,10 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn restore_verified_backup_rolls_back_when_the_second_rename_fails() {
+    fn restore_verified_backup_keeps_target_when_atomic_exchange_fails() {
         // Between the verified copy and the swap, the candidate can vanish
-        // (disk pressure, cleanup race): the first rename must be rolled
-        // back so the installed App is never left missing, and the preserved
-        // failed copy keeps the original recoverable.
+        // (disk pressure, cleanup race). The atomic exchange must fail before
+        // changing the installed App.
         let dir = tempfile::tempdir().unwrap();
         let previous = dir.path().join("previous");
         fs::create_dir_all(&previous).unwrap();
@@ -567,8 +731,7 @@ mod tests {
         let executable = synthetic_executable(&target);
         let staging_root = target.parent().unwrap().to_path_buf();
         let result = restore_verified_backup(&executable, &previous, || {
-            // Simulate the second rename failing: the verified candidate
-            // disappears from its staging directory before replace_bundle.
+            // Simulate the candidate disappearing before the exchange.
             let candidate = fs::read_dir(&staging_root)
                 .into_iter()
                 .flatten()

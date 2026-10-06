@@ -15,7 +15,7 @@ LoopX 协调长程 agent。一个局部正确的改动，仍可能改变 agent �
 | Layer / 层 | What it proves / 证明什么 | Normal cadence / 常规频率 |
 | --- | --- | --- |
 | Unit and contract tests / 单元与合同测试 | Pure rules, schemas, transition tables, invalid-state rejection / 纯规则、schema、状态转换和非法状态拒绝 | Every relevant PR in `python-tests.yml` / 相关 PR 必跑 |
-| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public on `main`, daily, or manual / 本地聚焦；主干、每日或手动全量 |
+| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public daily or manual / 本地聚焦；每日或手动全量 |
 | Catalog-informed canary / Catalog 驱动 canary | The smallest risk-based slice spanning every changed public surface / 覆盖所有变更面的最小风险切片 | Before sensitive merge or release / 敏感合并与发布前 |
 | CLI output budgets / CLI 输出预算 | Agent-facing output stays bounded and base-to-head growth is visible / 输出有界且能发现相对增长 | Relevant PR CI and premerge / 相关 PR CI 与 premerge |
 | Public-safe decision replay / 公开安全决策回放 | Reviewed source-state invariants replay through the real quota-to-scheduler path / 经审阅的源状态不变量重放真实 quota-to-scheduler 链路 | Regression and control-plane changes / 回归与控制面变更 |
@@ -172,7 +172,8 @@ workflow-level path-filtered check that cannot report on every PR.
 
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
-requiring common checks and the real packaged Dashboard build/browser smoke.
+requiring frontend type-check/build, scoped coverage and real packaged Dashboard
+browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
 Mixed, prompt, dependency and unknown changes stay full. Full Python runs four
 complete shards and combines all four coverage files. The `ci:full` label forces
 full qualification; main stays full. No selected-only report impersonates full
@@ -646,12 +647,18 @@ Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺
 不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
 正式契约变化时同步更新其归属 fixture。
 
-`full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
-not a required PR check. This separation protects repository quality without
-making every small patch wait for the broadest suite.
+`full-public-smokes.yml` runs daily and by manual dispatch on the selected ref;
+ordinary main pushes do not launch a sweep. It is not a required PR check. The
+five complete shards share one source-verified frontend build and at most two
+shards run at once. Daily/manual Python Tests also probes the next Node runtime;
+supported-runtime qualification remains on full PR/main/merge-queue candidates.
+See [CI impact and resource cadence](ci-impact-selection.md) for supersession,
+force-full and release readback. Hosted queue/runtime gains require measurement.
 
-`full-public-smokes.yml` 在主干、每日定时和手动触发时运行，不是 PR 必须门禁。
-这种分层既保护质量，也避免每个小 patch 都等待最宽测试集。
+`full-public-smokes.yml` 每日定时或按指定 ref 手动运行，不随普通主干提交重复启动，
+也不是 PR 必须门禁。五个完整分片共享一次前端构建，同时最多运行两个分片；
+下一版 Node 探测移到每日／手动 Python Tests，受支持 runtime 的完整验证仍保留。
+发布前需手动运行并回读精确候选的全量结果；实际排队与执行改善需在线测量。
 
 ### Smoke Fleet Health / Smoke 集群健康
 

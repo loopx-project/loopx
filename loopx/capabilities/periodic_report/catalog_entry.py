@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .bindings import DELIVERY_INTENT_SCHEMA
+from .core import TRIGGER_DECISION_SCHEMA
+
 
 PERIODIC_REPORT_CATALOG_ENTRY: dict[str, Any] = {
     "id": "periodic-report",
@@ -82,7 +85,7 @@ PERIODIC_REPORT_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "docs/reference/protocols/periodic-report-v0.md",
         },
         {
-            "schema_version": "periodic_report_trigger_decision_v0",
+            "schema_version": TRIGGER_DECISION_SCHEMA,
             "module": "loopx.capabilities.periodic_report.triggers",
             "doc": "docs/reference/protocols/periodic-report-v0.md",
         },
@@ -147,7 +150,7 @@ PERIODIC_REPORT_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "docs/reference/protocols/periodic-report-v0.md",
         },
         {
-            "schema_version": "periodic_report_delivery_intent_v0",
+            "schema_version": DELIVERY_INTENT_SCHEMA,
             "module": "loopx.extensions.lark.miaoda_report",
             "doc": "docs/reference/protocols/periodic-report-v0.md",
         },

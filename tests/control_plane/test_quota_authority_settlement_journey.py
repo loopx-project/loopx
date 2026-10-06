@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -118,13 +119,13 @@ def test_failed_canonical_read_cannot_fall_back_to_markdown(tmp_path):
 
 
 
-def _refresh(project: Path, runtime: Path, registry: Path):
+def _refresh(project: Path, runtime: Path, registry: Path, *extra: str):
     return cli._run_cli(
         registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
         "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
         "--delivery-outcome", "outcome_progress", "--agent-id", cli.AGENT_ID,
         "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
-        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+        "--no-global-sync", "--suppress-external-sinks", *extra, cwd=project,
     )
 
 
@@ -132,6 +133,77 @@ def _execute(command: str, project: Path, runtime: Path, registry: Path):
     # Execute the returned argv unchanged. The fixture supplies only CLI output
     # format and the same registry/runtime, never missing actor/binding arguments.
     return cli._run_cli(registry, runtime, *shlex.split(command)[1:], cwd=project)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, provider):
+    project, runtime, registry, _, _ = _source(
+        tmp_path, provider=provider, extra=f"claimed_by={cli.AGENT_ID}",
+    )
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0 and guard["decision"] == "run", guard
+    original = guard["heartbeat_receipt"]["settlement_identity"]
+
+    # A legitimate native wait changes the runnable frontier; it neither
+    # completes the original Todo nor changes the already admitted host Turn.
+    due = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat(timespec="seconds")
+    code, updated = cli._run_cli(
+        registry, runtime, "todo", "update", "--goal-id", cli.GOAL_ID,
+        "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
+        "--resume-when", f"resume_at:{due}", cwd=project,
+    )
+    assert code == 0 and updated["ok"] is True, json.dumps(updated)
+    code, refreshed = _refresh(
+        project, runtime, registry,
+        "--vision-state", "vision_on_track", "--vision-summary", "Continue current eligible work.",
+        "--vision-acceptance", "The waiting Todo remains open; the next Turn selects fresh work.",
+    )
+    assert code == 0, refreshed
+    assert refreshed["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
+    assert refreshed["vision_checkpoint"]["satisfied"] is True
+    code, spent = _execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
+    assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
+
+    readback = read_heartbeat_settlement(
+        runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID,
+    )
+    assert readback is not None and readback.replay_phase.value == "settled"
+    for explicit in (False, True):
+        code, replay = cli._run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+            "--turn-instance-id", cli.TURN_ID, "--scan-path", str(project),
+            *(["--todo-id", cli.TODO_ID] if explicit else []), cwd=project,
+        )
+        assert code == 0 and replay["effective_action"] == "heartbeat_settled_skip", replay
+        assert replay["heartbeat_receipt"]["settlement_identity"] == original
+        assert replay["interaction_contract"]["agent_channel"]["must_attempt"] is False
+        channel = replay["interaction_contract"]["cli_channel"]
+        assert channel["spend_allowed_now"] is False
+        assert channel["spend_after_validation"] is False
+        assert all("refresh-state" not in command and "spend-slot" not in command
+                   for command in channel["next_cli_actions"])
+        assert not replay.get("selected_todo")
+        assert not replay.get("autonomous_replan_obligation")
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1
+    assert cli._spend_run_count(runtime) == 1
+    current = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                             runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)["todo"]
+    assert current["status"] == "open" and current["resume_ready"] is False
+
+    code, fresh = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--turn-instance-id", "turn-after-semantic-progress", "--scan-path", str(project), cwd=project,
+    )
+    assert code == 0 and fresh["decision"] in ("run", "autonomous_replan_required"), fresh
+    assert fresh["heartbeat_receipt"]["turn_instance_id"] == "turn-after-semantic-progress"
+    assert (fresh.get("selected_todo") or {}).get("todo_id") != cli.TODO_ID
+    if fresh["decision"] == "autonomous_replan_required":
+        assert fresh["replan_action_packet"]["obligation_id"]
+    assert fresh["effective_action"] != "unsettled_host_turn_recovery"
+    assert cli._spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

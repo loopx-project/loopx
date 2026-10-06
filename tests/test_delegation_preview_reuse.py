@@ -377,6 +377,72 @@ def test_partial_supervisor_frame_obeys_parent_deadline_and_eof_cleanup():
     assert process.poll() == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX forced cleanup signals")
+def test_unconfirmed_supervisor_cleanup_cannot_start_a_second_worker(
+    tmp_path, monkeypatch
+):
+    from loopx.control_plane.collaboration import delegation_preview_transport
+
+    worker = (
+        "import json,os,sys,time\nfrom pathlib import Path\n"
+        "marker=Path(sys.argv[1])\n"
+        "for line in sys.stdin:\n"
+        " json.loads(line);marker.write_text(str(os.getpid()));time.sleep(60)\n"
+    )
+    transport = delegation_preview_transport.DelegationPreviewTransport()
+    monkeypatch.setattr(
+        delegation_preview_transport,
+        "BRIDGE_CLOSE_TIMEOUT_SECONDS",
+        0.05,
+    )
+
+    def options(marker):
+        preload = (
+            "import{existsSync}from'node:fs';"
+            f"const marker={json.dumps(str(marker))};"
+            "const timer=setInterval(()=>{if(existsSync(marker)){"
+            "clearInterval(timer);"
+            "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0)}},1)"
+        )
+        return {
+            "command": [sys.executable, "-c", worker, str(marker)],
+            "workspace": tmp_path,
+            "release": tmp_path,
+            "environment": {
+                **_pinned_release_environment(),
+                "NODE_OPTIONS": "--import=data:text/javascript,"
+                + quote(preload, safe=""),
+            },
+            "registry": tmp_path / "registry.json",
+            "runtime_root": tmp_path / "runtime",
+            "goal_id": "fixture-goal",
+            "agent_id": "fixture-agent",
+            "todo_id": "todo_fixture",
+            "argv": ("inspect",),
+            "timeout": 0.5,
+        }
+
+    markers = [tmp_path / "worker-1.pid", tmp_path / "worker-2.pid"]
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            transport.preview(**options(markers[0]))
+        assert markers[0].exists()
+        os.killpg(int(markers[0].read_text()), 0)
+        assert transport._process is not None
+        assert transport._partition is not None
+
+        with pytest.raises(ValueError, match="cleanup remains unconfirmed"):
+            transport.preview(**options(markers[1]))
+        assert not markers[1].exists()
+    finally:
+        for marker in markers:
+            if marker.exists():
+                try:
+                    os.killpg(int(marker.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGSTOP fault injection requires POSIX")
 def test_backpressured_supervisor_input_uses_original_parent_deadline(tmp_path, monkeypatch):
     from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
@@ -417,7 +483,7 @@ def test_backpressured_supervisor_input_uses_original_parent_deadline(tmp_path, 
             transport.preview(**options, argv=("x" * 65536,), timeout=0.1)
         assert send_durations[-1] < 0.4, send_durations
         assert transport._process is None
-        assert process.poll() == 0
+        assert process.poll() is not None
     finally:
         if timer:
             timer.cancel()

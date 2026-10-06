@@ -113,9 +113,33 @@ journeys and broader IM interactions remain open.
 
 Settings → Lark can now select a steward role independently of ordinary project
 Chat. The existing typed conversation binding owns its App, verified owner,
-source, workspace and bounded portfolio. A verified empty scope is distinct from
-an unavailable authorization; it contains no inherited Goals and does not certify
-global inventory coverage. Ordinary Chat still has no Goal or manager identity.
+source and workspace. New verified owner stewards default to `all_registered`:
+the current configured registry supplies every registered Goal and Agent, including
+future registrations. Stopped work remains inspectable through explicit history,
+but cannot receive new work. A verified empty registry is distinct from unavailable
+authorization; no historical registry or identity is imported. Ordinary Chat still
+has no Goal or manager identity.
+
+Older bindings retain their selected scope. Settings → Lark → **Authorize all
+registered work** upgrades the existing binding and its known sender-bound delivery
+policies without replacing its Session or audience. Individual recipient revocations
+remain effective; discovery does not prove execution readiness or grant protected
+operations. Trusted-local `manager-inbox configure-delivery-scope` uses the same
+source-policy owner, and a verified new private source initializes that policy once.
+An explicitly narrowed existing source policy is not widened by ordinary admission.
+An upgrade verifies every known delivery policy before publishing the broader
+binding. If an I/O write fails, the UI retains the old binding scope and offers
+an explicit retry. Earlier source-policy writes authorized by that upgrade may
+remain applied; retry converges them without resetting recipient revocations.
+This ordering does not claim an atomic transaction across separate files.
+
+When the configured registry declares `common_runtime_root`, coordination context,
+inboxes and return processing use that declared root even if Chat has a separate
+storage override. App bindings, conversations and provider credentials stay in
+their existing private storage. Without a declared common root, existing local
+Chat behavior is retained. This scope/path slice does not complete worker activation,
+receiver adoption or original-route return; native private ingress remains a separate
+integration boundary from the existing group ingress.
 
 Only an explicit `/delegate --tokens N objective` prepares a `goal.create`
 preview. Confirmation must arrive from that exact owner/App/source within fifteen
@@ -176,7 +200,7 @@ conversation.
 Missing execution evidence and unknown states stay explicitly unavailable.
 These commands open no Session, invoke no model and create no Goal. `/help`
 shows role-specific commands and the existing Settings → Lark entry for workspace,
-executor and revocation, including the text-only attachment boundary.
+executor and revocation, including supported images and unavailable media/attached-host boundaries.
 
 Regression coverage uses the production native filesystem store, durable queue,
 bound request and provider admission/reconciliation paths with a synthetic
@@ -897,3 +921,23 @@ historical cards and rejected-draft recovery. These fixtures establish transport
 and interface behavior, not live model quality, public posting or installed-host
 acceptance. GQ06's material entry and GQ07–09's continuity remain subject to their
 full delivery and recovery acceptance.
+
+
+### Default Lark private images reuse native Turn attachments
+
+Ordinary project and steward private conversations accept images and image/text
+posts by default. The provider verifies the canonical message under its receiving
+App, downloads only that message's resources as that App, and passes bounded
+PNG/JPEG/GIF/WebP data into the existing Core request and durable Session queue.
+Limits remain four images, 5 MiB each and 12 MiB total. Captions survive; resource
+keys and private image bytes do not enter typed routing observations. Duplicate
+events reuse downloaded input and the original Turn; restart drains that same
+Turn and upstream thread. Grants are checked again after download and on return.
+
+Failed downloads, unsupported files/audio/video, and images sent with control
+commands or to an attached host receive an explicit non-execution notice. The
+provider does not execute only the text of a partially supported post. Attached
+host media and file delivery remain separate gaps. Regression covers model-wire
+image input, unchanged Session, replay, durable restart and download-time
+revocation; live provider/model acceptance is reported separately. No new
+Session authority, queue, worker or feature toggle is introduced.

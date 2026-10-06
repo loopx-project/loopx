@@ -71,7 +71,13 @@ def test_pull_request_review_editor_supports_machine_and_goal_ci_policy() -> Non
     assert editor["writable_scopes"] == ["machine", "goal"]
     assert editor["fields"][0]["key"] == "wait_for_ci"
     assert editor["fields"][0]["input_kind"] == "boolean"
-    assert editor["fields"][1:] == [
+    assert [field["key"] for field in editor["fields"]] == [
+        "wait_for_ci", "owner_logins", "review_order",
+    ]
+    owner = editor["fields"][1]
+    assert owner["input_kind"] == "string_list"
+    assert "does not infer membership or grant review/merge authority" in owner["description"]
+    assert editor["fields"][2:] == [
         {
             "key": "review_order",
             "label": "Review direction",

@@ -1,4 +1,4 @@
-"""Full-source frontier replay on the shared complex fixture and real file store."""
+"""Full-source frontier replay on the shared complex fixture and real File/SQLite stores."""
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from test_goal_amendment_proposal import _write_fixture, GOAL_ID
 from loopx.control_plane.goals.goal_frontier.long_todo_chain import evaluate_long_todo_chain
 from loopx.control_plane.goals.shared_goal_alignment import project_shared_goal_alignment
@@ -29,9 +29,9 @@ def _fixture():
 def _commit_variant(paths, operation, todo_id):
     module = (Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination")
     script = (
-        f"import {{FileAuthorityStore}} from {json.dumps((module / 'file_authority_store.ts').as_uri())};"
+        f"import {{openLocalAuthorityStore}} from {json.dumps((module / 'local_authority_provider.ts').as_uri())};"
         f"import {{canonicalAuthoritySha256}} from {json.dumps((module / 'authority_store_codec.ts').as_uri())};"
-        "const s=new FileAuthorityStore(process.argv[1],process.argv[2]);const h=await s.loadAuthority();"
+        "const s=await openLocalAuthorityStore(process.argv[1],process.argv[2]);const h=await s.loadAuthority();"
         "const t=h.head.todos.find(t=>t.todo_id===process.argv[4]);"
         "if(process.argv[3]==='remove-exclusion')delete t.excluded_agents;else t.priority='P0';"
         "h.head.todo_read_model.records_sha256=canonicalAuthoritySha256(h.head.todos);"
@@ -40,13 +40,16 @@ def _commit_variant(paths, operation, todo_id):
         "if(r.status!=='applied')throw Error(JSON.stringify(r));"
     )
     subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e",
-                    script, str(paths["runtime"] / "authority/file-v0"), GOAL_ID, operation, todo_id],
+                    script, str(paths["runtime"]), GOAL_ID, operation, todo_id],
                    check=True, capture_output=True, text=True, timeout=30)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("display", ["stale", "missing"])
 @pytest.mark.parametrize("ack_scope", ["revision_only", "owned"])
-def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(tmp_path, display, ack_scope):
+def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(tmp_path, monkeypatch, provider, display, ack_scope):
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     paths = _write_fixture(tmp_path)
     projection = _fixture()
     # The shared fixture intentionally includes incomplete historical timestamps.
@@ -67,7 +70,7 @@ def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(
     from hashlib import sha256
     projection["todo_read_model"].update(todo_count=len(projection["todos"]),
         records_sha256=sha256(canonical_bytes(projection["todos"])).hexdigest())
-    initialize_canonical_authority(paths["runtime"], GOAL_ID, projection, state_path=paths["state_file"])
+    initialize_canonical_authority(paths["runtime"], GOAL_ID, projection, state_path=paths["state_file"], provider=provider)
     if display == "missing":
         paths["state_file"].unlink()
     before = paths["state_file"].read_bytes() if paths["state_file"].exists() else None
@@ -80,6 +83,8 @@ def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(
             assert not any(item.get("todo_id") == "todo_zz_frontier_028"
                            for item in summary["executable_backlog_items"])
         alignment = project_shared_goal_alignment(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"])
+        assert alignment["source_basis"]["todo_basis"]["source_authority"] == f"{provider}_v0"
+        assert alignment["read_only"] is True
         return evaluate_long_todo_chain(agent_todo_summary=summary, agent_counts={},
             frontier_counts=alignment["frontier_counts"], agent_id="agent-a", latest_replan_ack=ack)
 

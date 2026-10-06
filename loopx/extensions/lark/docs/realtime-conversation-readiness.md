@@ -80,6 +80,25 @@ approval store, scheduler or model-execution authority. Missing evidence is not
 permission to restart a request in a fresh model thread, elevate host policy
 or acknowledge work as completed.
 
+Markdown post presentation uses the existing shared inbox formatter. At a
+closing strong-emphasis boundary, trailing punctuation can move outside the
+bold span when followed by a word or non-ASCII symbol, including a fullwidth
+separator. This preserves visible text and the canonical answer; code, link
+destinations and ambiguous delimiter runs remain opaque. Preview and readback
+verify the same normalized post. This is provider compatibility, not a new
+Markdown parser or a change to Session, grants or result authority. Live
+rendering still needs the actual provider journey; formatter tests alone do
+not qualify it.
+
+Private DM result reconciliation uses the existing Chat store's terminal-state
+owner, including `timed_out`, for ordinary replies and commission results.
+Timeouts return an explicit failure and the original conversation's recovery
+controls. Provider readback still gates delivery: restarting the transport or
+redelivering the source reconciles the saved attempt without another send or
+model execution. Synthetic host/provider checks cover idle/hard DM timeouts
+and an injected commission timeout; a live-provider recovery drill remains
+part of the switch gate below.
+
 ## Qualification before switching
 
 The acceptance owner is the steward RFC's

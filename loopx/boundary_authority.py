@@ -109,9 +109,21 @@ def normalize_checkpointed_boundary_authority_entries(
         source = _clean_text(raw.get("source") or raw.get("provenance") or raw.get("reason_summary"))
         decision_id = _clean_text(raw.get("decision_id") or raw.get("run_id") or raw.get("gate_id"), limit=120)
         recorded_at = str(raw.get("recorded_at") or raw.get("decision_at") or "").strip()
-        expires_at = str(raw.get("expires_at") or raw.get("fresh_until") or "").strip()
+        # Null/blank retains the optional no-expiry contract. A supplied invalid
+        # value (including a false-like non-string) must not become no expiry.
+        expires_at = ""
+        for field in ("expires_at", "fresh_until"):
+            raw_expiry = raw.get(field)
+            if raw_expiry is not None:
+                expires_at = str(raw_expiry).strip()
+                if expires_at:
+                    break
         recorded = _parse_timestamp(recorded_at)
-        expires = _parse_timestamp(expires_at)
+        try:
+            expires = _parse_timestamp(expires_at)
+        except OverflowError:
+            # An ISO offset can place an instant outside datetime's UTC range.
+            expires = None
         inactive_reasons: list[str] = []
         if not scopes:
             inactive_reasons.append("missing_write_scope")
@@ -123,7 +135,9 @@ def normalize_checkpointed_boundary_authority_entries(
             inactive_reasons.append("inactive_status")
         if decision != "approve":
             inactive_reasons.append("decision_not_approved")
-        if expires and expires < current_time:
+        if expires_at and (not isinstance(raw_expiry, str) or expires is None):
+            inactive_reasons.append("invalid_expires_at")
+        elif expires and expires < current_time:
             inactive_reasons.append("expired")
         entry: dict[str, Any] = {
             "schema_version": CHECKPOINTED_BOUNDARY_AUTHORITY_SCHEMA_VERSION,
@@ -133,7 +147,10 @@ def normalize_checkpointed_boundary_authority_entries(
             "source": source,
             "recorded_at": recorded_at or None,
             "expires_at": expires_at or None,
-            "freshness": "expired" if "expired" in inactive_reasons else "fresh",
+            "freshness": (
+                "invalid" if "invalid_expires_at" in inactive_reasons
+                else "expired" if "expired" in inactive_reasons else "fresh"
+            ),
             "active": not inactive_reasons,
         }
         if decision_id:

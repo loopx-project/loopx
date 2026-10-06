@@ -42,9 +42,6 @@ async function accept(value: unknown) {
     const request = decodeHostProcessRequest(v.request);
     if (request.input !== "") throw new Error("preview input must be framed");
     started = true;
-    // Stop accepting before the Host's independent lifetime deadline begins
-    // cleanup; otherwise a new request could be admitted into a dying worker.
-    lifetime = setTimeout(() => stop("lifetime"), LIFETIME_MS);
     running = runHostProcess({...request, timeout_ms: LIFETIME_MS,
       stdout_limit_bytes: LIMIT * MAX_REQUESTS}, async item => {
       if (item.kind !== "stdout") return; // Never relay private worker diagnostics.
@@ -64,6 +61,9 @@ async function accept(value: unknown) {
         else if (!pending) armIdle();
       }
     }, owner.signal, undefined, {openInput: input => { write = input; }});
+    // Start the reuse lifetime after synchronous worker startup. This still
+    // stops admission before Host cleanup, without charging spawn latency.
+    lifetime = setTimeout(() => stop("lifetime"), LIFETIME_MS);
     void running.then(async result => {
       const originalPending = pending;
       stop(result.outcome);

@@ -86,10 +86,15 @@ def test_absent_plan_is_not_invented_for_historical_or_unbound_packets():
     assert envelope["writeback"]["spend_after_validation"] is False
 
 
-def test_real_cli_envelope_settles_original_turn_once(tmp_path):
-    project, runtime, registry = _write_fixture(tmp_path)
+@pytest.mark.parametrize("profile_args", [
+    ("--codex-app",),
+    ("--runtime-profile", "generic_cli"),
+    ("--runtime-profile", "codex_app_ssh_goal"),
+])
+def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_args):
+    project, runtime, registry = _write_fixture(tmp_path / "quoted inputs")
     _configure_read_only_todo(project)
-    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+    args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", TURN_ID, "--scan-path", str(project))
     rc, full = _run_cli(registry, runtime, *args)
@@ -104,11 +109,11 @@ def test_real_cli_envelope_settles_original_turn_once(tmp_path):
     ]
     assert plan["ordered_steps"][-1]["conditional"] is True
     assert plan["host_handoff"]["inside_agent_settlement"] is False
-    spend_command = plan["ordered_steps"][2]["command_template"].replace("loopx ", "loopx --format json ", 1)
+    spend_command = plan["ordered_steps"][2]["command_template"]
     rc, premature = _run_generated_cli(spend_command, registry_path=registry)
     assert rc != 0, premature
     assert _spend_run_count(runtime) == 0
-    writeback = plan["ordered_steps"][1]["command_template"].replace("loopx ", "loopx --format json ", 1)
+    writeback = plan["ordered_steps"][1]["command_template"]
     # A validated exclusion advances research without claiming the objective is met.
     # The same negative result is not a blocker merely because a candidate failed.
     guidance = plan["ordered_steps"][1]["precondition"]
@@ -139,8 +144,10 @@ def test_real_cli_envelope_settles_original_turn_once(tmp_path):
         registry_path=registry,
     )
     assert rc == 0, refreshed
-    for replay in (False, True):
-        rc, spent = _run_generated_cli(spend_command, registry_path=registry)
+    # Recovery instructions must also execute verbatim, with no format repair.
+    owed_command = refreshed["settlement_owed"]["command"]
+    for replay, command in ((False, owed_command), (True, spend_command)):
+        rc, spent = _run_generated_cli(command, registry_path=registry)
         assert rc == 0, spent
         assert spent["settlement_result"]["ok"] is True
         if replay:

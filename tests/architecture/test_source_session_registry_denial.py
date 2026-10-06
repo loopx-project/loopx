@@ -11,6 +11,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
     "loopx/capabilities/manager_context/roundtrip.py",
+    "loopx/capabilities/native_chat/project_context.py",
     "loopx/claude_goal_mode/scripts/connect.py",
     "loopx/cli.py",
     "loopx/cli_commands/coordination_shadow.py",
@@ -24,6 +25,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/coordination/runtime_shadow.py",
     "loopx/control_plane/coordination/shadow_goal_scope.py",
     "loopx/control_plane/projects/registry.py",
+    "loopx/control_plane/turn_driver/codex_sessions.py",
     "loopx/kunluncode_goal_mode/cli.py",
     "loopx/state_migration.py",
 }
@@ -59,7 +61,23 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
         "loopx/control_plane/coordination/shadow_goal_scope.py",
         "loopx/control_plane/projects/registry.py",
     }
-    for relative in callers - source_session_owners:
+    # Storage-location observation grants no runtime action. Keep this exception
+    # at its exact function; another direct loader in the module still fails.
+    metadata_reader = "loopx/capabilities/native_chat/project_context.py"
+    metadata_tree = ast.parse((REPO_ROOT / metadata_reader).read_text(encoding="utf-8"))
+    metadata_loader_functions = {
+        node.name
+        for node in ast.walk(metadata_tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "load_project_registry"
+            for call in ast.walk(node)
+        )
+    }
+    assert metadata_loader_functions == {"coordination_runtime_root"}
+    for relative in callers - source_session_owners - {metadata_reader}:
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert "require_runtime_compatible_project_registry(" in source, relative
     attached_owner = (REPO_ROOT / "loopx/attached_session.py").read_text(

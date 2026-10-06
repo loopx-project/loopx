@@ -1,0 +1,152 @@
+{
+  "schema_version": "finance_cash_reconciliation_input_v1",
+  "subject_ref": "urn:synthetic:issuer:cash-bridge",
+  "column_ref": "urn:synthetic:column:2001-Q4",
+  "unit": {
+    "currency": "USD",
+    "scale": 6
+  },
+  "period": {
+    "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context": {
+      "startDate": "2001-10-01Z",
+      "endDate": "2001-12-31Z"
+    },
+    "economic_period": {
+      "context_source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_ref": "urn:synthetic:parent:cash-period",
+      "role": "quarter_cash_flow",
+      "start": "2001-10-01T00:00:00Z",
+      "end": "2002-01-01T00:00:00Z",
+      "start_basis": "calendar"
+    }
+  },
+  "facts": [
+    {
+      "metric": "operating_cash_flow",
+      "state": "observed",
+      "measurement_kind": "reported_cash_flow",
+      "value": "10125",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "accuracy": {
+        "decimals": "0"
+      },
+      "source_refs": [
+        {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "urn:synthetic:cash-table:row:1",
+          "column_ref": "urn:synthetic:column:2001-Q4",
+          "label": "operating_cash_flow"
+        }
+      ]
+    },
+    {
+      "metric": "gross_capex",
+      "state": "observed",
+      "measurement_kind": "reported_cash_flow",
+      "value": "-2600",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "accuracy": {
+        "decimals": "0"
+      },
+      "source_refs": [
+        {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "urn:synthetic:cash-table:row:2",
+          "column_ref": "urn:synthetic:column:2001-Q4",
+          "label": "gross_capex"
+        }
+      ]
+    },
+    {
+      "metric": "asset_sale_proceeds",
+      "state": "observed",
+      "measurement_kind": "reported_cash_flow",
+      "value": "50",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "accuracy": {
+        "decimals": "0"
+      },
+      "source_refs": [
+        {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "urn:synthetic:cash-table:row:3",
+          "column_ref": "urn:synthetic:column:2001-Q4",
+          "label": "asset_sale_proceeds"
+        }
+      ]
+    },
+    {
+      "metric": "government_incentive_proceeds",
+      "state": "observed",
+      "measurement_kind": "reported_cash_flow",
+      "value": "125",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "accuracy": {
+        "decimals": "0"
+      },
+      "source_refs": [
+        {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "urn:synthetic:cash-table:row:4",
+          "column_ref": "urn:synthetic:column:2001-Q4",
+          "label": "government_incentive_proceeds"
+        }
+      ]
+    },
+    {
+      "metric": "net_capex",
+      "state": "observed",
+      "measurement_kind": "reported_cash_flow",
+      "value": "-2425",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "accuracy": {
+        "decimals": "0"
+      },
+      "source_refs": [
+        {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "urn:synthetic:cash-table:row:5",
+          "column_ref": "urn:synthetic:column:2001-Q4",
+          "label": "net_capex"
+        }
+      ]
+    },
+    {
+      "metric": "adjusted_free_cash_flow",
+      "state": "observed",
+      "measurement_kind": "reported_cash_flow",
+      "value": "7700",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "accuracy": {
+        "decimals": "0"
+      },
+      "source_refs": [
+        {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "urn:synthetic:cash-table:row:6",
+          "column_ref": "urn:synthetic:column:2001-Q4",
+          "label": "adjusted_free_cash_flow"
+        }
+      ]
+    }
+  ]
+}

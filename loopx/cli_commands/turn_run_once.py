@@ -797,7 +797,7 @@ def execute_turn_run_once(
                         ),
                         **options,
                     )
-                return run_codex_cli_host(request, **options)
+                return run_codex_cli_host(request, registry_path=registry_path, **options)
 
             host_runner = run_built_in_host
 

@@ -2398,6 +2398,7 @@ const privateConversationSchema = z.object({
   binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
   project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
   grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
+  goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   pending_count: z.number().int(), recovery_count: z.number().int(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
@@ -2410,7 +2411,8 @@ export async function fetchPrivateConversations() {
 export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write") {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant}),
+    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
+      ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {})}),
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {

@@ -393,6 +393,20 @@ it does not claim to reduce history IO. The agent chooses evidence-backed work;
 planner suggestions do not require branching on every turn or recording empty
 ceremonial nodes. Use the detail command when the short view is insufficient.
 
+Planning context also keeps a bounded `typed_evidence_audit` on suggested
+branches with explicit Todo/node links, and up to three existing exploring
+frontier nodes. Linked findings are resolved before the recent-history limit,
+so unrelated newer results do not hide an older linked refutation. The audit
+retains its diagnostic-only meaning and unchanged planner score; unknown links
+are visible and omission counts refer to the bounded audit, not the whole log.
+Use `todo update --goal-id <id> --agent-id <agent> --todo-id <todo>
+--explore-result-node-ref <node>` under the ordinary update/lease contract to
+link existing evidence. Before an experiment, use that evidence to explain the
+route and discriminating probe; a repeat can test changed conditions or
+uncertainty. These decision guidelines introduce no adoption/writeback gate,
+automatic successor or spawn permission. A context read does not prove that the
+model adopted the evidence or improved its result.
+
 Mode selection does not grant spawn, claim, lease, execution, quota or external
 publication authority. `spawn_allowed=false` retains analysis-only planning.
 Feature-off adds no Explore hook or evidence reads. Turning off preserves all

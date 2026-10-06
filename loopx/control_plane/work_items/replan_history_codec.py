@@ -23,6 +23,40 @@ REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
 }
 
 
+def effective_turn_cadence_context(
+    goal: dict[str, Any],
+    runtime_root: Path | None,
+    *,
+    registry_path: Path | None = None,
+    goal_ref: dict[str, str] | None = None,
+    source_admission: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    profile = goal.get("execution_profile") or {}
+    threshold = profile.get("replan_after_effective_turns")
+    if threshold is None:
+        return None
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, int)
+        or not 1 <= threshold <= 5
+    ):
+        raise ValueError("replan_after_effective_turns must be an integer from 1 to 5")
+    if runtime_root is None or not goal.get("id"):
+        raise ValueError("effective Turn cadence requires the Goal settlement runtime")
+    if goal_ref is None and goal.get("goal_instance_id"):
+        goal_ref = {"goal_id": goal["id"], "goal_instance_id": goal["goal_instance_id"]}
+    return {
+        "registry_path": registry_path,
+        "goal_ref": goal_ref,
+        "source_admission": source_admission,
+        "threshold": threshold,
+        "settlement_source": {
+            "runtime_root": str(runtime_root.resolve()),
+            "goal_id": goal["id"],
+        },
+    }
+
+
 def _timestamp(value: Any) -> float | None:
     parsed = parse_timestamp(value)
     return parsed.timestamp() if parsed is not None else None
@@ -37,6 +71,7 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
     event = run.get("monitor_event")
     event = event if isinstance(event, dict) else {}
     return {
+        **({"goal_ref": run["goal_ref"]} if "goal_ref" in run else {}),
         "agent_id": run_history_agent_id(run),
         "monitor_agent_id": normalize_todo_claimed_by(run_history_agent_id(run)),
         "public_agent_id": str(run.get("agent_id") or "").strip() or None,
@@ -121,6 +156,7 @@ def project_replan_history(
     stall_threshold: int = 2, periodic_threshold: int = 20,
     monitor_threshold: int = 6, streak_threshold: int = 5,
     monitor_schema: str = "dead_monitor_repeat_v0",
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if ack_recorded is None:
         from .autonomous_replan_ack import autonomous_replan_ack_recorded
@@ -141,8 +177,14 @@ def project_replan_history(
         "streak_threshold": streak_threshold, "monitor_schema": monitor_schema,
         "todos": _todo_facts(agent_todos, include_resume=needs_resume),
     }
+    if effective_turn_cadence is not None:
+        params["settlement_source"] = effective_turn_cadence["settlement_source"]
+        params["periodic_threshold"] = effective_turn_cadence["threshold"]
     try:
-        result = project_replan_request(params)
+        if effective_turn_cadence is None:
+            result = project_replan_request(params)
+        else:
+            result = _project_admitted_replan_request(params, effective_turn_cadence)
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
     if not isinstance(result, dict) or result.get("schema_version") != "replan_history_result_v0":
@@ -151,6 +193,36 @@ def project_replan_history(
     if trigger is not None and not isinstance(trigger, dict):
         raise RuntimeError("TypeScript replan history trigger mismatch")
     return trigger
+
+
+def _project_admitted_replan_request(params: dict[str, Any], context: dict[str, Any]) -> Any:
+    # One live admission and one snapshot cover all Turns. Borrow an enclosing
+    # refresh transaction instead of releasing its source/index locks early.
+    from ..quota.accounting_admission import quota_accounting_admission
+
+    source = dict(params["settlement_source"])
+    goal_ref = context.get("goal_ref")
+
+    def invoke(admission: dict[str, Any] | None, *, borrow: bool) -> Any:
+        admitted_source = dict(source)
+        if goal_ref is not None:
+            admitted_source["goal_ref"] = goal_ref
+        if admission is not None:
+            admitted_source["source_admission"] = admission
+            admitted_source["borrow_source_admission"] = borrow
+        return project_replan_request({**params, "settlement_source": admitted_source})
+
+    if context.get("source_admission") is not None:
+        return invoke(context["source_admission"], borrow=True)
+    with quota_accounting_admission(
+        runtime_root=Path(source["runtime_root"]),
+        registry_path=context.get("registry_path"),
+        goal_id=source["goal_id"],
+        goal_ref=goal_ref,
+        operation="replan-history-read",
+        lock_legacy_index=False,
+    ) as admission:
+        return invoke(admission, borrow=False)
 
 
 def project_replan_request(params: dict[str, Any], *, method: str = "work_item.replan_history") -> Any:

@@ -143,6 +143,15 @@ separate terminal review selection and eager declaration sequencing are removed.
 This closes a T1/T2/L2 terminal caller family, not the remaining leased metadata,
 executor fences or T4 retirement. [Semantics, crossings and rollback](../../reference/canonical-terminal-review.md).
 
+The canonical supersede CLI/facade now forwards existing-successor links to that
+same terminal owner. One commit links already declared replacement work, retires
+the predecessor and releases its original lease, replacing the earlier
+link-update then supersede sequence. Receipt recovery, source/actor/lease fences
+and one-way display delivery remain with their existing owners. No new Python
+decision owner or writer is introduced; unpromoted Markdown's new direct-link
+option fails closed. This narrows a T1/T2 recovery cost, not T4 retirement,
+default-provider qualification or a new frontend lifecycle journey.
+
 Linked User completion now has one typed owner, `todos/user_completion.ts`.
 The terminal transaction commits exact-target scope consumption, reject/cancel
 outcomes and conditional resume with its own completion/receipt; the Markdown
@@ -1233,10 +1242,19 @@ authority. Missing, changed, non-private or over-64-MiB files fail closed.
 After a handler may have committed, an unverifiable response stays ambiguous
 and requires exact receipt readback, never automatic mutation retry.
 
-This removes the immediate transport ceiling, not the cost of projecting a
-complete multi-megabyte basis. The next measured T3 cut should combine the
-canonical source read and checkpoint reduction inside one TypeScript call, then
-offer a versioned manifest with bounded pages for human/Agent inspection.
+Source read and read/check reduction now compose inside one TypeScript request.
+Both context reading and commit preflight use one checkpoint request instead of
+two; the complete authoritative facts no longer return to Python only to be sent
+back for reduction. The existing reducer, full-basis receipt, source locks and
+final provider-fenced commit remain the owners. Reduction follows release of
+the optimistic read fence; the final commit still rereads under its own fence.
+Python retains local source IO and receipt persistence. The unused source-only
+and standalone evaluation effects are retired with their adapter calls; commit
+and replay retain their existing single-request boundaries.
+
+This removes the intermediate full-fact round trip, not the cost of projecting
+and returning a complete multi-megabyte basis. The remaining measured T3 cut is
+a versioned manifest with bounded pages for human/Agent inspection.
 Every page must bind to the same source head and disclose omitted components;
 the receipt must still hash the complete relevant Todo/dependency, User Todo,
 Goal prose, acceptance and vision basis. A display limit must never become a

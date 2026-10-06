@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...presentation.answer_instruction import conversation_answer_instruction
 
 
 PROJECT_CONVERSATION_OBJECTIVE = (
@@ -84,8 +85,9 @@ class ChatProjectContexts:
             selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
         if session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
+        objective = PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE
         return {"project": Path(selected["context"]["workspace_path"]),
-                "objective": PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE,
+                "objective": objective + " " + conversation_answer_instruction(),
                 "title": Path(selected["context"]["workspace_path"]).name}
 
     def open_bound(self, binding_id: str, source: dict[str, Any], *, executor: str, channel_id: str | None) -> dict[str, Any]:
@@ -103,10 +105,26 @@ class ChatProjectContexts:
         return {**session, **self.session_context(session)}
 
     @staticmethod
-    def initialize_bound_scope(store, session):
+    def initialize_bound_scope(store, session, *, runtime_root=None):
         steward = session.get("steward_context")
         if not steward:
             return session
         from ...chat_manager_context import manager_authorization_scope_id
         return store.update_session(session["session_id"], manager_authorization_scope_id=manager_authorization_scope_id(
-            steward["goal_ids"], runtime_root=store.root.parent, channel_id=session["channel_id"]))
+            steward["goal_ids"], runtime_root=runtime_root or store.root.parent, channel_id=session["channel_id"]))
+
+
+def coordination_runtime_root(registry_path: Path | None, chat_root: Path) -> Path:
+    """Registered work/inboxes follow the registry; Chat keeps its own storage.
+
+    A Chat storage override must not create another Goal/Agent inbox authority.
+    Fixtures and ordinary project Chat without a registry keep their local root.
+    """
+    if registry_path is None or not registry_path.exists():
+        return chat_root
+    from ...control_plane.projects.registry_codec import load_project_registry
+    from ...paths import resolve_runtime_root
+    # Reading the registered storage root is lifecycle metadata observation.
+    # Session/Turn admission still enforces the runtime profile and Goal lifetime.
+    registry = load_project_registry(registry_path)
+    return resolve_runtime_root(registry, registry_path=registry_path) if registry.get("common_runtime_root") else chat_root

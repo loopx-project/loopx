@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,14 @@ from tests.control_plane.test_quota_settlement_cli import (
     _spend_run_count,
     _write_fixture,
 )
+from tests.control_plane.test_cli_output_budget import _stable_budget_fixture_root
+
+
+@pytest.fixture
+def settlement_budget_root(tmp_path: Path) -> Iterator[Path]:
+    # Measure the actual output with stable paths, as other CLI budgets do.
+    with _stable_budget_fixture_root(tmp_path) as root:
+        yield root
 
 
 def test_settled_advancement_hold_preserves_independent_monitor(
@@ -204,12 +213,13 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     ],
 )
 def test_completed_advancement_retains_auxiliary_monitor_admission(
-    tmp_path: Path,
+    settlement_budget_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
     writeback: bool,
     spend_first: bool,
 ) -> None:
+    tmp_path = settlement_budget_root
     from canonical_authority_fixture import (
         initialize_canonical_authority,
         isolate_sqlite_runtime,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -73,12 +74,37 @@ class LarkGoalTopicRuntimeService:
                 self._delivery_thread.start()
 
     def _reconcile_private(self) -> None:
-        while not self._closed.is_set():
-            try:
-                self.private_conversations.reconcile()
-            except Exception:
-                logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
-            self._closed.wait(1)
+        # Keep slow provider writes/readbacks off the scan loop. At most four
+        # persisted requests run, with no executor backlog or extra listener.
+        # The per-request journal lock retains ambiguous-write/no-resend safety.
+        transport = self.private_conversations
+        if transport is None:
+            return
+        pending: dict[Path, Future[int]] = {}
+        attempted: dict[Path, int] = {}
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool:
+            while not self._closed.is_set():
+                for path, future in list(pending.items()):
+                    if not future.done():
+                        continue
+                    pending.pop(path)
+                    try:
+                        future.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
+                try:
+                    paths = transport.pending_delivery_paths()
+                    attempted = {path: count for path, count in attempted.items() if path in paths}
+                    for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
+                        if len(pending) >= 4 or self._closed.is_set():
+                            break
+                        if path in pending:
+                            continue
+                        pending[path] = pool.submit(transport.reconcile_request, path)
+                        attempted[path] = attempted.get(path, 0) + 1
+                except Exception:
+                    logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
+                self._closed.wait(1)
 
     def _refresh_on_start(self) -> None:
         while not self._closed.is_set():

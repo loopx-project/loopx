@@ -116,6 +116,21 @@ are not rewritten. The v5 migration is an explicit semantic review signal and
 has **no additional size allowance**; overflow still requires the existing budget
 analysis. Default full quota output and settlement rules are unchanged.
 
+Newly generated turn-scoped settlement commands include global `--format json`
+before the subcommand. This changes the generated command output default for App
+heartbeat, generic CLI, and visible Goal lanes, in both full decisions and
+TurnEnvelope. It also applies to `settlement_owed.command` after writeback.
+Execute the returned command after filling its declared placeholders; do not
+append `--format json` after `quota spend-slot`, where it is not a subcommand
+option. Inspect both the exit code and JSON `ok`. Direct CLI invocations retain
+their existing output defaults; stored commands and receipts are not rewritten.
+This is command rendering over the existing settlement owner: validation,
+identity, step conditions, authority and one-spend semantics are unchanged.
+
+中文：新生成的结算命令自带位置正确的全局 JSON 参数，完整包、短包及写回后的
+补结算命令保持一致。填充占位项后直接执行，检查退出码和 JSON `ok`；不再需要
+手工在子命令后追加格式参数。直接 CLI 的默认格式、历史回执与结算权限均不变。
+
 The shared CLI plan also explains delivery classification before writeback.
 Validated evidence that excludes a route and informs the next decision can be
 `outcome_progress` even when the attempted candidate does not improve the target

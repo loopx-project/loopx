@@ -350,8 +350,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.delivery_response.project", lazyHandler(() => import("./work_items/delivery_history.ts"), ({projectDeliveryResponse}) => projectDeliveryResponse)],
     ["work_item.delivery_claim.validate", lazyHandler(() => import("./work_items/delivery_outcome.ts"), ({validateDeliveryClaim}) => validateDeliveryClaim)],
     ["goal.vision_checkpoint.evaluate", lazyHandler(() => import("./goals/vision_checkpoint.ts"), ({buildVisionCheckpoint}) => buildVisionCheckpoint)],
-    ["goal.checkpoint_read_context.evaluate", lazyHandler(() => import("./goals/checkpoint_read_context.ts"), ({evaluateCheckpointReadContext}) => evaluateCheckpointReadContext)],
-    ["goal.checkpoint_read_context.source", lazyHandler(() => import("./goals/checkpoint_authority.ts"), ({readCheckpointAuthority}) => readCheckpointAuthority)],
+    ["goal.checkpoint_read_context.resolve", lazyHandler(() => import("./goals/checkpoint_authority.ts"), ({resolveCheckpointReadContext}) => resolveCheckpointReadContext)],
     ["goal.checkpoint_read_context.commit", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({commitCheckpoint}) => commitCheckpoint)],
     ["goal.checkpoint_read_context.inspect_replay", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReplay}) => inspectCheckpointReplay)],
     ["goal.vision_wait.coverage", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectVisionWaitCoverage}) => projectVisionWaitCoverage)],
@@ -589,7 +588,9 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.agent_target", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveConversationAgentTarget}) => resolveConversationAgentTarget)],
     ["collaboration.peer.context_access", lazyHandler(() => import("./collaboration/peer_context.ts"), ({requirePeerContextAccess}) => requirePeerContextAccess)],
     ["collaboration.source.recipients", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceRecipients}) => resolveSourceRecipients)],
+    ["collaboration.source.execution_bindings", lazyHandler(() => import("./collaboration/source_grants.ts"), ({sourceExecutionBindings}) => sourceExecutionBindings)],
     ["collaboration.source.configure_recipient", lazyHandler(() => import("./collaboration/source_grants.ts"), ({configureSourceRecipient}) => configureSourceRecipient)],
+    ["collaboration.source.configure_scope", lazyHandler(() => import("./collaboration/source_grants.ts"), ({configureSourceScope}) => configureSourceScope)],
     ["collaboration.conversation.reply_context", lazyHandler(() => import("./collaboration/conversation_reply_context.ts"), ({projectConversationReplyContext}) => projectConversationReplyContext)],
     ["chat.turn.accept", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({planChatTurnAcceptance}) => planChatTurnAcceptance)],
     ["chat.turn.execution_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayContinueChatTurn}) => mayContinueChatTurn)],
@@ -733,7 +734,7 @@ export function createEffectRuntimeHandlers(
     ["explore.research.normalize", lazyHandler(() => import("./capabilities/explore_research.ts"), ({normalizeResearchObservation}) => normalizeResearchObservation)],
     ["explore.research.validate_attribution", lazyHandler(() => import("./capabilities/explore_research.ts"), ({validateResearchAttribution}) => validateResearchAttribution)],
     ["explore.research.frontier", lazyHandler(() => import("./capabilities/explore_research.ts"), ({projectResearchFrontier}) => projectResearchFrontier)],
-  ["work_item.replan_history.project", lazyHandler(() => import("./work_items/replan_history.ts"), ({projectReplanHistory}) => projectReplanHistory)],
+  ["work_item.replan_history.project", lazyHandler(() => import("./work_items/replan_history_settlement.ts"), ({projectSettledReplanHistory}) => projectSettledReplanHistory)],
   ["work_item.replan_history.project_snapshot", lazyHandler(() => import("./work_items/replan_history_snapshot.ts"), ({projectReplanHistorySnapshot}) => projectReplanHistorySnapshot)],
 
     [

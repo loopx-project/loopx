@@ -1221,7 +1221,9 @@ export function apply(ctx: Context): void {
 
   ctx.effect(function* () {
     const unregisterDriverBridge = goalBarCoordinator.registerDriverBridge(driver)
-    ctx.on('agent/created', ({ agent }) => { driver.observeAgent(agent) })
+    // DSH 0.2 announces startup/resume/clear/compact through agent/created.
+    // Reset the exact Session's state at that boundary, before input is driven.
+    ctx.on('agent/created', ({ agent }) => { driver.onSessionStart(agent) })
     ctx.on('agent/disposed', ({ agent }) => {
       goalBarCoordinator.invalidateSession(agent.session)
       driver.onAgentDisposed(agent)
@@ -1229,7 +1231,12 @@ export function apply(ctx: Context): void {
     ctx.on('session/disposed', session => {
       goalBarCoordinator.invalidateSession(session)
     })
-    ctx.on('agent/session-start', ({ agent }) => { driver.onSessionStart(agent) })
+    // Retain the real 0.1 lifecycle contract for previously supported hosts.
+    // The event was removed from 0.2's declarations and is not emitted there.
+    const legacyLifecycle = ctx as Context & {
+      on(event: 'agent/session-start', listener: (payload: { agent: Agent }) => void): unknown
+    }
+    legacyLifecycle.on('agent/session-start', ({ agent }) => { driver.onSessionStart(agent) })
     ctx.on('agent/status', ({ agent, status }) => {
       if (status === 'idle' || status === 'running') {
         goalBarCoordinator.publishAgentStatus(agent.session, status)

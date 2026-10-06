@@ -198,6 +198,7 @@ def qualify_replan_writeback(
     completion_turn_key: str | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -256,6 +257,7 @@ def qualify_replan_writeback(
         agent_todos=agent_todos,
         agent_id=safe_agent_id,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
     )
     status_payload = {
         "run_history": {
@@ -376,6 +378,7 @@ def enforce_open_replan_writeback(
     guard_semantic_replan_obligation_id: str | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Fail closed unless concrete typed evidence satisfies the selected replan.
 
@@ -394,6 +397,7 @@ def enforce_open_replan_writeback(
         progress_observation=progress_observation,
         registry_goal=registry_goal,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
         agent_vision=agent_vision,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
@@ -451,6 +455,7 @@ def qualify_refresh_replan_writeback(
     progress_observation: dict[str, Any] | None,
     registry_goal: dict[str, Any] | None,
     external_progress_review: Mapping[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
     completion_todo_id: str | None,
     completion_turn_key: str | None,
     classification: str,
@@ -514,6 +519,7 @@ def qualify_refresh_replan_writeback(
         progress_observation=progress_observation,
         registry_goal=registry_goal,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
         agent_vision=agent_vision,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,

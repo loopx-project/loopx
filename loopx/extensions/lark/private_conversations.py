@@ -5,42 +5,66 @@ Core owns audience grants, canonical Sessions, durable Turns and stop/recovery.
 """
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from ...capabilities.native_chat.external_conversations import ChatExternalConversations
-from ...chat_store import _atomic_write_json, _read_json
+from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...file_lock import exclusive_file_lock
 from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
-from .goal_channel_transport import call, json_payload, lark_args
+from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
 from .inbox_reply import _message, reply_lark_event_inbox, verify_lark_inbox_reply
+from .manager_context import manager_failure_reply
+from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
+from .outbound import LarkOutboundTextError, normalize_lark_outbound_text, safe_lark_plain_text_fallback
+from .private_images import private_message_caption, private_message_images
 
 
 class LarkPrivateConversations:
-    def __init__(self, *, controller: Any, runtime_root: Path, runner: Any, cli_bin: str) -> None:
+    def __init__(self, *, controller: Any, runtime_root: Path, runner: Any, cli_bin: str,
+                 reaction_feedback: bool = True) -> None:
         self.core = ChatExternalConversations(controller)
         self.bindings = self.core.bindings
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
+        self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
 
     def profiles(self) -> dict[str, dict[str, str]]:
+        """Discover current App configuration, never authorize a conversation.
+
+        A network/token probe failing is not a durable disconnect. The local
+        profile inventory supplies the actual App lease identity; Core still
+        freshly verifies App/owner/source/grants at admission and delivery.
+        """
+        bindings = self.bindings.read()["bindings"]
+        if not bindings:
+            return {}
+        result = call(self.runner, [self.cli_bin, "profile", "list"])
+        try:
+            configured = json.loads(str(result.get("stdout") or ""))
+        except json.JSONDecodeError as exc:
+            raise OSError("Lark profile configuration could not be read") from exc
+        if result.get("returncode") != 0 or not isinstance(configured, list):
+            # An unreadable inventory is unknown, not an empty configuration.
+            # The existing stream watcher retains its route on read failures.
+            raise OSError("Lark profile configuration could not be read")
+        apps = {str(row.get("name") or ""): str(row.get("appId") or "")
+                for row in configured if isinstance(row, Mapping)}
         profiles = {}
-        for row in self.bindings.read()["bindings"]:
-            try:
-                observation = self.bindings.observe(row["transport_ref"])
-            except (ValueError, OSError):
-                # One App's expired login must not block the independently
-                # verified App from acquiring its own listener lease.
-                continue
-            if any(observation.get(field) != row[field] for field in ["provider_ref", "operator_ref"]):
+        for row in bindings:
+            app_id = apps.get(row["transport_ref"], "")
+            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
+                    or identity_ref(app_id) != row["provider_ref"]):
                 continue
             profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
-                "binding_id": row["binding_id"], "consumer_ref": observation["consumer_ref"]}
+                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
         return profiles
 
     def health(self) -> dict[str, dict[str, int]]:
@@ -57,7 +81,7 @@ class LarkPrivateConversations:
     def _binding(self, profile: str) -> dict[str, Any]:
         return next(row for row in self.bindings.read()["bindings"] if row["transport_ref"] == profile)
 
-    def _source_message(self, record: dict[str, Any]) -> Mapping[str, Any] | None:
+    def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
 
         A p2p source read proves the destination without requiring group-member
@@ -65,7 +89,8 @@ class LarkPrivateConversations:
         """
         event = record["event"]
         try:
-            selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+            if selected is None:
+                selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
             native_path = self.core.root / f"{record['request_ref']}.json"
             native = _read_json(native_path) if native_path.exists() else {}
             if native.get("agent_target"):
@@ -95,7 +120,8 @@ class LarkPrivateConversations:
             "inbox_dir": f".loopx/inbox/private-chat/{scope}", "capture_scope": "configured_chat_all",
             "reply": {"enabled": True, "sender_profile": record["profile"], "sender_identity": "bot",
                 "bot_display_name": observation["bot_display_name"], "chat_id": record["event"]["chat_id"],
-                "placement_policy": "source_context", "received_reaction_emoji": ""},
+                "placement_policy": "source_context", "received_reaction_emoji": "Get" if self.reaction_feedback else "",
+                "received_reaction_policy": "retain", "processing_reaction_emoji": "OnIt" if self.reaction_feedback else ""},
         })
         event = record["event"]
         # Some unsupported attachment events have no rendered content. Keep a
@@ -111,7 +137,7 @@ class LarkPrivateConversations:
         try:
             binding = self._binding(profile)
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
-            self.bindings.resolve(binding_id=binding["binding_id"], **source)
+            selected = self.bindings.resolve(binding_id=binding["binding_id"], **source)
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
         request = identity_ref(binding["provider_ref"], event["message_id"])
@@ -129,11 +155,14 @@ class LarkPrivateConversations:
                     "profile": profile, "binding_id": binding["binding_id"], "source": source,
                     "event": event, "deliveries": {}, "status": "captured"}
                 _atomic_write_json(path, record)
-            source_message = self._source_message(record)
+            # Reuse this admission preflight only; Core rechecks under its
+            # source fence, and outbound writes always perform a fresh check.
+            source_message = self._source_message(record, selected=selected)
             if source_message is None:
                 return {"status": "source_verification_failed"}
             message_type = str(event.get("message_type") or "")
             text = ""
+            attachments: list[dict[str, Any]] = []
             if message_type == "text":
                 # lark-cli renders event and mget content as plain text. Read
                 # the full canonical message; do not decode a rendered event.
@@ -155,25 +184,44 @@ class LarkPrivateConversations:
                         return {"status": "invalid_text"}
                 if not text.strip():
                     return {"status": "empty_text"}
-            command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(text.strip())
-            if text.strip() == "/agents":
+            elif message_type in {"image", "post"}:
+                if source_message.get("msg_type", source_message.get("message_type")) != message_type:
+                    return {"status": "source_conflict"}
+                content = source_message.get("content")
+                if not isinstance(content, str):
+                    return {"status": "source_verification_failed"}
+                if record.get("source_content", content) != content:
+                    return {"status": "source_conflict"}
+                record["source_content"] = content
+                if "attachments" not in record and not record.get("attachment_notice"):
+                    try:
+                        text, attachments = private_message_images(content=content, message_type=message_type,
+                            message_id=event["message_id"], profile=profile, cli_bin=self.cli_bin, runner=self.runner)
+                        record.update(message=text, attachments=attachments)
+                    except ValueError as exc:
+                        record["attachment_notice"] = str(exc)
+                    _atomic_write_json(path, record)
+                text, attachments = record.get("message", ""), record.get("attachments", [])
+            command_input = private_message_caption(record["source_content"]) if attachments else text.strip()
+            command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(command_input)
+            if command_input == "/agents":
                 command = "agents"
-            elif text.strip() == "/project":
+            elif command_input == "/project":
                 command = "select_project"
-            elif text.strip() == "/agent" or text.strip().startswith("/agent "):
+            elif command_input == "/agent" or command_input.startswith("/agent "):
                 command = "select_agent"
             if binding["context_kind"] == "steward":
                 for prefix, selected_command in [("/delegate", "commission"), ("/委托", "commission"),
                                                   ("/confirm", "confirm_commission"), ("/cancel", "cancel_commission"),
                                                   ("/stop-commission", "stop_commission"), ("/resume-commission", "resume_commission")]:
-                    if text.strip() == prefix or text.strip().startswith(prefix + " "):
+                    if command_input == prefix or command_input.startswith(prefix + " "):
                         command = selected_command
                         break
-            if message_type != "text":
+            if message_type not in {"text", "image", "post"} or record.get("attachment_notice"):
                 command = "unsupported"
             try:
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
-                    request_ref=request, message=text, command=command)
+                    request_ref=request, message=text, command=command, attachments=attachments)
             except ValueError:
                 record.update(status="rejected", response="操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。")
                 _atomic_write_json(path, record)
@@ -191,20 +239,89 @@ class LarkPrivateConversations:
                 "queue_rejected" if admitted["status"] == "rejected" else "command_recorded")
             return {"status": status}
 
-    def _reply_runner(self, args: list[str]) -> Any:
+    def _reply_runner(self, args: Sequence[str]) -> Any:
         return self.runner([self.cli_bin, *args[1:]], None, 30)
 
-    def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str) -> bool:
+    def return_inbox(self, *, route: dict[str, Any], session: dict[str, Any],
+                     turn: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+        """Resolve an original worker return through its admitted private source.
+
+        Core revalidates the saved steward context. The two correlation records
+        must still name the exact canonical Session/Turn; neither the current
+        conversation nor a worker-supplied destination can replace that source.
+        Manager-context retains ownership of the return attempt and recovery.
+        """
+        saved = session["steward_context"]
+        selected = self.bindings.session_context(saved)
+        client = str(turn.get("client_turn_id") or "")
+        request = client.removeprefix("external-")
+        if client != f"external-{request}" or not re.fullmatch(r"[a-f0-9]{24}", request):
+            raise ValueError("original private request unavailable")
+        record = _read_json(self.root / f"{request}.json")
+        native = self.core.read_request(request)
+        message_id = str(record.get("event", {}).get("message_id") or "")
+        if (route["source_id"] not in (request, f"lark:{message_id}")
+                or identity_ref(selected["binding"]["provider_ref"], message_id) != request
+                or session.get("goal_id") != "loopx-manager"
+                or session.get("channel_id") != selected["channel_id"]
+                or route["goal_id"] not in selected["context"]["goal_ids"]
+                or route["session_id"] != session["session_id"]
+                or turn.get("session_id") != session["session_id"]
+                or record.get("profile") != selected["binding"]["transport_ref"]
+                or record.get("request_ref") != request
+                or record.get("source") != lark_private_source(
+                    provider_ref=selected["binding"]["provider_ref"], event=record["event"])
+                or record["source"]["source_ref"] != saved["source_ref"]
+                or any(row.get("binding_id") != saved["binding_id"]
+                       or row.get("source") != record["source"]
+                       or row.get("session_id") != session["session_id"]
+                       or row.get("turn_id") != turn["turn_id"]
+                       for row in (record, native))):
+            raise ValueError("original private return source changed")
+        return self._inbox(record), record
+
+    def _feedback(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path], processing: bool = False) -> None:
+        """Render observed Core admission/execution through the shared Inbox owner.
+
+        Presentation failures never reject a persisted Turn. Existing reaction
+        journals prevent uncertain provider writes from being repeated on replay.
+        """
+        if not self.reaction_feedback:
+            return
+        phase = "processing" if processing else "received"
+        feedback = record.setdefault("feedback", {})
+        if feedback.get(phase, {}).get("ok"):
+            return
+        config = inbox()
+        if processing:
+            result = mark_lark_event_inbox_processing(project=self.runtime_root, config_path=config,
+                message_id=record["event"]["message_id"], execute=True, runner=self._reply_runner)
+        else:
+            result = mark_lark_event_inbox_received(project=self.runtime_root, config_path=config,
+                event=record["event"], runner=self._reply_runner)
+        feedback[phase] = result
+        _atomic_write_json(path, record)
+
+    def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str, *, inbox: Callable[[], Path]) -> bool:
         if not text:
             return False
         phase_state = record["deliveries"].get(phase, {})
         if phase_state.get("verified"):
             return True
+        # Repair presentation before recording the exact provider intent. Core's
+        # answer stays unchanged. An older frozen intent may contain raw CRLF;
+        # preserve it when it still matches Core, letting Inbox verify its wire.
+        if phase_state.get("text") != text:
+            try:
+                text = normalize_lark_outbound_text(text, limit=None, preserve_format=True)
+            except LarkOutboundTextError:
+                text = safe_lark_plain_text_fallback(text)
         if phase_state.get("text") not in (None, text):
             raise ValueError("delivery content changed after an attempt")
-        config = self._inbox(record)
+        config = inbox()
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
+            finalize_reactions=phase != "admission" and not (phase == "terminal" and record.get("commission_resources")),
             source_membership_verifier=lambda: self._source_verified(record))
         if phase_state.get("attempt"):
             result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"])
@@ -224,84 +341,129 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, record)
 
             result = reply_lark_event_inbox(**kwargs, execute=True, before_send=before_send,
-                                           delivery_attempt_recorder=attempt, short_message_limit=None)
-        phase_state["verified"] = result.get("reply_verified") is True
+                                           delivery_attempt_recorder=attempt, short_message_limit=None,
+                                           content_format="markdown")
+        # A verified intermediate reply is not completion. A final reply with
+        # cleanup owed recovers its original attempt; it must never be resent.
+        phase_state["verified"] = result.get("reply_verified") is True and result.get("ok") is True
         phase_state["blocker"] = result.get("blocker")
         record["deliveries"][phase] = phase_state
         _atomic_write_json(path, record)
         return bool(phase_state["verified"])
 
+    def pending_delivery_paths(self) -> list[Path]:
+        """The durable transport store is the queue; no in-memory admission."""
+        return [path for path in sorted(self.root.glob("*.json"))
+                if _read_json(path)["status"] != "delivered"]
+
     def reconcile(self) -> int:
-        self.core.recover()
-        # A crash after Core admission but before the transport correlation
-        # record is repaired by replaying the same message identity.
-        for pending in sorted(self.root.glob("*.json")):
-            row = _read_json(pending)
-            if row["status"] == "captured":
-                self.admit(row["profile"], row["event"])
-        delivered = 0
-        for path in sorted(self.root.glob("*.json")):
-            with exclusive_file_lock(path, operation="deliver_private_chat_request"):
-                record = _read_json(path)
-                if record["status"] in {"captured", "delivered"}:
-                    continue
-                try:
-                    self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
-                    if record["status"] in {"command_queued", "command_completed", "commission_running"}:
-                        native = self.core.read_request(record["request_ref"])
-                        if native["status"] == "command_queued":
-                            self._deliver(path, record, "admission", native["response"])
-                            continue
-                        record.update(status=native["status"], response=native.get("response"),
-                                      commission_resources=native.get("commission_resources"),
-                                      status_snapshot=native.get("status_snapshot"))
-                    if record["status"] == "accepted":
-                        native = self.core.read_request(record["request_ref"])
+        return sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+
+    def reconcile_request(self, path: Path) -> int:
+        # Repair only this persisted source. Core still owns admission, recovery
+        # and the shared Session queue/fence; transport workers never run models.
+        row = _read_json(path)
+        if row["status"] == "captured":
+            self.admit(row["profile"], row["event"])
+        native_path = self.core.root / f"{row['request_ref']}.json"
+        if native_path.exists():
+            self.core.recover(request_ref=row["request_ref"])
+        with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+            record = _read_json(path)
+            if record["status"] in {"captured", "delivered"}:
+                return 0
+            config: Path | None = None
+
+            def inbox() -> Path:
+                nonlocal config
+                if config is None:
+                    config = self._inbox(record)
+                return config
+
+            try:
+                self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+                if record["status"] in {"command_queued", "command_completed", "commission_running"}:
+                    native = self.core.read_request(record["request_ref"])
+                    if native["status"] == "command_queued":
+                        self._feedback(path, record, inbox=inbox)
+                        self._deliver(path, record, "admission", native["response"], inbox=inbox)
+                        return 0
+                    record.update(status=native["status"], response=native.get("response"),
+                                  commission_resources=native.get("commission_resources"),
+                                  status_snapshot=native.get("status_snapshot"))
+                if record["status"] == "accepted":
+                    native = self.core.read_request(record["request_ref"])
+                    if native.get("agent_target"):
+                        self.bindings.resolve_agent_target(self.bindings.resolve(binding_id=record["binding_id"], **record["source"]), native["agent_target"])
+                    self._feedback(path, record, inbox=inbox)
+                    # Receipt follows persistent Core admission and is
+                    # independent of terminal execution and reply delivery.
+                    turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
+                    # Get already acknowledges admission. Reserve a text
+                    # notification for a real wait or unavailable feedback;
+                    # resume any old attempt with its original exact text.
+                    admission = (record["deliveries"].get("admission") or {}).get("text")
+                    if not admission:
                         if native.get("agent_target"):
-                            self.bindings.resolve_agent_target(self.bindings.resolve(binding_id=record["binding_id"], **record["source"]), native["agent_target"])
-                        # Receipt follows persistent Core admission and is
-                        # independent of terminal execution and reply delivery.
-                        self._deliver(path, record, "admission", "已持久受理到原 Agent 会话；等待原宿主领取。/status 查看持久队列，/project 返回普通项目对话。实时停止暂不支持，请在原宿主处理。" if native.get("agent_target") else "已持久受理；若已有执行，本条会排队。可发送 /status、/stop 或 /new。")
-                        turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
-                        if not turn or turn["status"] not in {"completed", "failed", "interrupted", "expired"}:
-                            continue
+                            admission = "已收到，等待原 Agent 宿主处理。/status 查看状态，/project 返回项目对话。"
+                        elif turn and turn["status"] == "queued":
+                            admission = "正在处理前一条，这条已排队。"
+                        elif (record.get("feedback", {}).get("received") or {}).get("ok") is not True:
+                            admission = "已收到，正在处理。"
+                    if admission:
+                        self._deliver(path, record, "admission", admission, inbox=inbox)
+                    if turn and turn["status"] in {"starting", "running"}:
+                        self._feedback(path, record, inbox=inbox, processing=True)
+                    if not turn or turn["status"] not in TERMINAL_TURN_STATES:
+                        return 0
+                    if turn["status"] == "failed" and turn.get("error_code") == "server_overloaded":
+                        response = manager_failure_reply(turn)[1] + " 原会话已保留。"
+                    else:
                         response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (
                             "本次执行已停止。" if turn["status"] == "interrupted" else
+                            "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
                             "本次执行失败或已过期，原会话已保留；请发送 /status 后再决定是否重试。")
-                    else:
-                        response = _command_text(str(record.get("response_code") or "")) or str(record.get("response") or "")
-                        if record.get("status_snapshot"):
-                            response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
-                    if self._deliver(path, record, "terminal", response):
-                        resources = record.get("commission_resources") or {}
-                        if resources.get("session_id") and resources.get("turn_id"):
-                            first_turn = self.core.controller.store.load_turn(resources["session_id"], resources["turn_id"])
-                            if not first_turn or first_turn["status"] not in {"completed", "failed", "interrupted", "expired"}:
-                                record["status"] = "commission_running"
-                                _atomic_write_json(path, record)
-                                continue
-                            result_text = str((first_turn.get("response") or {}).get("message") or "")
-                            result_text = "委托执行结果：\n" + result_text if first_turn["status"] == "completed" else "委托首轮执行未完成；原 Goal 和回执已保留，请查看状态后决定恢复。"
-                            proposal_id = native.get("proposal_id")
-                            if proposal_id:
-                                result_text += f"\n如需恢复暂停或额度受限的原执行：/resume-commission {proposal_id} --tokens N（N 为包含历史用量的总上限，须大于已用量；不会重开线程）。"
-                            if not self._deliver(path, record, "commission_result", result_text):
-                                continue
-                        config = self._inbox(record)
-                        acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
-                            message_ids=[record["event"]["message_id"]], execute=True)
-                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
-                        record["status"] = "delivered"
-                        _atomic_write_json(path, record)
-                        delivered += 1
-                except (KeyError, ValueError, OSError):
-                    # Keep pending receipts available for actionable recovery.
-                    continue
-        return delivered
+                else:
+                    if record["status"] != "rejected":
+                        self._feedback(path, record, inbox=inbox)
+                    response = (str(record.get("attachment_notice") or "")
+                        or _command_text(str(record.get("response_code") or "")) or str(record.get("response") or ""))
+                    if record.get("status_snapshot"):
+                        response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
+                if self._deliver(path, record, "terminal", response, inbox=inbox):
+                    resources = record.get("commission_resources") or {}
+                    if resources.get("session_id") and resources.get("turn_id"):
+                        first_turn = self.core.controller.store.load_turn(resources["session_id"], resources["turn_id"])
+                        if first_turn and first_turn["status"] in {"starting", "running"}:
+                            self._feedback(path, record, inbox=inbox, processing=True)
+                        if not first_turn or first_turn["status"] not in TERMINAL_TURN_STATES:
+                            record["status"] = "commission_running"
+                            _atomic_write_json(path, record)
+                            return 0
+                        result_text = str((first_turn.get("response") or {}).get("message") or "")
+                        result_text = ("委托执行结果：\n" + result_text if first_turn["status"] == "completed" else
+                            "委托首轮执行超时；原 Goal 和回执已保留，请查看状态后决定恢复。" if first_turn["status"] == "timed_out" else
+                            "委托首轮执行未完成；原 Goal 和回执已保留，请查看状态后决定恢复。")
+                        proposal_id = native.get("proposal_id")
+                        if proposal_id:
+                            result_text += f"\n如需恢复暂停或额度受限的原执行：/resume-commission {proposal_id} --tokens N（N 为包含历史用量的总上限，须大于已用量；不会重开线程）。"
+                        if not self._deliver(path, record, "commission_result", result_text, inbox=inbox):
+                            return 0
+                    config = inbox()
+                    acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
+                        message_ids=[record["event"]["message_id"]], execute=True)
+                    self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
+                    record["status"] = "delivered"
+                    _atomic_write_json(path, record)
+                    return 1
+            except (KeyError, ValueError, OSError):
+                # Keep pending receipts available for actionable recovery.
+                return 0
+        return 0
 
 
 def _command_text(code: str) -> str:
-    return {"unsupported_attachment": "此入口目前只支持文字；图片或文件没有交给模型。请发送文字描述。",
+    return {"unsupported_attachment": "这条消息未提交执行。普通项目或管家对话支持文字与图片；文件、音视频及所选 Agent 的原宿主暂不支持图片。请将文字与图片单独发送，或用 /project 返回项目对话。",
         "no_session": "尚无会话；发送文字即可开始。", "active_session": "正在执行；后续文字会进入同一会话队列。",
         "ready_session": "会话已就绪，可继续发送文字。", "new_session": "已关闭此前会话；下一条文字将开启新会话。",
         "attached_control_unavailable": "原 Agent 宿主尚不支持此处的实时停止或新建会话；原执行没有被停止或替换。请在原宿主处理，/project 返回普通项目对话。",
@@ -326,7 +488,7 @@ def _status_text(snapshot: dict[str, Any], *, help_requested: bool) -> str:
                  f"\n执行器：{markdown_scalar(snapshot['executor_endpoint_id'])}"
                  f"\n观察时间：{markdown_scalar(snapshot['observed_at'])}"
                  "\n工作区、执行器与解绑：本机 Chat → 设置 → Lark。变更或解绑会重新核验授权；已受理工作不会迁移到新会话。"
-                 "\n图片/文件目前未交给模型，请改用文字。")
+                 "\n可直接发送图片或图文消息（PNG/JPEG/GIF/WebP，最多 4 张，单张 5 MB、合计 12 MB）。文件与音视频暂不支持；选择原宿主 Agent 后仅支持文字。")
         if steward:
             text += "\n新委托：/delegate --tokens N 具体目标；读完预览后从原私聊发送完整 /confirm。/cancel 取消预览；/stop-commission 和 /resume-commission 使用原回执中的完整命令。"
     return text

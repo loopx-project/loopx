@@ -422,6 +422,13 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
         await agent._seed_phase(None, cwd=planning_env["LOOPX_PROJECT"])
         listed = await cli(None, ["todo", "list", "--goal-id", "planning-goal", "--role", "agent"])
         todos = {t["todo_id"]: t for t in listed["todos"]}
+        # Read back the exact minimal seed through the real Todo owner. Phase
+        # updates must not add task-decomposition advice to the benchmark task.
+        assert todos[agent._seeded_todo_id]["text"] == (
+            "[P0] Execute benchmark phase 2. Read the exact "
+            "current task from /opt/loopx-benchmark/control/task-phase-002.md; "
+            "inspect the workspace, implement and validate it."
+        )
         if status in {"open", "blocked"}:
             assert agent._seeded_todo_id == original and len(todos) == 1
             assert todos[original]["status"] == status

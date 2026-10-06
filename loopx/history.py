@@ -19,6 +19,7 @@ from .control_plane.goals.activation import (
     normalize_goal_activation_state,
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
@@ -69,7 +70,6 @@ STATUS_NEUTRAL_CLASSIFICATIONS = {
     QUOTA_MONITOR_POLL_CLASSIFICATION,
     *PROMOTION_READINESS_CLASSIFICATIONS,
 }
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 REGISTRY_STATUS_FIELDS = (
     "waiting_on",
     "attention_status",

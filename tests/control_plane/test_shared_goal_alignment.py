@@ -59,9 +59,13 @@ def test_corrupt_legacy_lease_only_blocks_a_selected_claim(tmp_path):
                     project=fixture["project"], registry_path=fixture["registry"], runtime_root=fixture["runtime"])
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("display", ["missing", "stale", "empty"])
-def test_promoted_alignment_does_not_use_the_display(tmp_path, display):
-    from canonical_authority_fixture import initialize_canonical_authority
+def test_promoted_alignment_does_not_use_the_display(tmp_path, monkeypatch, provider, display):
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
     fixture = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
@@ -69,7 +73,7 @@ def test_promoted_alignment_does_not_use_the_display(tmp_path, display):
         "status": "open", "done": False, "text": "Canonical work", "task_class": "advancement_task",
         "archive_state": "active", "source_section": "Agent Todo", "index": 1}
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[record], handoff_mode="soft_claim")
-    initialize_canonical_authority(fixture["runtime"], GOAL_ID, projection, state_path=fixture["state_file"])
+    initialize_canonical_authority(fixture["runtime"], GOAL_ID, projection, state_path=fixture["state_file"], provider=provider)
     if display == "missing":
         fixture["state_file"].unlink()
     elif display == "empty":
@@ -77,6 +81,7 @@ def test_promoted_alignment_does_not_use_the_display(tmp_path, display):
     result = project_shared_goal_alignment(goal_id=GOAL_ID, agent_id="agent-a",
         project=fixture["project"], registry_path=fixture["registry"], runtime_root=fixture["runtime"])
     assert result["unclaimed_eligible_work"] == [{"todo_id": "todo_canonical", "claim_required_before_work": True}]
+    assert result["source_basis"]["todo_basis"]["source_authority"] == f"{provider}_v0"
     assert fixture["state_file"].exists() is (display != "missing")
 
 STATE_HEADER_LINES = [

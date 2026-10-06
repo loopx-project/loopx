@@ -138,7 +138,8 @@ def main() -> None:
         item = next(item for item in json.loads(readback.stdout)["attention_queue"]["items"] if item["goal_id"] == GOAL_ID)
         projected = item.get("agent_lane_next_action") or item["project_asset"]["agent_lane_next_action"]
         assert projected["next_step"] == step
-        assert item["next_action_basis"] == lane["next_action_basis"]
+        assert projected["next_action_basis"] == lane["next_action_basis"]
+        assert "next_action_basis" not in item  # the selected route owns the basis
         markdown = subprocess.run([*command[:command.index("--format")], "--format", "markdown",
             *command[command.index("--format") + 2:]], capture_output=True, text=True, timeout=30)
         assert markdown.returncode == 0 and "next_step: " + step in markdown.stdout

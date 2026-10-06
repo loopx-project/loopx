@@ -54,7 +54,7 @@ FAKE_DSH_RUNNER_SIGNATURE = (
 def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
-    workspace = root / "workspace"
+    workspace = project
     runtime.mkdir(parents=True)
     workspace.mkdir(parents=True)
     (workspace / "docs").mkdir()

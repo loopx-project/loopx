@@ -125,6 +125,7 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | Explore evidence | Explore 拥有 append-only node、edge、finding 与有界 public-safe projection。 |
 | Research evidence 与 cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.zh-CN.md) 组合 generic progress、typed closure 和 explicit binary candidate。CLI summary 与 Lark node summary 共用只读投影，精确 experiment input fingerprint 防止过期结果继续有效。 |
 | Explore planning | 可选 branch planner 保持只读，并把执行交还 quota、Todo、claim 和 lease。 |
+| Turn context 中的证据 | Planning 模式的 turn-start 读取保留有界的显式 Todo/节点证据诊断与既有 exploring 前沿节点；先解析 finding 再裁剪近期历史。这交付决策输入，不代表 §11.5 adoption gate 或模型行为已经验证。 |
 | Model behavior qualification | 真实 function-tool 对话可以验证模型是否读取真实 packet 并选择真实 semantic writeback。 |
 
 ### 5.2 还缺什么

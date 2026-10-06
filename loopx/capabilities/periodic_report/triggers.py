@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from .core import (
+    TRIGGER_DECISION_SCHEMA,
     _boolean,
     _digest,
     _integer,
@@ -19,7 +20,6 @@ from .core import (
 
 
 TRIGGER_REQUEST_SCHEMA = "periodic_report_trigger_request_v0"
-TRIGGER_DECISION_SCHEMA = "periodic_report_trigger_decision_v0"
 
 _REPORTABLE_KINDS = {
     "bounded_segment_milestone",

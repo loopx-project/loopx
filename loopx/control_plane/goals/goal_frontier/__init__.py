@@ -1564,14 +1564,20 @@ def build_goal_frontier_projection_context_from_status(
             latest_agent_vision,
             latest_vision_checkpoint,
         )
-        + outcome_continuity.acceptance_gaps_from_todo_completion_checkpoint(
-            latest_agent_vision,
-            latest_vision_checkpoint,
-            agent_todo_summary=agent_todo_summary,
-            agent_id=agent_id,
-            completed_todo_threshold=completed_todo_replan_threshold(
-                (project_asset or {}).get("execution_profile")
-            ),
+        + (
+            []
+            if ((project_asset or {}).get("execution_profile") or {}).get(
+                "replan_after_effective_turns"
+            ) is not None
+            else outcome_continuity.acceptance_gaps_from_todo_completion_checkpoint(
+                latest_agent_vision,
+                latest_vision_checkpoint,
+                agent_todo_summary=agent_todo_summary,
+                agent_id=agent_id,
+                completed_todo_threshold=completed_todo_replan_threshold(
+                    (project_asset or {}).get("execution_profile")
+                ),
+            )
         )
         + acceptance_gaps_from_held_goal_binding(
             agent_todo_summary, agent_todo_source_items, agent_id=agent_id,

@@ -11,7 +11,7 @@ import subprocess
 SCHEMA = "loopx_ci_job_plan_v1"
 ROOT_DOCS = {"README.md", "README.zh-CN.md", "CHANGELOG.md", "CONTRIBUTING.md"}
 POLICY_PATHS = ("scripts/ci/impact_plan.py", "scripts/ci/review_gate.py", ".github/workflows/python-tests.yml")
-OUTPUTS = ("core_tests", "python_tests", "stage2c_tests", "presentation_tests")
+OUTPUTS = ("core_tests", "backend_tests", "python_tests", "stage2c_tests", "presentation_tests")
 PRESENTATION_ROOTS = ("apps/presentation/dashboard/src/", "apps/presentation/dashboard/public/", "loopx/web/chat/")
 PRESENTATION_SUFFIXES = {".ts", ".tsx", ".js", ".mjs", ".css", ".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff", ".woff2"}
 
@@ -28,7 +28,7 @@ def is_document(path: str) -> bool:
 
 def candidate(changes: list[Change], *, pull_request: bool = True) -> tuple[str, str]:
     if not pull_request:
-        return "full", "main and manual runs retain full qualification"
+        return "full", "non-PR runs retain full qualification"
     if not changes:
         return "full", "empty or unavailable diff is not an exemption"
     for change in changes:
@@ -39,14 +39,14 @@ def candidate(changes: list[Change], *, pull_request: bool = True) -> tuple[str,
     if not code:
         return "docs", "documentation only; existing runtime exemption"
     if all(item.path.startswith(PRESENTATION_ROOTS) and PurePosixPath(item.path).suffix in PRESENTATION_SUFFIXES for item in code):
-        return "presentation", "client-only source/assets; retain frontend build/browser and common checks"
+        return "presentation", "client-only source/assets; retain frontend type-check, build and browser checks"
     return "full", "runtime, prompts, tests, dependencies, build policy or unknown paths may affect backend behavior"
 
 
 def job_flags(kind: str, *, presentation: bool = False) -> dict[str, bool]:
     if kind not in {"docs", "presentation", "full"}:
         raise ValueError("unknown CI change kind")
-    return {"core_tests": kind != "docs", "python_tests": kind == "full",
+    return {"core_tests": kind != "docs", "backend_tests": kind == "full", "python_tests": kind == "full",
             "stage2c_tests": kind == "full", "presentation_tests": kind == "presentation" or presentation}
 
 

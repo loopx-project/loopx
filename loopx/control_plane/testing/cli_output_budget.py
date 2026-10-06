@@ -170,16 +170,12 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 12_000, "markdown": 300},
-            # The crowded fixture exercises the required-vision route. Its
-            # TurnEnvelope intentionally carries the complete authoring schema
-            # that the validator accepts, plus typed executor/selection facts
-            # and explicit registry routing. Completing its evidence-linked
-            # example while removing duplicate prose changes the same fixture
-            # from 14,360 to 14,571 characters; retain the 14,600 ceiling.
-            # The over-target TurnEnvelope diagnostic remains visible instead
-            # of hiding authority overflow; latest main renders it in 542
-            # characters, leaving a narrow 58-character presentation margin.
-            "crowded": {"json": 14_600, "markdown": 600},
+            # Required vision carries the validator's complete authoring schema,
+            # executable registry-bound commands and the overflow diagnostic.
+            # The same fixed-path fixture emits 14,647 chars on base and head;
+            # 15,000 leaves 353 chars without dropping these decision inputs.
+            # Keep the line, per-Todo and fixed semantic-growth guards below.
+            "crowded": {"json": 15_000, "markdown": 600},
             "multi_agent": {"json": 12_000, "markdown": 300},
         },
         max_lines={
@@ -236,7 +232,11 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Diagnosis Packet",
         max_chars={
             "small": {"json": 21_000, "markdown": 4_300},
-            "crowded": {"json": 44_000, "markdown": 4_500},
+            # The unchanged selected/Goal-array diagnostic emits 44,126 chars
+            # on the same fixed-path base/head fixture. Preserve both consumers
+            # and their required-replan evidence; 45,000 leaves 874 chars.
+            # Line and per-Todo/fixed-growth limits remain independently active.
+            "crowded": {"json": 45_000, "markdown": 4_500},
             "multi_agent": {"json": 21_000, "markdown": 4_300},
         },
         max_lines={

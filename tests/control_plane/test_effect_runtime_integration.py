@@ -17,7 +17,6 @@ from loopx.control_plane.coordination.runtime_shadow import (
     RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION,
     bootstrap_coordination_runtime_shadow,
     build_runtime_shadow_source_snapshot,
-    dispatch_coordination_runtime_shadow,
     inspect_coordination_runtime_shadow,
     read_coordination_runtime_shadow_todo_candidate,
     rollback_coordination_runtime_shadow,
@@ -303,6 +302,44 @@ def test_pre_send_connection_failure_does_not_remove_live_locator(
     assert json.loads(info_path.read_text(encoding="utf-8")) == info
 
 
+def test_pre_send_connection_failure_waits_for_retiring_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fingerprint = "c" * 64
+    retiring = {"token": "retiring"}
+    replacement = {"token": "replacement"}
+    observations = iter([retiring, retiring, None, None])
+    requests = []
+
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_read_info",
+        lambda *_args, **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_start_runtime",
+        lambda **_kwargs: replacement,
+    )
+    monkeypatch.setattr(effect_runtime.time, "sleep", lambda _seconds: None)
+
+    def request(info: object, **_kwargs: object) -> dict:
+        requests.append(info)
+        if info == retiring:
+            raise ConnectionRefusedError("fixture retired before send")
+        return {"result": {"ready": True}}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", request)
+
+    assert effect_runtime.effect_runtime_result("runtime.ping", {}) == {"ready": True}
+    assert requests == [retiring, replacement]
+
+
 def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundary(
     tmp_path: Path,
     monkeypatch,
@@ -319,8 +356,8 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         },
     }
     request = {
-        "goal": goal,
-        "runtime_root": tmp_path / "state",
+        "schema_version": "loopx_coordination_runtime_shadow_commit_v0",
+        "runtime_root": str(tmp_path / "state"),
         "goal_id": "shadow-goal",
         "operation_id": "todo-shadow:cross-runtime",
         "event_kind": "todo_claim",
@@ -339,8 +376,12 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         },
     }
 
-    applied = dispatch_coordination_runtime_shadow(**request)
-    replayed = dispatch_coordination_runtime_shadow(**request)
+    applied = effect_runtime.effect_runtime_result(
+        "coordination.runtime_shadow.commit", request,
+    )
+    replayed = effect_runtime.effect_runtime_result(
+        "coordination.runtime_shadow.commit", request,
+    )
     read_candidate = read_coordination_runtime_shadow_todo_candidate(
         goal=goal,
         runtime_root=tmp_path / "state",
@@ -349,10 +390,11 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         projection=request["projection"],
     )
 
-    assert applied["status"] == "failed"
-    assert applied["reason_code"] == "legacy_lineage_read_only"
-    assert replayed["status"] == "failed"
-    assert replayed["reason_code"] == "legacy_lineage_read_only"
+    for result in (applied, replayed):
+        assert result["status"] == "failed"
+        assert result["reason_code"] == "legacy_lineage_read_only"
+        assert result["primary_writeback_preserved"] is True
+        assert result["decision_read_from_shadow"] is False
     assert read_candidate["read_candidate_qualified"] is False
     assert read_candidate["decision_read_from_shadow"] is False
     assert not (tmp_path / "state/authority-shadow/file-v0").exists()

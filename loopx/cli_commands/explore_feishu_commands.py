@@ -26,6 +26,7 @@ from ..extensions.lark.presentation.explore_singleflight import (
     explore_feishu_sync_singleflight,
 )
 from ..extensions.lark.presentation.kanban import DEFAULT_CLI_BIN
+from ..extensions.lark.presentation.sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITIES
 
 
 SubcommandArg = Callable[[argparse.ArgumentParser], None]
@@ -149,8 +150,8 @@ def register_explore_feishu_commands(
     sync.add_argument("--as", dest="identity", default="user", choices=["bot", "user", "auto"])
     sync.add_argument(
         "--sink-visibility",
-        choices=["owner-only", "shared"],
-        default="owner-only",
+        choices=sorted(SINK_VISIBILITIES),
+        default=SINK_VISIBILITY_OWNER_ONLY,
         help="Use shared to redact private links and external ids before writing rows.",
     )
     sync.add_argument(

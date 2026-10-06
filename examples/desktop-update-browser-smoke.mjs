@@ -23,12 +23,20 @@ const server = createServer(async (req, res) => {
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await launchBrowser(loadPlaywright().chromium);
+function deferred() {
+  let resolvePromise;
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
 try {
   await mkdir(output, { recursive: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const calls = [];
   let nativeState = null;
   let nativeActionSettled = Promise.resolve();
+  let nativeActionDelayMs = 150;
   let nativeRuntimeSelection;
   let startupTiming = null;
   let failUpdate = false;
@@ -36,10 +44,35 @@ try {
   let checkUpToDate = false;
   let statusFailure = false;
   let environmentTelemetry = null;
+  let delayedStatus = null;
+  function delayNextStatus(phase) {
+    delayedStatus = {
+      phase,
+      started: deferred(),
+      release: deferred(),
+      returned: deferred(),
+    };
+    return delayedStatus;
+  }
   await page.exposeFunction("nativeInvoke", async (command, args) => {
     if (command === "desktop_update_status") {
       if (statusFailure) throw new Error("Command desktop_update_status not allowed by ACL");
-      return { state: nativeState, runtime_selection: nativeRuntimeSelection, startup: startupTiming, app_version: "0.5.4", rollback_available: true, environment: environmentTelemetry };
+      const result = {
+        state: structuredClone(nativeState),
+        runtime_selection: structuredClone(nativeRuntimeSelection),
+        startup: structuredClone(startupTiming),
+        app_version: "0.5.4",
+        rollback_available: true,
+        environment: structuredClone(environmentTelemetry),
+      };
+      if (delayedStatus && delayedStatus.phase === result.state?.phase) {
+        const request = delayedStatus;
+        delayedStatus = null;
+        request.started.resolve();
+        await request.release.promise;
+        request.returned.resolve();
+      }
+      return result;
     }
     calls.push({ command, args });
     if (checkFailure && args.action === "check") return { phase: "error", details: { code: checkFailure } };
@@ -48,7 +81,11 @@ try {
       return nativeState;
     }
     if (failUpdate) throw new Error("private diagnostic must not be displayed");
-    nativeActionSettled = new Promise((done) => setTimeout(done, 150)).then(() => {
+    nativeState = {
+      phase: args.action === "check" ? "checking" : args.action === "repair" ? "installing_runtime" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : args.action === "rollback" ? "installing_app" : args.action === "restart" ? "restart_required" : "downloading",
+      details: { version: "0.5.5", channel: args.channel },
+    };
+    nativeActionSettled = new Promise((done) => setTimeout(done, nativeActionDelayMs)).then(() => {
       nativeState = {
         phase: args.action === "check" ? "available" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : "restart_required",
         details: { version: "0.5.5", channel: args.channel },
@@ -75,9 +112,19 @@ try {
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
   assert.deepEqual(calls.map((call) => call.args?.action), ["check"], "auto-check must not mutate installation");
   await page.screenshot({ path: resolve(output, "update-panel.png") });
+  nativeActionDelayMs = 1500;
+  const delayedWorkspaceStatus = delayNextStatus("downloading");
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await delayedWorkspaceStatus.started.promise;
+  await nativeActionSettled;
   await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).waitFor();
+  delayedWorkspaceStatus.release.resolve();
+  await delayedWorkspaceStatus.returned.promise;
+  await page.waitForTimeout(50);
+  assert.equal(await page.getByRole("button", { name: "更新并准备重启", exact: true }).count(), 0, "a delayed workspace status must not replace restart_required");
+  assert.equal(await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).count(), 1);
   assert.deepEqual(calls.map((call) => call.args?.action), ["check", "apply"]);
+  nativeActionDelayMs = 150;
   await page.reload();
   await page.getByRole("button", { name: /重启完成更新/ }).waitFor();
   assert.deepEqual(calls.map((call) => call.args?.action), ["check", "apply"], "reload must recover native progress, not repeat install");
@@ -234,6 +281,19 @@ try {
   await page.locator("#update").click();
   await page.getByRole("button", { name: "更新并准备重启 / Install update" }).waitFor();
   assert.deepEqual(calls.at(-1).args, { action: "check", channel: "main" });
+  nativeActionDelayMs = 1500;
+  const applyCount = calls.filter((call) => call.args?.action === "apply").length;
+  const delayedBootStatus = delayNextStatus("downloading");
+  await page.locator("#update").click();
+  await delayedBootStatus.started.promise;
+  await nativeActionSettled;
+  await page.getByRole("button", { name: "重启完成更新 / Restart" }).waitFor();
+  delayedBootStatus.release.resolve();
+  await delayedBootStatus.returned.promise;
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator("#update").innerText(), "重启完成更新 / Restart", "a delayed boot status must not replace restart_required");
+  assert.equal(calls.filter((call) => call.args?.action === "apply").length, applyCount + 1, "the boot page must issue Apply once");
+  nativeActionDelayMs = 150;
   await page.reload();
   await page.getByText("恢复与更新 / Recovery & updates").click();
   await page.waitForFunction(() => document.querySelector("#channel").value === "main");

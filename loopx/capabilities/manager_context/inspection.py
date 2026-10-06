@@ -164,6 +164,7 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
 def manager_index(context: dict[str, Any]) -> dict[str, Any]:
     """A small directory, never a second mutable progress store."""
     read_tool = CONTEXT_TOOL_NAME if context.get("scope") == "owner_goal" else TOOL_NAME
+    execution = context.get("context_execution")
     return {
         "schema_version": "manager_evidence_index_v1",
         "snapshot_id": context.get("snapshot_id"),
@@ -191,6 +192,8 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
             if row.get("activation_state") != "stopped"
         ],
         "context_delegation": context.get("context_delegation"),
+        **({"context_execution": execution} if isinstance(execution, dict)
+           and (execution.get("bindings") or execution.get("available") is False) else {}),
         "evidence_sources": context.get("evidence_sources", [])[:12],
         "evidence_source_count": len(context.get("evidence_sources", [])),
         "agent_discovery": {"tool": read_tool, "view": "agents", "scope": "permitted_registry",

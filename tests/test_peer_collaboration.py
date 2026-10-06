@@ -789,6 +789,64 @@ def test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest(scenario):
     assert readiness["content_supplied"] is False
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 workspace input path regression")
+def test_peer_read_qualifies_long_workspace_input(scenario):
+    import shutil
+
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+    root, registry, brief, *_ = scenario
+    long_ref = "inputs/" + "/".join(("a" * 65, "b" * 65, "c" * 65))
+    long_directory = windows_extended_path(root / long_ref)
+    long_directory.mkdir(parents=True)
+    outside = root.parent / "outside-inputs"
+    try:
+        content = b"before\r\n\x1aafter\r\n\x00\xff"
+        artifact = long_directory / "packet.bin"
+        changed = long_directory / "changed.bin"
+        artifact.write_bytes(content)
+        changed.write_bytes(content)
+        expected = hashlib.sha256(content).hexdigest()
+        outside.mkdir()
+        (outside / "secret.bin").write_bytes(b"outside-secret")
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(long_directory / "junction"), str(outside)],
+            check=True, capture_output=True, text=True,
+        )
+        assert len(str(root / long_ref / "packet.bin")) > 260
+        inputs = [
+            {"ref": long_ref + "/packet.bin", "description": "Long input", "sha256": expected},
+            {"ref": long_ref + "/changed.bin", "description": "Changed input", "sha256": "0" * 64},
+            {"ref": long_ref + "/missing.bin", "description": "Missing input", "sha256": expected},
+            {"ref": long_ref + "/junction/secret.bin", "description": "Outside input",
+             "sha256": hashlib.sha256(b"outside-secret").hexdigest()},
+        ]
+        packet = root / "long-input-brief.json"
+        packet.write_text(json.dumps({**brief, "inputs": inputs}), encoding="utf-8")
+        sent = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+                   "--operation-id", "long-workspace-input", "--brief-file", str(packet))
+        item = cli(root, registry, "reviewer", "read")["items"][0]
+        assert item["request_id"] == sent["request_id"]
+        readiness = item["input_readiness"]
+        assert [row["status"] for row in readiness] == [
+            "available", "changed", "unavailable", "outside_workspace"
+        ]
+        assert readiness[0]["observed_sha256"] == readiness[0]["expected_sha256"] == expected
+        assert readiness[1]["observed_sha256"] == expected
+        assert readiness[3]["observed_sha256"] is None
+        assert all(row["content_supplied"] is False for row in readiness)
+        assert input_readiness(registry, "delivery", {"inputs": [{"ref": "../outside.txt"}]})[0][
+            "status"
+        ] == "outside_workspace"
+    finally:
+        long_tree = windows_extended_path(root / "inputs" / ("a" * 65))
+        assert long_tree.resolve().is_relative_to(windows_extended_path(root).resolve())
+        shutil.rmtree(long_tree)
+        if outside.exists():
+            assert outside.resolve().parent == root.parent.resolve()
+            shutil.rmtree(outside)
+
+
 def test_default_local_forwarding_keeps_revocations_after_original_delivery(external_scenario):
     root, registry, brief, _store, session, _turn, parent = external_scenario
     policy_path = _root(root) / "policy.json"

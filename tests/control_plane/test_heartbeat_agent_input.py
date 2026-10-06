@@ -61,7 +61,7 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
     assert "quota claim/lease and workspace contract plus repository rules" in body
     assert "Follow todo continuation policy" in body
     assert "Task-scoped coordination grants no authority over other agents" in body
-    assert "Keep scope in the heartbeat prompt, not todo metadata" in body
+    assert "Keep scope in this prompt, not todo metadata" in body
     for capability in ("filesystem_read", "filesystem_write", "shell"):
         assert capability in body
 

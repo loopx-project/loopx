@@ -357,8 +357,9 @@ loopx refresh-state \
 
 This boundary is valid only for the selected agent-bound or unclaimed open
 advancement Todo while it is still in flight. It permits a bound within-Todo
-step, but rejects Todo completion, autonomous replan writeback, and any outcome other
-than `outcome_progress`. Its checkpoint has `decision=not_required`,
+step (`--next-action`, at most 1200 characters after trimming), but rejects Todo
+completion, a durable shared Next Action update, autonomous replan writeback,
+and any outcome other than `outcome_progress`. Its checkpoint has `decision=not_required`,
 `required=false`, and a typed
 `in_flight_continuation` trigger carrying the Todo id. The next quota decision
 can therefore preserve causal ownership without manufacturing another vision
@@ -366,6 +367,13 @@ decision merely because the scheduler woke up. Agents must start from
 `interaction_contract.cli_channel.next_cli_actions[0]` and preserve its
 projected boundary and identity flags; reconstructing a generic
 `semantic_closeout` command discards that continuity contract.
+
+If the work actually replanned or completed the Todo, explicitly choose
+`semantic_closeout` and provide its required vision checkpoint. Do not simply
+remove the replan ACK to make a real replan pass as in-flight work. Conversely,
+ordinary within-Todo progress must not add `--autonomous-replan-recorded`.
+Keep detailed experiment evidence in referenced artifacts; the bounded next
+step is a continuation instruction, not the experiment report.
 
 Omitting `--delivery-boundary` remains strict `semantic_closeout`. Todo
 completion, `outcome_gap`, `primary_goal_outcome`, durable route changes,

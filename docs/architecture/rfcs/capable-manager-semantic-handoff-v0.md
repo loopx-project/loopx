@@ -799,6 +799,13 @@ execution or approval authority. Replacing a tenant-controlled App on another
 machine requires a freshly authorized App; credentials, source transcripts and
 permission bindings do not travel as a workstation backup.
 
+**Ordinary writable-project prompt checkpoint (S5):** project Turns use their
+authorized workspace, AGENTS and skills without manager Goal discovery, drafting
+or context-delegation instructions. Session, grants and the existing response
+envelope remain unchanged; manager and execution guidance retain their prior
+contract. Native fake-host tests qualify instruction routing and continuity,
+not source-reading success, model latency or sustained installed operation.
+
 Deliver these through M1/M3 and the existing S5 journey, without adding a parallel
 milestone or treating a periodic heartbeat as realtime transport:
 
@@ -820,6 +827,15 @@ provider failure where available; unexpected local preparation errors use
 and an already terminal result win over a late preparation error. Restoring the
 runtime must not replay a failed request; the same ingress identity returns the
 same failure, while a fresh explicit request can run after repair.
+
+**Model capacity failures (S5/S10):** the Codex adapter preserves the typed
+`serverOverloaded` terminal error as `server_overloaded`; arbitrary upstream
+prose cannot establish that category. Lark private conversations and manager
+replies show a safe busy-model explanation and ask users to check existing
+results before choosing a later retry. The original Session, Turn and delivery
+receipt remain authoritative. This adds no automatic replay, model fallback or
+replacement thread, and does not prove availability or absence of earlier
+effects. Retryable notifications still wait for the actual terminal outcome.
 
 **Stopped workers returning late (A23, GQ08):** context preparation and provider
 reads can outlive the bounded interrupt wait. Before dispatch and when a provider

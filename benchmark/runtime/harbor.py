@@ -54,7 +54,8 @@ class BenchmarkCodex(CodexOffline):
         validation_command=None,
         turn_timeout_sec=None,
         scheduler_timeout_sec=5080,
-        replan_after_todos=3,
+        replan_after_todos=None,
+        replan_after_turns=None,
         task_entry="seeded-todo",
         planning_timeout_sec=300,
         **kwargs,
@@ -77,12 +78,33 @@ class BenchmarkCodex(CodexOffline):
             raise ValueError(
                 "scheduler timeout must exceed turn timeout plus cleanup allowance"
             )
-        self.replan_after_todos = int(replan_after_todos)
+        if replan_after_turns is not None and replan_after_todos is not None:
+            raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
+        if replan_after_turns is not None:
+            if (type(replan_after_turns) is not int or
+                    not 1 <= replan_after_turns <= 5):
+                raise ValueError("replan_after_turns must be an integer between 1 and 5")
+            if not self.execution.uses_loopx:
+                raise ValueError("replan_after_turns requires a LoopX execution mode")
+        self.replan_after_turns = replan_after_turns
+        self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
             raise ValueError("replan_after_todos must be between 1 and 5")
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
         super().__init__(*args, **kwargs)
+
+    def _replan_configuration(self) -> tuple[str, str, int]:
+        # Transport existing Goal fields; the typed control plane owns counting.
+        if self.replan_after_turns is not None:
+            return ("replan_after_effective_turns", "--execution-replan-after-turns",
+                    self.replan_after_turns)
+        return ("replan_after_completed_todos", "--execution-replan-after-todos",
+                self.replan_after_todos)
+
+    def _replan_receipt(self) -> dict[str, int]:
+        key, _, value = self._replan_configuration()
+        return {key: value}
 
     @staticmethod
     def name() -> str:
@@ -230,7 +252,7 @@ class BenchmarkCodex(CodexOffline):
             "home_scope": "trial",
             "login_shell_node_path": _BASH_ENV,
             "scheduler_terminal_packet_compatibility": True,
-            "replan_after_completed_todos": self.replan_after_todos,
+            **self._replan_receipt(),
         }
         await self.exec_as_agent(
             environment,
@@ -309,6 +331,7 @@ class BenchmarkCodex(CodexOffline):
     async def _prepare_phase(
         self, environment: BaseEnvironment, instruction: str, *, cwd: str
     ) -> None:
+        key, option, expected = self._replan_configuration()
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
         )
@@ -352,8 +375,8 @@ class BenchmarkCodex(CodexOffline):
                     "harbor-task-workspace",
                     "--boundary-authority-decision-id",
                     "trial-workspace",
-                    "--execution-replan-after-todos",
-                    str(self.replan_after_todos),
+                    option,
+                    str(expected),
                     "--agent-work-mode",
                     f"{_AGENT_ID}=active",
                     "--execute",
@@ -368,8 +391,8 @@ class BenchmarkCodex(CodexOffline):
                     "configure-goal",
                     "--goal-id",
                     _GOAL_ID,
-                    "--execution-replan-after-todos",
-                    str(self.replan_after_todos),
+                    option,
+                    str(expected),
                     "--execute",
                 ],
                 cwd=cwd,
@@ -382,17 +405,17 @@ class BenchmarkCodex(CodexOffline):
             environment, ["configure-goal", "--goal-id", _GOAL_ID], cwd=cwd,
         )
         configured_state = cadence.get("after") or cadence.get("before") or {}
-        configured = configured_state.get("execution_profile", {}).get("replan_after_completed_todos")
-        if configured != self.replan_after_todos:
+        configured = configured_state.get("execution_profile", {}).get(key)
+        if configured != expected:
             raise RuntimeError(
-                f"replan cadence readback mismatch: expected {self.replan_after_todos}, got {configured!r}"
+                f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
             )
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:
         text = (
             f"[P0] Execute benchmark phase {self._phase_number}. Read the exact "
             f"current task from {self._task_document}; inspect the workspace, implement and "
-            "validate it, and create bounded successor Todos for remaining work."
+            "validate it."
         )
         if self._seeded_todo_id:
             listed = await self._loopx(environment, [
@@ -563,7 +586,7 @@ class BenchmarkCodex(CodexOffline):
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
             "home_scope": "trial",
-            "replan_after_completed_todos": self.replan_after_todos,
+            **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
         }
         self._write_aggregate_trajectory()

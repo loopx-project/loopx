@@ -226,6 +226,16 @@ loopx configure-goal \
 
 在 spawn 权限仍关闭时这仅是分析。用 `--no-explore-harness-enabled` 再次关闭门，或用 `--clear-explore-harness-profile` 让各 planner 请求自己的 profile。不带 `--execute` 的 preview 显示确切 orchestration delta，并保留无关的 `spawn_policy` keys。
 
+Planning 模式的 `explore turn-context` 在既有 turn-start hook 中提供决策输入：
+建议分支保留显式 Todo/节点关联的有界 `typed_evidence_audit`，同时返回最多三个
+既有 exploring 前沿节点。先解析关联 finding，再裁剪近期历史，避免无关的新结果
+遮掉旧反证。诊断不改变 planner 分数；未知关联可见，省略计数针对有界 audit，
+不代表完整日志。通过 `todo update --goal-id <id> --agent-id <agent> --todo-id <todo>
+--explore-result-node-ref <node>` 关联既有证据，仍遵守普通 update/lease 契约。
+实验前据此解释路线和有区分力的 probe；条件变化或不确定性可以支持重试。
+这些是决策指引，没有新增 adoption/writeback gate、自动 successor 或 spawn 权限。
+读取上下文不证明模型已经采纳证据或取得效果提升；短视图不足时读取完整 planner/summary。
+
 planner 把这个边界折叠进 packet 的 `orchestration_gate` 节，行为如下：
 
 | 边界状态 | Planner 行为 |

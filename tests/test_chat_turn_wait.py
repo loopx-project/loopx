@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 from unittest.mock import Mock
+
+import pytest
 
 from loopx.chat_runtime import ChatRuntimeController
 
@@ -27,11 +30,31 @@ def test_wait_for_turn_uses_managed_completion_event() -> None:
     assert runtime.store.load_turn.call_count == 2
 
 
-def test_wait_for_turn_performs_final_fallback_read_at_deadline() -> None:
+def test_wait_for_turn_performs_final_fallback_read_at_deadline(monkeypatch) -> None:
     runtime = _runtime()
     runtime.store.load_turn.side_effect = [{"status": "running"}, {"status": "completed"}]
+    # The first read is before the deadline; the fallback read is exactly at it.
+    clock = Mock(side_effect=[0.0, 0.0, 0.001])
+    sleep = Mock()
+    monkeypatch.setattr("loopx.chat_runtime.time", SimpleNamespace(monotonic=clock, sleep=sleep))
 
     turn = runtime.wait_for_turn(session_id="session", turn_id="turn", timeout_sec=0.001)
 
     assert turn["status"] == "completed"
     assert runtime.store.load_turn.call_count == 2
+    sleep.assert_called_once_with(0.001)
+
+
+def test_wait_for_turn_refuses_unfinished_initial_read_at_deadline(monkeypatch) -> None:
+    runtime = _runtime()
+    runtime.store.load_turn.return_value = {"status": "running"}
+    sleep = Mock()
+    monkeypatch.setattr("loopx.chat_runtime.time", SimpleNamespace(
+        monotonic=Mock(side_effect=[0.0, 0.001]), sleep=sleep,
+    ))
+
+    with pytest.raises(TimeoutError, match="chat turn wait timed out"):
+        runtime.wait_for_turn(session_id="session", turn_id="turn", timeout_sec=0.001)
+
+    assert runtime.store.load_turn.call_count == 1
+    sleep.assert_not_called()

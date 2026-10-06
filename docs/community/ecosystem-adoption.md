@@ -47,19 +47,46 @@ owner submitting a directory entry.
   against real services as not qualified. The historical single-node stack
   result does not establish those current, broader acceptances.
   Checked October 4, 2026.
-- **GoTry** (Danceiny) — uses LoopX goals, Codex task bindings and heartbeats
-  for multiple development lanes. [Issue #18](https://github.com/Danceiny/gotry/issues/18)
-  records setup; [PR #187](https://github.com/Danceiny/gotry/pull/187), merged,
-  records delivery validation. **Status: reported development-workflow use**;
-  this does not establish a LoopX dependency in the travel application's runtime.
-- **mimofan** (XiaomingX) — organizes UI/engine repairs through LoopX Todos.
-  [PR #738](https://github.com/XiaomingX/mimofan/pull/738) explicitly names that
-  workflow and is merged. **Status: development-workflow evidence**.
+- **GoTry** (Danceiny) — [issue #18](https://github.com/Danceiny/gotry/issues/18),
+  opened August 28, 2026, reports LoopX goals, Codex task bindings and initial
+  heartbeat acknowledgements. A [September 19 follow-up](https://github.com/Danceiny/gotry/issues/18#issuecomment-5740371337)
+  reports continued engineering automation and independent worktree delivery.
+  [PR #187](https://github.com/Danceiny/gotry/pull/187) merged September 7; its
+  reported local checks and [successful exact-head CI](https://github.com/Danceiny/gotry/actions/runs/34110550580)
+  concern a product delivery slice, whose body still lists real-inventory UAT
+  as open. Merge and CI success do not close that acceptance.
+  The [October 2 checkpoint](https://github.com/Danceiny/gotry/issues/18#issuecomment-5950941798)
+  retains real-user evidence gates; issues [#20](https://github.com/Danceiny/gotry/issues/20),
+  [#22](https://github.com/Danceiny/gotry/issues/22) and
+  [#142](https://github.com/Danceiny/gotry/issues/142) remain open at review.
+  **Status: dated, author-reported development-workflow use**. This does not
+  establish a LoopX dependency in the travel application's runtime, independently
+  reproduce the scheduler, or prove product acceptance. Checked October 5, 2026.
+- **mimofan** (XiaomingX) — [PR #738](https://github.com/XiaomingX/mimofan/pull/738),
+  merged August 10, 2026, attributes UI/engine repairs to LoopX Todos. The changes
+  fix `/monitor` persistence, `/balance` readback and `/freeze` false success;
+  the PR's build/test results are author-reported. The checked main
+  [monitor implementation](https://github.com/XiaomingX/mimofan/blob/000c0417ee5db8ce43eeb476b22aa83fae17780b/crates/tui/src/commands/groups/core/issue_monitor.rs)
+  retains the application's own `MonitorStore` path. **Status: dated, author-reported
+  development workflow; UI fixes merged**. This does not establish a LoopX
+  dependency in mimofan's runtime; ongoing LoopX use, scheduler behavior and
+  current-version compatibility were not independently verified. Checked October 5, 2026.
 - **Meta-RLR** (hk20013106) — [PR #17](https://github.com/hk20013106/RLR/pull/17),
-  merged, adds a CLI/JSON maintenance boundary. LoopX owns maintenance
-  goal/todo/evidence/monitor/replan state while `research_loop` owns scientific
-  state. **Status: maintenance integration merged**; later auto-wake
-  [PR #26](https://github.com/hk20013106/RLR/pull/26) is closed unmerged.
+  merged August 13, 2026, adds the external CLI/JSON maintenance boundary;
+  scientific state remains owned by `research_loop`. Closed, unmerged
+  [PR #26](https://github.com/hk20013106/RLR/pull/26) was superseded by
+  [PR #34](https://github.com/hk20013106/RLR/pull/34), merged August 23, 2026.
+  The checked main [root entry point](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/research_loop_v04.py)
+  composes an outer maintenance adapter. Its [activation and failure boundary](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake.py)
+  requires explicit `RLR_META_RLR_AUTOWAKE_CONFIG`, classifies eligible failures
+  and resolves verified repair provenance; the [adapter](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/autowake_adapter.py)
+  preserves the original failure if maintenance is unavailable. The
+  [LoopX boundary](https://github.com/hk20013106/RLR/blob/214b8a143e9007ea6750413bad0eac7d30d675fc/src/rlr_maintenance/loopx_cli.py)
+  uses external JSON CLI calls. [Windows test jobs](https://github.com/hk20013106/RLR/actions/runs/32649860637)
+  succeeded at PR #34's exact head; its continuous failure/repair/resume scenario
+  remains an author-reported result. **Status: optional maintenance and auto-wake
+  integration merged**. Current LoopX compatibility and sustained research use
+  were not independently reproduced. Checked October 5, 2026.
 - **LoopX Console** (xielixing) — a third-party BitFun MiniApp for GitHub issue
   repair. Independent [v3.9.29](https://github.com/xielixing/loopx-console/releases/tag/v3.9.29)
   was published August 18, 2026, with a MiniApp ZIP asset.
@@ -73,10 +100,19 @@ owner submitting a directory entry.
   are separate evidence; the ZIP, real host execution, current LoopX compatibility
   and sustained use were not independently tested. OpenBitFun upstream inclusion
   remains a separate proposal below. Checked October 5, 2026.
-- **zyra** (BingruL) — its [packaging configuration](https://github.com/BingruL/zyra/blob/fix/execution-timeouts-and-diagnostics/pyproject.toml)
-  includes an embedded LoopX runtime and CLI entry points.
-  **Status: source and packaging integration observed**; deployment and
-  sustained runtime use were not verified.
+- **zyra** (BingruL) — the checked default branch is
+  `fix/execution-timeouts-and-diagnostics`, pinned here to the September 19, 2026
+  [source snapshot](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/pyproject.toml).
+  Packaging includes the embedded LoopX modules and CLI entry points. Its
+  [source manifest](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/loopx_runtime/SOURCE-MANIFEST.json)
+  pins **LoopX v0.2.13**; the listed source files match the upstream tag's tree.
+  The [runtime resolver](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/zyra_integrations/loopx/runtime/resolver.py)
+  requires the embedded source or a Zyra-owned installed distribution, without
+  an archive fallback. **Status: pinned source and packaging integration observed**.
+  No GitHub release or tag was listed at review; this does not establish whether
+  a package was published elsewhere. Wheel installation, live Web/API execution,
+  compatibility with current LoopX and sustained use were not independently
+  verified. Checked October 5, 2026.
 - **Hufu** (Blicae8917) — [PR #70](https://github.com/Blicae8917/hufu/pull/70),
   merged August 23, 2026, adds an opt-in LoopX v0.5.2 RunOnce Consumer.
   The checked main snapshot [exports the consumer and its ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts);
@@ -309,7 +345,11 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - Scoped update: **2026-10-04–05**, rechecking OpenViking, NoKV, Hufu and
   benjamin-plugins against current public PR/issue states and pinned source files.
   AAOP's historical pilot/retirement and LoopX Console's independent release,
-  historical CLI pin and separate OpenBitFun proposal were reconciled on October 5.
+  historical CLI pin, zyra's default branch and embedded source pin, and the separate
+  OpenBitFun proposal were reconciled on October 5. GoTry's dated workflow reports
+  were separated from its open product acceptance. Meta-RLR's merged auto-wake
+  successor and current source wiring were reconciled with its historical PRs.
+  mimofan's dated workflow attribution was separated from its application runtime.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.

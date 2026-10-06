@@ -48,7 +48,10 @@ def explore_turn_context(
             explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
         )
         projection = build_explore_result_projection(
-            events, goal_id=goal_id, finding_limit=3, mermaid_node_limit=3
+            # Resolve explicit Todo links before the typed output budget is
+            # applied. New unrelated findings must not hide an older refutation.
+            events, goal_id=goal_id, finding_limit=len(events) if gate["enabled"] else 3,
+            mermaid_node_limit=3,
         )
     if gate["enabled"]:
         todos = list_goal_todos(

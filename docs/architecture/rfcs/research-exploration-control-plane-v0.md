@@ -144,6 +144,7 @@ milestone status.
 | Explore evidence | Explore owns append-only nodes, edges, findings, and bounded public-safe projections. |
 | Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
+| Evidence in turn context | Planning-mode turn-start reads retain bounded explicit Todo/node evidence diagnostics and existing exploring frontier nodes. Findings are resolved before recent-history truncation. This delivers decision input, not the §11.5 adoption gate or proof of model behavior. |
 | Model behavior qualification | Real function-tool conversations can test whether a model reads an actual packet and selects a real semantic writeback. |
 
 ### 5.2 What is missing

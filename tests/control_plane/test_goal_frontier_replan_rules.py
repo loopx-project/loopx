@@ -19,9 +19,11 @@ from loopx.control_plane.goals.goal_frontier.replan_rules import (
     select_goal_frontier_replan_rule,
 )
 from loopx.control_plane.todos.addition import require_replan_successor_scope
+from loopx.control_plane.goals.goal_frontier.long_todo_chain import (
+    long_todo_chain_successor_checkpoints,
+)
 from loopx.control_plane.todos.frontier_revision import (
     TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION,
-    advancement_frontier_revision_from_index,
     build_advancement_frontier_revision_index,
 )
 from loopx.control_plane.todos.summary_item import compact_todo_summary_item
@@ -337,58 +339,38 @@ def test_frontier_revision_index_preserves_complete_agent_lane_semantics() -> No
         },
     ]
     original = build_advancement_frontier_revision_index(source_items)
-    current_revision = advancement_frontier_revision_from_index(
-        original,
-        agent_id="current-agent",
-    )
-    unclaimed_revision = advancement_frontier_revision_from_index(
-        original,
-        agent_id="new-agent",
-    )
-    all_revision = advancement_frontier_revision_from_index(original, agent_id=None)
-    assert current_revision is not None and current_revision[2] is True
-    assert unclaimed_revision is not None and unclaimed_revision[2] is True
-    assert all_revision is not None and all_revision[2] is True
+    current_revision = original["by_agent"][0]
+    assert current_revision["agent_id"] == "current-agent"
+    unclaimed_revision = original["unclaimed"]
+    all_revision = original["all"]
+    assert current_revision["complete"] is True
+    assert unclaimed_revision["complete"] is True
+    assert all_revision["complete"] is True
 
     other_agent_change = deepcopy(source_items)
     other_agent_change[1]["priority"] = "P0"
     changed_other = build_advancement_frontier_revision_index(other_agent_change)
-    assert advancement_frontier_revision_from_index(
-        changed_other,
-        agent_id="current-agent",
-    ) == current_revision
-    assert advancement_frontier_revision_from_index(
-        changed_other,
-        agent_id="new-agent",
-    ) == unclaimed_revision
-    assert advancement_frontier_revision_from_index(
-        changed_other,
-        agent_id=None,
-    ) != all_revision
+    assert changed_other["by_agent"][0] == current_revision
+    assert changed_other["unclaimed"] == unclaimed_revision
+    assert changed_other["all"] != all_revision
 
     unclaimed_change = deepcopy(source_items)
     unclaimed_change[2]["priority"] = "P0"
     changed_unclaimed = build_advancement_frontier_revision_index(unclaimed_change)
-    assert advancement_frontier_revision_from_index(
-        changed_unclaimed,
-        agent_id="current-agent",
-    ) != current_revision
-    assert advancement_frontier_revision_from_index(
-        changed_unclaimed,
-        agent_id="new-agent",
-    ) != unclaimed_revision
+    assert changed_unclaimed["by_agent"][0] != current_revision
+    assert changed_unclaimed["unclaimed"] != unclaimed_revision
 
 
 def test_frontier_revision_index_rejects_malformed_agent_rows() -> None:
-    assert advancement_frontier_revision_from_index(
-        {
+    assert long_todo_chain_successor_checkpoints(
+        _long_chain_source_items(), agent_id="current-agent", triggers=[],
+        obligation_id="replan-test", candidates=[], frontier_revision_index={
             "schema_version": TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION,
             "all": {"complete": False},
             "unclaimed": {"complete": False},
             "by_agent": "not-a-list",
         },
-        agent_id="current-agent",
-    ) == (None, None, False)
+    ) is None
 
 
 def test_todo_succession_gap_prefers_exact_lifecycle_settlement() -> None:

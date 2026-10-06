@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -326,20 +327,17 @@ def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
 
 @contextlib.contextmanager
 def _stable_budget_fixture_root(root: Path):
-    """Keep absolute-path fields stable across pytest and xdist temp layouts."""
+    """Keep lexical and resolved fixture paths independent of runner layout."""
 
-    root.mkdir(parents=True, exist_ok=True)
     suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    alias = Path("/tmp") / f"loopx-cli-budget-{suffix}"
-    if alias.exists() or alias.is_symlink():
-        if not alias.is_symlink():
-            raise RuntimeError(f"refusing to replace non-symlink fixture root: {alias}")
-        alias.unlink()
-    alias.symlink_to(root, target_is_directory=True)
+    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
+    if fixture.exists() or fixture.is_symlink():
+        raise RuntimeError(f"refusing to replace existing fixture root: {fixture}")
+    fixture.mkdir()
     try:
-        yield alias
+        yield fixture
     finally:
-        alias.unlink(missing_ok=True)
+        shutil.rmtree(fixture)
 
 
 def _surface_commands(
@@ -805,6 +803,34 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         else:
             assert classification.qualification == "explicit_cold_path_exception"
             assert classification.surface_id is None
+
+
+def test_stable_budget_fixture_uses_an_owned_physical_short_root(tmp_path: Path) -> None:
+    outer = tmp_path / ("nested-runner-" + "p" * 128)
+    with _stable_budget_fixture_root(outer) as fixture:
+        assert not fixture.is_symlink()
+        assert fixture.resolve().parent == Path("/tmp").resolve()
+        (fixture / "owned.json").write_text("{}", encoding="utf-8")
+    assert not fixture.exists()
+    assert not outer.exists()
+
+
+def test_stable_budget_fixture_preserves_an_existing_directory(tmp_path: Path) -> None:
+    root = tmp_path / "foreign-directory"
+    suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
+    fixture.mkdir()
+    marker = fixture / "foreign.json"
+    marker.write_text("preserve", encoding="utf-8")
+    try:
+        try:
+            with _stable_budget_fixture_root(root):
+                raise AssertionError("existing fixture must not be replaced")
+        except RuntimeError:
+            pass
+        assert marker.read_text(encoding="utf-8") == "preserve"
+    finally:
+        shutil.rmtree(fixture)
 
 
 def test_real_cli_output_stays_inside_baseline_and_growth_contracts(

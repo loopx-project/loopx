@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from .ownership import MaterialProjectScope, material_owner_fields
+
 from ._validation import (
     capability_contract,
     compact_text,
@@ -31,7 +33,8 @@ def _required_bool(value: Any, *, field: str) -> bool:
 
 def build_material_intake_ranking_settlement(
     *,
-    goal_id: str,
+    goal_id: str | None = None,
+    project_scope: MaterialProjectScope | None = None,
     settlement_id: str,
     material_ref: str,
     observed_at: str,
@@ -176,7 +179,7 @@ def build_material_intake_ranking_settlement(
 
     settlement: dict[str, Any] = {
         "schema_version": MATERIAL_INTAKE_RANKING_SETTLEMENT_SCHEMA_VERSION,
-        "goal_id": compact_token(goal_id, field="goal_id"),
+        **material_owner_fields(goal_id=goal_id, project_scope=project_scope),
         "settlement_id": compact_token(settlement_id, field="settlement_id"),
         "material_ref": normalized_material_ref,
         "observed_at": iso_timestamp(observed_at, field="observed_at"),
@@ -212,7 +215,7 @@ def build_material_intake_ranking_settlement(
             "ranked_membership_verified": membership_verified,
         },
         "visibility": "public_safe",
-        "capability": capability_contract(packet_role="intake_ranking_settlement"),
+        "capability": capability_contract(packet_role="intake_ranking_settlement", project_scoped=project_scope is not None),
         "raw_content_captured": False,
         "private_locations_captured": False,
     }

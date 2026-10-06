@@ -32,7 +32,7 @@ def heartbeat_peer_admission_prompt_revision(text: str) -> str | None:
     block = (
         "Follow the current quota claim/lease and workspace contract plus repository rules. "
         "Follow todo continuation policy. Task-scoped coordination grants no authority over "
-        "other agents. Keep scope in the heartbeat prompt, not todo metadata."
+        "other agents. Keep scope in this prompt, not todo metadata."
     )
     return "heartbeat_peer_admission_v1" if block in text else None
 

@@ -451,6 +451,8 @@ def handle_registry_admin_command(
                 quota_window_hours=args.quota_window_hours,
                 execution_turn_granularity=args.execution_turn_granularity,
                 execution_replan_after_todos=args.execution_replan_after_todos,
+                execution_replan_after_turns=args.execution_replan_after_turns,
+                clear_execution_replan_after_turns=args.clear_execution_replan_after_turns,
                 clear_execution_replan_after_todos=bool(
                     args.clear_execution_replan_after_todos
                 ),

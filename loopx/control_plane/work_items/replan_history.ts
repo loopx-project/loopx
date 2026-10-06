@@ -212,12 +212,13 @@ function progressTrigger(runs: readonly Run[], request: Request): Trigger | null
     latest_generated_at: first.generatedAt, oldest_counted_generated_at: observed.at(-1)!.generatedAt,
   };
 }
-function periodicTrigger(runs: readonly Run[], request: Request): Trigger | null {
+function periodicTrigger(runs: readonly Run[], request: Request, qualified?: ReadonlySet<string>): Trigger | null {
   const durable: Run[] = [];
   // Monitor liveness receipts are durable, but only a material transition is
   // work for the periodic direction review. Monitor-specific triggers still
   // inspect every poll in the unfiltered history window.
-  for (const run of distinctTurns(runs.filter(row => row.classification &&
+  for (const run of distinctTurns(runs.filter(row => (!qualified ||
+      (row.agent && row.turn && qualified.has(JSON.stringify([row.agent, row.turn])))) && row.classification &&
       (row.classification !== "quota_monitor_poll" || row.monitor.material === true)))) {
     durable.push(run);
     if (durable.length >= request.periodic) break;
@@ -225,7 +226,7 @@ function periodicTrigger(runs: readonly Run[], request: Request): Trigger | null
   if (durable.length < request.periodic) return null;
   return {
     kind: "periodic_review_due", section: "run_history",
-    text: `latest ${durable.length} durable public run records since last autonomous replan reached periodic review threshold ${request.periodic}`,
+    text: `latest ${durable.length} ${qualified ? "settled work Turns" : "durable public run records"} since last autonomous replan reached periodic review threshold ${request.periodic}`,
     run_count: durable.length, threshold: request.periodic,
     latest_generated_at: durable[0]!.generatedAt, oldest_counted_generated_at: durable.at(-1)!.generatedAt,
     agent_id: sole(durable.map(run => run.publicAgent)),
@@ -300,14 +301,14 @@ function monitorStreak(request: Request): Trigger | null {
   };
 }
 
-export function projectReplanHistory(value: unknown): JsonObject {
+export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>): JsonObject {
   const request = decode(value);
   const runs = historyWindow(request);
   let trigger: Trigger | null;
   switch (request.operation) {
-    case "all": trigger = progressTrigger(runs, request) ?? monitorTrigger(runs, request) ?? periodicTrigger(runs, request); break;
+    case "all": trigger = progressTrigger(runs, request) ?? monitorTrigger(runs, request) ?? periodicTrigger(runs, request, qualified); break;
     case "progress": trigger = progressTrigger(runs, request); break;
-    case "periodic": trigger = periodicTrigger(runs, request); break;
+    case "periodic": trigger = periodicTrigger(runs, request, qualified); break;
     case "monitor_streak": trigger = monitorStreak(request); break;
   }
   return { schema_version: "replan_history_result_v0", trigger };

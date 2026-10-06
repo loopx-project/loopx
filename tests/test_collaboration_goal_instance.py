@@ -842,7 +842,7 @@ def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(
         def __init__(self) -> None:
             self.tools = {}
 
-        def tool(self):
+        def tool(self, *, description: str | None = None):
             def register(function):
                 self.tools[function.__name__] = function
                 return function

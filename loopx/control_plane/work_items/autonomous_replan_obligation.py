@@ -681,6 +681,7 @@ def autonomous_replan_obligation_from_runs(
     dead_monitor_repeat_schema_version: str,
     periodic_run_threshold: int,
     external_progress_review: Mapping[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     trigger = project_replan_history(
         latest_runs or [], agent_todos=agent_todos, agent_id=agent_id,
@@ -690,6 +691,7 @@ def autonomous_replan_obligation_from_runs(
         monitor_threshold=dead_monitor_repeat_threshold,
         monitor_schema=dead_monitor_repeat_schema_version,
         periodic_threshold=periodic_run_threshold,
+        effective_turn_cadence=effective_turn_cadence,
     )
     if trigger and trigger.get("kind") == "typed_progress_repeat":
         return build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)

@@ -13,7 +13,7 @@ from ...extensions.runtime import (
 )
 from ...history import load_registry
 from ...rollout_event_log import iter_rollout_events
-from .core import build_periodic_report_run
+from .core import TRIGGER_DECISION_SCHEMA, build_periodic_report_run
 from .machine_defaults import (
     SUBSCRIPTION_ERROR_SCHEMA,
     PeriodicReportSubscriptionConfigurationError,
@@ -355,7 +355,7 @@ def render_periodic_report_markdown(payload: dict[str, object]) -> str:
                 "",
             ]
         )
-    if payload.get("schema_version") == "periodic_report_trigger_decision_v0":
+    if payload.get("schema_version") == TRIGGER_DECISION_SCHEMA:
         return "\n".join(
             [
                 f"# Periodic Report Trigger `{payload.get('decision_id')}`",

@@ -145,15 +145,14 @@ def test_context_reads_real_canonical_todo_and_owner_acceptance(tmp_path, monkey
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
-    from loopx.control_plane.goals.checkpoint_context_io import _source_facts, _source_guard
-    from loopx.control_plane.quota.settlement import SettlementIdentity
+    from loopx.control_plane.goals.checkpoint_context_io import read_checkpoint_context
     import hashlib
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
         import tempfile
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry, _, _, _ = _missing(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todo = {"schema_version": "todo_item_v0", "todo_id": TODO_ID, "index": 1,
             "role": "agent", "status": "done", "done": True, "text": "Canonical delivered result",
@@ -166,12 +165,42 @@ def test_context_reads_real_canonical_todo_and_owner_acceptance(tmp_path, monkey
         "revision": 1, "digest": hashlib.sha256(canonical_bytes(document)).hexdigest(),
         "document": document, "bindings": [], "verification": None}
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
-    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
-    with _source_guard(runtime, GOAL_ID, state):
-        facts = _source_facts(runtime, registry, state, identity)
-    assert facts["todos"][0]["text"] == "Canonical delivered result"
-    assert facts["acceptance"]["contract"]["objective"] == "Canonical owner objective"
-    assert facts["source"]["authority"] == f"{provider}_v0"
+    context = read_checkpoint_context(registry_path=registry, runtime_root_override=str(runtime),
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID)
+    assert context["basis"]["todo"]["text"] == "Canonical delivered result"
+    assert context["basis"]["goal"]["acceptance"]["contract"]["objective"] == "Canonical owner objective"
+    assert context["basis"]["goal"]["acceptance"]["contract"]["criteria"] == document["criteria"]
+    assert context["basis"]["source"]["authority"] == f"{provider}_v0"
+
+
+def test_read_and_check_resolve_checkpoint_once_without_retired_calls(tmp_path, monkeypatch):
+    from loopx.control_plane.goals import checkpoint_context_io
+    from loopx.control_plane.quota.settlement import SettlementIdentity
+
+    project, runtime, registry, _, _, _ = _missing(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    calls = []
+    resolve = checkpoint_context_io._checkpoint_effect
+
+    def observe(method, request):
+        calls.append((method, request.get("phase")))
+        return resolve(method, request)
+
+    monkeypatch.setattr(checkpoint_context_io, "_checkpoint_effect", observe)
+    context = checkpoint_context_io.read_checkpoint_context(
+        registry_path=registry, runtime_root_override=str(runtime), goal_id=GOAL_ID,
+        agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
+    )
+    assert calls == [("goal.checkpoint_read_context.resolve", "read")]
+
+    identity = SettlementIdentity.from_runtime_payload(context["settlement_identity"])
+    calls.clear()
+    with checkpoint_context_io.checkpoint_commit_guard(
+        runtime_root=runtime, registry_path=registry, state_file=state,
+        identity=identity, read_context_id=context["read_context_id"],
+    ) as checked:
+        assert checked["ok"]
+    assert calls == [("goal.checkpoint_read_context.resolve", "check")]
 
 
 def test_source_writers_remain_excluded_until_checkpoint_append(tmp_path, monkeypatch):

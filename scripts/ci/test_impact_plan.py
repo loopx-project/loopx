@@ -7,10 +7,21 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from impact_plan import Change, POLICY_PATHS, candidate
+from impact_plan import Change, POLICY_PATHS, candidate, job_flags
 
 
 class ImpactTests(unittest.TestCase):
+    def test_whole_pr_job_requirements_are_owned_by_the_change_kind(self):
+        self.assertEqual(job_flags("presentation"), {
+            "core_tests": True, "backend_tests": False, "python_tests": False,
+            "stage2c_tests": False, "presentation_tests": True,
+        })
+        self.assertEqual(job_flags("full"), {
+            "core_tests": True, "backend_tests": True, "python_tests": True,
+            "stage2c_tests": True, "presentation_tests": False,
+        })
+        self.assertFalse(any(job_flags("docs").values()))
+
     def test_presentation_and_docs_union(self):
         for status in ("A", "M", "D"):
             for path in ("apps/presentation/dashboard/src/App.tsx", "loopx/web/chat/assets/chat.js",
@@ -65,12 +76,14 @@ class ImpactTests(unittest.TestCase):
             packet, _ = classify(base)
             self.assertEqual(packet["change_kind"], "presentation")
             self.assertFalse(packet["python_tests"])
+            self.assertFalse(packet["backend_tests"])
             self.assertFalse(packet["stage2c_tests"])
             self.assertTrue(packet["presentation_tests"])
             self.assertEqual(packet["head_sha"], git("rev-parse", "HEAD"))
             for flag in ("--force-full", "--non-pr"):
                 forced, _ = classify(base, flag)
                 self.assertTrue(forced["python_tests"])
+                self.assertTrue(forced["backend_tests"])
                 self.assertTrue(forced["stage2c_tests"])
                 self.assertEqual(forced["python_shards"], 4)
             # A policy change cannot authorize its own exemption.
@@ -84,6 +97,16 @@ class ImpactTests(unittest.TestCase):
             packet, output = classify(base)
             self.assertNotIn("python_tests=false", output)
             self.assertIn(strange, [item["path"] for item in packet["changes"]])
+            before_backend = git("rev-parse", "HEAD")
+            write("loopx/cli.py", "backend change")
+            git("add", "loopx/cli.py")
+            git("commit", "-qm", "earlier backend commit")
+            write(path, "later client change")
+            git("commit", "-qam", "latest client commit")
+            cumulative, _ = classify(before_backend)
+            self.assertEqual(cumulative["change_kind"], "full")
+            self.assertTrue(cumulative["backend_tests"])
+            self.assertEqual({item["path"] for item in cumulative["changes"]}, {"loopx/cli.py", path})
             before_link = git("rev-parse", "HEAD")
             (root / "docs").mkdir()
             (root / "docs/link.md").symlink_to("../loopx/web/chat/index.html")

@@ -16,6 +16,39 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("images use the managed conversation and never disappear into commands or an attached host", () => {
+  const request = {request_ref: "e".repeat(24), command: null};
+  assert.equal(planBoundConversationRequest({request, current_session: null, attachment_count: 1}).operation, "admit_turn");
+  for (const command of ["stop", "new", "select_agent", "commission"]) {
+    assert.equal(planBoundConversationRequest({request: {...request, command}, current_session: null,
+      attachment_count: 1}).response_code, "unsupported_attachment");
+  }
+  assert.equal(planBoundConversationRequest({request, current_session: null, attachment_count: 1,
+    agent_target: {session_id: "existing-host"}}).response_code, "unsupported_attachment");
+  for (const count of [-1, 5, 0.5, "1"]) {
+    assert.throws(() => planBoundConversationRequest({request, current_session: null, attachment_count: count}), /attachment count/);
+  }
+});
+
+test("owner steward scope reads the current registry, preserves its Session and never widens a project or legacy scope", () => {
+  const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], goal_scope: "all_registered"};
+  const next = planConversationBinding({...request, binding: steward}).state;
+  const use = {current: next, binding_id: row.binding_id, source_ref: "e".repeat(24), sender_ref: row.operator_ref,
+    private_human_message: true, observation, available_projects: [project], available_goal_ids: ["notes", "maintenance"]};
+  const selected = resolveBoundConversation(use);
+  assert.deepEqual((selected.context as Record<string, unknown>).goal_ids, ["maintenance", "notes"]);
+  assert.deepEqual((resolveBoundConversation({...use, available_goal_ids: ["new-goal"], session_context: selected.context}).context as Record<string, unknown>).goal_ids, ["new-goal"]);
+  assert.throws(() => resolveBoundConversation({...use, available_goal_ids: undefined}), /Goal scope/);
+  assert.throws(() => resolveBoundConversation({...use, observation: {...observation, verified: false}}), /verified/);
+  assert.throws(() => planConversationBinding({...request, binding: {...row, goal_scope: "all_registered"}}), /scope/);
+  const restricted = planConversationBinding({...request, current: next, expected_revision: 1,
+    binding: {...steward, goal_scope: "selected"}}).state;
+  assert.deepEqual((resolveBoundConversation({...use, current: restricted}).context as Record<string, unknown>).goal_ids, []);
+  assert.throws(() => resolveBoundConversation({...use, current: restricted, session_context: selected.context}), /context changed/);
+  const legacy = planConversationBinding({...request, binding: {...steward, goal_scope: undefined}}).state;
+  assert.deepEqual((resolveBoundConversation({...use, current: legacy}).context as Record<string, unknown>).goal_ids, []);
+});
+
 test("explicit project writes remain App-bound and cannot exceed the host grant, another executor or an existing Session", () => {
   const original = planConversationBinding(request).state as typeof current;
   const use = {current: original, binding_id: row.binding_id, source_ref: "e".repeat(24),

@@ -87,6 +87,7 @@ from .repository_memory_provider import (
 )
 from .repository_commit_evidence import verify_issue_fix_repository_commit_evidence
 from .repository_snapshot import (
+    SNAPSHOT_SCHEMA_VERSION,
     collect_public_github_repository_snapshot,
     render_repository_snapshot_markdown,
     repository_snapshot_record,
@@ -743,13 +744,13 @@ def register_issue_fix_commands(
     metrics_parser.add_argument(
         "--repository-baseline-json",
         required=True,
-        help="Public-safe issue_fix_repository_reporting_snapshot_v0 at period start.",
+        help=f"Public-safe {SNAPSHOT_SCHEMA_VERSION} at period start.",
     )
     metrics_parser.add_argument(
         "--repository-current-json",
         required=True,
         help=(
-            "Public-safe issue_fix_repository_reporting_snapshot_v0 at current time, "
+            f"Public-safe {SNAPSHOT_SCHEMA_VERSION} at current time, "
             "including flow_since_baseline."
         ),
     )

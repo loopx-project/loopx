@@ -102,6 +102,13 @@ receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 p
 这闭合 T1/T2/L2 的一组真实终结 caller，剩余 leased metadata、executor fence 和 T4
 仍未完成。[语义、调用次数与回滚](../../reference/canonical-terminal-review.zh-CN.md)。
 
+Canonical supersede 的 CLI/facade 现在把已有后继关联交给同一个 terminal owner。
+一次提交关联已声明的替代工作、退役原任务并释放原租约，取代先更新关联再 supersede
+的序列。回执恢复、source/actor/lease fence 和单向显示交付仍由既有 owner 负责。
+不新增 Python 决策 owner 或 writer；未晋级 Markdown 的新直接关联选项明确拒绝。
+这缩小 T1/T2 的恢复成本，不代表 T4 退役、默认 provider 验收或新前端 lifecycle
+流程完成。
+
 Canonical create/claim/update/Monitor poll/terminal 事务现共用
 `coordination/authority_source.ts`；Python adapter 经 `authority_registry_source`
 在注册/grant 投影前后校验来源。外部验证结束后保留原 witness，在新 effect/提交前
@@ -863,6 +870,25 @@ codec；较大的完整事实快照通过私有临时文件和摘要绑定的引
 才提供 unchanged reason。Authoring 契约复用校验器的 `todo_delta` 限制：保留前
 八项，每个保留项至多 80 字符。隔离的真实 CLI 恢复必须保持原结算身份和 replay
 约束。这闭合恢复指引的正确性缺口，不代表上下文、IO 或延迟成本已降低。
+
+**Checkpoint 读取上下文的传输边界。** 完整 Goal prose 和已归档 Todo 事实可能
+同时超过 2 MiB 请求与响应边界。Checkpoint 来源读取、归约、重放检查和提交显式
+使用同 UID 私有文件及字节数、SHA-256 摘要绑定；其他 effect 的默认传输边界不变。
+文件缺失、改变、权限不符或超过 64 MiB 时拒绝。Handler 可能已经提交后，无法验证
+的响应仍按不明确结果处理，要求精确回执回读，不能自动重试写入。
+
+来源读取和 read/check 归约现在在一次 TypeScript 请求内完成。上下文读取与提交前
+检查各从两次 checkpoint 请求降为一次，完整权威事实不再先返回 Python 再传回 TS。
+复用原 reducer、完整 basis 回执、来源锁及最终 provider 围栏提交；乐观读取释放
+provider 围栏后再归约，最终提交仍在自己的围栏内重读。Python 保留本地来源 IO 和
+回执持久化。来源专用、独立 evaluate effect 及其适配调用一并退役；commit 与 replay
+仍各使用一次请求。这消除中间完整事实往返，不代表多 MiB basis 的组装和返回成本
+已经消失，也不改变 File/SQLite、legacy Markdown 的回执、权限或 provider 默认值。
+
+剩余以测量驱动的 T3 工作是提供有版本的 manifest 与有界展示分页。每页绑定同一
+来源 head，并说明省略部分；回执仍须哈希完整相关 Todo/依赖、User Todo、Goal prose、
+acceptance 和 vision。展示限制不能变成结算限制。在 legacy、File、SQLite 上完成
+语义一致性与 stale-head 恢复验证前，保留当前完整读取路径。
 
 **恢复边界（2026-09-22）。** [authority archive 命令](../../reference/authority-archive.md)
 由现有 TS coordination owner 负责历史校验、状态 delta 重建和可重入恢复；Python

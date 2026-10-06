@@ -423,6 +423,45 @@ def _project_quota_cli_payload(
         degraded["turn_envelope_skipped"] = str(envelope_error)[:200]
         return degraded
 
+
+def _emit_quota_result(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    context: QuotaCommandContext | None,
+    registry_path: Path,
+    heartbeat_turn_id: str | None,
+    usage_quota_started: int,
+    capture_directory: Path | None,
+    detail_sections: frozenset[str],
+    print_payload: PrintPayload,
+) -> int:
+    """Capture the full decision before projecting and printing the CLI view."""
+    if context is not None:
+        observe_quota_result(
+            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
+            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+            started_at=usage_quota_started,
+        )
+    capture_decision(capture_directory, payload)
+    payload = _project_quota_cli_payload(
+        payload, args, detail_sections,
+        context.scheduler_context if context is not None else None,
+        captured_decision_path=(
+            str(capture_directory / "decision.json") if capture_directory is not None else None
+        ),
+    )
+    if args.quota_command == "should-run" and context is not None:
+        attach_host_poll_receipt(
+            context.status_payload,
+            args,
+            payload,
+            registry_path=registry_path,
+        )
+    print_payload(payload, args.format, _quota_renderer(args))
+    return 0 if payload.get("ok") else 1
+
+
 def handle_quota_command(
     args: argparse.Namespace,
     *,
@@ -894,26 +933,14 @@ def handle_quota_command(
         goal_id=args.goal_id,
         agent_id=args.agent_id,
     )
-    if context is not None:
-        observe_quota_result(
-            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
-            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
-            started_at=usage_quota_started,
-        )
-    capture_decision(capture_directory, payload)
-    payload = _project_quota_cli_payload(
-        payload, args, detail_sections,
-        context.scheduler_context if context is not None else None,
-        captured_decision_path=(
-            str(capture_directory / "decision.json") if capture_directory is not None else None
-        ),
+    return _emit_quota_result(
+        payload,
+        args,
+        context=context,
+        registry_path=registry_path,
+        heartbeat_turn_id=heartbeat_turn_id,
+        usage_quota_started=usage_quota_started,
+        capture_directory=capture_directory,
+        detail_sections=detail_sections,
+        print_payload=print_payload,
     )
-    if args.quota_command == "should-run" and context is not None:
-        attach_host_poll_receipt(
-            context.status_payload,
-            args,
-            payload,
-            registry_path=registry_path,
-        )
-    print_payload(payload, args.format, _quota_renderer(args))
-    return 0 if payload.get("ok") else 1

@@ -2568,6 +2568,7 @@ def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, m
 @pytest.mark.parametrize("error_code,label", [
     ("cyber_policy", "安全策略拦截"),
     ("rate_limit_exceeded", "请求频率限制"),
+    ("server_overloaded", "当前模型繁忙"),
     ("runtime_unavailable", "本地运行环境初始化失败"),
     ("resume_failed", "原 Agent 会话恢复失败"),
     ("private-upstream-detail", "管家处理失败"),

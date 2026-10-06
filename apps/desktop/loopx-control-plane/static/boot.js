@@ -67,9 +67,12 @@ const updateStatus = document.querySelector("#update-status");
 const forgetSelection = document.querySelector("#forget-selection");
 let nextAction = "check";
 let working = false;
+let actionInFlight = false;
+let statusGeneration = 0;
 let channelInitialized = false;
 let runtimeExplicit = false;
 let bundledRepairAvailable = true;
+const updateWorkingPhases = ["checking","downloading","installing_app","installing_runtime","connecting"];
 document.querySelector("#retry").onclick = () => location.reload();
 channel.onchange = () => { channelInitialized = true; render({phase:"idle"}); };
 const labels = {
@@ -133,13 +136,14 @@ function codeText(code, phase) {
 function render(state) {
   if (!state?.phase) return state;
   if (state.phase === "available" && state.details?.channel !== channel.value) state = {phase:"idle"};
-  working = ["checking","downloading","installing_app","installing_runtime","connecting"].includes(state.phase);
-  update.disabled = working;
-  repair.disabled = working || state.phase === "restart_required" || runtimeExplicit || !bundledRepairAvailable;
+  working = updateWorkingPhases.includes(state.phase);
+  const controlsDisabled = working || actionInFlight;
+  update.disabled = controlsDisabled;
+  repair.disabled = controlsDisabled || state.phase === "restart_required" || runtimeExplicit || !bundledRepairAvailable;
   if (state.details?.bundled_repair_available === false) repair.disabled = true;
-  forgetSelection.disabled = working || state.phase === "restart_required";
-  rollback.disabled = working || state.phase === "restart_required";
-  channel.disabled = working || state.phase === "restart_required";
+  forgetSelection.disabled = controlsDisabled || state.phase === "restart_required";
+  rollback.disabled = controlsDisabled || state.phase === "restart_required";
+  channel.disabled = controlsDisabled || state.phase === "restart_required";
   nextAction = state.phase === "available" ? "apply" : state.phase === "restart_required" ? "restart" : "check";
   update.textContent = nextAction === "apply" ? "更新并准备重启 / Install update" : nextAction === "restart" ? "重启完成更新 / Restart" : "检查更新 / Check for updates";
   updateStatus.textContent = codeText(state.details?.code, state.phase);
@@ -186,17 +190,24 @@ document.querySelector("#copy-diagnostics").onclick = async () => {
     document.querySelector("#copy-status").textContent = "请按 ⌘C / Ctrl+C 复制已选中的诊断。";
   }
 };
-async function invokeUpdate(action) {
+async function run(action) {
+  if (working || actionInFlight) return;
+  actionInFlight = true;
+  statusGeneration++;
   // Match the phase the backend publishes for each action (rollback restores
   // the previous app; restart keeps the required-restart state) instead of
   // previewing a download that is not happening.
   render({phase: action === "check" ? "checking" : action === "repair" || action === "align_runtime" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : "downloading"});
-  try { return render(await window.__TAURI__.core.invoke("desktop_update", {action,channel:channel.value})); }
-  catch (error) { return render({phase:"error", details:{code: safeCode(error)}}); }
-}
-async function run(action) {
-  if (working) return;
-  return invokeUpdate(action);
+  try {
+    const result = await window.__TAURI__.core.invoke("desktop_update", {action,channel:channel.value});
+    statusGeneration++;
+    actionInFlight = false;
+    return render(result);
+  } catch (error) {
+    statusGeneration++;
+    actionInFlight = false;
+    return render({phase:"error", details:{code: safeCode(error)}});
+  }
 }
 update.onclick = () => run(nextAction);
 repair.onclick = () => run("repair");
@@ -214,8 +225,11 @@ let terminalRounds = 0;
 let escalated = false;
 async function refresh() {
   if (!window.__TAURI__) { renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}}); return; }
+  const generation = ++statusGeneration;
   try {
     const result = await window.__TAURI__.core.invoke("desktop_update_status");
+    if (generation !== statusGeneration) return;
+    if (actionInFlight && result.state?.phase && !updateWorkingPhases.includes(result.state.phase)) return;
     if (!channelInitialized) {
       channel.value = result.state?.details?.channel ?? (result.app_version?.includes("-main.") ? "main" : "stable");
       channelInitialized = true;
@@ -228,7 +242,11 @@ async function refresh() {
     render(result.state);
     renderStartup(result);
     escalateFromSnapshot(result.state);
-  } catch { renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}}); }
+  } catch {
+    if (generation === statusGeneration && !actionInFlight) {
+      renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}});
+    }
+  }
 }
 function escalateFromSnapshot(state) {
   const terminal = TERMINAL_PHASES.includes(state?.phase);

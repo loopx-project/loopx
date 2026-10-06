@@ -151,8 +151,11 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
       capabilityId: "todo_replan_cadence",
       displayName: "Goal review cadence",
       editorScopes: ["machine", "goal"],
-      defaultConfiguration: { completed_todos: 5 },
-      fields: [{ key: "completed_todos", label: "Completed Todos between Goal reviews", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 }],
+      defaultConfiguration: { count_unit: "completed_todos", count: 5 },
+      fields: [
+        { key: "count_unit", label: "Count between reviews", description: "", input_kind: "select", required: true, options: ["completed_todos", "effective_turns"] },
+        { key: "count", label: "Review interval", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 },
+      ],
     }),
     periodicReportCapability(),
     goalCapability({
@@ -1023,7 +1026,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             namespace: "todo_replan_cadence",
             title: "Goal review cadence",
             description: "Live review threshold without added turns, quota, or authority.",
-            schema_versions: ["todo_replan_cadence_machine_defaults_v0"],
+            schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,
             template_status: "ready",
           },
