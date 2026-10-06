@@ -162,12 +162,13 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
   }
   if (acceptanceHold) return ["new_runnable_successor", "new_concrete_blocker"];
   if (kinds.some(kind => VISION_TRIGGERS.has(kind))) return [...VISION_OUTCOMES];
-  // Reviewing a long chain may retain existing runnable work. Its projected
+  // Periodic and long-chain reviews may retain existing runnable work. The
   // vision decision must close the checkpoint without manufacturing another
   // successor or progress identifier. Keep previously legal progress exits.
   // An external progress review likewise lets the Agent keep its plan on
   // evidence (a fresh vision path) or pivot with a typed progress delta.
-  return kinds.includes("long_todo_chain") || kinds.some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind))
+  return kinds.some(kind => kind === "long_todo_chain" ||
+    kind === "periodic_review_due" || EXTERNAL_REVIEW_TRIGGERS.has(kind))
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 

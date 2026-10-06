@@ -760,6 +760,17 @@ The replan decision must not be disturbed by monitor quiet skip, scoped gate
 waiting, or a single agent having no runnable todo. Those may explain local
 lane state, but they cannot erase a required goal-level replan.
 
+Periodic review now shares the long-chain evidence-linked vision path: current
+validation may justify `continue`, `no_change`, or `replan` without inventing a
+successor, surface, or hypothesis. The projected command requests the existing
+vision packet; missing acceptance/evidence, explicit outcome restrictions, and
+acceptance-recovery holds still fail closed. This changes periodic-review
+qualification, not cadence, Todo completion, or execution authority.
+
+周期复查与长链复查共用证据关联的 Vision 路径：验证支持原路线时，可以保留路线，
+不必虚构 successor、surface 或 hypothesis。缺少接受标准或证据、显式结果限制及
+接受标准恢复约束仍由原规则拒绝；复查周期、Todo 完成及执行权限保持原有语义。
+
 Long-chain scope corrections (#4667, #5001): Agent-scoped counts exclude shared
 unclaimed candidates and continuous monitors. Shared candidates remain selectable,
 but a new long-chain duty requires at least 15 claimed advancement Todos. The former

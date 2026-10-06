@@ -1,6 +1,7 @@
 """Receipt-backed cadence over an open Todo, through the real CLI and runtime."""
 
 import json
+import shlex
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -24,8 +25,11 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 )
 
 
-def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
+def test_open_todo_settled_turn_cadence_and_evidence_linked_review(tmp_path: Path) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
+    fixture = json.loads(registry.read_text())
+    fixture["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(fixture))
     rc, configured = _run_cli(
         registry,
         runtime,
@@ -187,6 +191,54 @@ def test_open_todo_counts_only_settled_turns(tmp_path: Path) -> None:
         assert periodic() is None
     finally:
         log.write_bytes(original)
+
+    # A cadence checkpoint is a review, not an obligation to invent a new route.
+    # Execute the projected vision path against the real isolated File runtime.
+    selected_rc, selected = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
+    )
+    assert selected_rc == 0, selected
+    contract = selected["replan_action_packet"]["writeback_contract"]
+    assert contract["preferred_input"] == "evidence_linked_vision_path"
+    vision_path = tmp_path / "periodic-vision.json"
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Original acceptance remains open."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
+                       "prior_assumption": "The existing method remains viable.",
+                       "observed_reality": "Current validation supports continuing it.",
+                       "retained": ["Existing method and open Todo"], "evidence_refs": []},
+    }
+    command = shlex.split(selected["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+    command = command[command.index("refresh-state"):]
+    command[command.index("--agent-vision-json") + 1] = str(vision_path)
+    command += ["--delivery-workspace-path", str(project), "--no-global-sync", "--suppress-external-sinks"]
+    vision_path.write_text(json.dumps(vision))
+    rc, rejected = _run_cli(registry, runtime, *command)
+    assert rc == 1 and rejected["appended"] is False, rejected
+    assert "typed semantic delta" in rejected["error"], rejected
+    vision["path_delta"]["evidence_refs"] = ["evidence:method-validation"]
+    vision_path.write_text(json.dumps(vision))
+    rc, accepted = _run_cli(registry, runtime, *command)
+    assert rc == 0, accepted
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
+    rc, spent = _run_cli(
+        registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "effective-turn-next", "--slots", "1",
+        "--source", "heartbeat", "--execute",
+    )
+    assert rc == 0 and spent["settlement_progress"]["state"] == "settled", json.dumps(spent)
+    rc, following = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "after-periodic-review", "--scan-path", str(project),
+    )
+    assert rc == 0 and following["decision"] == "run", following
+    assert following["selected_todo"]["status"] == "open"
 
     rc, cleared = _run_cli(
         registry,
