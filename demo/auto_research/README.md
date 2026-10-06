@@ -6,11 +6,11 @@ employees appear, what artifacts to inspect, and how to stop or take over.
 
 Use the deeper showcase and protocol docs only after this path is clear:
 
-- [Multi-agent product recipe](../../../docs/guides/multi-agent-product-recipe.md)
-- [Stop, takeover, and state-aware wake walkthrough](../../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md)
-- [Decentralized auto-research showcase](../../../docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md)
-- [auto_research_role_state_machine_v0](../../../docs/reference/protocols/auto-research-role-state-machine-v0.md)
-- [auto_research_role_profile_v0](../../../docs/reference/protocols/auto-research-role-profile-v0.md)
+- [Multi-agent product recipe](../../docs/guides/multi-agent-product-recipe.md)
+- [Stop, takeover, and state-aware wake walkthrough](../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md)
+- [Decentralized auto-research showcase](../../docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md)
+- [auto_research_role_state_machine_v0](../../docs/reference/protocols/auto-research-role-state-machine-v0.md)
+- [auto_research_role_profile_v0](../../docs/reference/protocols/auto-research-role-profile-v0.md)
 
 Implementation boundary: auto-research is a thin preset over the generic
 multi-agent kernel. `demo/auto_research/preset.py` owns only the
@@ -20,7 +20,7 @@ tick, workspace/trust-safe launch, todo/evidence/status protocol, and compact
 human status. The developer-facing recipe proof also follows that boundary:
 `preset.py` calls the generic `multi_agent.recipe` helper instead of defining
 decentralized A2A proof mechanics itself.
-Use the [multi-agent product recipe](../../../docs/guides/multi-agent-product-recipe.md) when a new
+Use the [multi-agent product recipe](../../docs/guides/multi-agent-product-recipe.md) when a new
 product wants to copy the pattern without copying auto-research code.
 
 ## Promotion Decision
@@ -433,7 +433,7 @@ Operator control stays on this command path:
 
 `--attach` and `--wake-visible-after-launch` cannot be combined. For the full
 stop → takeover → resume cycle and the synthetic smokes that pin it, see the
-[stop/takeover/wake walkthrough](../../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md).
+[stop/takeover/wake walkthrough](../../docs/guides/auto-research-stop-takeover-wake-walkthrough.md).
 
 ## 4. Launch A Visible Rehearsal
 
