@@ -131,7 +131,7 @@ with log.open("a", encoding="utf-8") as handle:
 turn_key = re.search(r'"turn_key":"([^"]+)"', prompt).group(1)
 print(json.dumps({
     "type": "thread.started",
-    "thread_id": "session-fixture-0001",
+    "thread_id": os.environ.get("FAKE_CODEX_SESSION_ID", "session-fixture-0001"),
     "raw_trajectory": "must-not-persist",
     "private_material": "must-not-persist"
 }), flush=True)
@@ -194,6 +194,8 @@ output_path.write_text(json.dumps({
     "vision_unchanged_reason": "The fixture objective remains unchanged.",
     "summary": "One public fixture advanced."
 }), encoding="utf-8")
+if os.environ.get("FAKE_CODEX_RESULT"):
+    output_path.write_text(os.environ["FAKE_CODEX_RESULT"], encoding="utf-8")
 """
     executable.write_text(
         source.replace(
@@ -1243,9 +1245,16 @@ def test_codex_cli_host_fails_closed_when_output_observation_is_incomplete(
     assert error.recovery_kind is None
 
 
-def test_codex_cli_host_discards_missing_resume_session(
+@pytest.mark.parametrize(("diagnostic", "category"), [
+    ("This model requires a newer version of Codex.", "model_requires_newer_codex"),
+    ("Session not found.", "session_missing"),
+    ("invalid_json_schema", "output_schema_rejected"),
+])
+def test_codex_cli_host_discards_invalid_resume_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str,
+    category: str,
 ) -> None:
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
@@ -1262,8 +1271,8 @@ def test_codex_cli_host_discards_missing_resume_session(
     )
 
     monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
-    monkeypatch.setenv("FAKE_CODEX_FAILURE_CATEGORY", "session")
-    with pytest.raises(RuntimeError, match="codex_cli_session_missing"):
+    monkeypatch.setenv("FAKE_CODEX_FAILURE_STDERR", diagnostic)
+    with pytest.raises(BuiltInHostError, match=f"codex_cli_{category}"):
         run_codex_cli_host(
             _request(
                 turn_key="sha256:" + "f" * 64,
@@ -1278,6 +1287,63 @@ def test_codex_cli_host_discards_missing_resume_session(
     envelope = first_request["turn_envelope"]
     assert isinstance(envelope, dict)
     assert codex_cli_session_binding(runtime_root, envelope) is None
+
+
+@pytest.mark.parametrize(("diagnostic", "category"), [
+    (None, None),
+    ("This model requires a newer version of Codex.", "model_requires_newer_codex"),
+    ("Session not found.", "session_missing"),
+    ("invalid_json_schema", "output_schema_rejected"),
+])
+def test_direction_session_never_mutates_implementation_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str | None, category: str | None,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    project = tmp_path / "project"
+    project.mkdir()
+    runtime_root = tmp_path / "runtime"
+    options = dict(runtime_root=runtime_root, project=project,
+                   codex_bin=str(executable), sandbox="workspace-write", timeout_seconds=5)
+    first = _request()
+    run_codex_cli_host(first, **options)
+    binding_path, = runtime_root.glob("goals/*/turn-sessions/*.json")
+    original = binding_path.read_bytes()
+    resumed = _request(turn_key="sha256:" + "b" * 64, session_action="resume")
+    direction = {**first, "direction_review": {"context": {"read_context_id": "direction-context"}}}
+    response = {"read_context_id": "direction-context", "decision": "continue",
+                "vision_unchanged_reason": "The current direction remains applicable."}
+    with monkeypatch.context() as direction_environment:
+        direction_environment.setenv("FAKE_CODEX_SESSION_ID", "temporary-direction-session")
+        direction_environment.setenv("FAKE_CODEX_RESULT", json.dumps(response))
+        if diagnostic:
+            direction_environment.setenv("FAKE_CODEX_FAIL", "1")
+            direction_environment.setenv("FAKE_CODEX_FAILURE_STDERR", diagnostic)
+            with pytest.raises(BuiltInHostError, match=f"codex_cli_{category}"):
+                run_codex_cli_host(direction, **options)
+        else:
+            assert run_codex_cli_host(direction, **options) == response
+    assert binding_path.read_bytes() == original
+    assert list(runtime_root.glob("goals/*/turn-sessions/*.json")) == [binding_path]
+    # A new interpreter must recover from the persisted binding, not in-memory state.
+    cold_resume = subprocess.run([
+        sys.executable, "-c", """
+import json, sys
+from pathlib import Path
+from loopx.control_plane.turn_driver.codex_cli import run_codex_cli_host
+result = run_codex_cli_host(json.loads(sys.argv[1]), runtime_root=Path(sys.argv[2]),
+    project=Path(sys.argv[3]), codex_bin=sys.argv[4], sandbox="workspace-write", timeout_seconds=5)
+print(json.dumps(result))
+""", json.dumps(resumed), str(runtime_root), str(project), str(executable),
+    ], cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, timeout=15)
+    assert cold_resume.returncode == 0, cold_resume.stderr
+    assert json.loads(cold_resume.stdout)["turn_key"] == resumed["turn_key"]
+    calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert len(calls) == 3
+    assert "resume" not in calls[1]
+    assert calls[1][calls[1].index("--sandbox") + 1] == "read-only"
+    assert "resume" in calls[2] and "session-fixture-0001" in calls[2]
 
 
 def test_public_e2e_smoke_runs_n_transactions_on_one_session() -> None:

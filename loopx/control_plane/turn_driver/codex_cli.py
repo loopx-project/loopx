@@ -749,6 +749,8 @@ def run_codex_cli_host(
             goal_admission.accept_result(commit)
 
     def discard_session() -> None:
+        if direction_only:
+            return
         def commit() -> None:
             _discard_codex_cli_session(
                 runtime_root,
