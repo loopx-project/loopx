@@ -176,6 +176,12 @@ def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch,
     assert read["command"] == hint["command"]
     assert read["ordering"] == "before_work"
     assert read["prompt_budget_bytes"] == 1536
+    # Rebuilding for a required read must not lose the selected authority.
+    for command in pending["interaction_contract"]["cli_channel"]["next_cli_actions"]:
+        if command.startswith("loopx "):
+            argv = shlex.split(command)
+            assert argv[argv.index("--registry") + 1] == str(registry)
+            assert argv[argv.index("--runtime-root") + 1] == str(root)
     # The dispatch names the hook that produced the read, and the projected hint
     # must still carry every field of that read unchanged.
     assert read["hook_id"] == "heartbeat.prompt_upgrade"

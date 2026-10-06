@@ -49,6 +49,7 @@ def _apply_retained_action_selection_reentry(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
     turn_instance_id: str | None,
+    registry_path: Path,
     runtime_root: Path,
 ) -> None:
     """Fence a no-argument reentry with its last explicit Todo choice."""
@@ -127,6 +128,7 @@ def _apply_retained_action_selection_reentry(
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
+        registry_path=str(registry_path),
         runtime_root=str(runtime_root),
     )
 
@@ -190,6 +192,7 @@ def _project_turn_start_required_reads(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
     turn_instance_id: str | None,
+    registry_path: Path,
     runtime_root: Path,
 ) -> bool:
     """Order evidence before work and report whether the decision changed."""
@@ -236,6 +239,7 @@ def _project_turn_start_required_reads(
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
+        registry_path=str(registry_path),
         runtime_root=str(runtime_root),
     )
     return True
@@ -281,6 +285,8 @@ def _apply_pending_capability_intent_precedence(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     turn_instance_id: str | None = None,
+    registry_path: Path | None = None,
+    runtime_root: Path | None = None,
 ) -> bool:
     """Apply intent precedence and report whether the decision changed."""
 
@@ -344,6 +350,8 @@ def _apply_pending_capability_intent_precedence(
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
+        registry_path=str(registry_path) if registry_path is not None else None,
+        runtime_root=str(runtime_root) if runtime_root is not None else None,
     )
     return True
 
@@ -630,6 +638,7 @@ def build_live_quota_should_run_decision(
         available_capabilities=available_capabilities,
         scheduler_execution_context=resolved_context,
         turn_instance_id=turn_instance_id,
+        registry_path=registry_path,
         runtime_root=runtime_root,
     )
     remembered_runtime = (payload.get("agent_identity") or {}).get(
@@ -652,6 +661,7 @@ def build_live_quota_should_run_decision(
         available_capabilities=available_capabilities,
         scheduler_execution_context=resolved_context,
         turn_instance_id=turn_instance_id,
+        registry_path=registry_path,
         runtime_root=runtime_root,
     )
     hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
@@ -663,6 +673,8 @@ def build_live_quota_should_run_decision(
             available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
             turn_instance_id=turn_instance_id,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
         )
         interaction = payload.get("interaction_contract")
         if isinstance(interaction, dict):

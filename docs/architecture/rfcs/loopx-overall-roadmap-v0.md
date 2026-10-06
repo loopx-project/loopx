@@ -911,8 +911,10 @@ outer Turn and native Goal driver on one binding.
 
 Heartbeat command guidance preserves the selected registry through guard, action
 selection, recovery and settlement, independently of the caller's working
-directory and runtime root. Conflicting-registry CLI fixtures qualify this
-bounded routing repair; they do not qualify host latency or fleet scale.
+directory and runtime root, including contract rebuilds for retained selections
+and required capability reads. File/SQLite fixtures execute generated settlement
+commands from a conflicting-registry directory and verify one-spend replay.
+This qualifies bounded routing; it does not qualify host latency or fleet scale.
 
 ## 7. Execution and Review Contract
 

@@ -516,7 +516,9 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("task_body", "quota_guard_command", "interface_budget"),
         markdown_anchor="# Heartbeat Automation Prompt",
-        max_chars={"json": 10_500, "markdown": 9_000},
+        # Complete registry routes are required in independently executable
+        # recovery/regeneration commands, including on the 128-character root.
+        max_chars={"json": 12_500, "markdown": 11_000},
         max_lines={"json": 58, "markdown": 115},
     ),
     CliOutputModeVariantSpec(

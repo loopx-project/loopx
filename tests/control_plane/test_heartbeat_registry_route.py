@@ -14,6 +14,7 @@ import test_quota_authority_settlement_journey as journey
 
 from loopx.heartbeat_prompt import build_heartbeat_prompt, build_heartbeat_prompt_error_payload
 from loopx.control_plane.heartbeat.budget import build_interface_budget
+from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 
 
 def _route(command: str, registry: Path, runtime: Path) -> None:
@@ -70,17 +71,28 @@ def _execute(argv: list[str], cwd: Path):
     env = dict(os.environ, PYTHONPATH=str(cli.REPO_ROOT))
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *argv],
                             cwd=cwd, env=env, text=True, capture_output=True, check=False)
+    assert result.stdout, result.stderr
     return result.returncode, json.loads(result.stdout)
 
 
-def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_registry(tmp_path):
-    project, runtime, original, _, _ = journey._source(tmp_path, provider="file")
-    registry = tmp_path / "selected authority" / "registry.json"
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_registry(tmp_path, provider):
+    project, runtime, original, _, _ = journey._source(tmp_path, provider=provider)
+    registry = tmp_path / "selected authority's directory" / "registry.json"
     registry.parent.mkdir()
     registry.write_text(original.read_text())
     conflict = json.loads(original.read_text())
     conflict["goals"][0]["coordination"]["registered_agents"] = ["another-worker"]
     original.write_text(json.dumps(conflict))
+    code, remembered = _execute([
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "semantic-preference", "agent", "remember",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--key", "review.collaboration", "--statement", "Use the designated reviewer.",
+        "--source-ref", "owner-message-1", "--source-quote", "Use the designated reviewer.",
+        "--expected-revision", "none", "--operation-id", "remember-1", "--execute",
+    ], project)
+    assert code == 0 and remembered["status"] == "applied", remembered
     code, prompt = _execute([
         "--registry", str(registry), "--runtime-root", str(runtime), "heartbeat-prompt",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--codex-app", "--full",
@@ -108,6 +120,12 @@ def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_reg
     code, guard = _execute(shlex.split(selection.replace("{todo_id}", cli.TODO_ID))[1:], project)
     assert code == 0, guard
     assert guard["selected_todo"]["todo_id"] == cli.TODO_ID
+    assert any(read["kind"] == "agent_preferences" for read in guard["required_reads"])
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    # A later no-argument reentry must retain the original choice and authority.
+    code, guard = _execute(guard_argv, project)
+    assert code == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"] == identity
     channel = guard["interaction_contract"]["cli_channel"]
     for command in channel["next_cli_actions"]:
         if command.startswith("loopx "):
@@ -117,6 +135,36 @@ def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_reg
         if isinstance(step, dict) and isinstance(step.get("command_template"), str):
             _route(step["command_template"], registry, runtime)
     assert cli._spend_run_count(runtime) == 0
+
+    refresh = next(c for c in channel["next_cli_actions"] if "refresh-state" in c)
+    replacements = {
+        "<validated_progress>": "validated_progress", "<scale>": "implementation",
+        "<outcome>": "outcome_progress",
+    }
+    for placeholder, value in replacements.items():
+        refresh = refresh.replace(placeholder, value)
+    code, refreshed = _execute(shlex.split(refresh)[1:] + [
+        "--vision-state", "vision_on_track",
+        "--vision-summary", "Keep validating the selected work.",
+        "--vision-acceptance", "The same Turn settles once against the selected authority.",
+        "--no-global-sync", "--suppress-external-sinks",
+    ], project)
+    assert code == 0 and refreshed["settlement_result"]["ok"], refreshed
+    spend = next(c for c in channel["next_cli_actions"] if "spend-slot" in c)
+    for replay in (False, True):
+        code, spent = _execute(shlex.split(spend)[1:], project)
+        assert code == 0 and spent["settlement_result"]["ok"], spent
+        if replay:
+            assert spent["idempotent_replay"] and not spent["appended"]
+    assert cli._spend_run_count(runtime) == 1
+    code, settled = _execute(guard_argv, project)
+    assert code == 0 and settled["effective_action"] == "heartbeat_settled_skip", settled
+    assert settled["heartbeat_receipt"]["settlement_identity"] == identity
+    readback = read_heartbeat_settlement(
+        runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID,
+    )
+    assert readback is not None and readback.replay_phase.value == "settled"
 
 
 def test_invalid_selected_registry_does_not_fall_back_to_valid_local_roster(tmp_path):

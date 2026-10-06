@@ -1540,8 +1540,8 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
-    # ever-growing temp/worker prefix. Do not shorten rendered paths or raise
-    # the absolute output ceiling to make this case pass.
+    # ever-growing temp/worker prefix. Preserve full commands and input size;
+    # the owning regression budget records any justified ceiling revision.
     # Reuse the other budget fixtures' short namespace. A canary's nested
     # TMPDIR can already exceed 128 characters before we create this root.
     parent = Path("/tmp").resolve()
