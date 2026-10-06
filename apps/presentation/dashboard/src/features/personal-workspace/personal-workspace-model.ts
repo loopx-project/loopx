@@ -492,6 +492,8 @@ export type PersonalWorkspaceCallbacks = {
   onCorrectRun?: (run: WorkspaceRun, message: string) => void | Promise<void>;
   onCloseRunSession?: (run: WorkspaceRun) => void | Promise<void>;
   onExplainDecision?: (attention: WorkspaceAttention) => void | Promise<void>;
+  /** Open the item's Goal conversation with an editable draft; never sends. */
+  onReplyToAttention?: (attention: WorkspaceAttention, intent: "reply" | "explain") => void;
   onExportOutput?: (output: WorkspaceOutput) => void | Promise<void>;
   onInterruptRun?: (run: WorkspaceRun) => void | Promise<void>;
   onCancelConversationPreparation?: (contextId: string) => void;

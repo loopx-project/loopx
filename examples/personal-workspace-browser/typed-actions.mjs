@@ -1292,21 +1292,20 @@ export const typedActionsScenario = {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
       await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
-      const replanUnit = page.getByLabel(/^复核计数依据/u);
-      const replanCount = page.getByLabel("两次复核间的数量", { exact: true });
-      await replanUnit.waitFor({ state: "visible" });
-      await replanCount.waitFor({ state: "visible" });
-      // A current editor must retain the fixture's installed v0 Todo policy.
-      // Selection mounts the fields before its effect synchronizes the draft.
-      await page.waitForFunction(() => [...document.querySelectorAll(".personal-capability-detail input[type=number]")]
-        .some((input) => input.value === "3"));
-      if (await replanUnit.inputValue() !== "completed_todos" || await replanCount.inputValue() !== "3"
-          || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
-        throw new Error(`Opening the current cadence editor reinterpreted or wrote the legacy policy: ${JSON.stringify({
-          unit: await replanUnit.inputValue(), count: await replanCount.inputValue(),
-          requestsBefore: requestsBeforeReadOnly, requestsAfter: api.machineConfigurationRequests.length,
-        })}`);
-      }
+      const reviewUnit = page.getByLabel(/^复核计数依据/u);
+      const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
+      await reviewUnit.waitFor({ state: "visible" });
+      await reviewCount.waitFor({ state: "visible" });
+      // Visibility precedes hydration of the persisted cadence into the v1 editor.
+      await page.waitForFunction(() => {
+        const labels = [...document.querySelectorAll(".personal-capability-detail label")];
+        const unit = labels.find((label) => label.innerText.includes("复核计数依据"))?.querySelector("select");
+        const count = labels.find((label) => label.innerText.includes("两次复核间的数量"))?.querySelector("input[type=number]");
+        return unit?.value === "completed_todos" && count?.value === "3";
+      });
+      assert.equal(await reviewUnit.inputValue(), "completed_todos");
+      assert.equal(await reviewCount.inputValue(), "3");
+      assert.deepEqual(await reviewUnit.locator("option").evaluateAll((options) => options.map((option) => option.value).filter(Boolean)), ["completed_todos", "effective_turns"]);
       await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
       await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
       for (const label of [/^启用$/u, /^允许一次有界安全修复$/u, /^要求精确 diff 回执$/u]) {

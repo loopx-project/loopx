@@ -151,10 +151,10 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
       capabilityId: "todo_replan_cadence",
       displayName: "Goal review cadence",
       editorScopes: ["machine", "goal"],
-      defaultConfiguration: { schema_version: "todo_replan_cadence_machine_defaults_v1", count_unit: "completed_todos", count: 5 },
+      defaultConfiguration: { count_unit: "completed_todos", count: 5 },
       fields: [
-        { key: "count_unit", label: "Review after", description: "", input_kind: "select", required: true, options: ["completed_todos", "effective_turns"] },
-        { key: "count", label: "Number between reviews", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 },
+        { key: "count_unit", label: "Count between reviews", description: "", input_kind: "select", required: true, options: ["completed_todos", "effective_turns"] },
+        { key: "count", label: "Review interval", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 },
       ],
     }),
     periodicReportCapability(),
@@ -394,7 +394,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
   }
 }
 
-export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
+export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null, userActionAttention = false, presentationApi = false } = {}) {
   let turnCounter = 0;
   const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
@@ -485,6 +485,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     todoRequestTexts: new Map(),
     todoRequestReads: [],
     decidedGateTodoIds: new Set(),
+    // Applied User action outcomes, so the needs-you projection reads back like canonical status.
+    userActionOutcomes: new Map(),
     hostThreadActivity: {},
     answerForMessage: null,
     loopxModeRequests: [],
@@ -522,6 +524,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       ...(fixture.local_dashboard_api ?? {}),
       periodic_report_index_url: "/periodic-report-workspace",
       periodic_report_detail_url: "/periodic-report-workspace-projection",
+      ...(presentationApi ? {
+        presentation_surfaces_url: `${typeof presentationApi === "string" ? presentationApi : ""}/extension-presentation-surfaces`,
+        presentation_detail_url: `${typeof presentationApi === "string" ? presentationApi : ""}/extension-projection`,
+      } : {}),
     };
     for (const directoryGoal of directoryGoalFixtures) {
       if (state.deletedGoalIds.has(directoryGoal.id)) continue;
@@ -570,11 +576,18 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (first) {
       first.waiting_on = "user_or_controller";
       const gateDecided = state.decidedGateTodoIds.has("todo-browser-user-gate");
+      const userItems = [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }];
+      if (userActionAttention) {
+        const outcome = state.userActionOutcomes.get("todo-browser-user-action");
+        userItems.unshift({ done: Boolean(outcome), status: outcome ?? "open", goal_id: first.goal_id, index: 1, role: "user", task_class: "user_action", bound_agent: "codex-delivery",
+          text: "在桌面 App 中手动创建剩余的 3 个角色会话", note: "这是一项不阻塞 Agent 的用户操作提醒，而不是批准请求。", todo_id: "todo-browser-user-action", updated_at: "2026-08-13T00:00:00Z" });
+        userItems.push({ done: false, status: "open", goal_id: first.goal_id, index: 2, role: "user", task_class: "user_action", text: "核对本机备份目录是否可写" });
+      }
       first.user_todos = {
-        items: [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }],
-        open_count: gateDecided ? 0 : 1,
+        items: userItems,
+        open_count: userItems.filter((todo) => !todo.done).length,
         source_section: "User Todo",
-        total_count: 1,
+        total_count: userItems.length,
       };
       const domainTodos = (first.project_asset?.agent_todos?.items ?? first.agent_todos?.items ?? [])
         .filter((todo) => !todo.done)
@@ -1948,6 +1961,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       // Mirrors ChatActionService's gate.resolve receipt (tests/control_plane/test_chat_gate_decisions.py).
       const decisionParameters = actionKind === "gate.resolve" ? preview?.normalized_parameters : null;
       if (decisionParameters) state.decidedGateTodoIds.add(decisionParameters.todo_id);
+      const userActionParameters = preview?.normalized_parameters?.todo_id === "todo-browser-user-action" ? preview.normalized_parameters : null;
+      if (userActionParameters) state.userActionOutcomes.set(userActionParameters.todo_id,
+        actionKind === "gate.resolve" ? "done" : userActionParameters.operation === "defer" ? "deferred" : "done");
       const decisionReceipt = decisionParameters ? { projection_verified: true, receipt_id: "fixture-receipt", outcome: "gate_resolved",
         decision_outcome: decisionParameters.decision,
         unblock_resume_state: { approve: "resumed", reject: "decision_rejected", cancel: "decision_cancelled" }[decisionParameters.decision] ?? null } : null;

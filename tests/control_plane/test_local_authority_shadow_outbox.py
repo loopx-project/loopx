@@ -14,7 +14,7 @@ from loopx.control_plane.coordination.coordination_state_contract_generated impo
 from loopx.control_plane.coordination.local_authority_shadow_projection import (
     ProjectionValueError,
     canonical_bytes,
-    lease_partition_projection,
+    compact_lease,
     partition_digest,
     sha256_digest,
     source_effect_runtime_result,
@@ -395,9 +395,12 @@ def test_cursor_allocation_hint_does_not_authorize_a_gap_or_candidate_write(tmp_
     registry, state, runtime_root = _fixture(tmp_path)
     directory = _todo_dir(runtime_root)
     directory.mkdir(parents=True)
-    outbox.write_cursor(directory, partition="todos", last_seq=5,
-                        last_entry_id="local-shadow-tx-" + "a" * 64,
-                        last_partition_digest=None, last_cursor="5", last_provider_revision="rev-5")
+    # Synthetic wire input: only the native drain may publish real cursors.
+    outbox.durable_write_json(outbox.cursor_path(directory), {
+        "schema_version": outbox.DRAIN_CURSOR_SCHEMA, "partition": "todos", "last_seq": 5,
+        "last_entry_id": "local-shadow-tx-" + "a" * 64, "last_partition_digest": None,
+        "last_cursor": "5", "last_provider_revision": "rev-5", "updated_at": "2026-09-05T00:00:00Z",
+    })
     assert outbox.next_seq(directory) == 6
     first = _record_change(registry, state, runtime_root, "Recorded after the cursor hint.")
     second = _record_change(registry, state, runtime_root, "Another source transaction.")
@@ -425,14 +428,12 @@ def test_canonical_projection_rejects_floats_and_bad_lease_identity() -> None:
     assert canonical_bytes({"b": 1, "a": [True, None, "\u00e9"]}) == '{"a":[true,null,"\u00e9"],"b":1}'.encode("utf-8")
     assert sha256_digest({"b": [1, None], "a": "x"}) == sha256_digest({"a": "x", "b": [1, None]})
     with pytest.raises(ProjectionValueError):
-        lease_partition_projection([("todo-a", {"goal_id": "other", "todo_id": "todo-a"})], goal_id=GOAL_ID)
-    projection = lease_partition_projection(
-        [("todo-b", {"goal_id": GOAL_ID, "todo_id": "todo-b", "version": 1, "extra": "retained"}),
-         ("todo-a", {"goal_id": GOAL_ID, "todo_id": "todo-a", "version": 2, "status": "active"})],
-        goal_id=GOAL_ID,
+        compact_lease({"goal_id": "other", "todo_id": "todo-a"}, goal_id=GOAL_ID, file_stem="todo-a")
+    lease = compact_lease(
+        {"goal_id": GOAL_ID, "todo_id": "todo-b", "version": 1, "extra": "retained"},
+        goal_id=GOAL_ID, file_stem="todo-b",
     )
-    assert [lease["todo_id"] for lease in projection["leases"]] == ["todo-a", "todo-b"]
-    assert projection["leases"][1]["extra"] == "retained"
+    assert lease["extra"] == "retained"
 
 
 def test_capture_failure_is_typed_and_preserves_the_primary_result(tmp_path: Path) -> None:
@@ -508,9 +509,12 @@ def test_cursor_residue_is_diagnostic_and_requires_an_exact_receipt(tmp_path: Pa
     directory = _todo_dir(runtime_root)
     first, second = outbox.list_entries(directory)
     assert outbox.retired_residue(directory) == []
-    outbox.write_cursor(directory, partition="todos", last_seq=first.seq,
-                        last_entry_id=first.entry_id, last_partition_digest=first.recorded_partition_digest(),
-                        last_cursor="2", last_provider_revision="file:2:" + "1" * 24)
+    outbox.durable_write_json(outbox.cursor_path(directory), {
+        "schema_version": outbox.DRAIN_CURSOR_SCHEMA, "partition": "todos", "last_seq": first.seq,
+        "last_entry_id": first.entry_id, "last_partition_digest": first.recorded_partition_digest(),
+        "last_cursor": "2", "last_provider_revision": "file:2:" + "1" * 24,
+        "updated_at": "2026-09-05T00:00:00Z",
+    })
     assert [path.name for path in outbox.retired_residue(directory)] == sorted(
         [first.committed_path.name, first.prepared_path.name]
     )
@@ -540,14 +544,3 @@ def test_exact_receipts_allow_cursor_then_residue_cleanup(tmp_path: Path) -> Non
     assert recovered.reason_code is None, recovered.reason_code
     assert outbox.list_entries(directory) == []
     assert outbox.read_cursor(directory) == cursor
-
-
-def test_reclaim_validates_the_complete_batch_before_any_unlink(tmp_path: Path) -> None:
-    first, second = tmp_path / "first.json", tmp_path / "second.json"
-    first.write_bytes(b"first exact receipt bytes")
-    second.write_bytes(b"second changed after proof")
-    proof = [(first, outbox.raw_bytes_digest(first.read_bytes())), (second, outbox.raw_bytes_digest(b"different bytes"))]
-    with pytest.raises(outbox.OutboxError) as raised:
-        outbox.reclaim_verified_files(proof)
-    assert raised.value.reason_code == "outbox_file_changed"
-    assert first.exists() and second.exists()

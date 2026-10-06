@@ -109,11 +109,22 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
     }
 
 
-def test_planning_writes_real_todo_then_reuses_it_without_executing_task(planning_env):
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
+    planning_env, context
+):
+    planning_env["LOOPX_ITERATION_CONTEXT"] = context
     ids = []
-    for _ in range(2):
+    for invocation in range(2):
         receipt = run_once(planning_env)
         assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
+        # Planning cannot attest to an execution that has not happened yet.
+        assert "planning_session_reused_for_execution" not in receipt["planning"]
+        persisted = json.loads(Path(planning_env["LOOPX_PLANNING_RESULT"]).read_text())
+        assert persisted == receipt["planning"]
+        expected_action = "resume" if context == "resume" and invocation else "start_new"
+        assert receipt["session"]["action"] == expected_action
+        assert receipt["session"]["session_id"] == "planning-fixture-session"
         ids.append(receipt["planning"]["todo_ids"])
     state = Path(planning_env["LOOPX_REGISTRY"]).with_name("state.md").read_text()
     assert ids[0] == ids[1] and len(ids[0]) == 1
@@ -122,7 +133,8 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(plannin
     argv = json.loads(
         (Path(planning_env["LOOPX_CODEX_HOME"]) / "seen-argv.json").read_text()
     )
-    assert "features.goals=false" in argv and "resume" not in argv
+    assert "features.goals=false" in argv
+    assert ("resume" in argv) == (context == "resume")
     assert not list(
         Path(planning_env["LOOPX_RUNTIME_ROOT"]).rglob("benchmark-pending-turn.json")
     )
@@ -439,3 +451,51 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
             assert "task-phase-001.md" in todos[original]["text"]
 
     asyncio.run(scenario())
+
+
+def test_sforge_planning_entry_runs_inside_native_process_and_reuses_receipt(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)}
+    assert prepare_entry(env)
+    initial = list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(initial) == 1
+    assert prepare_entry(env)
+    assert list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json")) == initial
+    # Real process boundary retains the native transport environment and deadline.
+    marker = Path(env["LOOPX_PROJECT"]) / "handoff.json"
+    target = "import os,json,pathlib; pathlib.Path(%r).write_text(json.dumps({k:os.environ[k] for k in ['HTTPS_PROXY','LOOPX_PHASE_DEADLINE_EPOCH','LOOPX_TASK_STAGE']}))" % str(marker)
+    proxy = "http://api-only.invalid:9090"
+    result = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_entry",
+                             sys.executable, "-c", target], env=env | {"HTTPS_PROXY": proxy},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(marker.read_text()) == {"HTTPS_PROXY": proxy,
+        "LOOPX_PHASE_DEADLINE_EPOCH": env["LOOPX_PHASE_DEADLINE_EPOCH"],
+        "LOOPX_TASK_STAGE": "execute"}
+    saved = Path(env["LOOPX_PLANNING_RESULT"])
+    valid = json.loads(saved.read_text())
+    for mutation in ({"state_readback_verified": False}, {"todo_ids": ["missing"]},
+                     {"status": "blocked"}, {"todo_ids": valid["todo_ids"] * 2}):
+        saved.write_text(json.dumps(valid | mutation))
+        with pytest.raises(ValueError):
+            prepare_entry(env)
+    changed = valid | {"input_digest": "stale"}
+    saved.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="current task"):
+        prepare_entry(env)
+
+
+def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 150)}
+    assert not prepare_entry(env)
+    assert not Path(env["LOOPX_PLANNING_RESULT"]).exists()
+    assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
+
+
+def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    Path(planning_env["CODEX_BIN"]).write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+    with pytest.raises(RuntimeError):
+        prepare_entry(planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)})
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()

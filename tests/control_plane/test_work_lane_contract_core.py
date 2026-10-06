@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.control_plane.work_items.work_lane import (
     preserve_heartbeat_receipt_bound_work_lane,
@@ -276,6 +278,26 @@ def test_receipt_bound_advancement_retains_auxiliary_due_monitor_context() -> No
     assert preserved["monitor_policy"] == (
         "auxiliary_no_spend_observation_then_continue_bound_todo"
     )
+
+
+@pytest.mark.parametrize("contract", [
+    None,
+    {},
+    {"monitor_kind": "todo_monitor_due", "must_attempt_work": False},
+    {"monitor_kind": "todo_monitor_due", "must_attempt_work": 1},
+    {"monitor_kind": "external_monitor", "must_attempt_work": True},
+])
+def test_bound_advancement_does_not_invent_due_monitor_authority(contract) -> None:
+    preserved = preserve_heartbeat_receipt_bound_work_lane(
+        contract,
+        selected_todo={
+            "todo_id": "todo_bound_advancement",
+            "task_class": "advancement_task",
+            "selection_binding": "heartbeat_receipt",
+        },
+    )
+
+    assert preserved is contract
 
 
 def test_quiet_monitor_explains_blocked_non_monitor_todos() -> None:

@@ -230,11 +230,14 @@ def build_todo_index(
                 existing["latest_event_kind"] = latest_kind
                 existing["latest_event_at"] = event_item.get("latest_event_at")
                 existing["latest_event_status"] = event_item.get("latest_event_status")
-                if event_item.get("status"):
-                    existing["status"] = event_item.get("status")
-                    existing["done"] = bool(event_item.get("done"))
-                if event_item.get("agent_id"):
-                    existing["agent_id"] = event_item.get("agent_id")
+                # Audit receipts describe historical operations. They cannot
+                # replace the current authority's status or mint a claimant.
+                if existing.get("source") == "rollout_event_log":
+                    if event_item.get("status"):
+                        existing["status"] = event_item.get("status")
+                        existing["done"] = bool(event_item.get("done"))
+                    if event_item.get("agent_id"):
+                        existing["agent_id"] = event_item.get("agent_id")
                 # The audit sentence describes the newest event for every row
                 # kind; only event-only rows also carry `title_source`, and the
                 # text of an attention-queue row stays authoritative because

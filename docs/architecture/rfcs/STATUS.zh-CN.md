@@ -29,7 +29,7 @@
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/external-evidence-research-capability-v0/) |
+| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [2 条](ledger/external-evidence-research-capability-v0/) |
 | [RFC：前沿科学研究计划 v0](frontier-science-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Goal Channel 协作模型 v0](goal-channel-collaboration-v0.zh-CN.md) | 已接受 | 无 | — |

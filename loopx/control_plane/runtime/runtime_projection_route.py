@@ -495,6 +495,8 @@ def _route_projection_is_current(
         and row[marker_field].get("runtime_projection_route_id")
         == route_id
         and row[marker_field].get("source_generated_at") == source_generated_at
+        and row.get("json_exists") is True
+        and row.get("markdown_exists") is True
         for row in rows
     )
 

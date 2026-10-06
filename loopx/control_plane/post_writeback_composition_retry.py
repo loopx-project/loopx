@@ -237,6 +237,13 @@ def _current_composition_retry_row(
     return current
 
 
+def _separate_unterminated_jsonl_tail(handle: Any) -> None:
+    handle.seek(0)
+    content = handle.read()
+    if content and not content.endswith("\n"):
+        handle.write("\n")
+
+
 def append_composition_retry_receipt(
     log_path: Path, receipt: Mapping[str, Any]
 ) -> tuple[dict[str, Any], bool]:
@@ -262,6 +269,7 @@ def append_composition_retry_receipt(
             current = _current_composition_retry_row(handle, receipt_id)
             if current is not None and current.get("status") == "settled":
                 return current, False
+            _separate_unterminated_jsonl_tail(handle)
             handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=False) + "\n")
             _compact_composition_retry_journal(log_path, handle)
     return payload, True
@@ -371,7 +379,7 @@ def settle_composition_retry_receipt(
                 return current, False
             if current is None:
                 return {}, False
-            handle.seek(0, 2)
+            _separate_unterminated_jsonl_tail(handle)
             handle.write(json.dumps(settled, sort_keys=True, ensure_ascii=False) + "\n")
     return settled, True
 

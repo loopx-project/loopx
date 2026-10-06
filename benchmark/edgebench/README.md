@@ -93,3 +93,15 @@ Configuration receipts prove requested startup settings; actual session model,
 resume continuity, capability use, evaluator completion and integrity need
 runtime/post-run qualification before any score is countable. Raw trial outputs
 and credentials belong outside the public repository.
+
+## Optional short-context treatment
+
+Add `--turn-envelope` to an otherwise identical `heartbeat-resume` or
+`heartbeat-explore` command to use the product's short normal packet and local
+same-invocation full detail. Other workers reject the option before creating a
+trial. The default remains off; the runtime and worker-profile receipts record
+it explicitly. Use a new run ID and freeze this as a separate context treatment,
+keeping objective guidance, task/scorer version, model and budgets matched.
+Omit the flag on the next run to disable it. No active experiment is changed by
+installing this code. Inspect wake receipts and the saved decisions before
+claiming adoption; score countability still requires the usual integrity review.

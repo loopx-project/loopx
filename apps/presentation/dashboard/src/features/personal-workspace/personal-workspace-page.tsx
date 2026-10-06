@@ -40,6 +40,7 @@ import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
 import { GoalTeamResults } from "./goal-team-results";
 import { GoalManagedResults } from "./goal-managed-results";
+import { GoalResearchResults, type GoalResearchApi } from "./goal-research-results";
 import { sendLoopXMessage, type LoopXModeSnapshot } from "../../data/chat";
 import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
@@ -56,6 +57,7 @@ import type {
   PersonalWorkspaceCallbacks,
   WorkspaceAgentOption,
   WorkspaceActionPreview,
+  WorkspaceAttention,
   WorkspaceActionPreviewRequest,
   WorkspaceDrawerSelection,
   WorkspaceGoal,
@@ -204,6 +206,7 @@ function GoalOutputsView({
   teamSessionId,
   goalId,
   localResults,
+  researchApi,
 }: {
   active: boolean;
   items: Array<Extract<WorkspaceTimelineItem, { kind: "output" }>>;
@@ -212,6 +215,7 @@ function GoalOutputsView({
   teamSessionId?: string;
   goalId: string;
   localResults: boolean;
+  researchApi?: GoalResearchApi;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [teamSnapshot, setTeamSnapshot] = useState<LoopXModeSnapshot | null>(null);
@@ -263,6 +267,7 @@ function GoalOutputsView({
         ))}
         {localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} /> : null}
       </section>
+      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} /> : null}
       {active && teamSessionId && !teamSnapshot && !teamError ? <p className="personal-object-list-state" role="status">{t("files.checkingTeam")}</p> : null}
       {active && teamSessionId && teamError ? <p className="personal-object-list-state is-error" role="alert">{t("files.teamLoadFailed")} <button type="button" onClick={() => setTeamRefresh(value => value + 1)}>{t("startup.retry")}</button></p> : null}
       {active && teamConfigured && teamSessionId ? <GoalTeamResults sessionId={teamSessionId} zh={locale === "zh-CN"} refreshKey={JSON.stringify(teamSnapshot?.deliveries ?? [])} /> : null}
@@ -791,6 +796,7 @@ export function PersonalWorkspacePage({
   managerChannelBinding,
   managerRuntime,
   model,
+  researchApi,
   readOnly = false,
   typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
@@ -813,6 +819,7 @@ export function PersonalWorkspacePage({
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
+  researchApi?: GoalResearchApi;
   ownerLabel?: string;
   readOnly?: boolean;
   // Bumped when typed previews were stored outside this page, so the page
@@ -908,6 +915,22 @@ export function PersonalWorkspacePage({
   function suggestReply(text: string) {
     setComposer(composer ? `${composer}\n${text}` : text);
     composerRef.current?.focus();
+  }
+  // A draft for another Goal waits until that Goal's composer is the visible one.
+  const [composerPrefill, setComposerPrefill] = useState<{ goalId: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!composerPrefill || composerPrefill.goalId !== selectedGoalId) return;
+    setComposerPrefill(null);
+    suggestReply(composerPrefill.text);
+  }, [composerPrefill, selectedGoalId]);
+  function draftAttentionMessage(attention: WorkspaceAttention, intent: "reply" | "explain") {
+    const task = attention.text.length > 120 ? `${attention.text.slice(0, 119)}…` : attention.text;
+    const key = intent === "reply" ? "drawer.attentionReplyPrefill"
+      : attention.details?.interaction === "decision" ? "drawer.decisionExplainPrefill" : "drawer.attentionExplainPrefill";
+    if (attention.goalId !== selectedGoalId) selectGoal(attention.goalId, "chat");
+    openGoalConversation();
+    setSelection(null);
+    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) });
   }
   // The steward prompt set is owned by the client model; the quick-prompt row
   // reuses it so one affordance answers "what now / what blocks / what is proven".
@@ -1577,6 +1600,8 @@ export function PersonalWorkspacePage({
       callbacks.onOpenOutput?.(output);
     },
     onApplyProposal: applyProposal,
+    onExplainDecision: callbacks.onExplainDecision ?? ((attention) => draftAttentionMessage(attention, "explain")),
+    onReplyToAttention: callbacks.onReplyToAttention ?? draftAttentionMessage,
     onCancelProposal: async (proposal) => {
       setSelection(null);
       setProposals((current) => {
@@ -1990,7 +2015,8 @@ export function PersonalWorkspacePage({
                     reportState={model.periodicReports}
                     teamSessionId={!readOnly && selectedAgentId === "codex" ? conversationSessionId : undefined}
                     goalId={selectedGoal.goalId}
-                    localResults={!readOnly && selectedGoalTab === "files"}
+            localResults={!readOnly && selectedGoalTab === "files"}
+            researchApi={researchApi}
                   />),
                   chat: (<>
                     {selectedGoal && activeSessionRun?.goalId === selectedGoal.goalId ? (

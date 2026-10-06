@@ -283,3 +283,43 @@ def test_originless_local_git_settles_without_fabricating_repository(tmp_path, m
     code, repeated = journey._execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
     assert code == 0 and not repeated["appended"], repeated
     assert cli._spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_nested_originless_delivery_recovery_names_registered_workspace(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, _, _ = journey._source(
+        tmp_path, provider=provider, extra=f"claimed_by={cli.AGENT_ID}",
+    )
+    nested = project / "nested-source"
+    nested.mkdir()
+    subprocess.run(["git", "-C", str(nested), "init", "-q"], check=True)
+    code, guard = journey._guard(project, runtime, registry)
+    assert code == 0, guard
+
+    def refresh(workspace):
+        return cli._run_cli(
+            registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
+            "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+            "--turn-instance-id", cli.TURN_ID, "--delivery-boundary", "in_flight_continuation",
+            "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(workspace),
+            "--no-global-sync", "--suppress-external-sinks", cwd=nested,
+        )
+
+    code, rejected = refresh(nested)
+    assert code != 0 and not rejected["ok"] and not rejected["appended"], rejected
+    assert f"registered local Goal workspace: {str(project)!r}" in rejected["error"]
+    assert "actual producing worktree" in rejected["error"]
+    assert cli._spend_run_count(runtime) == 0
+
+    # Supplying the registered workspace changes attribution explicitly; merely
+    # residing below it does not silently admit a distinct originless repository.
+    code, recovered = refresh(project)
+    assert code == 0 and recovered["ok"], recovered
+    assert recovered["delivery_workspace"]["workspace_identity"] == f"loopx:{cli.GOAL_ID}"
+    assert str(project) not in json.dumps(recovered["delivery_workspace"])
+    code, spent = journey._execute(recovered["settlement_owed"]["command"], project, runtime, registry)
+    assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    code, retry = journey._execute(recovered["settlement_owed"]["command"], project, runtime, registry)
+    assert code == 0 and not retry["appended"], retry
+    assert cli._spend_run_count(runtime) == 1

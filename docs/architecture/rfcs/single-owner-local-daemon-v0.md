@@ -85,6 +85,13 @@ describes the operator selection. This closes a configuration-retention gap in
 the current two-service path; fixture/native storage readback does not establish
 login/reboot recovery, the proposed unified daemon or full profile migration.
 
+The same helper gives its full status-contract read a bounded 15-second total
+deadline. A real HTTP regression retains schema/read-only facts after a
+six-second response and rejects HTTP errors and a hung feed; old-schema
+warnings remain intact. This repairs a diagnostic false-negative in the
+existing path. It does not reduce collection latency, close sustained-operation
+acceptance or qualify the proposed readiness/profile API.
+
 ## 5. Proposed architecture
 
 ### Ownership and identity

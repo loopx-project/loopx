@@ -1205,9 +1205,11 @@ def refresh_state_run(
                 )
             if delivery_workspace is None:
                 raise ValueError(
-                    "delivery workspace could not be verified; run from the registered "
-                    "local Goal workspace or the selected repository worktree, or name "
-                    "that workspace with --delivery-workspace-path"
+                    "delivery workspace could not be verified; registered local Goal "
+                    f"workspace: {str(resolved_project)!r}. If this delivery belongs to "
+                    "that workspace, retry from it or pass it with --delivery-workspace-path. "
+                    "For a selected repository delivery, use the actual producing worktree; "
+                    "the registered Goal workspace does not replace that requirement."
                 )
         if checkpoint_supplement:
             # The supplemental row must not reattribute the original delivery to

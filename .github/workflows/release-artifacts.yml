@@ -22,8 +22,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing GitHub Release tag containing this release tooling"
+        description: "Existing GitHub Release tag to build without changing its product source"
         required: true
+        type: string
+      browser_fixture_commit:
+        description: "Optional full merged commit supplying corrected browser fixtures"
+        required: false
         type: string
 
 permissions:
@@ -214,6 +218,50 @@ jobs:
           "${RUNNER_TEMP}/loopx-wheel/bin/python" -m pip install --force-reinstall --no-deps "${RUNNER_TEMP}"/sdist-wheel/*.whl
           python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
 
+      - name: Resolve browser fixture correction without rebuilding product bytes
+        env:
+          BROWSER_FIXTURE_COMMIT: ${{ inputs.browser_fixture_commit }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          product = git("rev-parse", "HEAD")
+          fixture = os.environ.get("BROWSER_FIXTURE_COMMIT", "") or product
+          if not re.fullmatch(r"[0-9a-f]{40}", fixture):
+              raise SystemExit("browser fixture correction requires a full commit SHA")
+          if git("rev-parse", fixture + "^{commit}") != fixture:
+              raise SystemExit("browser fixture correction must name a commit")
+          allowed = {
+              "examples/personal-workspace-browser/fixture.mjs",
+              "examples/personal-workspace-browser/typed-actions.mjs",
+              "examples/personal-workspace-browser/goal-work-map.mjs",
+          }
+          changed = set(git("diff", "--name-only", product, fixture, "--", *sorted(allowed)).splitlines())
+          if fixture != product and not changed:
+              raise SystemExit("browser fixture commit contains no correction in the fixture owners")
+          if fixture != product:
+              subprocess.run(["git", "merge-base", "--is-ancestor", fixture, "origin/main"], check=True)
+              for path in sorted(changed):
+                  if git("ls-tree", fixture, "--", path).split()[0] != "100644":
+                      raise SystemExit("browser fixture correction must retain a regular source file")
+                  Path(path).write_bytes(subprocess.check_output(["git", "show", fixture + ":" + path]))
+          Path("dist/RELEASE-SOURCES.json").write_text(json.dumps({
+              "product_tag": os.environ["RELEASE_TAG"],
+              "product_commit": product,
+              "browser_fixture_commit": fixture,
+              "browser_fixture_paths": sorted(changed),
+              "workflow_commit": os.environ["GITHUB_SHA"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+          }, indent=2) + "\n")
+          PY
+
       - name: Exercise the installed page in a real browser
         working-directory: apps/presentation/dashboard
         env:
@@ -313,6 +361,23 @@ jobs:
       - name: Exercise release contract smoke
         run: python examples/release-artifacts-smoke.py
 
+      - name: Restore browser fixtures and bind verified package checksums
+        run: |
+          git restore -- examples/personal-workspace-browser/fixture.mjs examples/personal-workspace-browser/typed-actions.mjs examples/personal-workspace-browser/goal-work-map.mjs
+          python scripts/release_artifacts.py verify-checksums --dist-dir dist/packages --checksum-file dist/SHA256SUMS
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          identity = Path("dist/RELEASE-SOURCES.json")
+          record = json.loads(identity.read_text())
+          record["sha256"] = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in [*sorted(Path("dist/packages").iterdir()), Path("dist/SHA256SUMS")]
+          }
+          identity.write_text(json.dumps(record, indent=2) + "\n")
+          PY
+
       - name: Attest release packages and checksum manifest
         if: github.event_name != 'pull_request'
         uses: actions/attest@v4
@@ -320,6 +385,7 @@ jobs:
           subject-path: |
             dist/packages/*
             dist/SHA256SUMS
+            dist/RELEASE-SOURCES.json
 
       - name: Upload validated release bundle
         uses: actions/upload-artifact@v7
@@ -364,6 +430,7 @@ jobs:
           gh release upload "${RELEASE_TAG}" \
             dist/packages/* \
             dist/SHA256SUMS \
+            dist/RELEASE-SOURCES.json \
             --repo "${GITHUB_REPOSITORY}"
 
   publish-pypi:

@@ -11,6 +11,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -50,6 +53,61 @@ def run_script(fake_bin: Path, home: Path, args: list[str], *, schema_version: i
 
 def run_status(fake_bin: Path, home: Path, *, schema_version: int, write_enabled: bool = False) -> str:
     return run_script(fake_bin, home, ["status"], schema_version=schema_version, write_enabled=write_enabled).stdout
+
+
+def check_real_status_deadline(fake_bin: Path, home: Path) -> None:
+    """Exercise the public helper with real curl, not a mocked deadline."""
+    real_curl = shutil.which("curl")
+    assert real_curl, "curl is required for the status HTTP regression"
+    response = {"delay": 6, "version": 2, "code": 200}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            assert self.path == "/status.json", self.path
+            time.sleep(response["delay"])
+            payload = json.dumps({
+                "status_contract": {"schema_version": response["version"], "producer": "loopx status"},
+                "local_dashboard_api": {"control_plane_write_enabled": False},
+            }).encode()
+            try:
+                self.send_response(response["code"])
+                self.end_headers()
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The bounded client deliberately abandons the hung feed.
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    mocked_curl = fake_bin / "curl.mocked"
+    (fake_bin / "curl").rename(mocked_curl)
+    (fake_bin / "curl").symlink_to(real_curl)
+    try:
+        def read_status() -> str:
+            return run_script(fake_bin, home, ["status"], schema_version=2,
+                              extra_env={"LOOPX_STATUS_PORT": str(server.server_port),
+                                         "LOOPX_DASHBOARD_HOST": "127.0.0.1"}).stdout
+
+        delayed = read_status()
+        assert "status_contract: schema_version=2 producer=loopx status" in delayed, delayed
+        assert "control_plane_write_api: disabled" in delayed, delayed
+        response.update(delay=0, version=1)
+        assert "warning: status feed is using an old contract" in read_status()
+        response.update(version=2, code=503)
+        assert "status_contract: unavailable" in read_status()
+        response.update(delay=40, code=200)
+        started = time.monotonic()
+        assert "status_contract: unavailable" in read_status()
+        assert time.monotonic() - started < 25, "a hung feed must not make status wait indefinitely"
+    finally:
+        (fake_bin / "curl").unlink()
+        mocked_curl.rename(fake_bin / "curl")
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def log_rotation_prelude(plist: Path) -> str:
@@ -268,6 +326,8 @@ def main() -> int:
         assert "LaunchAgents:" in current_output, current_output
         assert "URLs:" in current_output, current_output
         assert "Logs:" in current_output, current_output
+
+        check_real_status_deadline(fake_bin, home)
 
         run_script(fake_bin, home, ["install"], schema_version=2)
         status_plist = home / "Library" / "LaunchAgents" / "com.loopx.status.plist"

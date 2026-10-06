@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -198,4 +199,95 @@ add_goal_todo(registry_path=Path(sys.argv[1]), goal_id="goal-a", role="agent",
     result = json.loads(retried.stdout)
     assert result["status"] == "replayed"
     assert result["todo_id"] == before["todos"][0]["todo_id"]
+    assert read(runtime) == before
+
+
+def test_create_transaction_does_not_prefetch_the_complete_source(promoted, monkeypatch):
+    registry, runtime, _ = promoted
+    reads = []
+    real = provider_create.read_canonical_todos_if_promoted
+
+    def observe(**kwargs):
+        reads.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(provider_create, "read_canonical_todos_if_promoted", observe)
+    created = add_goal_todo(**intent(registry))
+    current = read(runtime)
+    assert current["todos"][0]["todo_id"] == created["todo_id"]
+    assert current["todos"][0]["completion_validation_required"] is True
+    # Fresh creation has no source facts to consume in Python. The native
+    # transaction validates its complete head; projection retains its own read.
+    assert reads == []
+    add_goal_todo(**intent(registry))
+    assert len(reads) == 1  # Validator replay still verifies the current digest.
+    assert read(runtime) == current
+
+
+@pytest.mark.parametrize("existing_receipt", [False, True])
+def test_create_transaction_rejects_an_inconsistent_complete_head(promoted, existing_receipt):
+    registry, runtime, state = promoted
+    original = {key: value for key, value in intent(registry).items()
+                if not key.startswith("validation_")}
+    if existing_receipt:
+        add_goal_todo(**original)
+    provider = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts"
+    script = (
+        f"import {{openLocalAuthorityStore}} from {json.dumps(provider.as_uri())};"
+        "const store=await openLocalAuthorityStore(process.argv[1],'goal-a');"
+        "const loaded=await store.loadAuthority('goal-a');"
+        "if(process.argv[2]==='damage'){"
+        "const projection=structuredClone(loaded.head);projection.todo_read_model.todo_count+=1;"
+        "const commit=await store.commitAuthority({expected_provider_revision:loaded.provider_revision,"
+        "operation_id:'inconsistent-fixture',events:[],next_projection:projection,receipts:[]});"
+        "if(commit.status!=='applied')throw new Error(JSON.stringify(commit));"
+        "}"
+        "process.stdout.write(JSON.stringify(await store.loadAuthority('goal-a')));"
+    )
+
+    def head(action):
+        child = subprocess.run(
+            ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
+             "-e", script, str(runtime), action], capture_output=True, text=True, timeout=45,
+        )
+        assert child.returncode == 0, child.stderr
+        return json.loads(child.stdout)
+
+    damaged = head("damage")
+    display = state.read_bytes()
+    with pytest.raises(LocalCoordinationAuthorityUnavailable):
+        add_goal_todo(**{**intent(registry), "operation_id": "new-create-on-damaged-head"})
+    assert head("read") == damaged
+    assert state.read_bytes() == display
+    assert len(damaged["head"]["todos"]) == int(existing_receipt)
+    if existing_receipt:
+        replay = add_goal_todo(**original)
+        assert replay["status"] == "replayed"
+        assert replay["changed"] is False
+        assert replay["projection_delivery"] == "pending"
+        assert head("read") == damaged  # A historical receipt grants no new write.
+        assert state.read_bytes() == display
+
+
+def test_missing_promoted_provider_cannot_create_through_markdown(promoted):
+    registry, runtime, state = promoted
+    before = read(runtime)
+    display = state.read_bytes()
+    backend = runtime / "authority" / {
+        "file_v0": "file-v0", "sqlite_v0": "sqlite-v0",
+    }[before["source_authority"]]
+    offline = backend.with_name(backend.name + "-offline")
+    backend.rename(offline)
+    try:
+        child = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--registry", str(registry), "--format", "json",
+            "todo", "add", "--goal-id", "goal-a", "--role", "agent",
+            "--text", "Reject a missing canonical provider", "--claimed-by", "agent-a",
+            "--operation-id", "missing-provider-create",
+        ], capture_output=True, text=True, timeout=60)
+        assert child.returncode != 0, child.stdout + child.stderr
+        assert json.loads(child.stdout)["ok"] is False
+        assert state.read_bytes() == display
+    finally:
+        offline.rename(backend)
     assert read(runtime) == before

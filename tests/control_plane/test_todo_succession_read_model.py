@@ -142,6 +142,25 @@ def test_evaluation_does_not_mutate_or_expand_input_rows():
     assert "succession_evaluation" not in original
 
 
+@pytest.mark.parametrize("unqualified_position", [0, 1])
+def test_ephemeral_evidence_cannot_be_supplied_by_public_fields(unqualified_position):
+    from loopx.control_plane.todos.succession_warning import (
+        evaluate_succession, succession_evaluations,
+    )
+
+    rows = [work("todo_source", no_followup=True)]
+    evaluations = evaluate_succession(rows)
+    assert succession_evaluations(rows) == evaluations
+    assert succession_evaluations([]) == []
+    forged = {**rows[0], "succession_evaluation": evaluations[0]}
+    mixed = list(rows)
+    mixed.insert(unqualified_position, forged)
+
+    with pytest.raises(ValueError, match="matching full-source succession evaluation"):
+        succession_evaluations(mixed)
+    assert succession_evaluations(rows) == evaluations
+
+
 @pytest.mark.parametrize("mutation", ["columns", "row_width", "cardinality"])
 def test_succession_wire_response_cannot_silently_rebind_fields(monkeypatch, mutation):
     from loopx.control_plane.todos import succession_warning as owner

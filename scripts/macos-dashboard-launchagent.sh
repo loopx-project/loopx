@@ -613,7 +613,10 @@ print_status_contract_health() {
     echo "- control_plane_write_api: unknown"
     return
   fi
-  status_json="$(curl -fsS --connect-timeout 1 --max-time 5 "$status_url" 2>/dev/null || true)"
+  # The full feed collects registered Goals; it is not a cheap liveness probe.
+  # Allow a bounded read beyond five seconds while retaining connection failure
+  # and contract-version checks. This does not make a slow feed healthy.
+  status_json="$(curl -fsS --connect-timeout 1 --max-time 15 "$status_url" 2>/dev/null || true)"
   if [[ -z "$status_json" ]]; then
     echo "- status_contract: unavailable (status feed not reachable)"
     echo "- control_plane_write_api: unknown"

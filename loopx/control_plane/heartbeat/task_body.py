@@ -51,6 +51,7 @@ def bind_exact_turn_settlement_task_body(
     task_body: str,
     *,
     turn_instance_id: str | None,
+    captured_envelope: bool = False,
 ) -> str:
     if turn_instance_id is None:
         return task_body
@@ -58,9 +59,11 @@ def bind_exact_turn_settlement_task_body(
         "LOOPX_TURN=<current_time_iso>",
         f"LOOPX_TURN={turn_instance_id}",
     )
+    plan_path = ("writeback.settlement_plan.ordered_steps" if captured_envelope
+                 else "interaction_contract.cli_channel.settlement_plan.ordered_steps")
     return (
         f"{bound}\n\nFor accountable delivery, execute "
-        "`interaction_contract.cli_channel.settlement_plan.ordered_steps` "
+        f"`{plan_path}` "
         "in order using its exact identity and effect id. Do not fall back "
         "to static unbound refresh or spend commands."
     )
@@ -652,6 +655,7 @@ def render_thin_heartbeat_task_body(
     brief_prompt_command: str,
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
+    captured_envelope: bool = False,
 ) -> str:
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,
@@ -663,6 +667,38 @@ def render_thin_heartbeat_task_body(
         if pr_review_pre_quota_command
         else ""
     )
+    if captured_envelope:
+        return f"""Advance `{goal_id}` from {active_state}.
+
+{HOST_LOOP_SAFETY_RULE}
+{scope_sentence}
+Use TurnEnvelope: `action.must_attempt` requires work; `user.notify` controls
+output only. ok=false -> recovery, no delivery. Language=user. Honor `boundary`, `execution_policy`, `contract_capsule`,
+`required_reads`, `agent_context`, and `replan_action_packet` when present.
+Read `detail_ref.full_decision` for selection, replan, capability context or
+missing/truncated commands: same-invocation observation, not fresh admission.
+Selection uses the saved `interaction_contract.cli_channel.selection_command`.
+Keep the guard's --turn-envelope and --decision-output-root on every fresh
+selection/repair/replan guard; each call saves its own immutable observation.
+After a workspace or state change, re-enter the guard before continuing work.
+
+```sh
+LOOPX_TURN=<current_time_iso>
+{pr_review_pre_quota_instruction}{quota_guard_command}
+```
+{SCOPE_BOUNDED_WORK_RULE}
+Observed capabilities -> --available-capability, never a user gate.
+Apply `scheduler` as projected; read the saved full decision for exact ACK args.
+Exact monitor settlement=no refresh/spend; auxiliary poll continues work.
+Validate work; execute `writeback.settlement_plan` and `writeback.next_cli_actions` with
+their exact identity. Do not guess commands from abbreviated previews.
+Writeback needs outcome and vision; unchanged reason requires an existing
+current evidence-linked vision. Missing vision after writeback -> same-Turn
+checkpoint-context then evidence; stale -> reread. Done -> complete Todo; waiting -> monitor and
+successor. Two stalls -> replan. P0 blocked -> safe P1/P2; quiet polls do not spend.
+`agent_read_required`: read/triage before work, settle/ACK.
+{reward_memory_rule}
+{policy_tail}"""
     return f"""Advance `{goal_id}` from {active_state}.
 
 {RUNTIME_EXECUTION_ROUTING_RULE}

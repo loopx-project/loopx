@@ -120,7 +120,9 @@ def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_cop
 ):
     env = worker_env(tmp_path)
     for _ in range(2):
-        assert run_once(env)["ok"]
+        receipt = run_once(env)
+        assert receipt["ok"]
+        assert "turn_envelope" not in receipt
     logs = tmp_path / "logs"
     assert len(list((logs / "sessions").glob("*.jsonl"))) == 2
     calls = [json.loads(p.read_text()) for p in (logs / "wakes").glob("*/stdout.jsonl")]
@@ -464,6 +466,47 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     env = worker_env(tmp_path) | {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "worker", "LOOPX_REGISTRY": "registry", "LOOPX_RUNTIME_ROOT": "runtime"}
     assert execution.timeout_seconds is None
     assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled)
+    commands = []
+    async def no_op(*args, **kwargs):
+        return None
+    async def stage(*args, **kwargs):
+        agent._runner_commit = "fixture"
+        return "fixture"
+    async def execute(*args, **kwargs):
+        commands.append(kwargs.get("command", ""))
+        return SimpleNamespace(stdout='{"ok": true}', stderr="", return_code=0)
+    for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
+        monkeypatch.setenv(key, str(tmp_path))
+    monkeypatch.setattr(CodexOffline, "install", no_op)
+    monkeypatch.setattr(agent, "_stage_source", stage)
+    monkeypatch.setattr(agent, "exec_as_root", execute)
+    monkeypatch.setattr(agent, "exec_as_agent", execute)
+    monkeypatch.setattr(agent, "_get_env", lambda key: None)
+    asyncio.run(agent.install(SimpleNamespace(default_user="fixture", upload_dir=no_op)))
+    command = next(c for c in commands if "> /logs/agent/loopx-install.json" in c)
+    receipt = json.loads(shlex.split(command)[2])
+    assert ("turn_envelope" in receipt) is enabled
+    if enabled:
+        assert receipt["turn_envelope"] is True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env["LOOPX_TURN_ENVELOPE"] = "1" if enabled else "0"
+    receipt = run_once(env)
+    assert receipt["ok"], receipt
+    assert ("turn_envelope" in receipt) is enabled
+    if enabled:
+        assert receipt["turn_envelope"] is True
 
 
 @pytest.mark.parametrize("observed", [

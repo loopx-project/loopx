@@ -72,6 +72,55 @@ impl Maintenance {
             .map_err(|_| "update_busy")?;
         Ok(BusyGuard(&self.busy))
     }
+
+    async fn run_automatic_update<T, Check, Apply, ApplyFuture, Restart>(
+        &self,
+        channel: &str,
+        check: Check,
+        apply: Apply,
+        restart: Restart,
+    ) -> Result<Option<()>, String>
+    where
+        Check: std::future::Future<Output = Result<Option<T>, String>>,
+        Apply: FnOnce(T) -> ApplyFuture,
+        ApplyFuture: std::future::Future<Output = Result<(), String>>,
+        Restart: FnOnce(),
+    {
+        if self.busy.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        // Automatic startup work owns supervision, while an explicit action
+        // reserves `busy` and waits here instead of failing with update_busy.
+        let Ok(_supervision) = self.supervision.try_lock() else {
+            return Ok(None);
+        };
+        if self.busy.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let result: Result<(), String> = async {
+            if let Some(update) = check.await? {
+                if self.busy.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                apply(update).await?;
+                // Installation cannot be interrupted. Once it finishes, either
+                // an admitted manual request reads restart_required or this
+                // transaction reserves the non-returning restart atomically.
+                let Ok(_restart_reservation) = self.acquire() else {
+                    return Ok(());
+                };
+                restart();
+            }
+            Ok(())
+        }
+        .await;
+        // A queued explicit action must become the final snapshot writer.
+        if let Err(error) = &result {
+            self.publish_failure(error, channel);
+        }
+        result.map(Some)
+    }
+
     fn publish(&self, phase: &str, details: Value) -> Value {
         let value = json!({"phase": phase, "details": details});
         // The pairing decision belongs with the other blocked states: the
@@ -756,25 +805,31 @@ fn automatic_app_update(app: &AppHandle) {
     } else {
         "stable"
     };
-    let result: Result<(), String> = tauri::async_runtime::block_on(async {
-        let _guard = state.acquire()?;
-        let url = endpoint(channel)?;
-        let checked = perform(app, "check", channel, url.clone()).await?;
-        if checked["phase"] == "available" {
-            perform(app, "apply", channel, url).await?;
-            app.restart();
-        }
-        Ok(())
-    });
+    let result: Result<Option<()>, String> =
+        tauri::async_runtime::block_on(state.run_automatic_update(
+            channel,
+            async {
+                let url = endpoint(channel)?;
+                let checked = perform(app, "check", channel, url.clone()).await?;
+                Ok((checked["phase"] == "available").then_some(url))
+            },
+            |url| async move {
+                perform(app, "apply", channel, url).await?;
+                Ok(())
+            },
+            || app.restart(),
+        ));
     if let Err(error) = result {
-        state.publish_failure(&error, channel);
         eprintln!("LoopX automatic App update deferred: {error}");
     }
     // An unavailable feed/signature never certifies freshness or prevents use
     // of the installed App. Diagnostics retain the failed check.
 }
 
-pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::ServiceSet>, String> {
+pub fn start_services(
+    app: &AppHandle,
+    endpoints: &crate::service_endpoints::ServiceEndpoints,
+) -> Result<Option<crate::services::ServiceSet>, String> {
     app.state::<Maintenance>()
         .startup_started
         .get_or_init(Instant::now);
@@ -795,7 +850,7 @@ pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::Service
                 return Err(error);
             }
         };
-        crate::services::ServiceSet::start(&runtime, |pending| {
+        crate::services::ServiceSet::start(&runtime, endpoints, |pending| {
             let service = crate::services::ServiceKind::pending_label(pending);
             app.state::<Maintenance>()
                 .publish("connecting", json!({"service":service}));
@@ -811,6 +866,53 @@ pub fn reconnect_requested(app: &AppHandle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finish_queued_manual_after_automatic_failure(
+        manual: impl FnOnce(&Maintenance) + Send + 'static,
+    ) -> std::sync::Arc<Maintenance> {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (automatic_started_tx, automatic_started_rx) = std::sync::mpsc::channel();
+        let (manual_admitted_tx, manual_admitted_rx) = std::sync::mpsc::channel();
+        let (release_automatic_tx, release_automatic_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async move {
+                    automatic_started_tx.send(()).unwrap();
+                    release_automatic_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    Err::<Option<()>, String>("update_check_failed".into())
+                },
+                |_| async { Ok(()) },
+                || {},
+            ))
+            .unwrap_err()
+        });
+        automatic_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let manual_state = std::sync::Arc::clone(&state);
+        let explicit = std::thread::spawn(move || {
+            let _manual = manual_state.acquire().unwrap();
+            manual_admitted_tx.send(()).unwrap();
+            tauri::async_runtime::block_on(async {
+                let _supervision = manual_state.supervision.lock().await;
+                manual(&manual_state);
+            });
+        });
+        manual_admitted_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        release_automatic_tx.send(()).unwrap();
+
+        assert_eq!(automatic.join().unwrap(), "update_check_failed");
+        explicit.join().unwrap();
+        state
+    }
+
     #[test]
     fn automatic_preparation_is_bounded_and_recovery_reuses_the_supervisor() {
         let state = Maintenance::default();
@@ -915,6 +1017,287 @@ mod tests {
         }));
         assert!(state.acquire().is_ok());
     }
+
+    #[test]
+    fn queued_manual_success_supersedes_automatic_failure() {
+        let state = finish_queued_manual_after_automatic_failure(|state| {
+            state.manual_failure_pending.store(false, Ordering::Release);
+            state.publish("available", json!({"version":"1.3.1"}));
+        });
+
+        assert_eq!(state.snapshot.lock().unwrap()["phase"], "available");
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "update_check_failed"
+        );
+        assert!(!state.manual_failure_pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn queued_manual_failure_supersedes_automatic_failure() {
+        let state = finish_queued_manual_after_automatic_failure(|state| {
+            state.manual_failure_pending.store(false, Ordering::Release);
+            state.publish_manual_failure("runtime_install_exit_23", "stable");
+        });
+
+        assert_eq!(
+            state.snapshot.lock().unwrap()["details"]["code"],
+            "runtime_install_exit_23"
+        );
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "runtime_install_exit_23"
+        );
+        assert!(state.manual_failure_pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn automatic_failure_is_published_before_supervision_is_released() {
+        let state = Maintenance::default();
+        let error = tauri::async_runtime::block_on(state.run_automatic_update(
+            "stable",
+            async { Err::<Option<()>, String>("update_check_failed".into()) },
+            |_| async { Ok(()) },
+            || {},
+        ))
+        .unwrap_err();
+
+        assert_eq!(error, "update_check_failed");
+        assert_eq!(
+            state.snapshot.lock().unwrap()["details"]["code"],
+            "update_check_failed"
+        );
+    }
+
+    #[test]
+    fn automatic_update_yields_to_an_admitted_manual_action() {
+        let state = Maintenance::default();
+        let _manual = state.acquire().unwrap();
+        let ran = std::cell::Cell::new(false);
+        let result = tauri::async_runtime::block_on(state.run_automatic_update(
+            "stable",
+            async {
+                ran.set(true);
+                Ok(None::<()>)
+            },
+            |_| async { Ok(()) },
+            || {},
+        ))
+        .unwrap();
+        assert!(result.is_none());
+        assert!(!ran.get(), "automatic update must yield to explicit work");
+    }
+
+    #[test]
+    fn queued_manual_before_available_update_preempts_automatic_install() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let applied = std::sync::Arc::new(AtomicBool::new(false));
+        let restarted = std::sync::Arc::new(AtomicBool::new(false));
+        let (check_started_tx, check_started_rx) = std::sync::mpsc::channel();
+        let (release_check_tx, release_check_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let automatic_applied = std::sync::Arc::clone(&applied);
+        let automatic_restarted = std::sync::Arc::clone(&restarted);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async move {
+                    check_started_tx.send(()).unwrap();
+                    release_check_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    Ok(Some(()))
+                },
+                move |_| async move {
+                    automatic_applied.store(true, Ordering::Release);
+                    Ok(())
+                },
+                move || automatic_restarted.store(true, Ordering::Release),
+            ))
+            .unwrap()
+        });
+        check_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_check_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), Some(()));
+        assert!(
+            !applied.load(Ordering::Acquire),
+            "an admitted manual request must run before automatic installation"
+        );
+        assert!(!restarted.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn queued_manual_during_install_reads_restart_required_before_restart() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let restarted = std::sync::Arc::new(AtomicBool::new(false));
+        let (install_started_tx, install_started_rx) = std::sync::mpsc::channel();
+        let (release_install_tx, release_install_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let install_state = std::sync::Arc::clone(&state);
+        let automatic_restarted = std::sync::Arc::clone(&restarted);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async { Ok(Some(())) },
+                move |_| async move {
+                    install_started_tx.send(()).unwrap();
+                    release_install_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    install_state.complete_app_replacement(json!({"version":"1.3.1"}));
+                    Ok(())
+                },
+                move || automatic_restarted.store(true, Ordering::Release),
+            ))
+            .unwrap()
+        });
+        install_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_install_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), Some(()));
+        assert_eq!(state.status_snapshot()["phase"], "restart_required");
+        tauri::async_runtime::block_on(async {
+            let _supervision = state.supervision.lock().await;
+            assert_eq!(
+                allow_action(
+                    state.snapshot.lock().unwrap()["phase"]
+                        .as_str()
+                        .unwrap_or("idle"),
+                    "repair",
+                ),
+                Err("restart_required".into())
+            );
+        });
+        assert!(
+            !restarted.load(Ordering::Acquire),
+            "automatic restart must not discard an admitted manual response"
+        );
+    }
+
+    #[test]
+    fn queued_manual_runs_after_automatic_check_finds_no_update() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (check_started_tx, check_started_rx) = std::sync::mpsc::channel();
+        let (release_check_tx, release_check_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let check_state = std::sync::Arc::clone(&state);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async move {
+                    check_started_tx.send(()).unwrap();
+                    release_check_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    check_state.publish("up_to_date", json!({"channel":"stable"}));
+                    Ok(None::<()>)
+                },
+                |_| async { panic!("no update must not install") },
+                || panic!("no update must not restart"),
+            ))
+            .unwrap()
+        });
+        check_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_check_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), Some(()));
+        let manual_result = tauri::async_runtime::block_on(async {
+            let _supervision = state.supervision.lock().await;
+            allow_action(
+                state.snapshot.lock().unwrap()["phase"]
+                    .as_str()
+                    .unwrap_or("idle"),
+                "check",
+            )?;
+            Ok::<Value, String>(state.publish("available", json!({"version":"1.3.1"})))
+        })
+        .unwrap();
+        assert_eq!(manual_result["phase"], "available");
+        assert_eq!(state.status_snapshot(), manual_result);
+    }
+
+    #[test]
+    fn queued_manual_result_supersedes_automatic_install_failure() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (install_started_tx, install_started_rx) = std::sync::mpsc::channel();
+        let (release_install_tx, release_install_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async { Ok(Some(())) },
+                move |_| async move {
+                    install_started_tx.send(()).unwrap();
+                    release_install_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    Err("app_install_failed".into())
+                },
+                || panic!("a failed install must not restart"),
+            ))
+            .unwrap_err()
+        });
+        install_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_install_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), "app_install_failed");
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "app_install_failed"
+        );
+        let manual_result = tauri::async_runtime::block_on(async {
+            let _supervision = state.supervision.lock().await;
+            state.manual_failure_pending.store(false, Ordering::Release);
+            state.publish("connecting", json!({}))
+        });
+        assert_eq!(manual_result["phase"], "connecting");
+        assert_eq!(state.status_snapshot(), manual_result);
+    }
+
+    #[test]
+    fn automatic_install_restarts_when_no_manual_request_is_pending() {
+        let state = Maintenance::default();
+        let restarted = AtomicBool::new(false);
+        let result = tauri::async_runtime::block_on(state.run_automatic_update(
+            "stable",
+            async { Ok(Some(())) },
+            |_| async {
+                state.complete_app_replacement(json!({"version":"1.3.1"}));
+                Ok(())
+            },
+            || {
+                assert_eq!(
+                    state.acquire().err().as_deref(),
+                    Some("update_busy"),
+                    "automatic restart reservation rejects a late manual request"
+                );
+                restarted.store(true, Ordering::Release);
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(result, Some(()));
+        assert!(restarted.load(Ordering::Acquire));
+        assert_eq!(state.status_snapshot()["phase"], "restart_required");
+        assert!(
+            state.acquire().is_ok(),
+            "test restart returned and released"
+        );
+    }
+
     #[test]
     fn replaced_app_requires_restart_before_another_transaction() {
         for action in ["check", "apply", "repair", "align_runtime", "rollback"] {

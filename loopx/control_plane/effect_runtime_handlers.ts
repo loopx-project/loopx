@@ -267,7 +267,6 @@ export function createEffectRuntimeHandlers(
     ["todo.completion_fence.evaluate", lazyHandler(() => import("./todos/completion_fence.ts"), ({evaluateTodoCompletionFence}) => evaluateTodoCompletionFence)],
     ["todo.completion_state.normalize", lazyHandler(() => import("./todos/completion_state.ts"), ({normalizeTodoCompletionValue}) => normalizeTodoCompletionValue)],
     ["todo.completion_state.require_metadata", lazyHandler(() => import("./todos/completion_state.ts"), ({requireTodoCompletionMetadataValue}) => requireTodoCompletionMetadataValue)],
-    ["todo.completion_state.continuation_for_write", lazyHandler(() => import("./todos/completion_state.ts"), ({selectTodoCompletionContinuation}) => selectTodoCompletionContinuation)],
     ["todo.field_update.plan", lazyHandler(() => import("./todos/field_update.ts"), ({planTodoFieldUpdate}) => planTodoFieldUpdate)],
     ["todo.priority.plan", lazyHandler(() => import("./todos/priority.ts"), ({evaluateTodoPriority}) => evaluateTodoPriority)],
     ["todo.public_update.plan", lazyHandler(() => import("./todos/public_update.ts"), ({planPublicTodoUpdate}) => planPublicTodoUpdate)],

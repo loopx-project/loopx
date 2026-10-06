@@ -9,8 +9,8 @@ whether a safe fallback may continue, or whether the projection itself needs
 repair.
 
 This contract turns the interaction catalog's Decision Scope Model into a
-machine-facing schema. It does not implement the runtime migration by itself;
-CLI/state/status/quota consumers should use this shape as the migration target.
+machine-facing schema. The shared TypeScript decision-dependency owner evaluates
+it for status/quota; Python adapters normalize inputs and validate responses.
 
 ## Fields
 
@@ -109,6 +109,19 @@ comparison and notification behavior.
 ```
 
 ## Status And Quota Rules
+
+### Typed transport boundary
+
+The internal `todo.decision_scope.evaluate` transport retains `consistency`,
+`standing`, `relation`, `relations`, `fallback`, and `gate_scopes`. The unused
+scalar operations `covers`, `scope_relation`, and `exact_relation`, and their
+Python adapters, have been removed; those operation requests fail explicitly.
+The underlying TypeScript coverage and exact-target rules remain part of the
+combined evaluation, including rejection of conflicting exact targets.
+
+This retirement changes an internal transport surface, not Todo metadata,
+user-facing CLI operations, provider defaults, permissions, or approval
+consumption. Existing input codecs and response schema/cardinality checks remain.
 
 Status and quota should read decision scopes in this order:
 

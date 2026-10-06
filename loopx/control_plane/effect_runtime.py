@@ -898,7 +898,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     pass
                 continue
             try:
-                if time.time() - lock.stat().st_mtime > 10:
+                if holder_pid is None and time.time() - lock.stat().st_mtime > 10:
                     lock.unlink(missing_ok=True)
             except OSError:
                 pass

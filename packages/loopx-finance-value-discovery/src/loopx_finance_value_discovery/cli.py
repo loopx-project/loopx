@@ -172,7 +172,7 @@ def _direct_parser() -> argparse.ArgumentParser:
     sub.add_parser("list-packs", help="List bundled industry metric packs.")
     lark_parser = sub.add_parser(
         "render-lark-card",
-        help="Render source-period evidence from the canonical dashboard view.",
+        help="Render research conclusions and evidence from the canonical dashboard view; no send.",
     )
     lark_parser.add_argument(
         "--input-json",
@@ -270,12 +270,12 @@ def run(argv: Sequence[str] | None = None) -> int:
             packet = list_finance_metric_packs()
         elif args.command == "render-lark-card":
             from .dashboard import build_finance_research_dashboard_packet
-            from .lark_projection import build_source_period_metrics_lark_card
+            from .lark_projection import build_decision_research_lark_card
 
             dashboard = build_finance_research_dashboard_packet(
                 _load_json(args.input_json)
             )
-            packet = build_source_period_metrics_lark_card(
+            packet = build_decision_research_lark_card(
                 dashboard["presentation_projection"]["view"]
             )
         else:

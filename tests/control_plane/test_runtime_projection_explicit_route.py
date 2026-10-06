@@ -139,6 +139,54 @@ def test_explicit_candidates_do_not_discover_other_roots(tmp_path: Path, monkeyp
     ) == [root]
 
 
+@pytest.mark.parametrize("missing_path_key", ["json_path", "markdown_path"])
+def test_route_projection_with_missing_artifact_is_not_current(
+    tmp_path: Path,
+    missing_path_key: str,
+) -> None:
+    runtime = tmp_path / "runtime"
+    runs = runtime / "goals" / DEFAULT_CONFLICT_GOAL / "runs"
+    runs.mkdir(parents=True)
+    json_path = runs / "projection.json"
+    markdown_path = runs / "projection.md"
+    json_path.write_text("{}\n", encoding="utf-8")
+    markdown_path.write_text("# projection\n", encoding="utf-8")
+    (runs / "index.jsonl").write_text(
+        json.dumps(
+            {
+                "json_path": str(json_path),
+                "markdown_path": str(markdown_path),
+                "shared_runtime_projection": {
+                    "runtime_projection_route_id": "route-a",
+                    "source_generated_at": "2026-10-06T00:00:00Z",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert runtime_projection_route._route_projection_is_current(
+        target_runtime_root=runtime,
+        goal_id=DEFAULT_CONFLICT_GOAL,
+        route_id="route-a",
+        source_generated_at="2026-10-06T00:00:00Z",
+        marker_field="shared_runtime_projection",
+    )
+
+    Path(
+        {"json_path": json_path, "markdown_path": markdown_path}[missing_path_key]
+    ).unlink()
+
+    assert not runtime_projection_route._route_projection_is_current(
+        target_runtime_root=runtime,
+        goal_id=DEFAULT_CONFLICT_GOAL,
+        route_id="route-a",
+        source_generated_at="2026-10-06T00:00:00Z",
+        marker_field="shared_runtime_projection",
+    )
+
+
 def test_invalid_default_root_is_not_treated_as_a_conflict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     current = tmp_path / "invalid"
     current.write_text("not a directory", encoding="utf-8")

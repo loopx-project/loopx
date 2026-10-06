@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
 
-from .codex import Execution, prepare_codex_home
+from .codex import Execution, TASK_ENTRIES, prepare_codex_home
 from .codex_offline import CodexOffline
 from .harbor import (
     BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
@@ -81,16 +81,28 @@ class SForgeWorker(CodexAgent):
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
                  blind_prompt: str | None = None,
+                 task_entry: str = "seeded-todo",
+                 turn_envelope: bool = False,
                  replan_after_turns: int | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
+        if not isinstance(turn_envelope, bool) or (
+            turn_envelope and profile not in {"heartbeat-resume", "heartbeat-explore"}
+        ):
+            raise ValueError("turn_envelope requires a heartbeat worker")
+        self.turn_envelope = turn_envelope
         if timeout_seconds <= 160:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
         if not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
+        if task_entry not in TASK_ENTRIES:
+            raise ValueError("unsupported task entry")
+        if task_entry != "seeded-todo" and not profile.startswith("heartbeat-"):
+            raise ValueError("loopx-planned requires a heartbeat profile")
+        self.task_entry = task_entry
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
                     not 1 <= replan_after_turns <= 5):
@@ -158,6 +170,8 @@ class SForgeWorker(CodexAgent):
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
+                task_entry=self.task_entry,
+                turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
             )
             asyncio.run(self.runtime.install(self.environment))
@@ -167,8 +181,10 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Could not remove unavailable submission entrypoint")
         (log_dir / "worker-profile.json").write_text(json.dumps({
             "profile": self.profile, "model": self._config.agent_model,
+            "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "stop_hook": self.profile == "official",
+            **({"turn_envelope": True} if self.turn_envelope else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
@@ -212,6 +228,10 @@ class SForgeWorker(CodexAgent):
         env = self.runtime._worker_env(cwd=self.cwd)
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                                  state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
+        if self.task_entry == "loopx-planned":
+            env["LOOPX_PLANNING_TIMEOUT_SEC"] = str(self.runtime.planning_timeout)
+            env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
+            command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
         # Persist the phase deadline in the task environment. An abnormal outer
         # resume preserves the remaining budget instead of granting another 18h.
         deadline = "/opt/loopx-benchmark/control/phase-deadline"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import Any
 
 from ...turn_identity import normalize_turn_instance_id
@@ -17,6 +18,27 @@ from ..scheduler.execution_context import (
 )
 
 HEARTBEAT_PROMPT_SCHEMA_VERSION = "loopx_heartbeat_prompt_v0"
+
+
+def resolve_heartbeat_capture_root(
+    root: str | Path | None,
+    *,
+    thin: bool,
+    full: bool,
+    compact: bool,
+    brief: bool,
+    native_goal_host: bool,
+    turn_instance_id: str | None,
+) -> Path | None:
+    """Validate capture transport for an already resolved host-owned Turn."""
+    if root is None:
+        return None
+    if not thin or full or compact or brief or native_goal_host or not turn_instance_id:
+        raise ValueError("--decision-output-root requires thin mode and an explicit host-owned Turn ID")
+    directory = Path(root).expanduser().absolute()
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("--decision-output-root must be an existing directory, not a symlink")
+    return directory
 
 
 def uses_native_goal_host_loop(
