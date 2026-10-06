@@ -467,7 +467,7 @@ def run_generated_script(config, url, image, path, *, redirect=None, readiness=N
               else reader._script(config, url))
     harness = """
 const vm=require('node:vm'),fs=require('node:fs');
-let href='',domReads=0,captures=0,loaded=!readiness||readiness.startsWith('sidebar_busy');
+let href='',domReads=0,captures=0,loaded=!readiness||readiness.startsWith('sidebar_busy')||readiness==='empty_sibling_article';
 const image={alt:'figure',currentSrc:'https://example.com/image.png',
  get complete(){return !readiness?.startsWith('image_')||loaded;},
  naturalWidth:2,naturalHeight:2,scrollIntoView(){},
@@ -511,7 +511,7 @@ const page={async goto(url){href=new URL(redirect||url).href;},
  async waitForFunction(fn,arg){
   if(typeof arg==='string'&&readiness){
    const initial=await this.evaluate(fn,arg);
-   if(readiness==='article_with_sidebar'||sidebarFixture){if(!initial)throw Error('readable content delayed by sidebar');loaded=true;}
+   if(readiness==='article_with_sidebar'||sidebarFixture||readiness==='empty_sibling_article'){if(!initial)throw Error('readable content delayed by sidebar');loaded=true;}
    else{
     if(initial)throw Error('loading content accepted');
     if(readiness==='timeout'||readiness==='image_timeout'||readiness==='main_busy_with_readable_article'||readiness==='article_busy_with_main_chrome')throw Error('page.waitForFunction timed out after 10000ms; private diagnostic');
@@ -595,6 +595,7 @@ def test_image_only_content_is_readable_after_pixels_load(configured, tmp_path, 
 @pytest.mark.parametrize("image", [False, True])
 @pytest.mark.parametrize("readiness", [
     "sidebar_busy_before_main", "sidebar_busy_inside_main", "sidebar_busy_with_primary_article",
+    "empty_sibling_article",
 ])
 def test_busy_sidebar_article_does_not_block_primary_content(configured, tmp_path, image, readiness):
     result, observation = run_generated_script(
