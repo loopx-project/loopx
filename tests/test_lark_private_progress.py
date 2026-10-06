@@ -11,7 +11,7 @@ from test_native_steward_private import steward  # noqa: F401
 
 from loopx.chat_codex_goal import CodexGoalDriver
 from loopx.chat_store import _atomic_write_json, _read_json
-from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+from loopx.extensions.lark.private_conversations import LarkPrivateConversations, PROGRESS_EDIT_BUDGET
 from loopx.extensions.lark.private_progress import ANSWER_WINDOW, project_progress
 from loopx.extensions.lark.conversation_identity import observe_lark_conversation_identity
 
@@ -22,6 +22,8 @@ class StreamingProvider(Provider):
         self.edits = []
         self.hide_next_edit_readback = False
         self.hidden_ref = None
+        self.edit_error = None
+        self.apply_rejected_edit = False
 
     def __call__(self, args, cwd=None, timeout=None):
         if "+messages-edit" in args:
@@ -34,6 +36,11 @@ class StreamingProvider(Provider):
                 return {"returncode": 0, "stdout": json.dumps({"ok": True, "api": [
                     {"body": {"msg_type": "post", "content": content}}]})}
             assert self.messages[ref]["chat_id"] == f"oc_{profile.replace('-', '_')}"
+            if self.edit_error is not None and not self.apply_rejected_edit:
+                if self.hide_next_edit_readback:
+                    self.hide_next_edit_readback = False
+                    self.hidden_ref = ref
+                return {"returncode": 1, "stderr": json.dumps({"error": self.edit_error})}
             self.messages[ref]["body"] = {"content": content}
             self.edits.append((profile, ref, text))
             if self.hide_next_edit_readback:
@@ -41,6 +48,8 @@ class StreamingProvider(Provider):
                 self.hidden_ref = ref
                 # The provider applied the body but lost its acknowledgement.
                 return {"returncode": 1, "stderr": "synthetic lost acknowledgement"}
+            if self.edit_error is not None:
+                return {"returncode": 1, "stderr": json.dumps({"error": self.edit_error})}
             return {"returncode": 0, "stdout": '{"ok":true}'}
         if "+messages-mget" in args and args[args.index("--message-ids") + 1] == self.hidden_ref:
             self.hidden_ref = None
@@ -304,3 +313,103 @@ def test_progress_is_bounded_and_does_not_invent_activity_or_show_reasoning():
     text = project_progress(state, [{"event_id": "4", "kind": "answer.delta", "payload": {"text": "a" * (ANSWER_WINDOW + 50)}}])
     assert len(state["answer"]) == ANSWER_WINDOW and "最近的回答片段" in text
     assert state["cursor"] == "4"
+
+
+def test_progress_edit_budget_survives_restart_and_reserves_final(ordinary):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        for index in range(PROGRESS_EDIT_BUDGET + 3):
+            store.append_event(sid, tid, kind="answer.delta", payload={"text": f"片段 {index}。"})
+            allow_update(transport, row)
+            # Each update uses a new transport, as a service restart would.
+            transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                                 runner=provider, cli_bin="lark-cli")
+            transport.reconcile()
+        assert len(provider.edits) == PROGRESS_EDIT_BUDGET
+        record = _read_json(transport.root / f"{row['request_ref']}.json")
+        assert record["stream"]["edit_attempts"] == PROGRESS_EDIT_BUDGET
+        assert f"片段 {PROGRESS_EDIT_BUDGET + 2}。" in record["stream"]["answer"]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert transport.reconcile() == 1
+        assert provider.edits[-1][2] == "Steered response."
+        assert len(provider.writes) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("code,unavailable,applied", [(230072, False, False), (230020, False, False),
+                                                    (230072, True, False), (230072, False, True)])
+def test_terminal_quota_fallback_requires_definite_rejection_and_fresh_readback(ordinary, code, unavailable, applied):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        provider.edit_error = {"type": "api", "code": code}
+        provider.hide_next_edit_readback = unavailable
+        provider.apply_rejected_edit = applied
+        result = transport.reconcile()
+        fallback = code == 230072 and not unavailable and not applied
+        assert len(provider.writes) == (2 if fallback else 1)
+        assert result == int(fallback or applied)
+        record = _read_json(transport.root / f"{row['request_ref']}.json")
+        if fallback:
+            assert record["deliveries"]["terminal"]["rejected_update"]["blocker"] == "provider_update_edit_limit"
+            assert not record["stream"].get("closed")  # The exhausted draft was not edited closed.
+            assert provider.writes[-1] == ("notes-app", "Steered response.")
+        replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                         runner=provider, cli_bin="lark-cli")
+        replay.reconcile()
+        assert len(provider.writes) == (2 if fallback or unavailable else 1)
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+    finally:
+        runtime.close()
+
+
+def test_upgrade_recovers_old_failed_terminal_edit_and_final_cleanup_without_resend(ordinary):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        # The old transport froze and recorded a final update, but the provider
+        # rejected it. That journal must recover without rerunning the model.
+        provider.edit_error = {"type": "api", "code": 230020}
+        assert transport.reconcile() == 0
+        path = transport.root / f"{row['request_ref']}.json"
+        assert _read_json(path)["deliveries"]["terminal"]["started"]
+        provider.edit_error = {"type": "api", "code": 230072}
+        provider.fail_reaction_delete = True
+        replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                         runner=provider, cli_bin="lark-cli")
+        assert replay.reconcile() == 0
+        assert len(provider.writes) == 2
+        assert _read_json(path)["deliveries"]["terminal"]["attempt"]["message_ref"] == "om_out_1"
+        provider.fail_reaction_delete = False
+        assert replay.reconcile() == 1
+        assert len(provider.writes) == 2
+        assert _read_json(path)["status"] == "delivered"
+    finally:
+        runtime.close()
+
+
+def test_ambiguous_progress_edit_counts_against_budget_before_provider_write(ordinary):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        store.append_event(row["session_id"], row["turn_id"], kind="answer.delta", payload={"text": "下一段。"})
+        allow_update(transport, row)
+        provider.hide_next_edit_readback = True
+        transport.reconcile()
+        record = _read_json(transport.root / f"{row['request_ref']}.json")
+        assert record["stream"]["edit_attempts"] == 1
+        assert len(provider.edits) == 1
+        allow_update(transport, row)
+        transport.reconcile()
+        record = _read_json(transport.root / f"{row['request_ref']}.json")
+        assert record["stream"]["edit_attempts"] == 1  # Readback recovery spends no edit.
+        assert len(provider.edits) == 1
+    finally:
+        runtime.close()

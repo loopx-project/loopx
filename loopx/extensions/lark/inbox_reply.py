@@ -1020,6 +1020,7 @@ def update_lark_inbox_reply(
     receipt = str(desired["idempotency_key"])
     updated_attempt = {**attempt, "provider_receipt": receipt,
                        "intent_digest": _intent_digest(profile, chat_id, receipt)}
+    edit_limit_reached = False
     if not lark_markdown_readback_matches(text=text, message=message):
         edit_args = [*base, "im", "+messages-edit", "--message-id", ref,
                      "--msg-type", "post", "--content", content, "--as", "bot", "--format", "json"]
@@ -1028,7 +1029,15 @@ def update_lark_inbox_reply(
             return {"ok": False, "reply_verified": False, "blocker": "provider_update_preview_mismatch"}
         if before_send(receipt).get("continue_delivery") is not True:
             return {"ok": False, "reply_verified": False, "blocker": "provider_update_deferred"}
-        _call(runner, edit_args)
+        edited = _call(runner, edit_args)
+        # The CLI reports API failures as JSON on stderr. Only this definite
+        # rejection permits falling back to a separate final message; unknown
+        # failures and lost acknowledgements still require exact readback.
+        edit_limit_reached = edited.get("returncode") != 0 and any(
+            isinstance(error := _json_object(edited.get(channel)).get("error"), Mapping)
+            and error.get("type") == "api" and error.get("code") == 230072
+            for channel in ("stdout", "stderr")
+        )
         # An error or timeout may follow an applied edit. Readback, not the
         # command return code, decides whether this exact body reached Lark.
         readback = _call(runner, read_args)
@@ -1037,6 +1046,8 @@ def update_lark_inbox_reply(
     if readback.get("returncode") != 0 or message is None:
         return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
     if not lark_markdown_readback_matches(text=text, message=message):
+        if edit_limit_reached:
+            return {"ok": False, "reply_verified": False, "blocker": "provider_update_edit_limit"}
         return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_mismatch"}
     return _verified_reply_result(project=project, config_path=config_path, message_id=message_id,
                                   runner=runner, finalize_reactions=finalize_reactions)

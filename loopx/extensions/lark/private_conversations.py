@@ -28,6 +28,10 @@ from .outbound import LarkOutboundTextError, normalize_lark_outbound_text, safe_
 from .private_images import private_message_caption, private_message_images
 from .private_progress import UPDATE_INTERVAL_SEC, project_progress
 
+# Conservative transport budget, not a claim about the provider's maximum.
+# Reserve edits for a canonical final or the oversized-final closing notice.
+PROGRESS_EDIT_BUDGET = 12
+
 
 def _presentation_text(text: str) -> str:
     try:
@@ -332,7 +336,7 @@ class LarkPrivateConversations:
         progress = record["deliveries"].get("progress") or {}
         stream = record.get("stream") or {}
         edit = phase_state.get("edit_from")
-        if phase in {"terminal", "commission_result"} and progress.get("attempt") and not stream.get("closed") and not phase_state.get("started"):
+        if phase in {"terminal", "commission_result"} and progress.get("attempt") and not stream.get("closed") and not stream.get("edit_limit_reached") and not phase_state.get("started"):
             # Freeze the known message proof before the first final edit. Later
             # recovery can replace the same ID, never append another answer.
             edit = {"text": _presentation_text(stream.get("confirmed_text") or progress["text"]),
@@ -352,10 +356,24 @@ class LarkPrivateConversations:
 
             result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
                 before_send=before_edit, delivery_attempt_recorder=edit_attempt)
+            if result.get("blocker") == "provider_update_edit_limit":
+                # A confirmed edit rejection plus fresh non-matching readback
+                # proves this final did not reach the draft. Preserve its proof
+                # and use the existing source-bound, idempotent final sender.
+                # Recovery of older, already-started final edits takes this
+                # same path; an ambiguous failure must never take it.
+                record.setdefault("stream", {})["edit_limit_reached"] = True
+                phase_state["rejected_update"] = {"blocker": result["blocker"],
+                    "edit_from": edit, "attempt": phase_state.get("attempt")}
+                for key in ("edit_from", "attempt", "started"):
+                    phase_state.pop(key, None)
+                record["deliveries"][phase] = phase_state
+                _atomic_write_json(path, record)
+                return self._deliver(path, record, phase, text, inbox=inbox)
             if result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
                 # Do not truncate long/mention-bearing final answers to fit a
                 # draft. Close it, then use the established full final sender.
-                if not self._close_progress(path, record, inbox=inbox):
+                if not self._close_progress(path, record, inbox=inbox) and not record.get("stream", {}).get("edit_limit_reached"):
                     return False
                 phase_state.pop("edit_from", None)
                 record["deliveries"][phase] = phase_state
@@ -389,15 +407,20 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
         return bool(phase_state["verified"])
 
-    def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path]) -> bool:
+    def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path], finalizing: bool = False) -> bool:
         text = _presentation_text(text)
         progress = record["deliveries"].get("progress") or {}
         if not progress.get("verified"):
             return self._deliver(path, record, "progress", text, inbox=inbox)
         stream = record.setdefault("stream", {})
+        if stream.get("edit_limit_reached") or (not finalizing and int(stream.get("edit_attempts") or 0) >= PROGRESS_EDIT_BUDGET):
+            return False
         confirmed: dict[str, Any] = {}
 
         def before_send(_intent: str) -> dict[str, bool]:
+            # Persist before the provider write: an uncertain acknowledgement
+            # may have consumed an edit too. Restarts retain the same budget.
+            stream["edit_attempts"] = int(stream.get("edit_attempts") or 0) + 1
             _atomic_write_json(path, record)
             return {"continue_delivery": True}
 
@@ -408,6 +431,8 @@ class LarkPrivateConversations:
             runner=self._reply_runner, source_membership_verifier=lambda: self._source_verified(record),
             before_send=before_send, delivery_attempt_recorder=lambda value: confirmed.update(value))
         stream["blocker"] = result.get("blocker")
+        if result.get("blocker") == "provider_update_edit_limit":
+            stream["edit_limit_reached"] = True
         if result.get("reply_verified") is True and result.get("ok") is True:
             stream.update(confirmed_text=text, confirmed_attempt=confirmed)
         _atomic_write_json(path, record)
@@ -415,7 +440,7 @@ class LarkPrivateConversations:
 
     def _close_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
         text = "回答已生成，完整结果将单独发送。"
-        if not self._edit_progress(path, record, text, inbox=inbox):
+        if not self._edit_progress(path, record, text, inbox=inbox, finalizing=True):
             return False
         record["stream"]["closed"] = True
         _atomic_write_json(path, record)
