@@ -8,6 +8,14 @@ migration, candidate/archive transitions, and bounded rerank proposals. It does
 not own raw documents, private source locations, provider credentials, or Core
 goal authority.
 
+Ordinary project conversations can use an explicitly activated source profile
+and an existing Core workspace write grant for inventory, candidate
+intake/rollback, rerank packets, readable projection and ranking settlement.
+These SDK packets select exactly one Goal or project owner; references never
+grant access. The source verifier resolves current Core authority and retains
+its staging/publication fence. Migration, rebuild and Explore remain Goal-only;
+installing the project skill or importing the SDK does not activate a source.
+
 ```mermaid
 flowchart LR
     RAW["Private raw material store<br/>files, messages, web captures"]

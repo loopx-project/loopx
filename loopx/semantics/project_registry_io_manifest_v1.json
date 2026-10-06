@@ -927,7 +927,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>._validated_replan_successor_obligation::codec_read:load_registry#1",
-      "line": 187,
+      "line": 188,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -935,7 +935,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#1",
-      "line": 333,
+      "line": 338,
       "column": 49,
       "kind": "codec_read",
       "api": "load_registry",
@@ -943,7 +943,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#2",
-      "line": 349,
+      "line": 354,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -951,7 +951,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#3",
-      "line": 357,
+      "line": 362,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -959,7 +959,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#4",
-      "line": 536,
+      "line": 541,
       "column": 53,
       "kind": "codec_read",
       "api": "load_registry",
@@ -967,7 +967,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#5",
-      "line": 667,
+      "line": 672,
       "column": 25,
       "kind": "codec_read",
       "api": "load_registry",
@@ -975,7 +975,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#6",
-      "line": 738,
+      "line": 743,
       "column": 13,
       "kind": "codec_read",
       "api": "load_registry",
@@ -983,7 +983,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#7",
-      "line": 783,
+      "line": 788,
       "column": 38,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1007,7 +1007,7 @@
     },
     {
       "site": "loopx/configure_goal.py::<module>.configure_goal::codec_transaction:project_registry_transaction#1",
-      "line": 519,
+      "line": 521,
       "column": 14,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",
@@ -1015,7 +1015,7 @@
     },
     {
       "site": "loopx/configure_goal.py::<module>.configure_goal::codec_read:load_project_registry#1",
-      "line": 729,
+      "line": 731,
       "column": 14,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -2175,7 +2175,7 @@
     },
     {
       "site": "loopx/state_refresh.py::<module>.refresh_state_run::codec_read:load_registry#1",
-      "line": 803,
+      "line": 804,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

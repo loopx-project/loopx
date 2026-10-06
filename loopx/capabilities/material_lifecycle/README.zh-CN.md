@@ -176,6 +176,14 @@ migration preparation、lifecycle receipt、ranked-entry rebuild、bounded reran
 readable projection、Explore intent、apply 与 rollback。具体 legacy parser、私有
 storage adapter、source profile 和 provider credential 仍由项目拥有。
 
+## 明确的项目来源 scope
+
+普通项目对话可为已显式启用的素材来源使用 `MaterialProjectScope`，无需创建 Goal。inventory、candidate intake/rollback、rerank packet、readable projection 和 intake-ranking settlement 支持以 `project_scope` 替代 `goal_id`；两者必须且只能选一个。项目 packet 不含 Goal 标识，也不带入 manager 上下文。
+
+scope 的 `project_ref`、`source_profile_ref`、`workspace_grant_ref` 是既有 Core 授权与来源 profile 的选择器，不授予权限。project candidate provider 必须实现 `MaterialProjectScopeVerifier`，核对当前调用者/受众、精确 store/profile、工作区写入边界、owner gate 的有效期与撤销状态。SDK 在访问 provider 前及发布 authority 前调用该 verifier，授权事实仍由既有 Core owner 提供；adapter 还须在自身 staging/publication 事务内执行授权检查，不能把预检查的 Boolean 当作事务 fence。
+
+默认关闭不变；本路径不注册 Goal、不创建 source authority，不扩大 Goal-only migration/rebuild/Explore。新来源初始化、私有存储与 transport 接入仍由 source owner 提供，不能仅凭这些字段或安装 skill 开始写入。
+
 ## 与其他能力的关系
 
 | 能力 | 核心问题 | 与 Material Lifecycle 的关系 |

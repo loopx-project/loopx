@@ -6,6 +6,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .ownership import MaterialProjectScope, material_owner_fields
+
 from ._validation import (
     capability_contract,
     check_record_keys,
@@ -193,7 +195,8 @@ def _normalize_moves(
 
 def build_material_rerank_proposal(
     *,
-    goal_id: str,
+    goal_id: str | None = None,
+    project_scope: MaterialProjectScope | None = None,
     proposal_id: str,
     inventory_ref: str,
     decision_evidence_ref: str,
@@ -231,7 +234,7 @@ def build_material_rerank_proposal(
 
     proposal: dict[str, Any] = {
         "schema_version": MATERIAL_RERANK_PROPOSAL_SCHEMA_VERSION,
-        "goal_id": compact_token(goal_id, field="goal_id"),
+        **material_owner_fields(goal_id=goal_id, project_scope=project_scope),
         "proposal_id": compact_token(proposal_id, field="proposal_id"),
         "inventory_ref": compact_token(inventory_ref, field="inventory_ref"),
         "decision_evidence_ref": compact_token(
@@ -240,7 +243,7 @@ def build_material_rerank_proposal(
         ),
         "observed_at": iso_timestamp(observed_at, field="observed_at"),
         "visibility": "public_safe",
-        "capability": capability_contract(packet_role="rerank_proposal"),
+        "capability": capability_contract(packet_role="rerank_proposal", project_scoped=project_scope is not None),
         "constraints": {
             "target_window_size": window,
             "max_moved_items": max_moved,
@@ -263,7 +266,8 @@ def build_material_rerank_proposal(
 
 def build_material_rerank_apply_receipt(
     *,
-    goal_id: str,
+    goal_id: str | None = None,
+    project_scope: MaterialProjectScope | None = None,
     receipt_id: str,
     proposal_ref: str,
     observed_at: str,
@@ -317,7 +321,7 @@ def build_material_rerank_apply_receipt(
 
     receipt: dict[str, Any] = {
         "schema_version": MATERIAL_RERANK_APPLY_RECEIPT_SCHEMA_VERSION,
-        "goal_id": compact_token(goal_id, field="goal_id"),
+        **material_owner_fields(goal_id=goal_id, project_scope=project_scope),
         "receipt_id": compact_token(receipt_id, field="receipt_id"),
         "proposal_ref": compact_token(proposal_ref, field="proposal_ref"),
         "observed_at": iso_timestamp(observed_at, field="observed_at"),
@@ -328,7 +332,7 @@ def build_material_rerank_apply_receipt(
         "validation_ref": compact_token(validation_ref, field="validation_ref"),
         "applied_material_refs": applied_refs,
         "visibility": "public_safe",
-        "capability": capability_contract(packet_role="rerank_apply_receipt"),
+        "capability": capability_contract(packet_role="rerank_apply_receipt", project_scoped=project_scope is not None),
         "raw_content_captured": False,
         "private_locations_captured": False,
     }

@@ -144,6 +144,10 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             "rate_limit_exceeded",
             "Codex 上游请求频率受限，本轮未完成。",
         ),
+        "serverOverloaded": (
+            "server_overloaded",
+            "当前模型繁忙，本轮未完成。",
+        ),
         "contextWindowExceeded": (
             "context_window_exceeded",
             "Codex 上下文超过限制，本轮未完成。",
@@ -169,6 +173,8 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             "next_action": (
                 "本轮已终止，不会自动重放；请查看上游说明。"
                 if policy
+                else "请先核对已有结果，再决定是否稍后重试；本次请求不会自动重放。"
+                if code == "server_overloaded"
                 else "请处理对应的上游限制后再继续。"
             ),
         },

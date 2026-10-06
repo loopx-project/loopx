@@ -1,4 +1,6 @@
-"""Goal-scoped Material Lifecycle capability contracts."""
+"""Material Lifecycle contracts for explicit Goal or project source owners."""
+
+from .ownership import MaterialProjectScope, MaterialProjectScopeVerifier
 
 from .apply import (
     MATERIAL_MIGRATION_APPLY_RECEIPT_SCHEMA_VERSION,
@@ -95,6 +97,8 @@ from .settlement import (
 )
 
 __all__ = [
+    "MaterialProjectScope",
+    "MaterialProjectScopeVerifier",
     "MATERIAL_CANDIDATE_INTAKE_APPLY_RECEIPT_SCHEMA_VERSION",
     "MATERIAL_CANDIDATE_INTAKE_PROPOSAL_SCHEMA_VERSION",
     "MATERIAL_CANDIDATE_INTAKE_ROLLBACK_RECEIPT_SCHEMA_VERSION",

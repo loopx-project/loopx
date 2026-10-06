@@ -50,6 +50,9 @@ Environment overrides:
   CODEX_HOME            Explicit service execution home, independent of the Chat override
   LOOPX_CHAT_CODEX_HOME  Explicit managed Codex home (upgrades preserve the existing binding)
   LOOPX_CHAT_SCAN_PATHS_JSON  JSON array of absolute workspace directories (preserved on upgrade)
+  LOOPX_CHAT_RUNTIME_ROOT    Explicit Chat data directory (preserved on upgrade)
+  LOOPX_CHAT_IDLE_TIMEOUT_SECONDS  Explicit idle timeout (preserved on upgrade)
+  LOOPX_CHAT_HARD_TIMEOUT_SECONDS  Explicit turn timeout (preserved on upgrade)
 EOF
 }
 
@@ -313,9 +316,70 @@ print(path.resolve())
 PY
 }
 
+resolve_chat_options() {
+  "$1" - "$chat_plist" <<'PY'
+import json
+import math
+import os
+import plistlib
+import shlex
+import sys
+from pathlib import Path
+
+target = Path(sys.argv[1])
+installed, words = {}, []
+if target.exists():
+    with target.open("rb") as stream:
+        plist = plistlib.load(stream)
+    installed = plist.get("EnvironmentVariables", {})
+    args = plist.get("ProgramArguments", [])
+    # Decode the legacy command; never run it to recover a setting.
+    words = shlex.split(args[2]) if len(args) == 3 and args[1] == "-c" else args
+options = {}
+for variable, flag in (
+    ("LOOPX_CHAT_RUNTIME_ROOT", "--runtime-root"),
+    ("LOOPX_CHAT_IDLE_TIMEOUT_SECONDS", "--idle-timeout-seconds"),
+    ("LOOPX_CHAT_HARD_TIMEOUT_SECONDS", "--hard-timeout-seconds"),
+):
+    value = os.environ.get(variable) or installed.get(variable)
+    if value is not None and not isinstance(value, str):
+        raise SystemExit(f"{variable} must be a string")
+    if not value:
+        for index, word in enumerate(words):
+            if word == flag:
+                if index + 1 == len(words):
+                    raise SystemExit(f"{variable} has a missing installed argument")
+                value = words[index + 1]
+            elif word.startswith(flag + "="):
+                value = word[len(flag) + 1:]
+                if not value:
+                    raise SystemExit(f"{variable} has an empty installed argument")
+    if value is None or value == "":
+        options[variable] = ""
+        continue  # Retain the CLI's existing default, without pinning a new root.
+    if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 for c in value):
+        raise SystemExit(f"{variable} must be a bounded string without control characters")
+    if flag == "--runtime-root":
+        path = Path(value).expanduser()
+        if not path.is_absolute() or (path.exists() and not path.is_dir()):
+            raise SystemExit(f"{variable} must be an absolute directory")
+        value = str(path.resolve())
+    else:
+        try:
+            seconds = float(value)
+        except ValueError:
+            raise SystemExit(f"{variable} must be a positive finite number")
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise SystemExit(f"{variable} must be a positive finite number")
+    options[variable] = value
+print(json.dumps(options))
+PY
+}
+
 write_plists() {
   local status_command python_command codex_command claude_command lark_cli_command registry
   local path_prefix command_path command_dir status_shell chat_shell control_plane_write_arg lark_cli_arg codex_home_export chat_codex_home execution_codex_home chat_scan_paths chat_scan_args
+  local chat_options chat_runtime_root chat_idle_timeout chat_hard_timeout chat_runtime_arg chat_timeout_args
   status_command="$(resolve_status_command)"
   python_command="$(resolve_loopx_python "$status_command")"
   registry="$(resolve_global_registry "$python_command")"
@@ -346,6 +410,15 @@ write_plists() {
   execution_codex_home="$(resolve_codex_home "$python_command" CODEX_HOME "$chat_codex_home")"
   chat_scan_paths="$(resolve_chat_scan_paths "$python_command")"
   chat_scan_args="$("$python_command" -c 'import json,shlex,sys; print("".join(" --scan-path " + shlex.quote(path) for path in json.load(sys.stdin)))' <<<"$chat_scan_paths")"
+  chat_options="$(resolve_chat_options "$python_command")"
+  chat_runtime_root="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_RUNTIME_ROOT"])' <<<"$chat_options")"
+  chat_idle_timeout="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"])' <<<"$chat_options")"
+  chat_hard_timeout="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_HARD_TIMEOUT_SECONDS"])' <<<"$chat_options")"
+  chat_runtime_arg=""
+  chat_timeout_args=""
+  [[ -z "$chat_runtime_root" ]] || chat_runtime_arg=" --runtime-root $(shell_quote "$chat_runtime_root")"
+  [[ -z "$chat_idle_timeout" ]] || chat_timeout_args+=" --idle-timeout-seconds $(shell_quote "$chat_idle_timeout")"
+  [[ -z "$chat_hard_timeout" ]] || chat_timeout_args+=" --hard-timeout-seconds $(shell_quote "$chat_hard_timeout")"
   expected_chat_runtime_identity >/dev/null || {
     echo "Could not resolve the installed LoopX runtime identity; existing plists were kept." >&2
     return 1
@@ -354,7 +427,7 @@ write_plists() {
   # Registry has already been resolved explicitly. --global-registry would
   # replace it with <common_runtime_root>/registry.json and lose custom routes.
   status_shell="$(log_rotation_prelude status) export LOOPX_PYTHON=$(shell_quote "$python_command"); export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") serve-status --host $(shell_quote "$host") --port $(shell_quote "$status_port") --limit $(shell_quote "$status_limit")$chat_scan_args$control_plane_write_arg"
-  chat_shell="$(log_rotation_prelude chat) export LOOPX_PYTHON=$(shell_quote "$python_command");$codex_home_export export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") chat --host $(shell_quote "$host") --port $(shell_quote "$chat_port") --codex-bin $(shell_quote "$codex_command") --claude-bin $(shell_quote "$claude_command")$lark_cli_arg$chat_scan_args --replace-existing-loopx-chat --no-open"
+  chat_shell="$(log_rotation_prelude chat) export LOOPX_PYTHON=$(shell_quote "$python_command");$codex_home_export export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry")$chat_runtime_arg chat --host $(shell_quote "$host") --port $(shell_quote "$chat_port") --codex-bin $(shell_quote "$codex_command") --claude-bin $(shell_quote "$claude_command")$lark_cli_arg$chat_scan_args$chat_timeout_args --replace-existing-loopx-chat --no-open"
 
   mkdir -p "$launch_agents_dir" "$logs_dir"
 
@@ -404,6 +477,12 @@ EOF
     <string>$(xml_escape "$registry")</string>
     <key>LOOPX_CHAT_SCAN_PATHS_JSON</key>
     <string>$(xml_escape "$chat_scan_paths")</string>
+    <key>LOOPX_CHAT_RUNTIME_ROOT</key>
+    <string>$(xml_escape "$chat_runtime_root")</string>
+    <key>LOOPX_CHAT_IDLE_TIMEOUT_SECONDS</key>
+    <string>$(xml_escape "$chat_idle_timeout")</string>
+    <key>LOOPX_CHAT_HARD_TIMEOUT_SECONDS</key>
+    <string>$(xml_escape "$chat_hard_timeout")</string>
   </dict>
   <key>ProgramArguments</key>
   <array>
@@ -534,7 +613,10 @@ print_status_contract_health() {
     echo "- control_plane_write_api: unknown"
     return
   fi
-  status_json="$(curl -fsS --connect-timeout 1 --max-time 5 "$status_url" 2>/dev/null || true)"
+  # The full feed collects registered Goals; it is not a cheap liveness probe.
+  # Allow a bounded read beyond five seconds while retaining connection failure
+  # and contract-version checks. This does not make a slow feed healthy.
+  status_json="$(curl -fsS --connect-timeout 1 --max-time 15 "$status_url" 2>/dev/null || true)"
   if [[ -z "$status_json" ]]; then
     echo "- status_contract: unavailable (status feed not reachable)"
     echo "- control_plane_write_api: unknown"

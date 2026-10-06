@@ -112,8 +112,9 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
     ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),
 ])
+@pytest.mark.parametrize("turns", [None, 3])
 def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_limit(
-    tmp_path, monkeypatch, profile, total, expected,
+    tmp_path, monkeypatch, profile, total, expected, turns,
 ):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -123,12 +124,26 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
     async def installed(self, environment):
         pass  # Budget transport test; no container or solver launch.
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
-    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-                          profile=profile, cwd="/task", timeout_seconds=total)
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    if turns is not None and profile == "native-goal":
+        with pytest.raises(ValueError, match="heartbeat profile"):
+            SForgeWorker(config, profile=profile, cwd="/task", replan_after_turns=turns)
+        return
+    worker = SForgeWorker(config, profile=profile, cwd="/task", timeout_seconds=total,
+                          replan_after_turns=turns)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd="/task")
     assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == expected
     assert worker.runtime.scheduler_timeout == total
+    expected_cadence = ({"replan_after_effective_turns": turns} if turns else
+                        {"replan_after_completed_todos": 3})
+    assert worker.runtime._replan_receipt() == expected_cadence
+    receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    if turns is not None:
+        assert all(receipt.get(k) == v for k, v in expected_cadence.items())
+    else:
+        assert "replan_after_effective_turns" not in receipt
+        assert "replan_after_completed_todos" not in receipt
     if profile == "native-goal":
         assert worker.resume_cmd is None
         assert worker_command(env, python="/python", source="/source",
@@ -322,3 +337,25 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("exec timeout")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry
+
+
+@pytest.mark.parametrize("value", [0, 6, True, 2.5, "3"])
+def test_effective_turn_cadence_rejects_invalid_values_before_install(tmp_path, monkeypatch, value):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    with pytest.raises(ValueError, match="replan_after_turns"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                     profile="heartbeat-explore", cwd="/task", replan_after_turns=value)
+    with pytest.raises(ValueError, match="replan_after_turns"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", replan_after_turns=value)
+
+
+def test_effective_turn_cadence_rejects_ambiguous_units(tmp_path):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    with pytest.raises(ValueError, match="not both"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                       replan_after_turns=3, replan_after_todos=3)

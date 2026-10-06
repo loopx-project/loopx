@@ -316,17 +316,21 @@ def main() -> int:
             "review_order": "forward",
         }
         assert features["todo_replan_cadence"]["availability"] == "supported_opt_in"
-        assert features["todo_replan_cadence"]["default"] == {"completed_todos": 5}
+        assert features["todo_replan_cadence"]["default"] == {
+            "count_unit": "completed_todos",
+            "count": 5,
+        }
         # Goal-scoped cadence is omitted when no explicit override is present;
         # the machine default remains discoverable through the default field.
         assert "current" not in features["todo_replan_cadence"], features[
             "todo_replan_cadence"
         ]
         replan_commands = features["todo_replan_cadence"]["commands"]
-        assert "--execution-replan-after-todos 3" in replan_commands["preview_enable"]
+        assert "--execution-replan-after-turns 3" in replan_commands["preview_enable"]
         assert "--execute" not in replan_commands["preview_enable"]
         assert "--execute" in replan_commands["apply_enable"]
         assert "--clear-execution-replan-after-todos" in replan_commands["preview_disable"]
+        assert "--clear-execution-replan-after-turns" in replan_commands["preview_disable"]
         assert "--execute" not in replan_commands["preview_disable"]
         assert "--execute" in replan_commands["apply_disable"]
         assert features["local_authority_shadow"]["availability"] == "retired"

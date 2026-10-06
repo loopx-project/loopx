@@ -291,11 +291,13 @@ classification remain independent scheduling and response decisions.
 The hook records its first read in owner-private state independently of this
 optional provider write. Thus a message captured earlier by the realtime
 collector still requires Agent reading even when reactions are explicitly
-disabled. Failed reactions are retried from this durable pending-read set while
-the message remains unsettled, including after the bounded history cursor has
-moved beyond the message timestamp. Provider failure increments compact
-failure accounting but does not discard the Inbox event or grant execution
-authority. Replay uses one aggregate bounded attempt budget per turn-start
+disabled. The durable pending-read set remains recoverable after the bounded
+history cursor moves beyond the message timestamp. A known provider reaction id
+recovers its local receipt without another create; an uncertain provider outcome
+keeps its prepared operation and blocks duplicate creation. Previously unattempted
+messages can still advance through the bounded round-robin selection. Provider
+failure increments compact accounting but does not discard the Inbox event or
+grant execution authority. Replay uses one aggregate bounded attempt budget per turn-start
 dispatch. A collector-scoped private cursor rotates route priority across
 dispatches, while each route keeps its own private round-robin message cursor.
 The public receipt exposes only attempt and deferred counts, never cursor or

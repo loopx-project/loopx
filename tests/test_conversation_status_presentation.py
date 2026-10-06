@@ -26,7 +26,11 @@ def test_short_status_keeps_facts_and_moves_diagnostics_to_help():
     help_text = _status_text(facts, help_requested=True)
     for exact_fact in [facts["workspace_path"], facts["executor_endpoint_id"], facts["observed_at"]]:
         assert exact_fact in help_text
-    assert "/agents" in help_text and "图片/文件目前未交给模型" in help_text
+    assert "/agents" in help_text
+    for media_limit in ("PNG", "JPEG", "GIF", "WebP", "4 张", "5 MB", "12 MB"):
+        assert media_limit in help_text
+    assert "文件与音视频暂不支持" in help_text
+    assert "原宿主 Agent 后仅支持文字" in help_text
 
 
 @pytest.mark.parametrize("changes", [

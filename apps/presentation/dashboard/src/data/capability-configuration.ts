@@ -51,3 +51,12 @@ export function parseEditableCapabilityJson(
   if (Object.keys(value).some((key) => !allowed.has(key))) return null;
   return value as Record<string, unknown>;
 }
+
+/** Read the legacy cadence without reinterpreting its unit or writing it back. */
+export function replanCadenceEditorValue(value: unknown): unknown {
+  const record = configurationObject(value);
+  if (Object.hasOwn(record, "completed_todos") && !Object.hasOwn(record, "count_unit")) {
+    return { count_unit: "completed_todos", count: record.completed_todos };
+  }
+  return value;
+}

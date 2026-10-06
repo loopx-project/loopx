@@ -32,7 +32,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
-  isAcceptedInFlightWriteback,
+  isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
@@ -1003,12 +1003,12 @@ function readQuotaSettlementFromRequest(
     );
   }
   const explicitAgentId = normalizeAgentId(request.agent_id);
-  const ownerRuns = snapshot.runs.filter((run) =>
-    quotaOwnerOwnsProjection(request.owner, run.goal_ref)
-  );
-  const ownerEvents = snapshot.events.filter((event) =>
-    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
-  );
+  // Only latest-Turn inference needs the full run history. Explicit readback
+  // must use the existing Turn indexes before applying the Goal owner fence;
+  // otherwise a batch over N Turns repeatedly scans all N receipts.
+  const ownerRuns = request.infer_turn_instance_id
+    ? snapshot.runs.filter((run) => quotaOwnerOwnsProjection(request.owner, run.goal_ref))
+    : [];
   const explicitEvents = !request.infer_turn_instance_id &&
       explicitAgentId !== null && request.turn_instance_id !== null
     ? indexedEvents(
@@ -1019,7 +1019,7 @@ function readQuotaSettlementFromRequest(
     ).filter((event) =>
       quotaOwnerOwnsProjection(request.owner, event.goal_ref)
     )
-    : ownerEvents;
+    : snapshot.events.filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
   const identityResult = resolveIdentity(
     request,
     explicitEvents,
@@ -1119,8 +1119,8 @@ function readQuotaSettlementFromRequest(
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
-  const inFlightWriteback = writeback.failure === null &&
-    isAcceptedInFlightWriteback(writebackRun, identity);
+  const progressWriteback = writeback.failure === null &&
+    isAcceptedProgressWriteback(writebackRun, identity);
   const replanWriteback = writeback.failure === null &&
     isAcceptedReplanWriteback(writebackRun, identity);
   const monitorPhase = receiptBoundMonitorPhase({
@@ -1134,7 +1134,7 @@ function readQuotaSettlementFromRequest(
   // reducer so completion, retirement or archival cannot reopen that Turn.
   const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
-    writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback || replanWriteback,
+    writeback_completes_binding: todoBoundReplan || blockedNoSpend || progressWriteback || replanWriteback,
     completion_receipt_present: completionEvent !== null,
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,

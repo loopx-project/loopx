@@ -159,12 +159,22 @@ owner submitting a directory entry.
 These projects explicitly credit LoopX ideas. Native implementations and
 accepted design documents are distinct from depending on the LoopX runtime.
 
-- **surogates** (invergent-ai) — [comparison and adoption plan](https://github.com/invergent-ai/surogates/blob/master/docs/superpowers/plans/2026-08-03-loopx-adoption.md)
-  selects durable grants, objective budgets and evaluator memory, while
-  retaining its own storage and runtime. [PR #188](https://github.com/invergent-ai/surogates/pull/188),
+- **surogates** (invergent-ai) — the [pinned comparison and adoption plan](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/docs/superpowers/plans/2026-08-03-loopx-adoption.md)
+  selects durable grants, objective budgets and evaluator memory while retaining
+  its own storage and runtime. [PR #188](https://github.com/invergent-ai/surogates/pull/188),
   [#190](https://github.com/invergent-ai/surogates/pull/190) and
-  [#191](https://github.com/invergent-ai/surogates/pull/191) are merged.
-  **Status: code-level borrowing**; live PR status supersedes the plan's older table.
+  [#191](https://github.com/invergent-ai/surogates/pull/191) merged August 3, 2026,
+  implementing scoped approval grants, mission token allowances and prior-verdict
+  memory. Current pinned [MissionStore](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/surogates/missions/store.py)
+  derives spend from its own session/task records; the [evaluator](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/surogates/missions/evaluator.py)
+  checks the allowance and includes its previous verdict and stagnation count.
+  PR #191 explicitly declines to port LoopX's progress-granularity lattice;
+  the current stagnation prompt steers the judge rather than enforcing a verdict.
+  **Status: code-level borrowing**; live PR status supersedes the plan's older
+  table. The author reports passing focused PostgreSQL tests and 28 existing
+  unit-suite failures; neither result was independently reproduced. This evidence
+  does not qualify LoopX runtime integration, current compatibility or sustained
+  use. Checked October 5, 2026.
 - **future-os** (futuregene) — [PR #253](https://github.com/futuregene/future-os/pull/253)
   and [#255](https://github.com/futuregene/future-os/pull/255), merged, implement
   selected multi-agent and goal-frontier mechanisms in Rust with explicit

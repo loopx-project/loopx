@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .ownership import MaterialProjectScope, material_owner_fields
+
 from ._validation import (
     capability_contract,
     compact_token,
@@ -28,7 +30,8 @@ MATERIAL_LIFECYCLE_STATES = {
 
 def build_material_store_inventory(
     *,
-    goal_id: str,
+    goal_id: str | None = None,
+    project_scope: MaterialProjectScope | None = None,
     store_id: str,
     store_revision: str,
     observed_at: str,
@@ -61,7 +64,7 @@ def build_material_store_inventory(
 
     inventory: dict[str, Any] = {
         "schema_version": MATERIAL_STORE_INVENTORY_SCHEMA_VERSION,
-        "goal_id": compact_token(goal_id, field="goal_id"),
+        **material_owner_fields(goal_id=goal_id, project_scope=project_scope),
         "store_id": compact_token(store_id, field="store_id"),
         "store_revision": compact_token(store_revision, field="store_revision"),
         "observed_at": iso_timestamp(observed_at, field="observed_at"),
@@ -72,7 +75,7 @@ def build_material_store_inventory(
         "backup_ref": compact_token(backup_ref, field="backup_ref"),
         "source_digest": compact_token(source_digest, field="source_digest"),
         "visibility": "public_safe",
-        "capability": capability_contract(packet_role="inventory"),
+        "capability": capability_contract(packet_role="inventory", project_scoped=project_scope is not None),
         "lifecycle_counts": counts,
         "item_count": sum(counts.values()),
         "parse_error_refs": token_list(

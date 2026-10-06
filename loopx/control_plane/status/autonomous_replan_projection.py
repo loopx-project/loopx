@@ -89,12 +89,14 @@ def autonomous_replan_obligation_from_runs(
     agent_todos: dict[str, Any] | None,
     agent_id: str | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     return _autonomous_replan_obligation_from_runs(
         latest_runs,
         agent_todos=agent_todos,
         agent_id=agent_id,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
         autonomous_replan_ack_recorded=autonomous_replan_ack_recorded,
         neutral_classifications=AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS,
         build_autonomous_replan_obligation=build_autonomous_replan_obligation,

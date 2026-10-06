@@ -10,11 +10,19 @@ from ...control_plane.goals.goal_vision_policy import (
 
 def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
     profile = goal.get("execution_profile")
-    if not isinstance(profile, Mapping) or (
-        "replan_after_completed_todos" not in profile
-    ):
+    if not isinstance(profile, Mapping):
         return None
-    return {"completed_todos": completed_todo_replan_threshold(dict(profile))}
+    if "replan_after_effective_turns" in profile:
+        return {
+            "count_unit": "effective_turns",
+            "count": profile["replan_after_effective_turns"],
+        }
+    if "replan_after_completed_todos" in profile:
+        return {
+            "count_unit": "completed_todos",
+            "count": completed_todo_replan_threshold(dict(profile)),
+        }
+    return None
 
 
 __all__ = ["configuration_summary"]

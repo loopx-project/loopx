@@ -21,6 +21,7 @@ from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
 from .inbox_reply import _message, reply_lark_event_inbox, verify_lark_inbox_reply
+from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
 from .outbound import LarkOutboundTextError, normalize_lark_outbound_text, safe_lark_plain_text_fallback
 from .private_images import private_message_caption, private_message_images
@@ -415,10 +416,13 @@ class LarkPrivateConversations:
                         self._feedback(path, record, inbox=inbox, processing=True)
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
-                    response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (
-                        "本次执行已停止。" if turn["status"] == "interrupted" else
-                        "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
-                        "本次执行失败或已过期，原会话已保留；请发送 /status 后再决定是否重试。")
+                    if turn["status"] == "failed" and turn.get("error_code") == "server_overloaded":
+                        response = manager_failure_reply(turn)[1] + " 原会话已保留。"
+                    else:
+                        response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (
+                            "本次执行已停止。" if turn["status"] == "interrupted" else
+                            "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
+                            "本次执行失败或已过期，原会话已保留；请发送 /status 后再决定是否重试。")
                 else:
                     if record["status"] != "rejected":
                         self._feedback(path, record, inbox=inbox)

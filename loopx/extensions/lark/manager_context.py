@@ -34,12 +34,13 @@ def opaque_digest(*values: Any) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:32]
 
 
-def manager_failure_reply(error: Exception) -> tuple[str, str]:
+def manager_failure_reply(error: Exception | Mapping[str, Any]) -> tuple[str, str]:
     labels = {
         "cyber_policy": "上游安全策略拦截",
         "misalignment_policy_violation": "上游策略拦截",
         "usage_limit_exceeded": "上游用量限制",
         "rate_limit_exceeded": "上游请求频率限制",
+        "server_overloaded": "当前模型繁忙",
         "context_window_exceeded": "上下文超限",
         "unauthorized": "上游身份验证失败",
         "idle_timeout": "等待上游响应超时",
@@ -60,8 +61,14 @@ def manager_failure_reply(error: Exception) -> tuple[str, str]:
             "管家连接自动重绑未能完成，旧连接已保留；请在连接设置中查看修复状态"
         ),
     }
-    code = str(getattr(error, "error_code", ""))
+    code = str(
+        error.get("error_code", "")
+        if isinstance(error, Mapping)
+        else getattr(error, "error_code", "")
+    )
     code = code if code in labels else "processing_failed"
+    if code == "server_overloaded":
+        return code, "当前模型繁忙，本轮未完成。请先查看 /status 与已有结果，再决定是否稍后重试；本次请求不会自动重放。"
     return code, f"已收到你的消息，但本次未能完成：{labels.get(code, '管家处理失败')}。没有生成完整答复，本次请求不会自动重放。"
 
 

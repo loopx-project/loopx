@@ -212,6 +212,21 @@ rebuild, bounded rerank, readable projection, Explore intent, apply, and
 rollback. Concrete legacy parsers, private storage adapters, source profiles,
 and provider credentials remain project owned.
 
+## Project Conversation Intake
+
+An explicitly activated project source can pass `MaterialProjectScope` instead
+of `goal_id` to the existing inventory, intake/rollback, ranking, projection and
+settlement builders. Exactly one owner is required; the project path creates
+no Goal. Its project/profile/grant references select existing Core context and
+source ownership, and never grant access by themselves.
+
+Project intake/rollback require the source provider's `verify_project_scope`
+to resolve the current Core caller, audience, exact profile/store, workspace
+write grant and expiring owner gate. Verification runs before source access
+and publication; the source must retain its transaction authorization fence.
+Source initialization stays project owned. Migration, rebuild and Explore keep
+their existing Goal route. No new CLI or transport configuration path is added.
+
 ## Relationship To Other Capabilities
 
 | Capability | Primary question | Relationship |

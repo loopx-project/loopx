@@ -153,6 +153,46 @@ def test_native_private_admission_queue_other_app_stop_and_verified_delivery(ord
         runtime.close()
 
 
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+@pytest.mark.parametrize("info", ["serverOverloaded", "other"])
+def test_model_capacity_failure_keeps_session_and_original_delivery(ordinary, profile, info):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    _, _, _, _, capture, fake, _ = ordinary
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        f'"codexErrorInfo": {json.dumps(info)}').replace('private-fixture-upstream-detail',
+        'private-fixture Selected model is at capacity serverOverloaded'))
+    try:
+        event = provider.event(profile, "busy-model", "typed terminal failure")
+        assert transport.admit(profile, event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        sid, tid = row["session_id"], row["turn_id"]
+        turn = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert turn["status"] == "failed" and turn["response"] is None
+        assert turn["error_code"] == ("server_overloaded" if info == "serverOverloaded" else "host_gate")
+        thread = store.load_session(sid)["upstream_thread_id"]
+        transport.reconcile()
+        terminal = provider.writes[-1][1]
+        assert ("当前模型繁忙" in terminal) == (info == "serverOverloaded")
+        assert "原会话已保留" in terminal
+        assert "private-fixture" not in terminal and "Partial answer" not in terminal
+        count = len(provider.writes)
+        LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli").reconcile()
+        assert len(provider.writes) == count
+        # Only the human's next input starts work; no retry or model/thread fallback.
+        before = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in before) == 1
+        followup = provider.event(profile, "after-busy", "continue here")
+        transport.admit(profile, followup)
+        following = transport.core.pending()[0]
+        assert following["session_id"] == sid
+        assert runtime.wait_for_turn(session_id=sid, turn_id=following["turn_id"], timeout_sec=10)["status"] == "completed"
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+        assert len(store.list_sessions()) == 1 and store.load_session(sid)["goal_id"] is None
+    finally:
+        runtime.close()
+
+
 def test_source_rejection_unsupported_file_notice_and_ambiguous_reply_readback(ordinary):  # noqa: F811
     _, runtime, provider, transport = connect(ordinary)
     try:

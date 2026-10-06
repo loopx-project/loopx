@@ -261,7 +261,7 @@ def _read(url: str, image_index: int | None = None, screenshot_path: str = "") -
                   _image_script(config, canonical, image_index, screenshot_path))
         result = subprocess.run(
             [config.executable, "nodejs", "-e", script],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
             timeout=TIMEOUT_SECONDS, check=False,
         )
         if result.returncode:

@@ -828,6 +828,15 @@ and an already terminal result win over a late preparation error. Restoring the
 runtime must not replay a failed request; the same ingress identity returns the
 same failure, while a fresh explicit request can run after repair.
 
+**Model capacity failures (S5/S10):** the Codex adapter preserves the typed
+`serverOverloaded` terminal error as `server_overloaded`; arbitrary upstream
+prose cannot establish that category. Lark private conversations and manager
+replies show a safe busy-model explanation and ask users to check existing
+results before choosing a later retry. The original Session, Turn and delivery
+receipt remain authoritative. This adds no automatic replay, model fallback or
+replacement thread, and does not prove availability or absence of earlier
+effects. Retryable notifications still wait for the actual terminal outcome.
+
 **Stopped workers returning late (A23, GQ08):** context preparation and provider
 reads can outlive the bounded interrupt wait. Before dispatch and when a provider
 returns, consult the persisted Turn status and its exact active Session claim

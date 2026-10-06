@@ -1145,6 +1145,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-task-inspector-status .is-done i { background: var(--pw-green); }
 .personal-task-inspector-status .is-blocked { background: var(--pw-red-bg); color: var(--pw-red); }
 .personal-task-inspector-status .is-blocked i { background: var(--pw-red); }
+.personal-task-blocked-reason { margin-top: 14px; padding: 11px 13px 12px; border: 1px solid color-mix(in srgb, var(--pw-red) 22%, var(--pw-line)); border-radius: 9px; background: color-mix(in srgb, var(--pw-red-bg) 55%, #fff); }
+.personal-task-blocked-reason h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 5px; color: var(--pw-red); font-size: 12px; font-weight: 700; }
+.personal-task-blocked-reason p { margin: 0; color: var(--pw-text); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.personal-task-blocked-reason[data-recorded="false"] p { color: var(--pw-muted); }
 .personal-task-inspector-fields { padding: 20px 24px 22px; background: #fff; }
 .personal-task-inspector-fields h4 { margin: 0 0 9px; color: var(--pw-text); font-size: 12px; font-weight: 700; }
 .personal-task-inspector-fields dl { margin: 0; border-top: 1px solid var(--pw-line); }

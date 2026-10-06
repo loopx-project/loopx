@@ -92,6 +92,8 @@ export const todoItemSchema = z.object({
   required_capabilities: z.array(z.string()).optional(),
   note: z.string().optional().nullable(),
   evidence: z.string().optional().nullable(),
+  // Public-safe blocker cause; producers project it only for blocked work.
+  reason: z.string().optional().nullable(),
   completed_at: z.string().optional().nullable(),
   updated_at: z.string().optional().nullable(),
   completion_validation_required: z.boolean().optional().nullable(),

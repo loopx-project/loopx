@@ -25,24 +25,34 @@ Use `--surface claude-code` or `--surface opencode` for those hosts; repeat the
 flag to install multiple host-native copies in one transaction. Managed copies
 live under `.agents/skills/`, `.claude/skills/`, or `.opencode/skills/` and are
 upgraded or removed through the same CLI. Project-local discovery does not
-itself activate material-store writes; the selected goal still needs explicit
-Material Lifecycle authority.
+itself activate material-store writes; the selected execution owner still
+needs explicit Material Lifecycle source authority.
 
 ## Activation Gate
 
 Before changing a material store:
 
-1. Resolve the current project, `goal_id`, registered agent, and active todo
-   through `loopx start-goal --guided`, `loopx status`, or `loopx diagnose`.
+1. Resolve the current project and execution owner. For a Goal route, use the
+   existing registered agent/active Todo. For an ordinary project route,
+   resolve the current Core project context and accepted request; do not run
+   `start-goal` or create a dummy Goal merely to obtain material metadata.
 2. Run `loopx project-skill status --project . --skill loopx-material` and
    confirm the required host surfaces are current.
-3. Confirm the selected todo explicitly targets `material_lifecycle`, or that
-   the goal authority declares an active Material Lifecycle profile and its
-   source store. A catalog entry or project-local skill is not activation.
-4. Confirm the goal boundary covers the exact private adapter and authority
-   paths. Public LoopX contracts never grant access to private source content.
+3. Require explicit activation: either the selected Goal Todo targets
+   `material_lifecycle`/the Goal declares its source profile, or the project
+   source owner declares an active material profile and an existing Core
+   workspace write grant. A catalog entry, scope reference or skill copy is
+   not activation.
+4. Confirm the Goal boundary or Core project write grant covers the exact
+   private adapter/authority paths. The project source verifier must bind the
+   current caller, audience, store/profile and owner gate, including expiry
+   and revocation. Ref names never grant access; enforce the authorization
+   fence within staging/publication as well as preflight checks.
 5. Run `loopx material-lifecycle architecture --format json` and preserve its
-   default-off, owner-gated, provider-neutral boundaries.
+   default-off, owner-gated, provider-neutral boundaries. The project source
+   route supports inventory, candidate intake/rollback, rerank packets,
+   readable projection and settlement; it does not widen Goal-only migration,
+   rebuild or Explore APIs.
 
 If the project-local skill is missing, preview an explicit project install; do
 not fall back to a global copy. If activation or authority is missing, stop
@@ -238,8 +248,10 @@ A complete material operation reports:
 
 Stop without mutating the source when:
 
-- the project or goal is ambiguous;
-- Material Lifecycle is not explicitly active for the selected goal;
+- the project or current execution owner is ambiguous;
+- Material Lifecycle is not explicitly active for the selected Goal or the
+  ordinary project's source profile with its existing Core write grant;
+- a project source route attempts Goal-only migration, rebuild or Explore;
 - source authority, backup, revision, or stable ids cannot be verified;
 - exact-read evidence conflicts with the proposed change;
 - overflow would be hidden rather than independently ranked;

@@ -135,12 +135,19 @@
 下列项目明确引用 LoopX 的思路。原生实现和已接受的设计文档，与依赖 LoopX 运行时
 是不同的关系。
 
-- **surogates**（invergent-ai）——[比较与采用计划](https://github.com/invergent-ai/surogates/blob/master/docs/superpowers/plans/2026-08-03-loopx-adoption.md)
+- **surogates**（invergent-ai）——[固定版本的比较与采用计划](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/docs/superpowers/plans/2026-08-03-loopx-adoption.md)
   选择吸收持久授权、目标预算和评估器记忆，保留自身存储及运行时。
   [PR #188](https://github.com/invergent-ai/surogates/pull/188)、
   [#190](https://github.com/invergent-ai/surogates/pull/190)、
-  [#191](https://github.com/invergent-ai/surogates/pull/191) 已合并。
+  [#191](https://github.com/invergent-ai/surogates/pull/191) 于 2026 年 8 月 3 日合并，
+  实现调用级授权、mission token 额度与前次评估记忆。
+  当前固定源码中的 [MissionStore](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/surogates/missions/store.py)
+  从自身 session/task 记录推导用量；[评估器](https://github.com/invergent-ai/surogates/blob/018db6d6aec1a2489ab6ce2278e3869b21834875/surogates/missions/evaluator.py)
+  检查额度，并注入前次结论与停滞计数。PR #191 明确未移植 LoopX 的进展粒度分类；
+  当前停滞提示引导 judge，不强制产生特定 verdict。
   **状态：代码层借鉴**；实时 PR 状态优先于计划中的旧表格。
+  作者报告专项 PostgreSQL 测试通过，完整单测仍有 28 项既有失败；两者均未独立复现。
+  这些证据不证明 LoopX 运行时集成、当前兼容性或持续使用。核对日期：2026-10-05。
 - **future-os**（futuregene）——已合并的
   [PR #253](https://github.com/futuregene/future-os/pull/253) 和
   [#255](https://github.com/futuregene/future-os/pull/255) 明确参考 LoopX，

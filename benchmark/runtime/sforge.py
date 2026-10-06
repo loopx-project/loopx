@@ -81,7 +81,8 @@ class SForgeWorker(CodexAgent):
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
                  blind_prompt: str | None = None,
-                 task_entry: str = "seeded-todo"):
+                 task_entry: str = "seeded-todo",
+                 replan_after_turns: int | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -96,6 +97,13 @@ class SForgeWorker(CodexAgent):
         if task_entry != "seeded-todo" and not profile.startswith("heartbeat-"):
             raise ValueError("loopx-planned requires a heartbeat profile")
         self.task_entry = task_entry
+        if replan_after_turns is not None:
+            if (type(replan_after_turns) is not int or
+                    not 1 <= replan_after_turns <= 5):
+                raise ValueError("replan_after_turns must be an integer between 1 and 5")
+            if not profile.startswith("heartbeat-"):
+                raise ValueError("replan_after_turns requires a heartbeat profile")
+        self.replan_after_turns = replan_after_turns
         self.profile, self.cwd = profile, cwd
         self.blind_prompt = blind_prompt
         self.prompt_installed = False
@@ -157,6 +165,7 @@ class SForgeWorker(CodexAgent):
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
+                replan_after_turns=self.replan_after_turns,
             )
             asyncio.run(self.runtime.install(self.environment))
         if self.blind_prompt is not None:
@@ -172,6 +181,8 @@ class SForgeWorker(CodexAgent):
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": "blind" if self.blind_prompt is not None else "native",
+            **(self.runtime._replan_receipt() if self.runtime and
+               self.replan_after_turns is not None else {}),
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):

@@ -80,6 +80,8 @@ def main(argv=None):
     parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--task-entry", choices=TASK_ENTRIES, default="seeded-todo")
+    parser.add_argument("--replan-after-turns", type=int, choices=range(1, 6),
+                        help="Opt in to settled work Turn cadence for heartbeat profiles")
     parser.add_argument("--eval-interval", type=int, default=300)
     parser.add_argument("--submission-cooldown", type=int, default=120)
     parser.add_argument("--judge-url", required=True)
@@ -87,6 +89,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.task_entry != "seeded-todo" and not args.worker.startswith("heartbeat-"):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
+    if args.replan_after_turns is not None and not args.worker.startswith("heartbeat-"):
+        parser.error("--replan-after-turns requires a heartbeat worker")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
@@ -122,7 +126,8 @@ def main(argv=None):
         }
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
                          timeout_seconds=args.timeout, blind_prompt=blind_prompt,
-                         task_entry=args.task_entry)
+                         task_entry=args.task_entry,
+                         replan_after_turns=args.replan_after_turns)
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
@@ -141,6 +146,8 @@ def main(argv=None):
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
+        **({"replan_after_effective_turns": args.replan_after_turns}
+           if args.replan_after_turns is not None else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))

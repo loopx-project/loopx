@@ -350,12 +350,15 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize("turns", [None, 2])
+def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing, turns):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
     from loopx.cli import build_parser
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture")
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                           replan_after_turns=turns)
+    field = "replan_after_effective_turns" if turns else "replan_after_completed_todos"
     calls = []
 
     async def write_task(*args, **kwargs):
@@ -369,7 +372,7 @@ def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {"replan_after_completed_todos": 3}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: turns or 3}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -381,6 +384,11 @@ def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing
     assert any(args[:2] == ["todo", "add"] for args in calls)
     assert any(args[0] == "bootstrap" for args in calls) is not existing
     assert all("--clear-waiting-on" not in args for args in calls)
+    option = "--execution-replan-after-turns" if turns else "--execution-replan-after-todos"
+    configured = [args for args in calls if option in args]
+    assert configured and all(args[args.index(option) + 1] == str(turns or 3)
+                              for args in configured)
+    assert agent._replan_receipt() == {field: turns or 3}
 
 
 def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monkeypatch):
@@ -456,3 +464,26 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     env = worker_env(tmp_path) | {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "worker", "LOOPX_REGISTRY": "registry", "LOOPX_RUNTIME_ROOT": "runtime"}
     assert execution.timeout_seconds is None
     assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")
+
+
+@pytest.mark.parametrize("observed", [
+    {"replan_after_completed_todos": 2},
+    {"replan_after_effective_turns": 3},
+    {},
+])
+def test_turn_cadence_readback_rejects_wrong_unit_or_value(tmp_path, monkeypatch, observed):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", replan_after_turns=2)
+    async def no_work(*args, **kwargs):
+        return True
+    async def cli(*args, **kwargs):
+        return {"after": {"execution_profile": observed}}
+    async def no_pending(**kwargs):
+        return SimpleNamespace(return_code=1)
+    monkeypatch.setattr(agent, "_write_task_document", no_work)
+    monkeypatch.setattr(agent, "_registry_exists", no_work)
+    monkeypatch.setattr(agent, "_seed_phase", no_work)
+    monkeypatch.setattr(agent, "_loopx", cli)
+    with pytest.raises(RuntimeError, match="readback mismatch"):
+        asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Fixture", cwd=str(tmp_path)))

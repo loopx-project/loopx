@@ -500,6 +500,7 @@ def test_explicit_manager_model_and_effort_reach_start_resume_and_turn(
         ("misalignmentPolicyViolation", "misalignment_policy_violation"),
         ("usageLimitExceeded", "usage_limit_exceeded"),
         ("rateLimitExceeded", "rate_limit_exceeded"),
+        ("serverOverloaded", "server_overloaded"),
         ("contextWindowExceeded", "context_window_exceeded"),
         ("unauthorized", "unauthorized"),
         ("futureVariant", "host_gate"),
@@ -585,8 +586,9 @@ def test_unstructured_upstream_error_stays_generic() -> None:
     assert "private upstream" not in str(error) + json.dumps(error.gate)
 
 
+@pytest.mark.parametrize("retry_info", ["rateLimitExceeded", "serverOverloaded"])
 def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, retry_info
 ):
     session = chat_agent.CodexChatAgentSession(
         process=_FakeAppServerProcess(),
@@ -619,7 +621,7 @@ def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
                 "params": {
                     "threadId": "thread-fixture",
                     "turnId": "turn-fixture",
-                    "error": {"codexErrorInfo": "rateLimitExceeded"},
+                    "error": {"codexErrorInfo": retry_info},
                     "willRetry": True,
                 },
             },

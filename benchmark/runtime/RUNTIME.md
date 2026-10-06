@@ -235,3 +235,27 @@ or blocked plan cannot start execution. Reusing the receipt does not bypass the
 ordinary scheduler's quota, claim, blocker or settlement checks. Retain receipts
 and native sessions when comparing planning cost; no active attempt is changed
 by selecting this option for a new run.
+
+
+### Explicit effective-Turn cadence
+
+Harbor `BenchmarkCodex` accepts `replan_after_turns: 3`; the native EdgeBench
+launcher accepts `--replan-after-turns 3` for `heartbeat-resume` and
+`heartbeat-explore`. This passes the existing Goal option
+`--execution-replan-after-turns` and verifies the persisted
+`replan_after_effective_turns` value before execution. The shared TypeScript
+control plane still owns which settled work Turns count; adapters do not count
+records or completed Todos themselves.
+
+Omitting the option preserves the legacy three-completed-Todo setting. Harbor
+rejects simultaneous explicit Todo and Turn settings. To roll back, omit the
+Turn option in a new trial or select `replan_after_todos` in Harbor; do not alter
+an active matched trial. Receipts name the selected unit. Values must be integers
+from one through five, and non-LoopX profiles reject the option. No task, scoring,
+feedback, spawn permission, or total-budget change is implied. This adapter
+option alone does not enable SForge planned task entry.
+
+The two options are independent: `--task-entry` selects where the initial Todo
+comes from, while `--replan-after-turns` selects which cadence the shared control
+plane uses afterwards. A trial may set either, both, or neither; receipts record
+both selections so a comparison keeps every other input fixed.

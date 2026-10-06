@@ -54,6 +54,31 @@ def test_read_returns_evidence_without_visual_or_write_claim(configured, monkeyp
     assert "does not prove article" in result["limitations"]
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_real_child_preserves_utf8_evidence_on_a_gbk_host(
+    configured, monkeypatch, stream,
+):
+    import sys
+    # The fixture child emits real UTF-8 bytes; it does not return a predecoded
+    # mock. Python's default text codec models the Windows host locale.
+    value = {"requested_url": URL, "canonical_url": URL, **extraction()}
+    payload = (reader.MARKER + json.dumps(value, ensure_ascii=False)).encode("utf-8")
+    real_run = subprocess.run
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "gbk")
+
+    def emit(_args, **kwargs):
+        return real_run(
+            [sys.executable, "-c", f"import sys; sys.{stream}.buffer.write({payload!r})"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(reader.subprocess, "run", emit)
+    result = reader.read_public_url(URL)
+    assert result["ok"] is True
+    assert result["text"] == "Source evidence 原文"
+    assert result["sha256"] == hashlib.sha256("Source evidence 原文".encode("utf-8")).hexdigest()
+
+
 @pytest.mark.parametrize("url,error", [
     ("http://example.com/article", "source_url_invalid"),
     ("https://user:secret@example.com/article", "source_url_invalid"),

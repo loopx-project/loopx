@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from .control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.runtime.time import chronology_key, now_local_iso
 from .control_plane.goals.state_resolution import resolve_goal_state as resolve_goal_state
@@ -1055,6 +1056,11 @@ def refresh_state_run(
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
             registry_goal=registry_goal,
+            effective_turn_cadence=effective_turn_cadence_context(
+                registry_goal or {"id": safe_goal_id}, runtime_root,
+                registry_path=registry_path, goal_ref=goal_ref,
+                source_admission=source_admission,
+            ),
             # The acknowledgement is judged against the same sentinel-derived
             # obligation that status shows; `off` loads nothing.
             external_progress_review=external_progress_review_context(
