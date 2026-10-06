@@ -30,6 +30,7 @@ deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
 ]
 test = [
+  "distlib>=0.3.9,<1; sys_platform == 'win32'",
   "jsonschema>=4.23,<5",
   "mcp==1.28.1",
   "pyyaml>=6,<7",
