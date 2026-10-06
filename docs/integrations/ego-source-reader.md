@@ -69,7 +69,7 @@ raw browser diagnostics; use local provider logs for diagnosis.
 Both text and image reads wait up to 10 seconds within that same execution
 budget for readable semantic content after navigation. Articles inside the
 main region take precedence, with the main region or body as fallback. Ancillary
-landmarks such as sidebars and navigation cannot select or block the content
+landmarks such as sidebars and navigation cannot select, satisfy or block the content
 region. Visible loading/busy indicators in the content and a busy ancestor
 delay extraction; unrelated sidebar spinners do not. There
 is no minimum text length. Image reads also accept a visible, loaded image in
