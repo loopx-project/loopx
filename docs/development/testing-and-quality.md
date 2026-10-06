@@ -798,6 +798,12 @@ view: the standard differential fixture emitted 5,438 characters on both the
 unchanged base and candidate, exceeding 5,100. Its Markdown regression ceiling
 is 6,000 (562 characters of headroom); thin JSON and the 3,000-character task-body
 budget remain unchanged. Distinct execution commands remain directly runnable.
+The same immutable base/candidate differential also found unchanged crowded
+admission and Turn-plan JSON at 34,371 / 15,023 against 34,000 / 15,000 ceilings.
+These retain the current admission/settlement and executable-plan fields; no
+caller migration or truncation is part of this repair. Their crowded JSON
+ceilings are 35,500 / 15,500 (1,129 / 477 characters of measured headroom).
+Line, population, growth, semantic and structural-differential checks stay fixed.
 
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
