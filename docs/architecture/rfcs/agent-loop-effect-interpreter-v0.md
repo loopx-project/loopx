@@ -497,6 +497,18 @@ separate acceptance; active Python IO adapters are retained.
 真实 Legacy/File/SQLite CLI 验证覆盖全文尾部、用户 gate、恢复和签名内容篡改。
 这是普通上下文交付默认值的变化；模型效果、安装后的 App/Lark 旅程及总体效率仍待验证。
 
+The no-write model-behavior safety adapter now recognizes the existing native
+scheduler route prefix (`--registry` / `--runtime-root`) before the matching
+ACK/failure command. Qualification exercises the actual binder and TurnEnvelope
+projection, not only unbound synthetic argv. The adapter decodes bounded wire
+only for recursive confidentiality scanning; route values, decoded extensions
+and unrelated aliases remain subject to that scan, and the original packet and
+wire are forwarded unchanged. Unknown or malformed prefixes and mismatched
+hint/command pairs still refuse. This removes a transport false rejection; it
+changes no scheduler admission, execution grant, default or host effect.
+Real packaged transport qualification remains separate from live model outcomes,
+App adoption and the three convergence acceptances below.
+
 Remaining implementation Todos, in dependency order:
 
 | Todo | Observable outcome and decisive acceptance |

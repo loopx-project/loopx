@@ -346,6 +346,14 @@ hook 身份。必读项只在 Agent channel 携带，明确空列表抑制旧读
 模型采用、安装态 App/Lark 和整体上下文效率仍单独验收；本阶段不改变 transport
 默认值，也不删除尚有实际调用方的 Python adapter。
 
+no-write model-behavior 安全适配器现在识别原生 scheduler 在 ACK/failure
+命令前绑定的 `--registry`／`--runtime-root` 路由前缀。验证走真实 binder 和
+TurnEnvelope 投影，不能只用未绑定的合成 argv。适配器只为递归保密扫描解码
+有界 wire：路由值、解码后的扩展及无关 alias 仍被扫描，原 packet 和 wire
+原样传递。未知或损坏前缀、hint 与命令不匹配继续拒绝。这修复传输误拒绝，
+不改变 scheduler 准入、执行授权、默认值或宿主效果；打包后的传输验证不代表
+live 模型结果、App 采用或以下三项收敛验收完成。
+
 后续实施 Todo 按依赖顺序推进：
 
 | Todo | 可观察结果与决定性验收 |
