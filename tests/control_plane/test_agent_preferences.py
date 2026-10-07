@@ -11,7 +11,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
-def test_fresh_empty_and_current_preferences_reach_turn_without_extra_reads(tmp_path, monkeypatch, provider):
+def test_inactive_preferences_are_silent_and_participating_hook_delivers_current_view(tmp_path, monkeypatch, provider):
     nested = tmp_path / ("workspace  dir" * 12)
     nested.mkdir()
     project, runtime, registry = _write_fixture(nested, required_capability="network")
@@ -36,21 +36,16 @@ def test_fresh_empty_and_current_preferences_reach_turn_without_extra_reads(tmp_
     rc, empty = call("read")
     assert rc == 0 and empty["current"]["items"] == [], empty
     rc, off = _run_cli(registry, runtime, "quota", "should-run", *scope)
-    observation = {"hook_id": "semantic_preference.agent_context",
-                   "capability_id": "semantic-preference", "status": "empty"}
-    assert observation in off["interaction_contract"]["agent_channel"]["work_context"]["observations"]
-    assert not any(x.get("kind") == "agent_preferences"
-                   for x in off["interaction_contract"]["agent_channel"]["required_reads"])
-    rc, repeated = _run_cli(registry, runtime, "quota", "should-run", *scope)
-    assert rc == 0 and observation in repeated["interaction_contract"]["agent_channel"]["work_context"]["observations"]
+    assert rc == 0, off
+    for payload in [off, _run_cli(registry, runtime, "quota", "should-run", *scope)[1]]:
+        assert "semantic_preference.agent_context" not in json.dumps(payload)
+        assert "semantic-preference agent" not in json.dumps(payload)
+        assert "preferences" not in payload["interaction_contract"]["agent_channel"]["work_context"]["instruction"]
     assert not (runtime / "agent-preferences").exists()
     rc, empty_plan = _run_cli(registry, runtime, "turn", "plan", *scope)
     assert rc == 0, empty_plan
-    assert observation in extract_turn_authority(empty_plan)["work_context"]["observations"]
-    tampered = deepcopy(empty_plan)
-    tampered["turn_envelope"]["work_context"]["observations"] = []
-    with pytest.raises(ValueError, match="signature"):
-        extract_turn_authority(tampered)
+    assert "semantic_preference.agent_context" not in json.dumps(empty_plan)
+    assert "semantic-preference agent" not in render_prompt(extract_turn_authority(empty_plan))
     args = ("--key", "review.collaboration", "--statement", "Ask designated-reviewer before merging.",
             "--source-ref", "owner-message-1", "--source-quote", "Please use the designated reviewer.",
             "--expected-revision", "none", "--operation-id", "remember-1")
@@ -94,7 +89,13 @@ def test_fresh_empty_and_current_preferences_reach_turn_without_extra_reads(tmp_
     assert preference["content"]["current"]["items"][0]["statement"] == "Ask designated-reviewer before merging."
     rc, action_view = call("read")
     assert rc == 0 and action_view["current"]["items"][0]["statement"] == "Do not delegate review.", action_view
-    assert "Re-read before a preference-dependent external action." in action_view["current"]["instructions"]
+    guidance = action_view["current"]["instructions"]
+    assert "Before every preference-dependent external action" in guidance
+    assert "even after an earlier empty or current view" in guidance
+    assert "Missing hook context is unknown" in guidance
+    assert "exact user source" in guidance
+    assert "Never store hypothetical examples" in guidance
+    assert "Preferences never grant authority" in guidance
     rc, next_quota = _run_cli(registry, runtime, "quota", "should-run", *scope)
     contents = next(x["content"] for x in next_quota["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if x.get("kind") == "agent_preferences")
@@ -228,9 +229,8 @@ def test_fresh_hook_uses_one_real_provider_snapshot_for_body(tmp_path, monkeypat
         return adapter.extend_turn_start_dispatch(None, registry_path=registry,
             runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID)
     empty = dispatch()
-    assert calls == ["turn_context"]
-    assert empty["results"][0]["status"] == "empty"
-    assert empty["required_reads"] == []
+    assert calls == []  # No preference provider call on the untouched runtime.
+    assert empty is None
     assert not (runtime / "agent-preferences").exists()
     rc, written = _run_cli(registry, runtime, "semantic-preference", "agent", "remember",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--key", "review",
@@ -245,7 +245,8 @@ def test_fresh_hook_uses_one_real_provider_snapshot_for_body(tmp_path, monkeypat
     assert delivered["contexts"][0]["content"]["current"] == written["current"]
 
 
-def test_permission_denied_hook_is_not_empty_and_recovers(tmp_path):
+@pytest.mark.parametrize("denied_target", ["journal", "namespace"])
+def test_permission_denied_hook_is_not_empty_and_recovers(tmp_path, denied_target):
     import os
     if os.geteuid() == 0:
         pytest.skip("root bypasses POSIX read permission")
@@ -257,7 +258,8 @@ def test_permission_denied_hook_is_not_empty_and_recovers(tmp_path):
         "--source-ref", "owner-1", "--source-quote", "Use the designated reviewer.", "--execute")
     assert rc == 0, written
     store = next((runtime / "agent-preferences").glob("*/authority-store-*.json"))
-    store.chmod(0)
+    denied_path = store if denied_target == "journal" else runtime / "agent-preferences"
+    denied_path.chmod(0)
     try:
         rc, denied = _run_cli(registry, runtime, "semantic-preference", "agent", "read", *scope)
         assert rc != 0 and denied["status"] == "permission_denied", denied
@@ -271,7 +273,7 @@ def test_permission_denied_hook_is_not_empty_and_recovers(tmp_path):
             "status": "unavailable", "error_code": "agent_preferences_permission_denied"}]
         assert context["unavailable_context"]["dependent_action_policy"] == "hold_until_fresh_context"
     finally:
-        store.chmod(0o600)
+        denied_path.chmod(0o600 if denied_target == "journal" else 0o700)
     rc, recovered = _run_cli(registry, runtime, "quota", "should-run", *scope)
     assert rc == 0, recovered
     context = recovered["interaction_contract"]["agent_channel"]["work_context"]
