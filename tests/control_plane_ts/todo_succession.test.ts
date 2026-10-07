@@ -4,7 +4,8 @@ import {evaluateTodoSuccession, projectTodoSuccession, projectTodoClosure, SUCCE
 
 const row = (todo_id: string, overrides = {}) => ({todo_id, status: "done", active: true,
   advancement: true, no_followup: false, successors: [], superseded_by: null,
-  unblocks: null, resumes: null, handoff: false, context_fields: ["claimed_by"], ...overrides});
+  unblocks: null, resumes: null, handoff: false, done: false, route_flag: null,
+  legacy_route_label: "", context_fields: ["claimed_by"], ...overrides});
 
 type ProjectionInput = {schema_version: string; rows: Record<string, unknown>[];
   context_field_sets?: unknown; evaluations?: Record<string, unknown>[]};
@@ -22,6 +23,26 @@ function project(request: ProjectionInput) {
   return {...result, evaluations: (result.evaluations as unknown[][]).map(row =>
     Object.fromEntries(SUCCESSION_EVALUATION_COLUMNS.map((name, index) => [name, row[index]])))};
 }
+
+test("route advisory belongs to the source evaluation and never clears the handoff", () => {
+  const source = row("todo_gate", {status: "open", handoff: true, legacy_route_label: "STALE handoff closeout"});
+  for (const [extra, expected] of [
+    [{}, true], [{route_flag: false}, false], [{route_flag: true, done: true}, true],
+    [{status: "done"}, false], [{status: "deferred"}, false], [{done: true}, false],
+    [{active: false}, false], [{handoff: false}, false], [{legacy_route_label: "handoff closeout"}, false],
+  ] as const) {
+    const value = {...source, ...extra}, evaluation = evaluateTodoSuccession([value])[0];
+    assert.equal(evaluation.route_continuation_replan_required, expected);
+    assert.deepEqual(evaluation.successor_todo_ids, []);
+    assert.equal(evaluation.handoff_state, !value.active || !value.handoff ? null :
+      value.status === "done" ? "cleared_without_successor" : value.status === "deferred" ? "deferred" : "blocking");
+  }
+  const evaluation = evaluateTodoSuccession([source])[0];
+  for (const extra of [{route_flag: false}, {legacy_route_label: "handoff closeout"}, {done: true}]) {
+    assert.throws(() => project({schema_version: "todo_succession_request_v1",
+      rows: [{...source, ...extra}], evaluations: [evaluation]}), /matching full-source/);
+  }
+});
 
 test("one resolver recognizes explicit, supersession and inferred links in source order", () => {
   const rows = [row("todo_source", {successors: ["todo_explicit", "todo_source", "todo_missing"], superseded_by: "todo_replaced", handoff: true}),
@@ -91,6 +112,7 @@ test("interned field sets are lossless and reject invalid references", () => {
 test("a cached result cannot contradict its matched item facts", () => {
   const source = row("todo_source"), evaluation = evaluateTodoSuccession([source])[0];
   for (const mutation of [{successor_gap: false}, {tracked_completion: false}, {handoff_state: "superseded"},
+    {route_continuation_replan_required: true},
     {successor_todo_ids: [null]}, {successor_todo_ids: [source.todo_id]}]) {
     assert.throws(() => project({schema_version: "todo_succession_request_v1",
       rows: [source], evaluations: [{...evaluation, ...mutation}]}), /succession evaluation|successor identity/);

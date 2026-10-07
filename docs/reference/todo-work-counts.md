@@ -138,6 +138,15 @@ A source already marked partial cannot regain `source_proof` or
 rows. Query scope and source completeness are independent conditions. These
 proofs remain read-only observations, not permission to settle a Goal.
 
+Route-replan facts now participate in the same full-source succession evidence.
+Changing a typed route flag or a historical handoff label after evaluation
+rejects filtered readback; it cannot reuse the old evidence to change a closure
+obligation. An explicit boolean, including `false`, takes precedence. The
+historical “stale handoff closeout” prose hint remains a bounded compatibility
+advisory in the TS succession owner, never gate clearance, successor evidence
+or execution permission. Supported old writers and their migration readers
+remain intact; retiring this Python decision does not force a Goal upgrade.
+
 This changes status, Todo-list and quota summary readback for both legacy and
 promoted Goals without a flag. Existing frontend and Lark views consume these
 Core projections; no new setting or frontend asset is required. No provider,
@@ -155,6 +164,10 @@ Python 继续负责旧数据解码、公开字段筛选、隐私处理与文本�
 微秒，不再把较晚编辑误作较晚完成。缺失／非法时间仍计入已完成总数和历史，但不进入
 最近完成列表。后继缺口警告仍按最后更新时间排序，未知时间靠后，不丢弃警告。
 已有 partial 来源不会因为再次筛选命中所有可见行，就重新获得整个来源的收尾证明。
+route-replan 的类型化标记及旧 handoff 文本提示现在绑定同一份完整来源证据；求值后
+修改这些事实，筛选读取会拒绝旧证据。显式 `false` 优先于旧提示，提示仍只是重规划
+建议，不能解除 gate、证明后继或授予执行权。此次只退役 Python 重复决策，不删除
+仍有调用方的旧 writer／迁移 reader，也不强制升级既有 Goal。
 
 覆盖 legacy 与 canonical 的 status、Todo 查询和 quota 摘要；展示预算保持原值。
 没有新增设置、权限或 writer，不改变 provider 默认值，也不宣称完成整 Goal 迁移。

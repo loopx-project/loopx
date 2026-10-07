@@ -32,6 +32,40 @@ def cli(registry: Path, *args: str):
 
 
 @pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+def test_real_cli_historical_route_advisory_preserves_old_source_and_provider(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, state, registry = tmp_path / 'runtime', tmp_path / 'state.md', tmp_path / 'registry.json'
+    gate = {'schema_version': 'todo_item_v0', 'archive_state': 'active', 'source_section': 'Agent Todo',
+            'role': 'agent', 'text': 'stale handoff closeout', 'status': 'open', 'done': False,
+            'task_class': 'advancement_task', 'excluded_agents': ['agent-b'], 'unblocks_todo_id': 'todo_work'}
+    records = [{**gate, 'todo_id': 'todo_legacy'},
+               {**gate, 'todo_id': 'todo_ordinary', 'text': 'Review the route'},
+               {**gate, 'todo_id': 'todo_closed', 'status': 'done', 'done': True, 'no_followup': True}]
+    projection = build_todo_runtime_shadow_projection(goal_id='goal-a', todos=records, handoff_mode='soft_claim')
+    state.write_text(render_canonical_todo_sections('# Goal\n\n## Agent Todo\n', projection['todos'],
+        provider_revision='fixture-source').markdown)
+    registry.write_text(json.dumps({'common_runtime_root': str(runtime), 'goals': [{
+        'id': 'goal-a', 'repo': str(tmp_path), 'state_file': state.name, 'status': 'active',
+        'coordination': {'registered_agents': ['agent-a', 'agent-b']},
+    }]}))
+    if provider != 'legacy':
+        initialize_canonical_authority(runtime, 'goal-a', projection, state_path=state, provider=provider)
+        state.unlink()
+    source = state.read_bytes() if state.exists() else None
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')
+    for todo_id, expected in [('todo_legacy', True), ('todo_ordinary', False), ('todo_closed', False)]:
+        result = cli(registry, '--todo-id', todo_id)
+        summary = result['agent_todos']
+        handoff = summary['handoff_gates'][0]
+        assert (handoff.get('route_continuation_replan_required') is True) is expected
+        assert handoff['gate_state'] == ('cleared_no_followup' if todo_id == 'todo_closed' else 'blocking')
+        assert 'terminal_closure_proof' not in summary or todo_id == 'todo_closed'
+        assert result['todo']['excluded_agents'] == ['agent-b']
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a') == before
+    assert (state.read_bytes() if state.exists() else None) == source
+
+
+@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
 def test_real_cli_graph_selection_history_and_read_only_manager(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = fixture_projection()

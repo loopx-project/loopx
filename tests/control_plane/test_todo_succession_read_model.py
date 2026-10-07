@@ -125,6 +125,40 @@ def test_explicit_route_flag_is_not_overridden_by_legacy_prose_hint():
     assert result["gate_state"] == "blocking"
 
 
+@pytest.mark.parametrize("status,done,flag,label,expected", [
+    ("open", False, None, "STALE handoff closeout", True),
+    ("open", False, False, "stale handoff closeout", False),
+    ("done", True, True, "", True),
+    ("done", True, None, "stale handoff closeout", False),
+    ("deferred", False, None, "stale handoff closeout", False),
+    ("open", True, None, "stale handoff closeout", False),
+    ("open", False, None, "handoff closeout", False),
+])
+def test_route_replan_retains_explicit_and_legacy_advisory_semantics(status, done, flag, label, expected):
+    gate = work("todo_gate", status=status, done=done, text=label,
+                excluded_agents=["agent-b"], unblocks_todo_id="todo_work")
+    if flag is not None:
+        gate["route_continuation_replan_required"] = flag
+    result = build_todo_handoff_gate_states([gate])[0]
+    assert (result.get("route_continuation_replan_required") is True) is expected
+    # A replan hint never resolves ownership or the handoff's successor.
+    assert result["successor_count"] == 0
+    assert result["excluded_agents"] == ["agent-b"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("route_continuation_replan_required", False),
+    ("text", "handoff closeout"),
+])
+def test_filtered_summary_rejects_changed_route_facts(field, value):
+    gate = work("todo_gate", status="open", done=False, text="stale handoff closeout",
+                excluded_agents=["agent-b"], unblocks_todo_id="todo_work")
+    source = summary([gate])
+    source["items"][0][field] = value
+    with pytest.raises(Exception, match="matching full-source"):
+        filtered_todo_summary(source, role="agent", todo_id="todo_gate")
+
+
 def test_archived_identity_can_be_recreated_but_duplicate_active_authority_rejects():
     source = work("todo_source", no_followup=True)
     result = summary([source], resume_source_items=[source, {**source, "archive_state": "archive"}])

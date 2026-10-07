@@ -19,6 +19,7 @@ interface Row {
   active: boolean; advancement: boolean; noFollowup: boolean; tracked: boolean;
   successors: string[]; supersededBy: string | null; unblocks: string | null;
   resumes: string | null; handoff: boolean;
+  done: boolean; routeFlag: boolean | null; legacyRouteLabel: string;
 }
 function id(value: unknown): string | null {
   if (value === null) return null;
@@ -34,6 +35,9 @@ function decode(value: unknown): Row {
   const status = requireStringLiteral(facts.status, ["open", "blocked", "done", "deferred"], "status");
   const active = requireBoolean(facts.active, "active");
   const advancement = requireBoolean(facts.advancement, "advancement");
+  if (typeof facts.legacy_route_label !== "string") {
+    throw new EffectRuntimeRequestError("legacy route label must be text");
+  }
   if (!Array.isArray(facts.successors) || !Array.isArray(facts.context_fields) ||
       facts.context_fields.some(field => typeof field !== "string")) {
     throw new EffectRuntimeRequestError("succession lists must be arrays");
@@ -47,7 +51,10 @@ function decode(value: unknown): Row {
       if (!target) throw new EffectRuntimeRequestError("successor identity cannot be null");
       return target;
     }), supersededBy: id(facts.superseded_by), unblocks: id(facts.unblocks),
-    resumes: id(facts.resumes), handoff: requireBoolean(facts.handoff, "handoff")};
+    resumes: id(facts.resumes), handoff: requireBoolean(facts.handoff, "handoff"),
+    done: requireBoolean(facts.done, "done"),
+    routeFlag: facts.route_flag === null ? null : requireBoolean(facts.route_flag, "route_flag"),
+    legacyRouteLabel: facts.legacy_route_label};
 }
 function handoffState(row: Row, successors: readonly string[]): HandoffState | null {
   if (!row.active || !row.handoff) return null;
@@ -56,6 +63,16 @@ function handoffState(row: Row, successors: readonly string[]): HandoffState | n
   if (row.status !== "done") return "blocking";
   if (row.noFollowup) return "cleared_no_followup";
   return successors.length ? "cleared_with_successor" : "cleared_without_successor";
+}
+
+/** Retain the historical prose hint only as a replan advisory. An explicit
+ * boolean wins, including false; this never clears a gate or grants work.
+ * Retire the hint when the supported route-closeout writers emit typed flags. */
+function routeReplanRequired(row: Row): boolean {
+  if (row.routeFlag !== null) return row.routeFlag;
+  if (!row.active || !row.handoff || row.done || row.status === "done" || row.status === "deferred") return false;
+  const label = row.legacyRouteLabel.toLowerCase();
+  return label.includes("stale") && label.includes("handoff") && label.includes("closeout");
 }
 
 /** The same edge index drives live readback and bounded archive capture. */
@@ -96,7 +113,8 @@ export function evaluateTodoSuccession(values: readonly unknown[]): JsonObject[]
     return {schema_version: EVALUATION_SCHEMA, item_sha256: canonicalAuthoritySha256(row.facts),
       successor_todo_ids: successors, unresolved_successor_ids: declared.filter(target => !resolved.includes(target)),
       tracked_completion: row.tracked, successor_gap: row.tracked && !row.noFollowup && successors.length === 0,
-      handoff_state: handoffState(row, successors)};
+      handoff_state: handoffState(row, successors),
+      route_continuation_replan_required: routeReplanRequired(row)};
   });
 }
 
@@ -112,11 +130,13 @@ export function validateTodoSuccession(facts: unknown, value: unknown): JsonObje
   }
   requireBoolean(evaluation.tracked_completion, "tracked_completion");
   requireBoolean(evaluation.successor_gap, "successor_gap");
+  requireBoolean(evaluation.route_continuation_replan_required, "route_continuation_replan_required");
   if (evaluation.handoff_state !== null) requireStringLiteral(evaluation.handoff_state, HANDOFF_STATES, "handoff_state");
   const successors = evaluation.successor_todo_ids as string[];
   if (evaluation.tracked_completion !== row.tracked ||
       evaluation.successor_gap !== (row.tracked && !row.noFollowup && successors.length === 0) ||
       evaluation.handoff_state !== handoffState(row, successors) ||
+      evaluation.route_continuation_replan_required !== routeReplanRequired(row) ||
       new Set(successors).size !== successors.length || successors.includes(row.id ?? "")) {
     throw new EffectRuntimeRequestError("inconsistent Todo succession evaluation");
   }

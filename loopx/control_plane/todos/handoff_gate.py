@@ -41,27 +41,12 @@ def _todo_text(item: dict[str, Any]) -> str:
     return str(item.get("text") or "").strip()
 
 
-def _stale_handoff_closeout_replan_required(gate: dict[str, Any]) -> bool:
-    # Legacy compatibility only: old authors did not write the typed route flag.
-    # Do not use this prose hint for successor existence, gate state or permission.
-    # Retire it after the remaining route-closeout writers emit the typed flag.
-    if isinstance(gate.get("route_continuation_replan_required"), bool):
-        return gate["route_continuation_replan_required"] is True
-    if _todo_done(gate):
-        return False
-    label = " ".join(
-        str(gate.get(key) or "")
-        for key in ("action_kind", "title", "text")
-        if str(gate.get(key) or "").strip()
-    ).lower()
-    return "stale" in label and "handoff" in label and "closeout" in label
-
-
 def _compact_handoff_gate(
     gate: dict[str, Any],
     *,
     state: HandoffGateState,
     successor_ids: list[str],
+    route_replan_required: bool,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": TODO_HANDOFF_GATE_SCHEMA_VERSION,
@@ -104,7 +89,7 @@ def _compact_handoff_gate(
     superseded_by = normalize_todo_id(payload.get("superseded_by"))
     if superseded_by:
         payload["superseded_by"] = superseded_by
-    if _stale_handoff_closeout_replan_required(gate):
+    if route_replan_required:
         payload["route_continuation_replan_required"] = True
         payload.setdefault(
             "route_continuation_reason",
@@ -125,7 +110,8 @@ def build_todo_handoff_gate_states(
     decisions = evaluations if evaluations is not None else project_succession(todo_items)
     gates = [
         _compact_handoff_gate(item, state=HandoffGateState(decision["handoff_state"]),
-            successor_ids=decision["successor_todo_ids"])
+            successor_ids=decision["successor_todo_ids"],
+            route_replan_required=decision["route_continuation_replan_required"])
         for item, decision in zip(todo_items, decisions, strict=True)
         if decision["handoff_state"] is not None
     ]
