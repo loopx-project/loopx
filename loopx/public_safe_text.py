@@ -200,10 +200,9 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
 # path behind an explicit `path:` prefix. Whether a surface *rejects* what this
 # owner recognizes stays the caller's named policy, so a surface can still opt
 # into the narrower legacy set by asking for `LOCAL_PATH_SURFACE_PATTERN` alone.
-# `file://` is deliberately not in this set: direction 3 does classify it as a
-# local path, but every surface that has to stop carrying one already rejects it
-# here as a raw remote location, and the surfaces that keep ordinary URLs would
-# need a per-surface decision rather than a shared-pattern change.
+# Typed public exports also reject file URLs, including host-qualified ones.
+# The internal text-owner classifier and legacy compactor retain their separate
+# policies; recognizing a locator here does not change those destinations.
 HOME_RELATIVE_PATH_PATTERN = re.compile(r"(?<![\w~])~[\\/][^\s`'\"<>]+")
 PATH_PREFIX_LOCAL_PATTERN = re.compile(
     r"(?<![\w:])path:[\\/][^\s`'\"<>]+", re.IGNORECASE
@@ -221,11 +220,13 @@ LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN = re.compile(
     r"(?:^|[\s:=])(?:/Users/|/private/|/tmp/|~[/\\])",
     re.IGNORECASE,
 )
+FILE_URL_LOCAL_PATH_PATTERN = re.compile(r"\bfile://", re.IGNORECASE)
 PUBLIC_SAFE_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     LOCAL_PATH_SURFACE_PATTERN,
     HOME_RELATIVE_PATH_PATTERN,
     PATH_PREFIX_LOCAL_PATTERN,
     LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
+    FILE_URL_LOCAL_PATH_PATTERN,
 )
 # Presentation redaction keeps its historical Unix-root boundary behavior (it
 # catches paths even after a colon), consumes the shared absolute, drive-letter
@@ -495,7 +496,8 @@ def find_public_safe_local_path(value: str | None) -> re.Pattern[str] | None:
     surfaces that publish outside the runtime (Refs #5136, direction 3): the
     absolute roots, the two gap shapes `classify_private_text` reaches only when
     a caller opts into `include_path_gaps`, and the colon/equals boundary form
-    the migrated surfaces already enforced. Recognition is still not permission:
+    the migrated surfaces already enforced, plus file URLs. Recognition is still
+    not permission:
     a caller that must keep a narrower historical verdict asks for
     `LOCAL_PATH_SURFACE_PATTERN` directly, and each surface keeps its own
     rejection message and length limit.
