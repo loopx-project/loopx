@@ -255,3 +255,50 @@ canonical 写入绕过旧 writer，不代表未迁移 Goal 的调用方已消失
 不可用时明确失败；不降级到 Markdown writer，不破坏历史恢复，回退保留迁移后的
 新写入。现有回归覆盖不等于长期 SQLite、真实 PostgreSQL、打包 App 或发布默认
 已通过，trial 与正式默认的资格继续分别记录。
+
+## Existing canonical Goal storage in the App
+
+Open a Goal’s settings → Task ownership → **Goal data storage**. This control
+uses the same typed local-provider migration, archive and publication owner as
+`authority-archive plan-migration/migrate`; it changes neither new-Goal defaults
+nor ownership policy. Previous Markdown Goals must first use reviewed promotion.
+PostgreSQL cutover is outside this local File/SQLite operation.
+
+1. Stop writers and settle active leases, including expired active leases. An
+   active capture blocks preview/apply even when its outbox currently looks
+   empty. Finish the existing capture rollback/recovery; do not delete its queue.
+2. Read current storage, select File or SQLite and preview. The immutable plan
+   pins the source identity, revision, cursor, projection and writer fence.
+3. Confirm the reviewed operation. Apply verifies the full backup and target
+   history before publishing and independently reading the selected provider.
+4. After a lost response or server restart, **recover the original preview**.
+   The browser retains only its opaque handle and digest. Recovery reports the
+   original prepared/completed record separately from today’s source; it never
+   replays a superseded operation or changes the provider. Retry that same plan
+   to resolve an interrupted publication. A stale source needs a fresh preview.
+5. To return to File, preview a new migration from the **current SQLite head**.
+   This retains writes made after the first migration. Restoring the original
+   backup alone would discard those writes and is not a reverse cutover.
+
+HTTP accepts registered Goal and opaque preview/digest bindings, never caller
+paths, source overrides or complete state. Its current-source/recovery reads are
+observations, not execution grants or whole-Goal backups. Configuration remains
+unchanged until explicit apply. Real File/SQLite HTTP and packaged-App recovery
+validation does not qualify sustained D2, release defaults, a stopped external
+Host or all historical-source upgrade paths.
+
+### 既有 canonical Goal 的 App 存储切换
+
+进入 Goal 设置 → 任务所有权 → **Goal 数据存储**。新 Goal 默认值、任务所有权
+策略与此处的既有存储切换分别管理，复用同一 TS migration/archive/provider owner。
+旧 Markdown Goal 先走有备份的审核晋升；这里不提供 PostgreSQL 切换。
+
+先停止写入方并结算 active lease，过期不证明 Host 已停。active capture 即使暂时
+空队列也拒绝切换；按原生 rollback/recovery 处理，不能删队列。读回当前来源、
+选择 File/SQLite、预览并明确确认后才备份和发布。来源变化拒绝应用。
+
+丢失响应或重启后恢复同一 opaque 预览与摘要。历史 completed 回执与当前来源
+分开读回，旧操作被后续切换替代后不会重新激活。中断操作重试原计划；源变更才
+审核新计划。回退 File 必须从当前 SQLite head 新建计划，保留升级后的新增写入，
+不能直接恢复旧备份替换当前数据。本入口不授予执行权限或迁移所有 Goal；D2、
+发布默认、完整旧源/Host 恢复继续按原验收分别资格化。

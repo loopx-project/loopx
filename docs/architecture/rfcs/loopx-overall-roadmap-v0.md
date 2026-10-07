@@ -875,6 +875,15 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 - **Exit:** use shared-authority Section 7.2's separate decisions for a bounded change, reversible opt-in cohort and released default. Each requires affected real CLI/backend and independent baseline/negative/recovery evidence at its own scope. Formal D2 retains applicable volume and at least ten-day evidence; a cohort need not wait for that certificate. D3 retains explicit cutover authority. This plan runs no soak or provider promotion.
 - **Rollback:** reviewed fenced export/import and schema-aware downgrade; replacing a binary cannot restore old write authority.
 
+Existing canonical File/SQLite cutover now has a packaged settings journey using
+the existing typed migration/archive owner: immutable preview, explicit apply,
+original-plan recovery and independent current-source readback. Active capture
+(including an empty queue) and unsettled leases refuse cutover. File→SQLite→new
+writes→File must use the current head; historical completion never selects the
+provider. This is a bounded App companion, not full old-source/Host upgrade or
+D2/release-default qualification. Continue those original acceptance frontiers
+and retire each last caller separately.
+
 The [Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.md)
 adds a bounded R5 dependency for R2/R3 retirement and late-result safety. The
 codec and source-session lifetime transaction exist; attached Chat, handoff and
