@@ -325,7 +325,7 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 | 执行事实 | 既有 owner／投影 | 保留的边界 |
 |---|---|---|
 | Goal/Agent/Todo 身份 | quota 选择及回执；envelope actor、selected Todo 和签名结算身份 | 捕获身份与写入时校验仍必要；展示身份不授予执行权 |
-| 完整要求 | Agent channel 权威必读；quota 与短包原样保留命令、顺序及 hook/capability 身份 | 共同提议完整 Goal／验收／所选工作读取与一份精确 Todo 正文；摘要或源 hash 不证明采用 |
+| 完整要求 | Agent channel 权威 work context 与剩余必读；有效 Todo、验收及 scoped User 义务，完整 Goal 保留渐进式全文读取 | 注册 reader 在两种传输中满足当前任务读取；来源失败会阻止依赖它的交付，真实模型采用和打包宿主旅程仍待验收 |
 | 能力拒绝 | 既有 capability_gate_v0；短包保留原样 required/missing 与源中历史字段 | 修复事实遗漏，不改变就绪策略或能力开启 |
 | 选择／claim／lease | selected Todo、action portfolio 及当前所属事务 | 短包归属不是新鲜 lease；保留捕获源并在所属写入入口复核 |
 | replan／Goal 收尾 | replan action packet、contract capsule 和 vision audit | 完整证据仍走有权限的详情；Todo 完成不证明 Goal 完成 |
@@ -338,13 +338,15 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 结算另有覆盖，仍不证明安装态 App 收敛或模型成本。以下三项继续按各自验收保持
 未完成；这份核对不授权批量删除剩余 Python IO adapter。
 
-统一工作上下文提案在最终准入后生成完整 Goal、已启用的 canonical 验收和有效
-所选工作读取，再贯穿签名 envelope 与宿主 prompt adapter 保留命令、顺序和
-hook 身份。必读项只在 Agent channel 携带，明确空列表抑制旧读取回退。精确 Todo
-只返回一份完整源记录，概览仍有界。真实 legacy/File/SQLite CLI 覆盖源丢失、
-长要求尾部、引用路径、准入拒绝和签名坐标变更。见[工作上下文契约](../../reference/required-work-context.md)。
-模型采用、安装态 App/Lark 和整体上下文效率仍单独验收；本阶段不改变 transport
-默认值，也不删除尚有实际调用方的 Python adapter。
+统一工作上下文现在由既有 TS interaction owner 选择并满足必读，注册的 Python
+adapter 核验来源，在普通 heartbeat/quota 与签名 envelope 中返回完整当前任务来源，
+无需启用 TurnEnvelope。混合 Goal 文件仍必须经渐进式路径全文读取，不能按历史标题
+裁剪后冒充原始目标。未支持的来源保留必读命令，来源失败或变化会阻止依赖它的交付。
+一份 Agent carrier 保留明确空列表、完整要求尾部及 hook 身份；精确 Todo 返回一份
+完整源记录，概览仍有界。真实 legacy/File/SQLite CLI 覆盖源丢失、长要求尾部、
+scoped gate、恢复和签名内容篡改。见[工作上下文契约](../../reference/required-work-context.md)。
+这是普通上下文交付默认值的变化，不是 transport 默认值的变化；模型结果、安装态
+App/Lark 旅程及整体效率仍单独验收，保留尚有真实调用方的 Python IO adapter。
 
 no-write model-behavior 安全适配器现在识别原生 scheduler 在 ACK/failure
 命令前绑定的 `--registry`／`--runtime-root` 路由前缀。验证走真实 binder 和
@@ -361,6 +363,32 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 | 核对 heartbeat 与 TurnEnvelope 的执行和上下文要求 | 同一捕获的权威决策保留 actor/Goal/Todo、必读全文、claim/lease、选择、replan/收尾、带条件结算和 scheduler 所有权。删除渲染分支前列明遗漏与重复事实。覆盖可选能力关闭、仅 recall、仅 ingest、绑定失效和 provider 失败；私有详情只经有权限的引用访问。 |
 | 在真实宿主 renderer 采用同一 typed 投影 | heartbeat full/thin 与 Turn host 消费同一执行事实及同 Turn 捕获/详情入口；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
 | 核验上下文形态及迁移默认 | 将相同的正常、replan、等待/恢复与可选能力负载同时对照当前完整和短包路径，测量载荷/model token、详情 IO、延迟、资源增长、遗漏、决策与结果质量。数据丢失、重复效果、身份和结算错误保持硬约束；保留受支持的已保存 prompt/回执与可逆 rollout，根据证据再改预算或默认。 |
+
+下一成本切片已有可复现的回归预算缺口，不能归因于 fixture alias，也不授权删掉
+必需上下文。`aa87cc019` 与 `fc411c878` 使用相同公共 CLI fixture、临时 alias
+和命令参数，实际 JSON stdout 测量如下：
+
+| 公共负载／入口 | base 字符 | candidate 字符 | base 紧凑 JSON | candidate 紧凑 JSON |
+|---|---:|---:|---:|---:|
+| 36 Todo／1 Agent／12 run，`turn plan` | 16,115 | 17,403 | 12,112 | 13,145 |
+| 1 Todo／1 Agent／1 run，开启 multi-subagent 的 `quota should-run --turn-envelope` | 10,990 | 11,661 | 8,892 | 9,464 |
+| 36 Todo／1 Agent／12 run，`heartbeat-prompt --thin` | 3,122 | 3,122 | 3,069 | 3,069 |
+
+crowded Turn 的增长包括 envelope 内 484 个紧凑字符，以及新增 hook-dispatch
+诊断的 510 个紧凑字符。envelope 现在说明哪些 hook 观察到空上下文、清除其缓存，
+并区分已满足的 pre-work 读取和后续 action 的新鲜来源要求；这些指令和签名观测
+有实际决策价值。hook 诊断另有副作用披露职责，移动或删除前须核验真实消费者。
+pretty-print 开销单独计量，不等于 token、延迟或模型质量结果。
+
+原 runner 测试仍失败：crowded `turn plan` 超过 16,000 字符上限，开启
+multi-subagent 的 runner 超过 9,000 字符 envelope 上限。后者因嵌套 fixture
+路径在 base/candidate 分别输出 11,291／11,961 字符，与表中的路径负载不同。
+历史 base 已失败；这些是回归预算，不是执行 quota 或冻结的 promotion 门限。
+下一有界实现须先刻画诊断消费者，再比较无损压缩与有证据的余量，联合修改既有
+预算 owner 和 runner 测试。保留 fixture 规模、完整路由、来源全文、hook 坐标、
+新鲜性指令和真实 stdout 膨胀拒绝，遵循
+[预算决策指南](../../development/testing-and-quality.md#budget-failure-decisions)。
+原负载通过前，这次测量不算预算通过、transport 默认决策或安装态宿主资格。
 
 不引入通用 executor，也不降低验收门槛来让短包通过。保留未满足要求，分别记录
 传输等价、安装态宿主采用和有效模型结果。见
