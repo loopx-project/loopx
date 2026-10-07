@@ -754,23 +754,25 @@ def select_quota_todo_summary(
     filter_user_gate_blocks_agent: bool = False,
     available_capabilities: Any = None,
 ) -> dict[str, Any] | None:
-    canonical_summary = summarize_user_todos_for_quota(
-        canonical_value,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=filter_user_gate_blocks_agent,
-        available_capabilities=available_capabilities,
-        resolve_capacity=True,
+    sources = (
+        (summarize_user_todos_for_quota, canonical_value),
+        (summarize_project_asset_todos_for_quota, project_asset_value),
     )
-    project_asset_summary = summarize_project_asset_todos_for_quota(
-        project_asset_value,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=filter_user_gate_blocks_agent,
-        available_capabilities=available_capabilities,
-        resolve_capacity=True,
-    )
-    if is_canonical_attention_todo_summary(canonical_value):
-        return canonical_summary or project_asset_summary
-    return project_asset_summary or canonical_summary
+    if not is_canonical_attention_todo_summary(canonical_value):
+        sources = tuple(reversed(sources))
+    # Source precedence is decided before projecting Agent lanes/capacity.
+    # The fallback is needed only when the preferred source has no summary.
+    for summarize, value in sources:
+        summary = summarize(
+            value,
+            agent_identity=agent_identity,
+            filter_user_gate_blocks_agent=filter_user_gate_blocks_agent,
+            available_capabilities=available_capabilities,
+            resolve_capacity=True,
+        )
+        if summary:
+            return summary
+    return summary
 
 
 def select_quota_todo_source_items(
