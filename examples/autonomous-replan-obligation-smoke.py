@@ -379,7 +379,7 @@ def assert_new_typed_surface_closes_exact_obligation() -> None:
         assert "autonomous_replan_obligation" not in after, after
 
 
-def assert_typed_monitor_and_periodic_thresholds_remain_explicit() -> None:
+def assert_typed_monitor_threshold_remains_explicit() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-monitor-replan-") as tmp:
         registry_path, runtime = write_fixture(Path(tmp), monitor_repeat_count=6)
         item = attention_item(run_cli("status", registry_path=registry_path, runtime=runtime))
@@ -400,14 +400,38 @@ def assert_typed_monitor_and_periodic_thresholds_remain_explicit() -> None:
             "dead_monitor_repeat"
         ), item
 
+
+def assert_explicit_completed_todo_periodic_fallback() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-periodic-replan-") as tmp:
         registry_path, runtime = write_fixture(Path(tmp), periodic_run_count=20)
+        # Twenty durable records have no settlement evidence. They cannot
+        # satisfy the default effective-Turn cadence. The retained 20-record
+        # fallback belongs only to the explicit completed-Todo unit.
+        item = attention_item(
+            run_cli("status", "--limit", "30", registry_path=registry_path, runtime=runtime)
+        )
+        assert "autonomous_replan_obligation" not in item["project_asset"], item
+        run_cli(
+            "configure-goal", "--goal-id", GOAL_ID,
+            "--execution-replan-after-todos", "5", "--execute",
+            registry_path=registry_path, runtime=runtime,
+        )
         item = attention_item(
             run_cli("status", "--limit", "30", registry_path=registry_path, runtime=runtime)
         )
         obligation = item["project_asset"]["autonomous_replan_obligation"]
         assert obligation["triggers"][0]["kind"] == "periodic_review_due", obligation
         assert obligation["triggers"][0]["run_count"] == 20, obligation
+        assert obligation["triggers"][0]["threshold"] == 20, obligation
+        run_cli(
+            "configure-goal", "--goal-id", GOAL_ID,
+            "--clear-execution-replan-after-todos", "--execute",
+            registry_path=registry_path, runtime=runtime,
+        )
+        item = attention_item(
+            run_cli("status", "--limit", "30", registry_path=registry_path, runtime=runtime)
+        )
+        assert "autonomous_replan_obligation" not in item["project_asset"], item
 
 
 def main() -> int:
@@ -419,7 +443,8 @@ def main() -> int:
     assert_typed_repeat_requires_two_equivalent_observations()
     assert_equivalent_observation_is_rejected_before_write()
     assert_new_typed_surface_closes_exact_obligation()
-    assert_typed_monitor_and_periodic_thresholds_remain_explicit()
+    assert_typed_monitor_threshold_remains_explicit()
+    assert_explicit_completed_todo_periodic_fallback()
     print("autonomous-replan-obligation-smoke ok")
     return 0
 
