@@ -55,6 +55,49 @@ def test_register_use_rank_persists(tmp_path: Path) -> None:
     assert json.dumps(packet, ensure_ascii=False)
 
 
+def test_record_connector_use_rejects_negative_elapsed_time(tmp_path: Path) -> None:
+    state = load_connector_registry(tmp_path / "connector-registry.json")
+
+    with pytest.raises(ValueError, match="elapsed milliseconds must be non-negative"):
+        record_connector_use(state, "sina-daily", ms=-7)
+
+    assert state["usage"]["sina-daily"]["total_ms"] == 0
+
+
+def test_cli_rejects_negative_elapsed_time_without_persisting(tmp_path: Path) -> None:
+    path = tmp_path / "connector-registry.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "connector",
+            "use",
+            "sina-daily",
+            "--ms",
+            "-7",
+            "--path",
+            str(path),
+            "--format",
+            "json",
+        ],
+        check=False,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "ok": False,
+        "error": "elapsed milliseconds must be non-negative",
+    }
+    assert not path.exists()
+
+
 def test_builtin_connector_updates_survive_catalog_resync(tmp_path: Path) -> None:
     path = tmp_path / "connector-registry.json"
     state = load_connector_registry(path)

@@ -81,7 +81,8 @@ def register_connector_commands(sub, add_subcommand_format: AddFormat) -> None:
     p_use = actions.add_parser("use", help="Record a connector call")
     p_use.add_argument("connector_id")
     p_use.add_argument("--fail", action="store_true")
-    p_use.add_argument("--ms", type=int, default=0)
+    p_use.add_argument("--ms", type=int, default=0,
+                       help="Non-negative elapsed time in milliseconds (default: 0)")
     p_use.add_argument("--note")
     _add_registry_path(p_use)
     add_subcommand_format(p_use)
@@ -126,7 +127,7 @@ def handle_connector_command(
             try:
                 result = record_connector_use(state, args.connector_id, ok=not args.fail,
                                               ms=args.ms, manual_note=args.note)
-            except KeyError as exc:
+            except (KeyError, ValueError) as exc:
                 print_payload({"ok": False, "error": str(exc)}, output_format(args),
                               lambda p: f"error: {p['error']}")
                 return 1
