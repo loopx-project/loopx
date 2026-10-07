@@ -60,6 +60,8 @@ def main() -> None:
                 session_id="adoption", upstream_thread_id="fixture", upstream_mode="chat", adapter_kind="codex_app_server")
             runtime.loopx_mode.apply("adoption", {"operation": "configure", "settings": {
                 "agent_id": "lead", "token_budget": 1000}}, work_dir=repo, objective="Read accepted work")
+            mode = store.load_session("adoption")["loopx_mode"]
+            store.update_session("adoption", loopx_mode={**mode, "enabled": True, "paused": True})
             initial_session = store.load_session("adoption")
             server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
             server.verbose = False
@@ -78,7 +80,9 @@ def main() -> None:
                     print(json.dumps({"restored": True}), flush=True)
                 elif operation == "inspect":
                     observed = runner.read("analysis-1")
-                    print(json.dumps({"result": observed, "session_unchanged": store.load_session("adoption") == initial_session,
+                    session = store.load_session("adoption")
+                    print(json.dumps({"result": observed, "session_unchanged": session == initial_session,
+                        "coordinator_paused": session["loopx_mode"]["paused"] is True,
                         "host_invocations": [(root / workspace / "host-invocations").read_text()
                             for workspace in ("analyst/initial", "reviewer/corrected")]}), flush=True)
                 else:

@@ -76,6 +76,7 @@ try {
   const recorded = await command("inspect");
   assert.equal(recorded.result.adoptions.length, 1);
   assert.equal(recorded.result.adoptions[0].state, "current");
+  assert.equal(recorded.coordinator_paused, true, "The real session remains paused, as shown in the report");
   assert.ok(recorded.session_unchanged, "No native lifecycle, mode, wake or extra coordinator Turn changed");
   assert.deepEqual(recorded.host_invocations, ["1", "1"]);
   await mkdir(outputDir, {recursive: true});
