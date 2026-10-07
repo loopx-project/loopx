@@ -365,6 +365,48 @@ test("a validated plan compiles into a confirmation card frame", () => {
   }
 });
 
+test("a failed retry-safe team plan restores only the original confirmed identity", () => {
+  const original = teamPlanProposal();
+  const failed = {
+    ...original,
+    status: "failed",
+    failure: {error_code: "team_plan_commit_failed", retry_safe: true},
+  };
+  const plan = compileActionReviewPlan(failed);
+  assert.equal(plan.interaction, "review");
+  assert.equal(plan.reason, "team_plan_retry");
+  assert.equal(plan.canApply, true);
+  assert.equal(plan.retryOriginal, true);
+  assert.equal(plan.proposalId, original.proposal_id);
+  assert.equal(plan.sourceFingerprint, original.expected_state_fingerprint);
+
+  for (const change of [
+    {failure: {error_code: "team_plan_commit_failed", retry_safe: false}},
+    {failure: {error_code: "team_plan_commit_failed"}},
+    {failure: null},
+    {status: "applying"},
+    {status: "gated"},
+    {status: "stale"},
+    {status: "applied", receipt: {projection_verified: true}},
+    {status: "cancelled"},
+    {status: "rejected"},
+    {proposal_id: ""},
+    {expected_state_fingerprint: " "},
+    {permission_classification: "protected"},
+    {available_transitions: ["cancel"]},
+    {normalized_parameters: {...original.normalized_parameters, goal_id: "another-goal"}},
+    {normalized_parameters: {...original.normalized_parameters,
+      plan: {...original.normalized_parameters.plan, goal_id: "another-goal"}}},
+    {normalized_parameters: {...original.normalized_parameters,
+      plan: {...original.normalized_parameters.plan, applies: true}}},
+  ]) {
+    const candidate = {...failed, ...change};
+    const recovered = compileActionReviewPlan(candidate);
+    assert.notEqual(recovered.retryOriginal, true, JSON.stringify(change));
+    assert.notEqual(recovered.canApply, true, JSON.stringify(change));
+  }
+});
+
 test("a plan card keeps the same identity through pending and result states", () => {
   const pending = compileReviewCardFrame({ ...teamPlanProposal(), status: "applying" });
   if (!pending) assert.fail("expected pending review card frame");

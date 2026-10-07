@@ -93,11 +93,55 @@ def test_real_child_preserves_utf8_evidence_on_a_gbk_host(
     ("https://other.test/article", "source_origin_not_authorized"),
     ("https://example.com\n.evil.test/article", "source_url_invalid"),
     ("https://example.com\\@evil.test/article", "source_url_invalid"),
+    ("https://[fe80::1%25en0]/article", "source_url_invalid"),
     ("javascript:alert(1)", "source_url_invalid"),
 ])
 def test_rejects_url_before_browser_access(configured, monkeypatch, url, error):
     monkeypatch.setattr(reader.subprocess, "run", lambda *a, **k: pytest.fail("browser accessed"))
     assert reader.read_public_url(url) == {"ok": False, "error": error}
+
+
+def test_ipv6_source_and_origin_use_browser_canonical_host(configured, monkeypatch, tmp_path):
+    url = "https://[2606:4700:4700:0000:0000:0000:0000:1111]/article"
+    origin = "https://[2606:4700:4700::1111]"
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "https://[2606:4700:4700:0000:0000:0000:0000:1111]")
+
+    config = reader.ReaderConfig.from_environment()
+    canonical, actual_origin = reader._url(url)
+
+    assert canonical == origin + "/article"
+    assert actual_origin == origin
+    assert config.origins == frozenset({origin})
+
+    result, observation = run_generated_script(
+        config, canonical, False, tmp_path / "unused.png",
+    )
+    assert result["ok"] is True
+    assert result["url"] == canonical
+    assert observation["domReads"] > 0
+
+
+@pytest.mark.parametrize("origin_host", ["::ffff:8.8.8.8", "::ffff:808:808"])
+@pytest.mark.parametrize("request_host", ["::ffff:8.8.8.8", "::ffff:808:808"])
+def test_ipv4_mapped_ipv6_round_trips_through_browser_url(
+    configured, monkeypatch, tmp_path, origin_host, request_host,
+):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", f"https://[{origin_host}]")
+    config = reader.ReaderConfig.from_environment()
+    url = f"https://[{request_host}]/article"
+
+    canonical, origin = reader._url(url)
+    result, observation = run_generated_script(
+        config, url, False, tmp_path / "unused.png",
+    )
+
+    expected = "https://[::ffff:808:808]/article"
+    assert result["ok"] is True
+    assert result["url"] == expected
+    assert observation["domReads"] > 0
+    assert canonical == expected
+    assert origin == "https://[::ffff:808:808]"
+    assert config.origins == frozenset({"https://[::ffff:808:808]"})
 
 
 @pytest.mark.parametrize("key,value", [

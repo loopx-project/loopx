@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
-import { projectQuotaSelection } from "../../loopx/control_plane/todos/quota_selection.ts";
+import { projectQuotaSelection, projectTodoQuotaPlanning } from "../../loopx/control_plane/todos/quota_selection.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
 import {projectAdvancementFrontier} from "../../loopx/control_plane/todos/frontier_revision.ts";
 
@@ -131,4 +131,22 @@ test("malformed facts are rejected, not coerced into scope or execution authorit
     assert.throws(() => projectQuotaSelection(request([row("bad", fields)])));
   }
   assert.throws(() => projectQuotaSelection(request([], {visibility_limit: -1})));
+});
+
+test("quota v2 validates closure in the existing batch while retaining v0/v1 wire behavior", () => {
+  const resume = {schema_version: "todo_resume_planning_request_v0", sources: {
+    items: [], backlog_items: [], first_open_items: [], deferred_items: [], deferred_resume_candidates: [],
+    resume_blocked_items: [], monitor_open_items: [], current_agent_claimed_monitor_items: [], claimed_monitor_open_items: []}, agent_id: null,
+    item_limit: 8, has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null, available_capabilities: null};
+  const selection = request([], {available: []});
+  const v0 = projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v0", resume, selection});
+  const v1 = projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v1", resume, selection});
+  assert.deepEqual(v0, v1);
+  assert.equal(v0.source_completeness, undefined);
+  assert.throws(() => projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v2", resume, selection}), /closure source/);
+  const v2 = projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v2", resume, selection, source_contract: {}});
+  const {source_completeness, closure_intent, ...unchanged} = v2;
+  assert.deepEqual(unchanged, v1);
+  assert.equal((source_completeness as JsonObject).status, "invalid");
+  assert.equal(closure_intent, null);
 });

@@ -482,6 +482,11 @@ def handle_refresh_state_command(
             merge_agent_vision_patch = True
         agent_vision_packet, explore_result = split_explore_result_input(
             agent_vision_packet, getattr(args, "explore_result_json", None),
+            scope_context=dict(
+                registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+                turn_instance_id=args.turn_instance_id,
+            ),
         )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(

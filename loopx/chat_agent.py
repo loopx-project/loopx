@@ -622,6 +622,13 @@ class CodexChatAgentSession:
         )
         runtime_env = os.environ.copy()
         runtime_env["CODEX_HOME"] = str(runtime_home)
+        # Select an operator-defined native provider for ordinary Chat only.
+        # Codex owns its configuration/authentication; never copy credentials
+        # or replace a resumed thread to change its upstream transport.
+        provider_override = (
+            runtime_env.get("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "").strip()
+            if not execution_mode else ""
+        )
         command = [resolved, "app-server"]
         if _compatibility_catalog_path is not None:
             command.extend(
@@ -724,6 +731,7 @@ class CodexChatAgentSession:
                     ),
                     "cwd": str(root),
                     **({"model": model} if model else {}),
+                    **({"modelProvider": provider_override} if provider_override else {}),
                     **(
                         {
                             "config": {
@@ -748,6 +756,10 @@ class CodexChatAgentSession:
                 },
                 request_id=2,
             )
+            if provider_override and thread_result.get("modelProvider") != provider_override:
+                raise session._runtime_error(
+                    "Codex did not apply the requested conversation provider."
+                )
             if model and thread_result.get("model") not in {None, model}:
                 raise session._runtime_error(
                     "Codex did not apply the requested conversation model."
@@ -1175,6 +1187,8 @@ class CodexChatAgentSession:
                 step = None
                 if method == "item/completed":
                     step = steps.completed(item)
+                    if isinstance(item, dict) and item.get("type") == "contextCompaction":
+                        phase = "Agent 会话上下文压缩已结束"
                 elif method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"} and isinstance(params, dict):
                     step = steps.reasoning_delta(
                         params.get("itemId"), params.get("delta"),
@@ -1195,6 +1209,7 @@ class CodexChatAgentSession:
                         "userMessage": "Agent 已收到消息",
                         "agentMessage": "Agent 正在生成回答",
                         "reasoning": "Agent 正在思考",
+                        "contextCompaction": "Agent 正在压缩会话上下文",
                         "commandExecution": "Agent 正在执行命令",
                         "mcpToolCall": "Agent 正在调用工具",
                         "dynamicToolCall": "Agent 正在调用工具",

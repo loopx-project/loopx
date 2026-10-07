@@ -1,5 +1,34 @@
 # Continue work in Goal Chat
 
+## Select an existing Codex provider for ordinary Chat
+
+An operator can set `LOOPX_CHAT_CODEX_MODEL_PROVIDER` to a provider ID already
+defined in the managed `CODEX_HOME/config.toml`. Ordinary project and steward
+conversations pass this selection to Codex's native `thread/start` or
+`thread/resume` and verify the returned provider before starting a Turn. A
+missing or different readback fails; it never creates a replacement thread.
+Without the override, provider selection remains unchanged. Managed Goal
+execution keeps its own host binding and ignores this ordinary-Chat setting.
+
+For example, where upstream WebSocket connections repeatedly fail, a native
+Responses provider with `requires_openai_auth = true` and
+`supports_websockets = false` can retain the existing Codex authentication while
+using HTTP streaming. Define a separate provider ID: current Codex versions
+reject overrides of the reserved `openai` ID. Use `name = "OpenAI"` for the
+same Codex backend, leave `base_url` unset, and verify actual native capabilities
+and live reply timing before adopting it. This is an optional transport
+mitigation, not a claim that every disconnect has this cause. No retry or
+timeout budget changes, credentials, policy grants or alternative model runner
+are added by LoopX.
+
+The existing macOS LaunchAgent installer preserves the selection across
+upgrades. Set an explicit empty value to clear it when regenerating the service.
+At an idle service boundary, restore the previous provider and restart the
+existing owner; retain the original Session/history and read back its provider.
+Changing only an environment variable does not reconfigure an already running
+app-server. HTTP streaming remains streaming; the stdio connection between
+LoopX and Codex is unaffected.
+
 The existing **Goal → Chat** can be the project coordinator. The local steward
 handles cross-Goal intake and owner attention; a project conversation or a
 registered peer can coordinate work within one Goal. Both reuse the existing

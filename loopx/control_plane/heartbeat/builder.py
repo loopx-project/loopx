@@ -604,6 +604,14 @@ def build_heartbeat_prompt(
         ):
             if not payload.get(key):
                 payload.pop(key, None)
+    elif brief:
+        # The brief task body already embeds its compact-detail command. Keep
+        # only the selected brief command as top-level regeneration metadata;
+        # repeating the other mode commands can exceed the registered output
+        # budget when the CLI/runtime paths are long.
+        payload.pop("expanded_prompt_command", None)
+        payload.pop("compact_prompt_command", None)
+        payload.pop("thin_prompt_command", None)
     return payload
 def build_heartbeat_prompt_error_payload(
     *,

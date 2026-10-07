@@ -86,6 +86,56 @@ def terminal(
 
 
 @pytest.mark.parametrize("mode", list(HandoffMode))
+@pytest.mark.parametrize("action", list(TodoAction))
+@pytest.mark.parametrize("invalid", [lease(present=False), lease(status="released")])
+@pytest.mark.parametrize("target", [None, todo(), todo(status="done")])
+@pytest.mark.parametrize("actor", [AGENT_A, "unknown"])
+def test_contradictory_lease_rejection_precedes_missing_todo_authority_and_replay(
+    mode, action, invalid, target, actor
+):
+    state = snapshot(handoff_mode=mode, lease=invalid, todo=target)
+    # Snapshot corruption cannot become an ordinary actor denial or a replay.
+    result = decide(state, TodoMutationCommand(action=action, actor_agent_id=actor))
+    assert result.outcome is DecisionOutcome.REJECTED
+    assert result.code == "invalid_lease_snapshot"
+    assert result.next_snapshot is None
+    assert result.authority_mode is None
+    assert result.ownership_gate is OwnershipGate.NOT_REQUIRED
+    assert result.lease_fence is LeaseFence.NOT_REQUIRED
+    assert not result.idempotent
+
+
+@pytest.mark.parametrize("mode", list(HandoffMode))
+@pytest.mark.parametrize("action", list(TodoAction))
+def test_missing_todo_is_a_typed_refusal_before_actor_admission(mode, action):
+    result = decide(
+        snapshot(handoff_mode=mode, todo=None),
+        TodoMutationCommand(action=action, actor_agent_id="unknown"),
+    )
+    assert result.outcome is DecisionOutcome.REJECTED
+    assert result.code == "todo_not_found"
+    assert result.next_snapshot is None
+    assert result.authority_mode is None
+    assert not result.idempotent
+
+
+@pytest.mark.parametrize("mode", list(HandoffMode))
+@pytest.mark.parametrize(
+    "holder",
+    [None, lease(active=False, status="expired"), lease(active=False, status="released"), lease()],
+)
+def test_snapshot_guard_keeps_claim_neutral_edits_and_holder_state(mode, holder):
+    state = snapshot(handoff_mode=mode, lease=holder)
+    result = decide(
+        state, TodoMutationCommand(action=TodoAction.UPDATE, actor_agent_id=AGENT_A)
+    )
+    assert result.outcome is DecisionOutcome.APPLY
+    assert result.next_snapshot.todo == state.todo
+    assert result.next_snapshot.lease == holder
+    assert result.lease_fence is LeaseFence.NOT_REQUIRED
+
+
+@pytest.mark.parametrize("mode", list(HandoffMode))
 @pytest.mark.parametrize("ownership", [False, True])
 def test_update_authority_keeps_claim_neutral_edits_separate_from_ownership(
     mode, ownership

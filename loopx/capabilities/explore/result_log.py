@@ -78,7 +78,12 @@ FINDING_STATUSES = {
 }
 
 TITLE_LIMIT = 200
-SUMMARY_LIMIT = 1200
+# A writeback finding includes its revision, applicability, observation and
+# complete route decision. Bound display separately without clipping that scope.
+SUMMARY_LIMIT = 2000
+# Persisted source compatibility includes the historical compactor's
+# two-character ellipsis overflow; it is independent of the writer budget.
+PERSISTED_TEXT_LIMIT = 2002
 REF_LIMIT = 240
 MAX_EVIDENCE_REFS = 16
 MAX_TAGS = 8
@@ -138,6 +143,16 @@ def _compact_text(value: Any, *, limit: int, field: str) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _persisted_text(value: Any, *, field: str) -> str:
+    """Validate stored source text without applying a current writer's budget."""
+    text = _compact_text(value, limit=PERSISTED_TEXT_LIMIT, field=field)
+    if len(text) > PERSISTED_TEXT_LIMIT or text != str(value or ""):
+        raise ValueError(
+            f"{field} must be canonical text within {PERSISTED_TEXT_LIMIT} characters"
+        )
+    return text
 
 
 def _safe_public_ref(value: Any, *, field: str) -> str:
@@ -416,7 +431,8 @@ def validate_explore_result_event(
 
     Event builders are the schema authority. Rebuilding the event catches
     unknown fields, invalid ids, unsafe text, forged boundary flags, and stale
-    event ids without maintaining a second field-level validator.
+    event ids. Persisted text has its own bounded compatibility budget: it is
+    validated and restored before hashing, never clipped to the writer default.
     """
 
     payload = dict(event)
@@ -431,27 +447,33 @@ def validate_explore_result_event(
     if payload.get("boundary") != PUBLIC_BOUNDARY:
         raise ValueError("explore result event must declare the public-safe boundary")
 
+    summary = _persisted_text(payload.get("summary"), field="summary")
     common = {
         "goal_id": goal_id,
-        "summary": payload.get("summary"),
+        "summary": None,
         "agent_id": payload.get("agent_id"),
         "run_id": payload.get("run_id"),
         "recorded_at": payload.get("recorded_at"),
     }
     if event_kind == EVENT_KIND_NODE:
+        blocked_reason = _persisted_text(
+            payload.get("blocked_reason"), field="blocked_reason"
+        )
         rebuilt = build_explore_node_event(
             **common,
             title=payload.get("title"),
             node_id=payload.get("result_id"),
             node_kind=payload.get("node_kind"),
             status=payload.get("status"),
-            blocked_reason=payload.get("blocked_reason"),
+            blocked_reason=blocked_reason[:SUMMARY_LIMIT],
             parent_id=payload.get("parent_id"),
             evidence_refs=payload.get("evidence_refs"),
             tags=payload.get("tags"),
             supersedes=payload.get("supersedes"),
             research_observation=payload.get("research_observation"),
         )
+        if blocked_reason:
+            rebuilt["blocked_reason"] = blocked_reason
     elif event_kind == EVENT_KIND_EDGE:
         rebuilt = build_explore_edge_event(
             **common,
@@ -472,6 +494,9 @@ def validate_explore_result_event(
             tags=payload.get("tags"),
             supersedes=payload.get("supersedes"),
         )
+    if summary:
+        rebuilt["summary"] = summary
+    rebuilt["event_id"] = _event_id(rebuilt)
     if payload != rebuilt:
         raise ValueError("explore result event is not canonical or contains unknown fields")
     return rebuilt

@@ -99,6 +99,30 @@ conversion. Local CLI adoption at `db3672f3c` verifies a clean source manifest,
 qualified SQLite runtime, current known authority formats and healthy canonical
 contract readback. This does not certify every installed Host or D2.
 
+### Todo snapshot refusal: retained semantics, one native owner
+
+The next bounded T4 slice moves the live Todo bridge's two snapshot refusals to
+`coordination/todo_lifecycle_decision.ts`. Claim/update and complete/supersede
+now share `invalid_lease_snapshot` before `todo_not_found`, actor admission and
+terminal replay. An active lease cannot be absent or released; an explicit null
+Todo is a domain refusal. Missing/malformed wire fields still fail strict
+decoding. Direct native callers gain the protection previously confined to the
+Python bridge; normalized Python outcomes and refusal precedence stay intact.
+
+| Retired symbol | Caller / replacement | Retained obligation and rollback |
+| --- | --- | --- |
+| Python `_invalid_lease_snapshot`, `_result` and the bridge's early missing-Todo decision | `authority_core.decide` / `_typescript_todo_decision`; existing terminal/mutation RPCs reach the same TS owner | Preserve rejection codes, no proposed write/release, actor/delegation/CAS rules and valid holder behavior. Keep the live Python snapshot/result adapter used by `todos/mutation_authority.py`, including native result-shape validation. Revert the code package without state conversion. |
+
+Independent negative cases cover all four verbs and three handoff modes,
+including absent Todo, done replay and an unauthorized actor. The baseline
+Python bridge already rejects these states; direct baseline TS does not.
+Qualification also exercises real File/SQLite creation, update, terminal
+effects, original-operation recovery, unavailable-provider refusal and leased
+settlement in isolated source and wheel installations. These are synthetic
+entrypoint tests, not attached-App or sustained-cost qualification. No store,
+writer, outbox, historical format/receipt reader or permanent Host IO is retired;
+C1, D2 and release-default adoption remain separate acceptance boundaries.
+
 ## Current closeout: validation, migration and deletion (2026-10-02)
 
 Rechecked against main `8b5335a72` and the linked PR heads. This is the current

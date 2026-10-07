@@ -458,7 +458,7 @@ Current source-path audit for the first convergence slice:
 | Capability refusal | Existing quota `capability_gate_v0`; compact boundary now retains exact `required`/`missing` arrays and historical source names | This repairs omitted facts, not readiness policy or capability activation |
 | Selection / claim / lease | Selected Todo, action portfolio and current owning transactions | Compact selected ownership is not a fresh lease; retain the captured source and revalidate at the owning mutation |
 | Replan / Goal closure | Replan action packet, contract capsule and vision audit | Full evidence remains on authorized detail paths; Todo completion is not Goal completion |
-| Settlement / scheduler | Intact typed settlement plan and explicit host-owned scheduler projection | Scheduler detail, actual host readback and exactly-once recovery still need host adoption qualification |
+| Settlement / scheduler | Intact typed settlement plan and explicit host-owned scheduler projection; omitted scheduler argv references resolve the same captured full decision | Unbound detail commands are retired in this projection. Actual host readback, stale mutation refusal and exactly-once recovery still need host adoption qualification |
 | Optional memory | Verified boundary participation plus fresh host binding | Off/recall/ingest/stale/provider-failure isolation remains mandatory; transport parity is not model value |
 
 The capability-fact correction is a read-model change in the established

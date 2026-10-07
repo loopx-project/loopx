@@ -807,7 +807,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#1",
-      "line": 638,
+      "line": 643,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -815,7 +815,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#2",
-      "line": 719,
+      "line": 724,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1799,15 +1799,23 @@
     },
     {
       "site": "loopx/control_plane/work_items/team_plan_adapter.py::<module>.apply_team_plan::codec_read:load_registry#1",
-      "line": 140,
-      "column": 31,
+      "line": 147,
+      "column": 27,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/control_plane/work_items/team_plan_adapter.py::<module>.apply_team_plan.read_source_request::codec_read:load_registry#1",
+      "line": 162,
+      "column": 35,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"
     },
     {
       "site": "loopx/control_plane/work_items/team_plan_adapter.py::<module>.team_plan_state_fingerprint::codec_read:load_registry#1",
-      "line": 79,
+      "line": 86,
       "column": 31,
       "kind": "codec_read",
       "api": "load_registry",

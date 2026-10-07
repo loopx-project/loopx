@@ -105,6 +105,71 @@ def allow_update(transport, row):
     _atomic_write_json(path, record)
 
 
+def test_context_compaction_shows_only_observed_fixed_phase():
+    state = {}
+    start = {"event_id": "compaction-start", "kind": "agent.phase", "payload": {
+        "method": "item/started", "label": "Agent 正在压缩会话上下文"}}
+    finish = {"event_id": "compaction-end", "kind": "agent.phase", "payload": {
+        "method": "item/completed", "label": "Agent 会话上下文压缩已结束"}}
+    assert project_progress(state, [start]) == "⏳ **正在压缩会话上下文**"
+    assert project_progress(state, [finish]) == "⏳ **会话上下文压缩已结束，继续处理**"
+    for method in ("item/started", "item/completed", "item/reasoning/textDelta"):
+        project_progress(state, [{"event_id": method, "kind": "agent.phase", "payload": {
+            "method": method, "label": "private unrecognized output", "text": "private reasoning"}}])
+    assert "private" not in project_progress(state, [])
+    assert "answer" not in state  # Compaction completion is not a terminal answer.
+
+
+def test_native_compaction_updates_original_post_without_restart(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    streamed = StreamingProvider()
+    streamed.__dict__.update(provider.__dict__)
+    transport.runner = streamed
+    fake = ordinary[-2]
+    release = fake.parent / "continue-compaction"
+    fake.write_text(fake.read_text().replace('            continue\n        response =', f'''            import pathlib, time
+            item = {{"id": "compaction", "type": "contextCompaction"}}
+            print(json.dumps({{"method": "item/started", "params": {{"threadId": "durable-thread", "turnId": active_turn, "item": item}}}}), flush=True)
+            while not pathlib.Path({str(release)!r}).exists():
+                time.sleep(.01)
+            print(json.dumps({{"method": "item/completed", "params": {{"threadId": "durable-thread", "turnId": active_turn, "item": item}}}}), flush=True)
+            continue
+        response ='''))
+    try:
+        transport.admit("notes-app", streamed.event("notes-app", "compaction", "wait for interrupt"))
+        row = transport.core.pending()[0]
+        active(store, row)
+        sid, tid = row["session_id"], row["turn_id"]
+
+        def wait_for_phase(label):
+            deadline = time.monotonic() + 10
+            while not any(e["kind"] == "agent.phase" and e["payload"].get("label") == label
+                          for e in store.events_after(sid, tid, None)):
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+
+        wait_for_phase("Agent 正在压缩会话上下文")
+        transport.reconcile()
+        assert len(streamed.writes) == 1 and "正在压缩会话上下文" in streamed.writes[0][1]
+        release.touch()
+        wait_for_phase("Agent 会话上下文压缩已结束")
+        allow_update(transport, row)
+        transport.reconcile()
+        assert "压缩已结束，继续处理" in streamed.edits[-1][2]
+        assert store.load_turn(sid, tid)["status"] == "running"
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        transport.reconcile()
+        assert streamed.edits[-1][2] == "Steered response."
+        assert len(streamed.writes) == 1 and {ref for _, ref, _ in streamed.edits} == {"om_out_0"}
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(r["method"] == "thread/start" for r in requests) == 1
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+    finally:
+        release.touch()
+        runtime.close()
+
+
 def test_native_stream_visible_before_terminal_coalesces_and_replays_without_new_message(ordinary):  # noqa: F811
     store, runtime, provider, transport, row = start(ordinary)
     try:

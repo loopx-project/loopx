@@ -433,8 +433,20 @@ repeat another authoritative field. In particular,
 todo text is already present as the recommended action. Scheduler reset plans
 keep the exact acknowledgement argv inline when it satisfies the executable
 argv limits; the failure argv stays behind `failure_cli_args_detail_ref` until
-the host update actually fails. Consumers must follow these references instead
-of treating the omitted duplicate as missing state.
+the host update actually fails. Both omitted-argv references now carry a
+`detail_ref` into `full_decision.scheduler_hint.<source carrier>` instead of an
+unbound `quota should-run --include-detail scheduler` request. Resolve that path
+through this envelope's captured `detail_ref.full_decision`, check its
+Goal/Agent/Turn and source hash, and retain the original argv verbatim. The
+carrier is `app_automation` when supplied, otherwise the historical `codex_app`;
+an alias must not redirect the reference to another source. Missing capture
+requires recovery, never another admission disguised as a detail read. Actual
+host readback and current scheduler mutation validation still apply.
+
+中文：被省略的 ACK 和失败上报参数通过同一 Turn 保存的完整决策读取，不再
+提示执行未绑定的新 quota 命令。先核对 Goal/Agent/Turn 和来源哈希，再按
+`detail_ref` 读取原始参数；历史 Codex 投影仍使用其原始来源。捕获丢失须恢复，
+不得将重新准入当作细节读取；此引用不代替实际 host 读回或调度写入时的验证。
 
 This contract is a projection only. It does not change quota selection, todo
 routing, scheduler state, history writes, or state transitions. Promoting it to

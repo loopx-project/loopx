@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -44,7 +45,23 @@ def _url(value: str) -> tuple[str, str]:
             or parsed.password is not None or parsed.port not in {None, 443}):
         raise ValueError("HTTPS public-source URL required")
     # Coarse input/origin preflight; browser normalization belongs to WHATWG URL.
-    origin = "https://" + parsed.hostname.lower()
+    hostname = parsed.hostname.lower()
+    if ":" in hostname:
+        # urlsplit.hostname removes an IPv6 literal's brackets, but WHATWG
+        # origins require them. Normalize compression to match new URL().origin.
+        if "%" in hostname:
+            raise ValueError("scoped IPv6 source URLs are not supported")
+        address = ipaddress.IPv6Address(hostname)
+        mapped = address.ipv4_mapped
+        if mapped is not None:
+            packed = mapped.packed
+            high = int.from_bytes(packed[:2], "big")
+            low = int.from_bytes(packed[2:], "big")
+            compressed = f"::ffff:{high:x}:{low:x}"
+        else:
+            compressed = address.compressed
+        hostname = f"[{compressed}]"
+    origin = "https://" + hostname
     canonical = origin + (parsed.path or "/")
     if parsed.query:
         canonical += "?" + parsed.query

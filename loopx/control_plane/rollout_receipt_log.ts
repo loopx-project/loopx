@@ -151,19 +151,38 @@ export async function heartbeatReceiptStatus(params: {
   agentId: string;
   turnInstanceId: string;
 }): Promise<HeartbeatReceiptStatus> {
-  const receipts = await readGoalHeartbeatReceipts(
+  const snapshot = await readGoalRolloutEventSnapshot(
     params.runtimeRoot,
+    params.goalId,
+  );
+  const receipts = goalHeartbeatReceiptsFromSnapshot(
+    snapshot,
     params.goalId,
     params.agentId,
   );
-  if (receipts === null) return "missing";
-  const firstMatch = receipts.findIndex(
+  if (snapshot === null || receipts === null) return "missing";
+  const firstReceipt = receipts.find(
     (event) => event.run_id === params.turnInstanceId,
   );
+  const firstMatch = firstReceipt === undefined
+    ? -1
+    : snapshot.events.indexOf(firstReceipt);
   if (firstMatch < 0) return "missing";
-  return receipts.slice(firstMatch + 1).some(
-      (event) => event.run_id !== params.turnInstanceId,
-    )
+  return snapshot.events.slice(firstMatch + 1).some((event) => {
+    if (
+      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
+      event.goal_id !== params.goalId ||
+      event.agent_id !== params.agentId
+    ) return false;
+    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
+      return event.run_id !== params.turnInstanceId;
+    }
+    const details = event.details;
+    return event.status === "normal_run" &&
+      typeof details === "object" && details !== null && !Array.isArray(details) &&
+      (details as JsonObject).ok === true &&
+      (details as JsonObject).should_run === true;
+  })
     ? "stale"
     : "fresh";
 }

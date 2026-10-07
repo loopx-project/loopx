@@ -7,6 +7,7 @@ import { projectTodoResumePlanning } from "./resume_planning.ts";
 import { gateAddressesAgent, actionAddressesAgent, claimAllowsAgent } from "./agent_scope.ts";
 import { missingRequiredCapabilities } from "../agents/capability_gate.ts";
 import {claimedAdvancementCountFromIndex} from "./frontier_revision.ts";
+import {validateTodoClosureSource} from "./succession.ts";
 
 interface Row {
   payload: JsonObject; display: JsonObject; claim: string | null;
@@ -188,13 +189,15 @@ export function projectQuotaSelection(value: unknown): JsonObject {
   }, claim_visibility: claimVisibility};
 }
 
-/** One quota read boundary composes scope/claim selection and existing resume rules. */
+/** One quota read boundary composes scope/claim, resume and source closure rules. */
 export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "quota planning");
-  if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1"].includes(String(request.schema_version))) throw new EffectRuntimeRequestError("quota planning schema mismatch");
-  if (request.schema_version === "todo_quota_planning_request_v1") {
+  if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1", "todo_quota_planning_request_v2"].includes(String(request.schema_version))) throw new EffectRuntimeRequestError("quota planning schema mismatch");
+  if (request.schema_version !== "todo_quota_planning_request_v0") {
     requireStringArray(requireJsonObject(request.selection, "selection").available, "available");
   }
+  const closure = request.schema_version === "todo_quota_planning_request_v2"
+    ? validateTodoClosureSource(request.source_contract) : {};
   return {schema_version: "todo_quota_planning_v0", resume_planning: projectTodoResumePlanning(request.resume),
-    ...projectQuotaSelection(request.selection)};
+    ...projectQuotaSelection(request.selection), ...closure};
 }

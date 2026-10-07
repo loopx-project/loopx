@@ -13,7 +13,7 @@ export type ActionReviewReason =
   | "apply_pending" | "readback_verified" | "readback_unverified"
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
-  | "operation_confirmation_expired" | "operation_expiry_unknown"
+  | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
   | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry";
 
 export type OperationReviewContent = {
@@ -497,6 +497,23 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     return {...finish({interaction: "review", canApply: true,
       reason: failure?.error_code === "canonical_update_projection_pending"
         ? "canonical_update_projection_pending" : "canonical_update_retry"}), retryOriginal: true};
+  }
+  const teamPlanFrame = proposal.action_kind === "team.plan" ? reviewCardFrame : undefined;
+  const teamPlanFailure = objectValue(proposal.failure);
+  const teamPlanGoalId = textValue(parameters?.goal_id);
+  const teamPlanContext = objectValue(proposal.context);
+  if (proposal.schema_version === "loopx_chat_action_proposal_v1"
+      && proposal.action_kind === "team.plan" && proposal.status === "failed"
+      && proposal.permission_classification === "durable_write"
+      && teamPlanFailure?.retry_safe === true
+      && identity.proposalId && identity.sourceFingerprint
+      && Array.isArray(proposal.available_transitions)
+      && proposal.available_transitions.includes("apply")
+      && teamPlanFrame?.kind === "result" && teamPlanFrame.resultKind === "failed"
+      && teamPlanGoalId
+      && textValue(objectValue(parameters?.plan)?.goal_id) === teamPlanGoalId
+      && (teamPlanContext?.goal_id == null || teamPlanContext.goal_id === teamPlanGoalId)) {
+    return {...finish({interaction: "review", canApply: true, reason: "team_plan_retry"}), retryOriginal: true};
   }
   if (proposal.status === "applying") {
     if (operationFrame?.kind === "pending" && operationFrame.executionState) {

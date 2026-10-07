@@ -32,7 +32,9 @@ test("overview retains declared relationships without changing their meaning", (
 });
 
 test("overview loss is visible and an exact read recovers the original constraint", () => {
-  const record = {todo_id: "report", status: "open", text: "研究报告😀".repeat(90),
+  const fullText = "研究报告😀".repeat(150) + "Only publish after owner acceptance.";
+  const record = {todo_id: "report", status: "open", text: fullText,
+    title: Array.from(fullText).slice(0, 500).join("") + "...",
     note: "背景。".repeat(120) + "只写草稿，不要发布。", private_provider_payload: "excluded"};
   const overview = (page([record]).todos as JsonObject[])[0];
   assert.equal(overview.content_truncated, true);
@@ -44,6 +46,9 @@ test("overview loss is visible and an exact read recovers the original constrain
   assert.equal(exact.private_provider_payload, undefined);
   const external = (page([record], {owner_scope: false, todo_id: "report"}).todos as JsonObject[])[0];
   assert.equal(external.continuation, undefined);
+  const titleOnly = (page([{todo_id: "title-only", title: "Original title", status: "open"}],
+    {todo_id: "title-only"}).todos as JsonObject[])[0];
+  assert.equal(titleOnly.title, "Original title");
 });
 
 test("exact completed or missing records remain observations, never runnable work", () => {

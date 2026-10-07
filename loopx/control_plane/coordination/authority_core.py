@@ -126,37 +126,6 @@ class TransitionPlan:
     idempotent: bool = False
 
 
-def _result(
-    outcome: DecisionOutcome,
-    code: str,
-    *,
-    next_snapshot: CoordinationSnapshot | None = None,
-    authority_mode: str | None = None,
-    ownership_gate: OwnershipGate = OwnershipGate.NOT_REQUIRED,
-    lease_fence: LeaseFence = LeaseFence.NOT_REQUIRED,
-    idempotent: bool = False,
-) -> TransitionPlan:
-    return TransitionPlan(
-        outcome=outcome,
-        code=code,
-        next_snapshot=next_snapshot,
-        authority_mode=authority_mode,
-        ownership_gate=ownership_gate,
-        lease_fence=lease_fence,
-        idempotent=idempotent,
-    )
-
-
-def _invalid_lease_snapshot(lease: LeaseSnapshot | None) -> bool:
-    """Reject contradictory normalized states at the pure-core boundary."""
-
-    return bool(
-        lease is not None
-        and lease.active
-        and (not lease.present or lease.status == "released")
-    )
-
-
 def write_scopes_overlap(
     left: tuple[str, ...] | list[str],
     right: tuple[str, ...] | list[str],
@@ -250,8 +219,6 @@ def _typescript_todo_decision(
     """Project the typed lifecycle decision; storage and locks stay with callers."""
 
     todo = snapshot.todo
-    if todo is None:
-        return _result(DecisionOutcome.REJECTED, "todo_not_found")
     terminal = command.action in {TodoAction.COMPLETE, TodoAction.SUPERSEDE}
     operation = "terminal" if terminal else "mutation"
     payload = effect_runtime_result(
@@ -269,7 +236,7 @@ def _typescript_todo_decision(
                 }
                 for grant in snapshot.lifecycle_grants
             ],
-            "todo": _todo_fact_payload(todo),
+            "todo": _todo_fact_payload(todo) if todo is not None else None,
             "decision_target": (
                 _todo_fact_payload(snapshot.decision_target)
                 if snapshot.decision_target is not None
@@ -302,7 +269,9 @@ def _typescript_todo_decision(
         ) from exc
     next_snapshot = None
     if outcome is DecisionOutcome.APPLY:
-        if payload.get("next_todo_status") != ("done" if terminal else todo.status):
+        if todo is None or payload.get("next_todo_status") != (
+            "done" if terminal else todo.status
+        ):
             raise RuntimeError(
                 "TypeScript Todo lifecycle decision returned invalid next Todo state"
             )
@@ -372,8 +341,6 @@ def decide(
 ) -> TransitionPlan:
     """Evaluate one normalized command without reading or writing state."""
 
-    if _invalid_lease_snapshot(snapshot.lease):
-        return _result(DecisionOutcome.REJECTED, "invalid_lease_snapshot")
     if isinstance(command, TodoMutationCommand):
         return _typescript_todo_decision(snapshot, command)
     raise TypeError(f"unsupported coordination command: {type(command).__name__}")

@@ -10,6 +10,7 @@ from typing import Any
 
 from ...chat_manager_details import read_manager_goal_details
 from ...chat_manager_history import read_manager_delivery_history
+from ...control_plane.effect_runtime import effect_runtime_result
 
 
 TOOL_NAME = "loopx_manager_read"
@@ -200,6 +201,14 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
     """A small directory, never a second mutable progress store."""
     read_tool = CONTEXT_TOOL_NAME if context.get("scope") == "owner_goal" else TOOL_NAME
     execution = context.get("context_execution")
+    # Only the prompt directory uses excerpts. The context and scoped reader
+    # retain complete records, source quality and the original authority.
+    goals = context.get("goals", [])
+    previews = effect_runtime_result(
+        "presentation.goal_attention.bound",
+        {"goals": [{"goal_id": row.get("goal_id"), "attention": row.get("attention")}
+                   for row in goals], "preview": True},
+    )["goals"]
     return {
         "schema_version": "manager_evidence_index_v1",
         "snapshot_id": context.get("snapshot_id"),
@@ -227,12 +236,12 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
                 "agents": [agent_work_summary(agent) for agent in row.get("agents", [])],
                 "progress": row.get("progress"),
                 "lifecycle_phase": _lifecycle_phase(row.get("goal_lifecycle")),
-                "attention": row.get("attention") or {
+                "attention": preview.get("attention") or {
                     "status": "unavailable", "items": [], "reason": "goal_not_read",
                 },
                 "details": "use_" + read_tool,
             }
-            for row in context.get("goals", [])
+            for row, preview in zip(goals, previews, strict=True)
             if row.get("activation_state") != "stopped"
         ],
         "context_delegation": context.get("context_delegation"),
@@ -248,6 +257,11 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
             "or completed results. Respect each Goal's quality, recorded timestamp and Agent coverage. "
             "An empty or unverified projection does not prove idle or stopped. For a current-work "
             "question, answer the known overview first; read only missing or requested detail."
+        ),
+        "attention_note": (
+            "Attention is a directory preview, not complete decision terms or an action grant. "
+            "Resolve read_reference with the scoped read tool before deciding or acting; "
+            "details_omitted and content_truncated never prove complete evidence."
         ),
     }
 

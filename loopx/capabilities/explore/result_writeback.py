@@ -24,11 +24,63 @@ from .result_log import (
 )
 
 
-def normalize_result_attachment(attachment, *, other_attachment=...):
+def normalize_result_attachment(
+    attachment, *, other_attachment=..., vision_packet=None, scope_context=None
+):
     params = {"attachment": attachment}
+    if vision_packet is not None:
+        params["vision_packet"] = vision_packet
     if other_attachment is not ...:
         params["other_attachment"] = other_attachment
+    # Only explicit path-delta references with omitted scope need a state read.
+    # TypeScript owns scope eligibility and normalization; this transports the
+    # canonical Todo links and question records, never infers facts or authority.
+    referenced = [row for row in (attachment, other_attachment) if (
+        isinstance(row, dict)
+        and row.get("schema_version") == "explore_result_from_path_delta_v0"
+        and "question" not in row and "applicability" not in row
+    )]
+    if scope_context is not None and referenced:
+        params["linked_scope"] = _linked_scope_context(
+            node_ids=[row.get("node_id") for row in referenced], **scope_context
+        )
     return effect_runtime_result("explore.result.normalize", params)
+
+
+def _linked_scope_context(
+    *, registry_path, runtime_root_override, goal_id, agent_id, todo_id,
+    turn_instance_id, node_ids,
+):
+    from pathlib import Path
+    from ...control_plane.runtime.runtime_projection_route import (
+        resolve_goal_source_runtime_route,
+    )
+
+    if not (agent_id and todo_id and turn_instance_id):
+        raise ValueError("Explore result attachment requires agent, Todo and Turn identity")
+    route = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
+    )
+    source_registry = Path(route["source_registry"])
+    source_runtime = Path(route["source_runtime_root"])
+    _, graph, gate = _policy(source_registry, goal_id)
+    if not (graph or gate["enabled"]):
+        raise ValueError("Explore result attachment requires enabled Explore evidence or planning mode")
+    rows = list_goal_todos(
+        registry_path=source_registry, runtime_root_arg=str(source_runtime),
+        goal_id=goal_id, todo_id=todo_id,
+    ).get("todos", [])
+    if len(rows) != 1 or rows[0].get("claimed_by") != agent_id:
+        raise ValueError("Explore result attachment must belong to the caller's claimed Todo")
+    projection = build_explore_result_projection(
+        load_explore_result_events_strict(
+            explore_result_log_path(source_runtime, goal_id), goal_id=goal_id
+        ), goal_id=goal_id,
+    )
+    return {"requested_node_refs": rows[0].get("explore_result_node_refs", []),
+            "nodes": [node for node in projection.get("nodes", [])
+                      if node.get("node_id") in node_ids]}
 
 
 def _events(attachment, *, goal_id, agent_id, source_id, recorded_at):

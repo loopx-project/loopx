@@ -24,7 +24,7 @@ INLINE_VISION_FIELDS = {
 }
 
 
-def split_explore_result_input(vision_packet, result_path):
+def split_explore_result_input(vision_packet, result_path, *, scope_context=None):
     """Transport explicit attachments; the capability owns validation/conflicts.
 
     Keep the generic vision packet separate. No attachment means no capability
@@ -41,7 +41,9 @@ def split_explore_result_input(vision_packet, result_path):
     from ..capabilities.explore.result_writeback import normalize_result_attachment
 
     other = {"other_attachment": attachments[1]} if len(attachments) == 2 else {}
-    return vision_packet, normalize_result_attachment(attachments[0], **other)
+    return vision_packet, normalize_result_attachment(
+        attachments[0], vision_packet=vision_packet, scope_context=scope_context, **other
+    )
 
 
 def inline_agent_vision_packet(args: argparse.Namespace) -> dict[str, object] | None:

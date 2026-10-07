@@ -183,7 +183,8 @@ def test_partial_link_failure_replays_without_duplicate_or_primary_rollback(
     assert second["ok"] and second["graph"]["appended_event_count"] == 0
 
 
-@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "conflict", "off-without-result"])
+@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "conflict", "off-without-result",
+                                "path-disabled", "path-missing", "path-no-evidence", "path-overflow"])
 def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
@@ -191,7 +192,7 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
 
     project, runtime, path = _write_fixture(tmp_path)
     config = json.loads(path.read_text())
-    config["goals"][0]["explore_graph"] = {"enabled": case not in {"disabled", "off-without-result"}}
+    config["goals"][0]["explore_graph"] = {"enabled": case not in {"disabled", "off-without-result", "path-disabled"}}
     path.write_text(json.dumps(config))
     rc, claimed = _run_cli(path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
                           "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
@@ -211,6 +212,24 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
         packet["explore_result"] = None
     if case == "invalid":
         packet["explore_result"]["evidence_refs"] = []
+    if case.startswith("path-"):
+        packet["explore_result"] = {
+            key: ATTACHMENT[key] for key in
+            ("node_id", "question", "applicability", "input_revision", "status")
+        }
+        packet["explore_result"]["schema_version"] = "explore_result_from_path_delta_v0"
+        if case != "path-missing":
+            packet["path_delta"] = {
+                "schema_version": "goal_path_delta_v0", "outcome": "continue",
+                "prior_assumption": "A finite prefix might bound the tail.",
+                "observed_reality": ATTACHMENT["observation"],
+                "changed": [ATTACHMENT["interpretation"]],
+                "evidence_refs": ATTACHMENT["evidence_refs"],
+            }
+            if case == "path-no-evidence":
+                packet["path_delta"]["evidence_refs"] = []
+            if case == "path-overflow":
+                packet["path_delta"]["observed_reality"] = "x" * 321
     source = tmp_path / "vision.json"
     source.write_text(json.dumps(packet))
     extra = ()
@@ -238,7 +257,7 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
 
 @pytest.mark.parametrize("terminal", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
-@pytest.mark.parametrize("source_mode", ["file", "vision", "both"])
+@pytest.mark.parametrize("source_mode", ["file", "vision", "both", "path_delta", "wide_path_delta", "linked_path_delta"])
 def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_retry(
     tmp_path, terminal, interrupted, source_mode, monkeypatch, capsys,
 ):
@@ -275,6 +294,16 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         cwd=project,
     )
     assert rc == 0, claimed
+    if source_mode == "linked_path_delta":
+        from loopx.capabilities.explore.result_log import (
+            append_explore_result_event, build_explore_node_event,
+        )
+        append_explore_result_event(explore_result_log_path(runtime, GOAL_ID),
+            build_explore_node_event(goal_id=GOAL_ID, node_id=ATTACHMENT["node_id"],
+                node_kind="question", title=ATTACHMENT["question"],
+                summary=ATTACHMENT["applicability"], status="open"))
+        update_goal_todo(registry_path=path, goal_id=GOAL_ID, todo_id=TODO_ID,
+            agent_id=AGENT_ID, explore_result_node_refs=[ATTACHMENT["node_id"]])
     terminal_proof = {}
     if terminal:
         from canonical_authority_fixture import initialize_canonical_authority
@@ -350,11 +379,38 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         "vision_patch": {"acceptance_summary": "Require a uniform tail bound."},
         "explore_result": template,
     }
+    if source_mode in {"path_delta", "wide_path_delta", "linked_path_delta"}:
+        packet["path_delta"] = {
+            "schema_version": "goal_path_delta_v0", "outcome": "continue",
+            "prior_assumption": "A finite prefix might establish the bound.",
+            "observed_reality": ATTACHMENT["observation"],
+            "changed": [ATTACHMENT["interpretation"]],
+            "evidence_refs": ATTACHMENT["evidence_refs"],
+        }
+        packet["explore_result"] = {
+            key: ATTACHMENT[key] for key in
+            ("node_id", "question", "applicability", "input_revision", "status")
+        }
+        packet["explore_result"]["schema_version"] = "explore_result_from_path_delta_v0"
+        if source_mode == "linked_path_delta":
+            for field in ("question", "applicability"):
+                del packet["explore_result"][field]
+        if source_mode == "wide_path_delta":
+            # Independent scope/tail oracle, exceeding the old 1200-character
+            # stored-summary cap and using all nine legal route entries.
+            packet["explore_result"]["input_revision"] = "r" * 160
+            packet["explore_result"]["applicability"] = "Finite prefix only; ".ljust(200, "a")
+            packet["path_delta"]["observed_reality"] = ATTACHMENT["observation"].ljust(320, "o")
+            for kind in ("retained", "changed", "stopped"):
+                packet["path_delta"][kind] = [f"{kind}-{i}: ".ljust(120, str(i)) for i in range(3)]
+            packet["path_delta"]["stopped"][-1] = "Do not transfer without a uniform tail bound.".rjust(120, "s")
+            packet["path_delta"]["evidence_refs"] = [*ATTACHMENT["evidence_refs"], ".loopx/evidence/probe.json"]
+            packet["explore_result"]["evidence_refs"] = ATTACHMENT["evidence_refs"]
     vision.write_text(json.dumps(packet))
     attachment_args = ()
     if source_mode in {"file", "both"}:
         attachment_args += ("--explore-result-json", str(source))
-    if source_mode in {"vision", "both"}:
+    if source_mode in {"vision", "both", "path_delta", "wide_path_delta", "linked_path_delta"}:
         attachment_args += ("--agent-vision-json", str(vision))
     args = (
         "refresh-state",
@@ -415,10 +471,24 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
     finding = received["graph"]["writeback_results"][0]
     assert finding["finding_id"] == replay["explore_result_delivery"]["finding_id"]
     assert ATTACHMENT["observation"] in finding["summary"]
-    assert ATTACHMENT["applicability"] in finding["summary"]
+    if source_mode != "wide_path_delta":
+        assert ATTACHMENT["applicability"] in finding["summary"]
+    if source_mode == "wide_path_delta":
+        assert len(finding["summary"]) > 1200
+        assert packet["explore_result"]["input_revision"] in finding["summary"]
+        assert packet["explore_result"]["applicability"] in finding["summary"]
+        assert packet["path_delta"]["observed_reality"] in finding["summary"]
+        for kind in ("retained", "changed", "stopped"):
+            for item in packet["path_delta"][kind]:
+                assert item in finding["summary"]
+        assert finding["evidence_refs"] == ATTACHMENT["evidence_refs"]
+        assert len(finding["summary"]) <= 2000
     assert index.read_bytes() == before
     changed = {**ATTACHMENT, "interpretation": "A different conclusion."}
-    if source_mode == "vision":
+    if source_mode in {"path_delta", "wide_path_delta", "linked_path_delta"}:
+        packet["path_delta"]["observed_reality"] = "A changed observation on retry."
+        vision.write_text(json.dumps(packet))
+    elif source_mode == "vision":
         vision.write_text(json.dumps({**packet, "explore_result": changed}))
     else:
         source.write_text(json.dumps(changed))

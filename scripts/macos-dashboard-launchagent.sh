@@ -49,6 +49,7 @@ Environment overrides:
   LOOPX_LOG_MAX_BYTES    Rotate an agent log once it exceeds this size (default 10 MiB)
   CODEX_HOME            Explicit service execution home, independent of the Chat override
   LOOPX_CHAT_CODEX_HOME  Explicit managed Codex home (upgrades preserve the existing binding)
+  LOOPX_CHAT_CODEX_MODEL_PROVIDER  Optional native provider for ordinary Chat (preserved on upgrade)
   LOOPX_CHAT_SCAN_PATHS_JSON  JSON array of absolute workspace directories (preserved on upgrade)
   LOOPX_CHAT_RUNTIME_ROOT    Explicit Chat data directory (preserved on upgrade)
   LOOPX_CHAT_IDLE_TIMEOUT_SECONDS  Explicit idle timeout (preserved on upgrade)
@@ -372,6 +373,12 @@ for variable, flag in (
         if not math.isfinite(seconds) or seconds <= 0:
             raise SystemExit(f"{variable} must be a positive finite number")
     options[variable] = value
+variable = "LOOPX_CHAT_CODEX_MODEL_PROVIDER"
+# Explicit empty disables an installed override; absence preserves it.
+value = os.environ.get(variable, installed.get(variable, ""))
+if not isinstance(value, str) or len(value) > 256 or any(ord(c) < 32 for c in value):
+    raise SystemExit(f"{variable} must be a bounded string without control characters")
+options[variable] = value.strip()
 print(json.dumps(options))
 PY
 }
@@ -379,7 +386,7 @@ PY
 write_plists() {
   local status_command python_command codex_command claude_command lark_cli_command registry
   local path_prefix command_path command_dir status_shell chat_shell control_plane_write_arg lark_cli_arg codex_home_export chat_codex_home execution_codex_home chat_scan_paths chat_scan_args
-  local chat_options chat_runtime_root chat_idle_timeout chat_hard_timeout chat_runtime_arg chat_timeout_args
+  local chat_options chat_runtime_root chat_idle_timeout chat_hard_timeout chat_runtime_arg chat_timeout_args chat_model_provider
   status_command="$(resolve_status_command)"
   python_command="$(resolve_loopx_python "$status_command")"
   registry="$(resolve_global_registry "$python_command")"
@@ -411,6 +418,7 @@ write_plists() {
   chat_scan_paths="$(resolve_chat_scan_paths "$python_command")"
   chat_scan_args="$("$python_command" -c 'import json,shlex,sys; print("".join(" --scan-path " + shlex.quote(path) for path in json.load(sys.stdin)))' <<<"$chat_scan_paths")"
   chat_options="$(resolve_chat_options "$python_command")"
+  chat_model_provider="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_CODEX_MODEL_PROVIDER"])' <<<"$chat_options")"
   chat_runtime_root="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_RUNTIME_ROOT"])' <<<"$chat_options")"
   chat_idle_timeout="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"])' <<<"$chat_options")"
   chat_hard_timeout="$("$python_command" -c 'import json,sys; print(json.load(sys.stdin)["LOOPX_CHAT_HARD_TIMEOUT_SECONDS"])' <<<"$chat_options")"
@@ -423,7 +431,7 @@ write_plists() {
     echo "Could not resolve the installed LoopX runtime identity; existing plists were kept." >&2
     return 1
   }
-  codex_home_export=" export CODEX_HOME=$(shell_quote "$execution_codex_home"); export LOOPX_CHAT_CODEX_HOME=$(shell_quote "$chat_codex_home");"
+  codex_home_export=" export CODEX_HOME=$(shell_quote "$execution_codex_home"); export LOOPX_CHAT_CODEX_HOME=$(shell_quote "$chat_codex_home"); export LOOPX_CHAT_CODEX_MODEL_PROVIDER=$(shell_quote "$chat_model_provider");"
   # Registry has already been resolved explicitly. --global-registry would
   # replace it with <common_runtime_root>/registry.json and lose custom routes.
   status_shell="$(log_rotation_prelude status) export LOOPX_PYTHON=$(shell_quote "$python_command"); export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") serve-status --host $(shell_quote "$host") --port $(shell_quote "$status_port") --limit $(shell_quote "$status_limit")$chat_scan_args$control_plane_write_arg"
@@ -473,6 +481,8 @@ EOF
     <string>$(xml_escape "$execution_codex_home")</string>
     <key>LOOPX_CHAT_CODEX_HOME</key>
     <string>$(xml_escape "$chat_codex_home")</string>
+    <key>LOOPX_CHAT_CODEX_MODEL_PROVIDER</key>
+    <string>$(xml_escape "$chat_model_provider")</string>
     <key>LOOPX_GLOBAL_REGISTRY</key>
     <string>$(xml_escape "$registry")</string>
     <key>LOOPX_CHAT_SCAN_PATHS_JSON</key>

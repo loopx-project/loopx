@@ -329,7 +329,7 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 | 能力拒绝 | 既有 capability_gate_v0；短包保留原样 required/missing 与源中历史字段 | 修复事实遗漏，不改变就绪策略或能力开启 |
 | 选择／claim／lease | selected Todo、action portfolio 及当前所属事务 | 短包归属不是新鲜 lease；保留捕获源并在所属写入入口复核 |
 | replan／Goal 收尾 | replan action packet、contract capsule 和 vision audit | 完整证据仍走有权限的详情；Todo 完成不证明 Goal 完成 |
-| 结算／scheduler | 完整 typed 结算计划及显式宿主调度投影 | 调度详情、实际宿主读回与一次恢复仍待宿主采用验收 |
+| 结算／scheduler | 完整 typed 结算计划及显式宿主调度投影；省略的调度 argv 引用同一捕获的完整决策 | 此投影退役未绑定的详情命令。实际宿主读回、过期写入拒绝与一次恢复仍待宿主采用验收 |
 | 可选 memory | 核验后的 boundary 参与事实及新鲜宿主绑定 | 关闭／recall／ingest／失效／provider 失败隔离持续保留；传输等价不是模型收益 |
 
 能力事实修复归既有 TS read-model owner。真实捕获的 File/SQLite 决策覆盖拒绝及

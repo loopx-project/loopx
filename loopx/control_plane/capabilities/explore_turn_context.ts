@@ -4,7 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 
-import {exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
+import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -118,7 +118,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       // could turn a bounded refutation into a blanket route ban.
       writeback_results: visibleResults
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
-          summary: String(row.summary ?? "").slice(0, 1200)})),
+          summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT)})),
       result_page: {
         total: resultRows.length, offset: resultOffset, limit: resultLimit,
         remaining: remainingResults, revision: resultRevision,
@@ -135,6 +135,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       result_writeback_inline_option: writeback.inline_option,
       result_writeback_inline_field: writeback.inline_field,
       result_attachment_schema: writeback.attachment_schema,
+      path_delta_attachment_schema: writeback.path_delta_attachment_schema,
+      path_delta_attachment_template: writeback.path_delta_attachment_template,
+      linked_question_attachment_template: writeback.linked_question_attachment_template,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),

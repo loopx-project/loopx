@@ -112,6 +112,22 @@ Events are sanitized at record time: compact text limits, credential-like
 markers rejected, and evidence refs must be public relative refs or opaque ids
 (for example `ov:doc:lustre-survey`), never local absolute paths.
 
+The writer compacts summaries and blocked reasons at 2000 characters. The
+strict v0 reader accepts canonical persisted text up to 2002 characters without
+recompacting or rewriting it, including the historical compactor's two extra
+ellipsis characters. Reader compatibility remains independent of the writer
+budget. Unknown fields, unsafe text, stale event hashes and text beyond that
+reader bound still fail closed. Display and page limits remain
+separate from the stored evidence.
+
+For a shared log, deploy compatible readers to every CLI, service and worker
+that reads it before deploying an expanded writer. Older 1200-character
+readers may reject a longer event and block the whole read. The source writer
+has expanded to 2000 characters; this does not upgrade installed runtimes,
+migrate existing events or grant write authority. Rolling back to an older
+reader requires first retaining the longer log with a compatible reader; do not
+silently clip its counterevidence.
+
 ## Results From Ordinary Work Writeback
 
 An enabled evidence or planning mode accepts an explicit
@@ -156,6 +172,26 @@ JSON already passed to `--agent-vision-json`. This explicit field saves a separa
 result file; ordinary vision or `path_delta` text is never interpreted as a finding.
 The CLI separates the attachment from the generic vision packet and sends it
 through the same Explore validator and post-writeback hook.
+
+When this same vision packet already contains a validated, evidence-linked
+top-level `path_delta`, use `graph.path_delta_attachment_template` instead:
+`schema_version=explore_result_from_path_delta_v0`, stable `node_id`, `question`,
+`applicability`, tested `input_revision` and explicit `status`. The capability
+reuses the complete observation and all retained, changed and stopped route
+items. It does not infer a finding or its status from ordinary vision text.
+If the delta includes local evidence-file pointers, optionally supply
+`evidence_refs` selecting one or more opaque identifiers already present in
+that same delta. Foreign identifiers, empty selections and local file pointers
+are rejected; the hook never invents identifiers or silently drops refs.
+Omitting the selection reuses all refs and requires all of them to be opaque.
+
+Observation text allows 320 characters and interpretation text 1200; the complete
+finding, including revision and applicability, fits the 2000-character stored
+summary limit. This raises the previous 300/300 attachment and 1200 summary
+limits to preserve legal Goal route decisions and their last negative condition.
+The next-turn view preserves that entire summary, with the same three-result
+default and existing paginated detail reads. Short findings and off mode retain
+their behavior. This is a transport limit change, not evidence of model adoption.
 
 Alternatively, add `--explore-result-json result.json` to the ordinary admitted work
 writeback, retaining its Goal, Agent, Todo, Turn and delivery fields. When both

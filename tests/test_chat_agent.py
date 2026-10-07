@@ -43,13 +43,15 @@ def test_silent_event_reader_releases_dispatch_fence_for_control_receipt(tmp_pat
 
 
 class _FakeAppServerProcess:
-    def __init__(self, *, config_response=None) -> None:
+    def __init__(self, *, config_response=None, model_provider=None, thread_id="thread-loopx-chat") -> None:
         responses = [
             {"id": 1, "result": {"serverInfo": {"name": "fake-codex"}}},
-            {"id": 2, "result": {"thread": {"id": "thread-loopx-chat"}}},
+            {"id": 2, "result": {"thread": {"id": thread_id}}},
         ]
         if config_response is not None:
             responses.insert(1, {"id": 3, "result": config_response})
+        if model_provider is not None:
+            responses[-1]["result"]["modelProvider"] = model_provider
         self.stdin = io.StringIO()
         self.stdout = io.StringIO(
             "".join(json.dumps(response) + "\n" for response in responses)
@@ -188,6 +190,7 @@ def test_codex_chat_app_server_stdio_uses_utf8(
         ({"type": "agentMessage"}, "Agent 正在生成回答"),
         ({"type": "commandExecution"}, "Agent 正在执行命令"),
         ({"type": "reasoning"}, "Agent 正在思考"),
+        ({"type": "contextCompaction"}, "Agent 正在压缩会话上下文"),
         ({"type": "mcpToolCall"}, "Agent 正在调用工具"),
         ({"type": "futureItem", "text": "private-fixture-content"}, "Agent 正在处理"),
         ({}, "Agent 正在处理"),
@@ -230,7 +233,10 @@ def test_turn_activity_does_not_invent_goal_reads_or_successful_checks(
     phases = [p for kind, p in events if kind == "agent.phase"]
     assert phases[1]["label"] == expected_activity
     assert phases[0]["label"] == "Agent 已开始处理"
-    assert phases[2]["label"] == "Agent 返回了处理状态"
+    assert phases[2]["label"] == (
+        "Agent 会话上下文压缩已结束" if item.get("type") == "contextCompaction"
+        else "Agent 返回了处理状态"
+    )
     assert not any("检查" in p["label"] or "Goal" in p["label"] for p in phases)
     assert "private-fixture-content" not in json.dumps(phases)
     assert any(kind == "answer.delta" and p["text"] == "Ready." for kind, p in events)
@@ -293,6 +299,63 @@ def test_codex_chat_pins_explicit_home_in_child_environment(monkeypatch, tmp_pat
     try:
         assert options["env"]["CODEX_HOME"] == str((tmp_path / "bound").resolve())
         assert chat_agent.os.environ["CODEX_HOME"] == str(tmp_path / "ambient")
+    finally:
+        session.close()
+
+
+def test_codex_chat_provider_override_resumes_original_thread_and_preserves_policy(monkeypatch, tmp_path):
+    process = _FakeAppServerProcess(model_provider="fixture-http", thread_id="original-thread")
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "fixture-http")
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    session = chat_agent.CodexChatAgentSession.start(
+        codex_bin="codex", work_dir=tmp_path, goal_id="fixture", objective="fixture",
+        resume_thread_id="original-thread", model="fixture-model", reasoning_effort="high",
+        codex_home=tmp_path / "original-home",
+    )
+    try:
+        packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        resume = next(p for p in packets if p.get("method") == "thread/resume")
+        assert resume["params"]["threadId"] == "original-thread"
+        assert resume["params"]["modelProvider"] == "fixture-http"
+        assert resume["params"]["model"] == "fixture-model"
+        assert resume["params"]["config"]["model_reasoning_effort"] == "high"
+        assert resume["params"]["sandbox"] == "read-only"
+        assert resume["params"]["approvalPolicy"] == "never"
+        assert not any(p.get("method") in {"thread/start", "turn/start"} for p in packets)
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("actual", [None, "different-provider"])
+def test_codex_chat_provider_override_refuses_unconfirmed_native_selection(monkeypatch, tmp_path, actual):
+    process = _FakeAppServerProcess(model_provider=actual)
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "fixture-http")
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    with pytest.raises(chat_agent.CodexChatAgentError, match="requested conversation provider"):
+        chat_agent.CodexChatAgentSession.start(
+            codex_bin="codex", work_dir=tmp_path, goal_id="fixture", objective="fixture",
+            resume_thread_id="original-thread", model="fixture-model", reasoning_effort="high",
+        )
+    assert process.returncode == 0
+    packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+    assert not any(p.get("method") in {"thread/start", "turn/start"} for p in packets)
+
+
+def test_chat_provider_override_does_not_select_managed_goal_executor_provider(monkeypatch, tmp_path):
+    process = _FakeAppServerProcess()
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "fixture-http")
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    session = chat_agent.CodexChatAgentSession.start(
+        codex_bin="codex", work_dir=tmp_path, goal_id="fixture", objective="fixture",
+        execution_mode=True,
+    )
+    try:
+        packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        start = next(p for p in packets if p.get("method") == "thread/start")
+        assert "modelProvider" not in start["params"]
     finally:
         session.close()
 
