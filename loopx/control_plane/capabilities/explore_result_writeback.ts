@@ -22,19 +22,19 @@ export function exploreResultWritebackAffordance(): JsonObject {
     path_delta_attachment_schema: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
     path_delta_attachment_template: {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      node_id: "", question: "", applicability: "", input_revision: "", status: "tentative",
+      question: "", applicability: "", input_revision: "", status: "tentative",
     },
     linked_question_attachment_template: {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
       node_id: "<linked-question-id>", input_revision: "", status: "tentative",
     },
-    guidance: "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json. Prefer path_delta_attachment_template when this same packet contains an evidence-linked path_delta: supply the stable question, applicability, tested input revision and explicit finding status; the hook reuses the complete observation and route decision. For an existing question linked to this Todo, use linked_question_attachment_template: omit both question and applicability to reuse its canonical scope. New or unlinked questions still require explicit scope; input_revision and status are never inferred. If path_delta also references local files, explicitly select its opaque identifiers with optional evidence_refs; selected refs must occur in this same path_delta. Without a selection, all refs must be opaque identifiers. Otherwise fill attachment_template, inline or via --explore-result-json. Matching sources coalesce; conflicts reject. Routine work needs no attachment; do not invent findings. Capture is optional, not a settlement obligation. A stopped route does not imply refuted status, and a score alone does not prove refutation. Keep raw logs local. Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
+    guidance: "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json. Prefer path_delta_attachment_template when this same packet contains an evidence-linked path_delta: supply the question, applicability, tested input revision and explicit finding status. For a new question, omit node_id: the hook derives its identity from the exact question and applicability, creates it and links this Todo; no explore node call is needed. To add to a known question, reuse its returned node_id and canonical scope. The hook reuses the complete observation and route decision. For an existing question linked to this Todo, use linked_question_attachment_template: omit both question and applicability to reuse its canonical scope. New or unlinked questions still require explicit scope; input_revision and status are never inferred. If path_delta also references local files, explicitly select its opaque identifiers with optional evidence_refs; selected refs must occur in this same path_delta. Without a selection, all refs must be opaque identifiers. Otherwise fill attachment_template, inline or via --explore-result-json. Matching sources coalesce; conflicts reject. Routine work needs no attachment; do not invent findings. Capture is optional, not a settlement obligation. A stopped route does not imply refuted status, and a score alone does not prove refutation. Keep raw logs local. Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
     // Blank evidence fields deliberately fail validation until the caller
     // supplies observed facts. Goal/Agent/Todo/Turn bind in ordinary writeback;
     // a source-code revision here would not establish the tested input revision.
     attachment_template: {
       schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
-      node_id: "", question: "", applicability: "", input_revision: "",
+      question: "", applicability: "", input_revision: "",
       observation: "", interpretation: "", status: "tentative", evidence_refs: [],
     },
   };
@@ -48,6 +48,12 @@ function text(value: unknown, field: string, limit: number): string {
   }
   return value.trim();
 }
+function explicitNodeId(value: unknown): string {
+  if (typeof value !== "string" || value.length > 96 || !/^[A-Za-z][A-Za-z0-9_.:-]{0,95}$/.test(value.trim())) {
+    throw new EffectRuntimeRequestError("Invalid Explore node_id: use a returned question id, or omit node_id with explicit question and applicability for a new question; do not precreate an area node");
+  }
+  return value.trim();
+}
 function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope?: unknown): JsonObject {
   const row = requireJsonObject(value, "Explore result attachment");
   if (row.schema_version === EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA) {
@@ -57,8 +63,13 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("Explore result attachment contains unknown fields");
   }
   requireStringLiteral(row.schema_version, [EXPLORE_RESULT_ATTACHMENT_SCHEMA], "attachment schema");
-  const node = text(row.node_id, "node_id", 96);
-  if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,95}$/.test(node)) throw new EffectRuntimeRequestError("invalid Explore node_id");
+  const question = text(row.question, "question", 180);
+  const applicability = text(row.applicability, "applicability", 200);
+  // Identity is mechanical, never inferred evidence. Exact scoped text, not
+  // revision/status/observation, binds successive results to the same question.
+  const node = Object.hasOwn(row, "node_id")
+    ? explicitNodeId(row.node_id)
+    : "question_" + createHash("sha256").update(JSON.stringify([question, applicability])).digest("hex");
   if (!Array.isArray(row.evidence_refs) || !row.evidence_refs.length || row.evidence_refs.length > 8) {
     throw new EffectRuntimeRequestError("evidence_refs requires one to eight opaque evidence identifiers");
   }
@@ -72,8 +83,7 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
   // Status reuses the existing finding vocabulary. The caller supplies the
   // interpretation; a failed prerequisite belongs in a tentative observation.
   return {schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA, node_id: node,
-    question: text(row.question, "question", 180),
-    applicability: text(row.applicability, "applicability", 200),
+    question, applicability,
     input_revision: text(row.input_revision, "input_revision", 160),
     observation: text(row.observation, "observation", 320),
     interpretation: text(row.interpretation, "interpretation", 1200),
@@ -113,7 +123,7 @@ function questionScope(row: JsonObject, value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("Supply both question and applicability, or omit both for a linked question");
   }
   const scope = requireJsonObject(value, "Explore capture requires a canonical linked question scope");
-  const nodeId = text(row.node_id, "node_id", 96);
+  const nodeId = explicitNodeId(row.node_id);
   const refs = requireStringArray(scope.requested_node_refs, "linked question refs");
   const nodes = Array.isArray(scope.nodes) ? scope.nodes.map(node => requireJsonObject(node, "linked question")) : [];
   const matches = nodes.filter(node => node.node_id === nodeId && node.node_kind === "question");

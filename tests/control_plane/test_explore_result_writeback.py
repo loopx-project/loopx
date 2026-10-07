@@ -68,7 +68,7 @@ def test_real_result_link_read_and_replay(tmp_path):
     with pytest.raises((ValueError, EffectRuntimeRejected)):
         prepare_result_attachment(attachment, **args)
     assert not explore_result_log_path(args["runtime_root"], "research").exists()
-    assert set(attachment) == set(ATTACHMENT)
+    assert set(attachment) == set(ATTACHMENT) - {"node_id"}
     attachment.update(ATTACHMENT)
     prepare_result_attachment(attachment, **args)
     assert not explore_result_log_path(args["runtime_root"], "research").exists()
@@ -369,7 +369,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
     source = tmp_path / "result.json"
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     template = plan["ordered_steps"][1]["optional_attachments"][0]["attachment_template"]
-    assert set(template) == set(ATTACHMENT)
+    assert set(template) == set(ATTACHMENT) - {"node_id"}
     template.update(ATTACHMENT)
     source.write_text(json.dumps(template))
     vision = tmp_path / "vision.json"
