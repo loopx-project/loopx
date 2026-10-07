@@ -416,8 +416,8 @@ class ChatRuntimeController:
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
     ) -> ChatRuntimeAdapter:
-        if project_context is not None and project_context.get("grant") == "workspace_write" and agent_id != "codex":
-            raise ValueError("the selected executor cannot enforce workspace write authorization")
+        if project_context is not None:
+            project_context_policy.validate_project_native_executor(agent_id, project_context)
         if (
             manager_runtime is not None
             and manager_runtime.get("runtime_profile") == "trusted_owner"

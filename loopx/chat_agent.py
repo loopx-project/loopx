@@ -514,6 +514,7 @@ class CodexChatAgentSession:
     process_tree_owned: bool = False
     runtime_profile: str = "restricted"
     sandbox: str = "read-only"
+    permissions_profile: str | None = None
     project_context: dict[str, str] | None = None
     model: str | None = None
     reasoning_effort: str | None = None
@@ -613,6 +614,14 @@ class CodexChatAgentSession:
                 raise ValueError(
                     "Codex Chat sandbox does not match the selected runtime profile"
                 )
+        # Core owns the optional narrower project filesystem policy. A model,
+        # transport or project config cannot substitute a profile of its choice.
+        permissions_profile = policy.get("permissions_profile") if project_context is not None else None
+        if permissions_profile:
+            host_config = {**(host_config or {}), **policy["host_config"]}
+            # The native filesystem helper re-executes this binary. A symlink
+            # under the user's home must not require opening that directory.
+            resolved = str(Path(resolved).resolve())
         # Pin the host store explicitly, including compatibility retries. Never
         # redirect an existing thread by inheriting a different launch context.
         runtime_home = (
@@ -679,6 +688,7 @@ class CodexChatAgentSession:
             process_tree_owned=isolate_process_tree,
             runtime_profile=runtime_profile,
             sandbox=selected_sandbox,
+            permissions_profile=permissions_profile,
             project_context=policy["context"] if project_context is not None else None,
             model=model,
             reasoning_effort=reasoning_effort,
@@ -746,7 +756,8 @@ class CodexChatAgentSession:
                         if reasoning_effort or host_config
                         else {}
                     ),
-                    "sandbox": selected_sandbox,
+                    **({"permissions": permissions_profile} if permissions_profile
+                       else {"sandbox": selected_sandbox}),
                     "approvalPolicy": "never",
                     **(
                         {"dynamicTools": dynamic_tools}
@@ -774,6 +785,13 @@ class CodexChatAgentSession:
             session.model = thread_result.get("model") or model
             session.reasoning_effort = thread_result.get("reasoningEffort") or reasoning_effort
             session.thread_id = _extract_id(thread_result, "thread", "threadId")
+            if permissions_profile:
+                active = thread_result.get("activePermissionProfile")
+                if not isinstance(active, dict) or active.get("id") != permissions_profile:
+                    raise session._runtime_error("Codex did not apply the project filesystem permissions.")
+                roots = thread_result.get("runtimeWorkspaceRoots")
+                if not isinstance(roots, list) or roots != [str(root)]:
+                    raise session._runtime_error("Codex did not apply the exact project workspace root.")
             if not session.thread_id:
                 raise session._runtime_error(
                     "Codex app-server did not return a thread id."
@@ -1112,6 +1130,7 @@ class CodexChatAgentSession:
                 **({"model": self.model} if self.model else {}),
                 **({"effort": self.reasoning_effort} if self.reasoning_effort else {}),
                 "approvalPolicy": "never",
+                **({"permissions": self.permissions_profile} if self.permissions_profile else {}),
                 **(
                     {"outputSchema": output_schema} if output_schema is not None else {}
                 ),

@@ -627,6 +627,7 @@ def handle_support_control_command(
                 replace_existing_loopx_chat(args.host, args.port)
             serve_chat(
                 project_workspace_grant=args.project_workspace_grant,
+                project_filesystem_scope=args.project_filesystem_scope,
                 private_reactions=not getattr(args, "no_private_reactions", False),
                 registry_path=chat_registry_path,
                 runtime_root_override=args.runtime_root,

@@ -43,10 +43,10 @@ def test_silent_event_reader_releases_dispatch_fence_for_control_receipt(tmp_pat
 
 
 class _FakeAppServerProcess:
-    def __init__(self, *, config_response=None, model_provider=None, thread_id="thread-loopx-chat") -> None:
+    def __init__(self, *, config_response=None, model_provider=None, thread_id="thread-loopx-chat", thread_response=None) -> None:
         responses = [
             {"id": 1, "result": {"serverInfo": {"name": "fake-codex"}}},
-            {"id": 2, "result": {"thread": {"id": thread_id}}},
+            {"id": 2, "result": thread_response or {"thread": {"id": thread_id}}},
         ]
         if config_response is not None:
             responses.insert(1, {"id": 3, "result": config_response})
@@ -69,6 +69,68 @@ class _FakeAppServerProcess:
 
     def kill(self) -> None:
         self.returncode = -1
+
+
+@pytest.mark.parametrize("grant", ["workspace_read", "workspace_write"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_turn(monkeypatch, tmp_path, grant, resume):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    context = ChatProjectContexts([tmp_path], workspace_grant=grant, filesystem_scope="workspace_only").available()[0]
+    profile = "loopx_workspace_only_" + ("write" if grant == "workspace_write" else "read")
+    process = _FakeAppServerProcess(thread_response={"thread": {"id": "thread-loopx-chat"},
+        "activePermissionProfile": {"id": profile}, "runtimeWorkspaceRoots": [str(tmp_path)]})
+    real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
+    binary = tmp_path / "native-codex"
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda name: str(binary) if name == "codex" else real_which(name))
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, *a, **k:
+        process if command[0] == str(binary) else real_popen(command, *a, **k))
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+        goal_id=None, objective="project", project_context=context,
+        resume_thread_id="thread-loopx-chat" if resume else None,
+        model="synthetic-model", reasoning_effort="high",
+        host_config={"skills": {"include_instructions": True}, "project_doc_max_bytes": 32768})
+    try:
+        requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        method = "thread/resume" if resume else "thread/start"
+        params = next(r["params"] for r in requests if r.get("method") == method)
+        assert params["permissions"] == session.permissions_profile == profile
+        assert "sandbox" not in params and params["approvalPolicy"] == "never"
+        assert params["config"]["permissions"][profile]["network"]["enabled"] is False
+        assert params["config"]["default_permissions"] == profile
+        assert params["config"]["skills"]["include_instructions"] is False
+        assert params["config"]["project_doc_max_bytes"] == 0
+        sent = []
+        monkeypatch.setattr(session, "_request", lambda method, params, **kw:
+            sent.append((method, params)) or {"turn": {"id": "owned-turn"}})
+        monkeypatch.setattr(session, "_next_event", lambda **kw:
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+        session.send("Continue.")
+        assert sent[0][1]["permissions"] == profile and "sandboxPolicy" not in sent[0][1]
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("response", [
+    {}, {"activePermissionProfile": {"id": "other"}},
+    {"activePermissionProfile": {"id": "loopx_workspace_only_write"}},
+    {"activePermissionProfile": {"id": "loopx_workspace_only_write"}, "runtimeWorkspaceRoots": ["/other"]},
+])
+def test_project_filesystem_scope_rejects_missing_or_changed_native_readback_without_fallback(monkeypatch, tmp_path, response):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    process = _FakeAppServerProcess(thread_response={"thread": {"id": "thread-loopx-chat"}, **response})
+    real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
+    binary = tmp_path / "native-codex"
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda name: str(binary) if name == "codex" else real_which(name))
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, *a, **k:
+        process if command[0] == str(binary) else real_popen(command, *a, **k))
+    with pytest.raises(chat_agent.CodexChatAgentError, match="did not apply"):
+        chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path, goal_id=None,
+            objective="project", project_context=ChatProjectContexts([tmp_path], filesystem_scope="workspace_only").available()[0],
+            resume_thread_id="thread-loopx-chat", model="synthetic-model", reasoning_effort="high")
+    requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+    assert sum(r.get("method") == "thread/resume" for r in requests) == 1
+    assert not any(r.get("method") in {"thread/start", "turn/start"} for r in requests)
+    assert process.returncode == 0
 
 
 class _FakeClaudeProcess:

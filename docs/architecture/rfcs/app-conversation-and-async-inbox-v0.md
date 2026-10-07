@@ -96,6 +96,34 @@ local Scope reuses only the same typed project context; a host grant change open
 a new Session while retaining old history and rejecting new work on the old
 Session.
 
+`loopx chat --project-filesystem-scope workspace_only` additionally narrows ordinary
+Codex project Sessions to workspace file tools: root access is denied, minimal
+system executable reads remain available, and only the selected workspace has the
+existing read or write grant. Temporary directories, shell environment inheritance,
+login shells, web search and tool network access are disabled. The typed context
+persists this selection; changing it invalidates reuse of the old context. Default
+project access remains writable with `host_default` filesystem scope.
+
+The narrowed profile also disables automatic skill catalog injection and project
+instruction discovery. The agent can read workspace-owned `AGENTS.md` and skills
+through its bounded file tools. Ordinary project Sessions keep native instruction
+and skill discovery. This does not disable explicit host skill resolution, clear
+old conversation context or suppress account-level instructions supplied by the
+host; those remain separate privacy checks.
+
+The adapter sends the Core-owned named permissions profile, never a simultaneous
+legacy sandbox override, on start and exact-thread resume. It verifies the returned
+profile and sole workspace root, and pins that profile on subsequent Turns. Hosts
+that do not support the profile fail closed rather than falling back to wider
+permissions. Other executors are rejected for this scope. The native helper uses
+the canonical Codex executable so a home-directory symlink needs no read grant.
+
+This is a filesystem-tool boundary, not complete community Bot isolation. It does
+not authorize group audiences or isolate host-loaded instructions, skills, MCP
+credentials, dynamic tools or a private registry. Those boundaries need their own
+qualification before a public group is enabled; a successful file probe is not
+public Bot acceptance.
+
 Typed Core/HTTP/native-host regressions qualify default writes, explicit read-only,
 workspace identity, independent App grants, old-Session rejection and exact-thread
 resume. Earlier source evidence records a Codex canary editing and reading back a

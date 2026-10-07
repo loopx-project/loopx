@@ -13,6 +13,10 @@ export function normalizeProjectContext(value: unknown): Record<string, string> 
   }
   const normalized: Record<string, string> = {kind: "project_workspace", project_ref: ref, workspace_path: workspace,
     audience: String(context.audience), grant: String(context.grant)};
+  if (context.filesystem_scope !== undefined) {
+    if (context.filesystem_scope !== "workspace_only") throw new Error("invalid project filesystem scope");
+    normalized.filesystem_scope = "workspace_only";
+  }
   if (context.audience === "bound_owner") {
     for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref"]) {
       const value = context[field];
@@ -25,7 +29,31 @@ export function normalizeProjectContext(value: unknown): Record<string, string> 
 
 export function projectConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeProjectContext(input.context);
-  return {context, sandbox: context.grant === "workspace_write" ? "workspace-write" : "read-only",
+  const writable = context.grant === "workspace_write";
+  const permissions = context.filesystem_scope === "workspace_only" ? {
+    permissions_profile: `loopx_workspace_only_${writable ? "write" : "read"}`,
+    host_config: {
+      default_permissions: `loopx_workspace_only_${writable ? "write" : "read"}`,
+      allow_login_shell: false,
+      web_search: "disabled",
+      shell_environment_policy: {inherit: "none"},
+      // The host may discover instructions outside the filesystem sandbox.
+      // Read project instructions/skills through the bounded native tools.
+      skills: {include_instructions: false},
+      project_doc_max_bytes: 0,
+      permissions: {
+        [`loopx_workspace_only_${writable ? "write" : "read"}`]: {
+          extends: ":workspace",
+          filesystem: {
+            ":root": "deny", ":minimal": "read", ":tmpdir": "deny", ":slash_tmp": "deny",
+            ":workspace_roots": {".": writable ? "write" : "read"},
+          },
+          network: {enabled: false},
+        },
+      },
+    },
+  } : {};
+  return {context, sandbox: writable ? "workspace-write" : "read-only", ...permissions,
     channel_id: context.audience === "local_owner"
     ? `project.${context.project_ref}` : `project.external.${context.binding_id}.${context.source_ref}`};
 }

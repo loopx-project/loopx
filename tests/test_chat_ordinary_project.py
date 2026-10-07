@@ -200,6 +200,20 @@ def test_writable_project_turns_use_project_skills_without_manager_work_selectio
     assert session["project_context"]["grant"] == "workspace_write"
     assert len(store.list_sessions()) == 1
     assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
+@pytest.mark.parametrize("grant", ["workspace_read", "workspace_write"])
+def test_workspace_only_rejects_other_executor_before_session_creation(ordinary, monkeypatch, grant):
+    store, runtime, contexts, request, _, _, _ = ordinary
+    contexts.filesystem_scope, contexts.workspace_grant = "workspace_only", grant
+    monkeypatch.setattr("loopx.chat_endpoint_catalog.shutil.which",
+        lambda executable: executable if executable == "kiro-cli" else None)
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **_: pytest.fail("must reject before starting a host"))
+    status, result = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"], "agent_id": "kiro-cli",
+    })
+    assert status == 400 and "workspace-only" in result.get("error", "")
+    assert store.list_sessions() == []
+
+
 def test_read_only_project_rejects_executor_with_workspace_write_scope(ordinary, monkeypatch):
     store, runtime, contexts, request, _, _, _ = ordinary
 

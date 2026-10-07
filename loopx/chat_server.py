@@ -1569,6 +1569,7 @@ def serve_chat(
     verbose: bool = False,
     enable_goal_subagent_configuration: bool = False,
     project_workspace_grant: str = "workspace_write",
+    project_filesystem_scope: str = "host_default",
     private_reactions: bool = True,
 ) -> None:
     if not is_loopback_host(host):
@@ -1623,7 +1624,8 @@ def serve_chat(
     server.runtime_controller = ChatRuntimeController(
         store=server.chat_store,
         registry_path=resolved_registry_path,
-        project_contexts=ChatProjectContexts(resolved_scan_roots, workspace_grant=project_workspace_grant),
+        project_contexts=ChatProjectContexts(resolved_scan_roots, workspace_grant=project_workspace_grant,
+                                            filesystem_scope=project_filesystem_scope),
         manager_scope_resolver=lambda session: (
             server.runtime_controller.project_contexts.conversation_bindings.steward_scope(session)
             if isinstance(session.get("steward_context"), dict) else authorized_manager_goal_ids(

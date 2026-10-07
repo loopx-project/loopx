@@ -34,10 +34,14 @@ PROJECT_WORK_OBJECTIVE = (
 
 
 class ChatProjectContexts:
-    def __init__(self, roots: list[Path], *, workspace_grant: str = "workspace_write") -> None:
+    def __init__(self, roots: list[Path], *, workspace_grant: str = "workspace_write",
+                 filesystem_scope: str = "host_default") -> None:
         if workspace_grant not in {"workspace_read", "workspace_write"}:
             raise ValueError("unsupported project workspace grant")
         self.workspace_grant = workspace_grant
+        if filesystem_scope not in {"host_default", "workspace_only"}:
+            raise ValueError("unsupported project filesystem scope")
+        self.filesystem_scope = filesystem_scope
         # Remember the owner's spelling as well as its initial canonical target.
         # A later symlink retarget must not redirect an accepted Session.
         self.roots = [(root.expanduser().absolute(), root.expanduser().resolve()) for root in roots]
@@ -51,7 +55,9 @@ class ChatProjectContexts:
             ref = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:24]
             contexts[ref] = {"kind": "project_workspace", "project_ref": ref,
                              "workspace_path": str(canonical), "audience": "local_owner",
-                             "grant": self.workspace_grant}
+                             "grant": self.workspace_grant,
+                             **({"filesystem_scope": "workspace_only"}
+                                if self.filesystem_scope == "workspace_only" else {})}
         return list(contexts.values())
 
     def resolve(self, project_ref: str, *, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -130,12 +136,22 @@ def coordination_runtime_root(registry_path: Path | None, chat_root: Path) -> Pa
     return resolve_runtime_root(registry, registry_path=registry_path) if registry.get("common_runtime_root") else chat_root
 
 
+def validate_project_native_executor(agent_id: str, project_context: Mapping[str, object]) -> None:
+    if agent_id == "codex":
+        return
+    if project_context.get("filesystem_scope") == "workspace_only":
+        raise ValueError("the selected executor cannot enforce workspace-only filesystem access")
+    if project_context.get("grant") == "workspace_write":
+        raise ValueError("the selected executor cannot enforce workspace write authorization")
+
+
 def validate_project_executor_scope(
     agent_id: str,
     project_context: Mapping[str, object],
     capabilities: Callable[[], list[dict[str, object]]],
     capability: Mapping[str, object] | None = None,
 ) -> None:
+    validate_project_native_executor(agent_id, project_context)
     if project_context.get("grant") != "workspace_read":
         return
     selected = capability or next(
