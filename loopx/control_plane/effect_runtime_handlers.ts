@@ -452,6 +452,7 @@ export function createEffectRuntimeHandlers(
     ["operation.agent_handoff.plan", lazyHandler(() => import("./work_items/operation_agent_handoff.ts"), ({planAgentOperationHandoff}) => planAgentOperationHandoff)],
     ["operation.agent_handoff.inbox", lazyHandler(() => import("./work_items/operation_agent_handoff.ts"), ({projectAgentOperationInbox}) => projectAgentOperationInbox)],
     ["scheduler.monitor_successor.plan", lazyHandler(() => import("./scheduler/monitor_successor.ts"), ({planMonitorSuccessor}) => planMonitorSuccessor)],
+    ["scheduler.monitor_batch.plan", lazyHandler(() => import("./scheduler/monitor_batch.ts"), ({planLegacyMonitorBatch}) => planLegacyMonitorBatch)],
     ["scheduler.monitor_target.select", lazyHandler(() => import("./scheduler/monitor_successor.ts"), ({selectMonitorTodoRequest}) => selectMonitorTodoRequest)],
     ["capabilities.issue_fix.monitor_reconciliation.plan", lazyHandler(() => import("./capabilities/issue_fix_monitor_reconciliation.ts"), ({planIssueFixMonitorReconciliation}) => planIssueFixMonitorReconciliation)],
     ["capabilities.pr_review.approval_closeout.plan", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({planPrReviewApprovalCloseout}) => planPrReviewApprovalCloseout)],

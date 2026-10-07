@@ -69,6 +69,7 @@ from .control_plane.todos.completion_transaction import (
     user_todo_completion_metadata_updates,
 )
 from .control_plane.todos import completion_validation as completion_validation_module
+from .control_plane.todos.mutation_response import serialize_added_todo_payload
 from .control_plane.todos.next_action_runtime import apply_added_todo_next_action, settle_completed_todo_next_action
 from .control_plane.todos.list_projection import (
     compact_agent_lane_todo_summary as compact_agent_lane_todo_summary,
@@ -723,51 +724,13 @@ def add_goal_todo(
             write_captured_todo_state(shadow_capture, runtime_root=shadow_runtime_root, goal_id=goal_id,
                 state_path=resolved_state_file, text=new_text)
 
-    payload = {
-        "ok": True,
-        "dry_run": dry_run,
-        "added": added,
-        "already_exists": bool(add_result["already_exists"]),
-        "metadata_updated": metadata_updated,
-        "status_changed": bool(add_result.get("status_changed")),
-        "goal_id": goal_id,
-        "role": role,
-        "section": add_result.get("section"),
-        "todo": todo_text,
-        "todo_id": add_result.get("todo_id"),
-        "status": add_result.get("status"),
-        "task_class": add_result.get("task_class"),
-        "action_kind": add_result.get("action_kind"),
-        "capability_binding_ref": add_result.get("capability_binding_ref"),
-        "task_repository": add_result.get("task_repository"),
-        "continuation_policy": add_result.get("continuation_policy"),
-        "required_write_scopes": add_result.get("required_write_scopes"),
-        "required_capabilities": add_result.get("required_capabilities"),
-        "target_capabilities": add_result.get("target_capabilities"),
-        "explore_result_node_refs": add_result.get("explore_result_node_refs"),
-        "decision_scope": add_result.get("decision_scope"),
-        "required_decision_scopes": add_result.get("required_decision_scopes"),
-        "claimed_by": add_result.get("claimed_by"),
-        "bound_agent": add_result.get("bound_agent"),
-        "goal_bound": add_result.get("goal_bound"),
-        "agent_id": effective_agent_id,
-        "blocks_agent": add_result.get("blocks_agent"),
-        "excluded_agents": add_result.get("excluded_agents"),
-        "global_gate": add_result.get("global_gate"),
-        "unblocks_todo_id": add_result.get("unblocks_todo_id"),
-        "replan_obligation_id": add_result.get("replan_obligation_id"),
-        "resume_when": add_result.get("resume_when"),
-        "target_key": add_result.get("target_key"),
-        "cadence": add_result.get("cadence"),
-        "next_due_at": add_result.get("next_due_at"),
-        "expires_at": add_result.get("expires_at"),
-        "watch_only": add_result.get("watch_only"),
-        "note": add_result.get("note"),
-        "state_file": str(resolved_state_file),
-        "project": str(resolved_project) if resolved_project else None,
-        "updated_at": updated_at if changed else None,
-        **handoff_gate,
-    }
+    payload = serialize_added_todo_payload(
+        add_result=add_result, goal_id=goal_id, role=role, todo_text=todo_text,
+        agent_id=effective_agent_id, state_file=resolved_state_file,
+        project=resolved_project, updated_at=updated_at, dry_run=dry_run,
+        added=added, metadata_updated=metadata_updated, changed=changed,
+        handoff_gate=handoff_gate,
+    )
     payload = _attach_todo_write_correctness_dry_run_packet(
         payload,
         goal_id=goal_id,

@@ -62,7 +62,8 @@ function createReceipt(input: CoordinationTodoCreateInput, requestSha: string) {
     }});
 }
 
-function normalizeCreateInput(rawInput: CoordinationTodoCreateInput): CoordinationTodoCreateInput {
+function normalizeCreateInput(rawInput: CoordinationTodoCreateInput,
+  claimPolicy: "actor_owned" | "registered_peer_handoff" = "actor_owned"): CoordinationTodoCreateInput {
   const todo = canonicalTodoDomainRecord(rawInput.todo, "Todo create record");
   const input = {
     ...rawInput,
@@ -89,7 +90,7 @@ function normalizeCreateInput(rawInput: CoordinationTodoCreateInput): Coordinati
     if (!input.registered_agents.includes(owner)) {
       throw new AuthorityStoreProtocolError("Todo claim owner is not registered");
     }
-    if (input.actor_agent_id !== null && input.actor_agent_id !== owner) {
+    if (input.actor_agent_id !== null && input.actor_agent_id !== owner && claimPolicy !== "registered_peer_handoff") {
       throw new AuthorityStoreProtocolError("claimed Todo create requires actor to match owner");
     }
   }
@@ -107,7 +108,13 @@ function semanticDuplicateResult(
 ): CoordinationTodoCreateResult {
   const ignored = new Set(["schema_version", "todo_id", "created_by", "last_actor_agent_id", "updated_at"]);
   const mismatch = Object.entries(todo).find(([field, value]) =>
-    !ignored.has(field) && canonicalAuthoritySha256(value) !== canonicalAuthoritySha256(duplicate[field])
+    !ignored.has(field) && !(
+      // The legacy Markdown read model omits an empty capabilities list;
+      // public Todo normalization projects the same absence as [].
+      field === "required_capabilities" && Array.isArray(value) && value.length === 0 &&
+      duplicate[field] === undefined
+    ) && (duplicate[field] === undefined ||
+      canonicalAuthoritySha256(value) !== canonicalAuthoritySha256(duplicate[field]))
   );
   if (mismatch !== undefined) {
     return failure(
@@ -154,8 +161,9 @@ export function planCoordinationTodoCreate(
   todos: ReadonlyMap<string, JsonObject>,
   readModelSchema: unknown,
   identity: "role_text" | "operation_lane" = "role_text",
+  claimPolicy: "actor_owned" | "registered_peer_handoff" = "actor_owned",
 ): CoordinationTodoCreateResult {
-  const input = normalizeCreateInput(rawInput);
+  const input = normalizeCreateInput(rawInput, claimPolicy);
   const candidate = createCandidate(input, readModelSchema);
   const duplicate = identity === "role_text" ? [...todos.values()].find((todo) =>
     todo.role === input.todo.role && todo.archive_state === "active" &&
