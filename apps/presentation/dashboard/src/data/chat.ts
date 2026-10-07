@@ -559,7 +559,7 @@ export async function transitionTypedAction(
   ).proposal;
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(chatApiUrl(url), {

@@ -6,6 +6,7 @@ import { useWorkspaceI18n } from "./i18n";
 import { LarkSettingsPage } from "./lark-settings-page";
 import { GoalCapabilitySettings } from "./goal-capability-settings";
 import { GoalOwnershipSettings } from "./goal-ownership-settings";
+import { GoalStorageSettings } from "./goal-storage-settings";
 import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
@@ -221,7 +222,10 @@ export function WorkspaceSettingsPage({
             onChanged={onChanged}
           />
         ) : null}
-        {tab === "ownership" && selectedGoal ? <GoalOwnershipSettings key={selectedGoal.goalId} goalId={selectedGoal.goalId} onChanged={onChanged} /> : null}
+        {tab === "ownership" && selectedGoal ? <div key={selectedGoal.goalId}>
+          <GoalOwnershipSettings goalId={selectedGoal.goalId} onChanged={onChanged} />
+          <GoalStorageSettings goalId={selectedGoal.goalId} onChanged={onChanged} />
+        </div> : null}
         {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
 

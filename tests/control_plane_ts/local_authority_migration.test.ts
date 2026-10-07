@@ -300,3 +300,62 @@ test("Todo metadata survives every historical row, including null, false, empty 
     assert.equal(current.completion_validation_revision, 0);
   }
 });
+
+test("readback separates original completion from current source without replaying", async t => {
+  const root = await fixture(t);
+  const first = await plan(root, "sqlite");
+  assert.equal((await manage(request(root, first))).status, "migrated");
+  await append(root, 3);
+  const current = await manage(request(root, {action: "migration-readback"}));
+  assert.equal((current.current as JsonObject).cursor, "3");
+  const back = await plan(root, "file");
+  assert.equal((await manage(request(root, back))).status, "migrated");
+  const before = await (await selected(root, goal)).store.scanCommitted(null, 10);
+  const read = await manage(request(root, {...first, action: "migration-readback"}));
+  assert.equal(read.ok, true, JSON.stringify(read));
+  assert.equal(read.target_provider, "sqlite");
+  assert.equal((read.recovery as JsonObject).phase, "completed");
+  assert.equal((read.current as JsonObject).provider, "file");
+  assert.deepEqual(await (await selected(root, goal)).store.scanCommitted(null, 10), before);
+  assert.equal((await manage(request(root, {...first, action: "migration-readback", goal_id: "another-goal"}))).ok, false);
+  assert.equal((await manage(request(root, {...first, action: "migration-readback", plan_sha256: "0".repeat(64)}))).ok, false);
+});
+
+test("an active capture blocks cutover even with an empty outbox; pending data stays intact", async t => {
+  const root = await fixture(t);
+  const {bootstrapManagedShadow} = await import("../../loopx/control_plane/coordination/shadow_management.ts");
+  const {mkdir} = await import("node:fs/promises");
+  const capture = await bootstrapManagedShadow({runtime_root: root, goal_id: goal, operation_id: "capture",
+    source_version: "state:1", source_snapshot: {state_path: join(root, "state.md")},
+    projection: {schema_version: "loopx_coordination_shadow_projection_v0", goal_id: goal, todos: [], leases: []}},
+    {withPrimaryLocks: async fn => await fn(), verifySourceSnapshot: async () => {}});
+  assert.equal(capture.status, "applied", JSON.stringify(capture));
+  const file = join(root, "active-capture-plan.json");
+  const denied = await manage(request(root, {action: "plan-migration", provider: "sqlite", plan: file}));
+  assert.equal(denied.ok, false);
+  assert.match(String(denied.reason), /active capture/);
+  const pending = join(root, "authority-shadow", "outbox", goal, "todos");
+  await mkdir(pending, {recursive: true});
+  await writeFile(join(pending, "entry.prepared.json"), "pending source write");
+  const again = await manage(request(root, {action: "plan-migration", provider: "sqlite", plan: file}));
+  assert.equal(again.ok, false);
+  assert.equal(await readFile(join(pending, "entry.prepared.json"), "utf8"), "pending source write");
+  assert.equal((await selected(root, goal)).provider, "file");
+});
+
+test("verified historical completion survives unavailable current provider without adoption", async t => {
+  const root = await fixture(t);
+  const first = await plan(root, "sqlite");
+  assert.equal((await manage(request(root, first))).status, "migrated");
+  const {rename} = await import("node:fs/promises");
+  const paths = localAuthorityProviderPaths(root, goal);
+  await rename(paths.sqlite, paths.sqlite + ".unavailable");
+  assert.equal((await manage(request(root, {action: "migration-readback"}))).ok, false);
+  const read = await manage(request(root, {...first, action: "migration-readback"}));
+  assert.equal(read.ok, true, JSON.stringify(read));
+  assert.equal(read.current, null);
+  assert.equal((read.recovery as JsonObject).phase, "completed");
+  assert.equal(read.execution_authority_granted, false);
+  assert.equal((await manage(request(root, first))).ok, false);
+  await assert.rejects(selected(root, goal));
+});
