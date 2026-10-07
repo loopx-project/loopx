@@ -32,7 +32,8 @@ def test_evidence_readback_pagination_scope_failure_and_recovery(tmp_path, monke
     for index in range(41):
         append_explore_result_event(log, build_explore_finding_event(
             goal_id="evidence-goal", node_id="question", finding_id=f"finding_{index}",
-            title=f"Observation {index}", status="refuted", summary="Counterexample at input revision A",
+            title=f"Observation {index}", status="refuted",
+            summary="Counterexample at input revision A " + "c" * 1700 + "; do not transfer beyond the tested scope.",
             evidence_refs=["artifact:counterexample"], agent_id="worker",
         ))
     from loopx.todos import add_goal_todo, list_goal_todos
@@ -86,6 +87,8 @@ def test_evidence_readback_pagination_scope_failure_and_recovery(tmp_path, monke
         item = page["items"][0]
         assert item["scope"] == "Inputs with a finite prefix"
         assert item["status"] == "refuted"
+        assert len(item["summary"]) > 1200
+        assert item["summary"].endswith("do not transfer beyond the tested scope.")
         assert item["evidence_refs"] == ["artifact:counterexample"]
         assert item["agent_id"] == "worker"
         assert {todo["todo_id"] for todo in item["linked_todos"]} == {linked, "todo_archived"}

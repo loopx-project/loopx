@@ -26,7 +26,6 @@ export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;
 const EXECUTABLE_CLI_ARGS_MAX_ITEMS = 64;
 const EXECUTABLE_CLI_ARGS_MAX_ITEM_CHARS = 512;
 const EXECUTABLE_CLI_ARGS_MAX_TOTAL_CHARS = 2_048;
-const SCHEDULER_DETAIL_REQUEST = "loopx quota should-run --include-detail scheduler";
 const PROTOCOL_ACTION_PACKET_LLM_POLICY = "no_api";
 const PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref";
 
@@ -401,6 +400,9 @@ function scheduler(payload: JsonObject, turn: ReturnType<typeof interpretQuotaSh
     ? appAutomation
     : legacyCodexApp;
   if (Object.keys(sourceApp).length === 0) return result;
+  const sourceRef = Object.keys(appAutomation).length > 0
+    ? "full_decision.scheduler_hint.app_automation"
+    : "full_decision.scheduler_hint.codex_app";
   const app: JsonObject = {};
   for (const field of [
     "host_surface", "apply", "host_action", "recommended_rrule",
@@ -429,15 +431,17 @@ function scheduler(payload: JsonObject, turn: ReturnType<typeof interpretQuotaSh
   if (cliArgs.length > 0) {
     app.ack_cli_args = cliArgs;
   } else if (ack.cli_args) {
+    // Resolve omitted executable data from the same captured observation.
+    // A fresh quota call can select a different Goal/Agent/Turn or create a receipt.
     app.ack_cli_args_detail_ref = {
       reason: "omitted_to_preserve_executable_argv",
-      request: SCHEDULER_DETAIL_REQUEST,
+      detail_ref: `${sourceRef}.ack_hint.cli_args`,
     };
   }
   if (object(sourceApp.failure_hint).cli_args) {
     app.failure_cli_args_detail_ref = {
       reason: "cold_path_until_host_update_failure",
-      request: SCHEDULER_DETAIL_REQUEST,
+      detail_ref: `${sourceRef}.failure_hint.cli_args`,
     };
   }
   if (Object.keys(app).length > 0) {

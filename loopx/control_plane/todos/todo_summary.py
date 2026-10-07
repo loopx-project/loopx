@@ -840,9 +840,6 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
     # the same full-source hashes/semantics before using any summary fact,
     # avoiding a separate RPC for every role/filter (including empty roles).
     succession = succession_evaluations(items)
-    handoff_gates = build_todo_handoff_gate_states(items, evaluations=succession)
-    replan_gates = {gate.get("todo_id") for gate in handoff_gates
-        if gate.get("route_continuation_replan_required") is True}
     rows = []
     for item, evaluation in zip(items, succession, strict=True):
         resume = normalize_todo_resume_when(item.get("resume_when"))
@@ -864,7 +861,7 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
             "linked_user_action": bool(normalize_todo_id(item.get("unblocks_todo_id"))),
             "no_followup": normalize_todo_no_followup(item.get("no_followup")) is True,
             "successor_gap": evaluation["successor_gap"], "handoff_state": evaluation["handoff_state"],
-            "replan": item.get("route_continuation_replan_required") is True or item.get("todo_id") in replan_gates,
+            "replan": evaluation["route_continuation_replan_required"],
             **{"todo_id": normalize_todo_id(item.get("todo_id")),
                 "claim": normalize_todo_claimed_by(item.get("claimed_by")),
                 "bound": normalize_todo_bound_agent(item.get("bound_agent")),

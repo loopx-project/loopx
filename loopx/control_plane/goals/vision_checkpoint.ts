@@ -400,7 +400,9 @@ function normalizeAdvancementPolicy(value: unknown): string {
   return candidate;
 }
 
-function normalizeGoalPathDelta(
+// Reuse the same authoring rule when an optional capability references this
+// explicit packet; callers never recreate its validation or state vocabulary.
+export function normalizeGoalPathDelta(
   value: unknown,
 ): [JsonObject | null, Record<string, number>] {
   if (value === null || value === undefined) return [null, {}];

@@ -12,7 +12,6 @@ from .contract import (
 from .quota_selection import project_quota_planning
 from .frontier_deadline import todo_summary_frontier_deadline
 from .todo_semantics import (
-    todo_item_is_watch_only_monitor,
     todo_item_task_class,
     todo_presentation_sort_key,
     todo_summary_monitor_schedule_gap_items,
@@ -192,146 +191,6 @@ class _QuotaTodoLanes:
     open_count: Any
 
 
-def _strict_non_negative_int(value: Any) -> int | None:
-    if type(value) is not int or value < 0:
-        return None
-    return value
-
-
-def _terminal_closure_proof_is_valid(
-    value: dict[str, Any],
-    *,
-    counts: dict[str, int | None],
-    source_proof: dict[str, Any],
-) -> bool:
-    proof = value.get("terminal_closure_proof")
-    items = value.get("items")
-    total_count = counts["total_count"]
-    displayed_items_cover_source = bool(
-        isinstance(total_count, int)
-        and (
-            (total_count == 0 and items == [])
-            or (
-                total_count > 0
-                and isinstance(items, list)
-                and 0 < len(items) <= total_count
-            )
-        )
-    )
-    return bool(
-        value.get("schema_version") == "todo_summary_v0"
-        and isinstance(items, list)
-        and displayed_items_cover_source
-        and all(
-            isinstance(item, dict)
-            and (
-                (item.get("status") == "done" and item.get("done") is True)
-                or (
-                    todo_item_is_watch_only_monitor(item)
-                )
-            )
-            and item.get("route_continuation_replan_required") is not True
-            for item in items
-        )
-        and all(
-            isinstance(item, dict)
-            and todo_item_is_watch_only_monitor(item)
-            for item in (value.get("monitor_open_items") or [])
-        )
-        and value.get("deferred_items") == []
-        and value.get("deferred_resume_candidates") == []
-        and _strict_non_negative_int(
-            value.get("convergence_open_count", value.get("open_count"))
-        ) == 0
-        and _strict_non_negative_int(value.get("completed_without_successor_count", 0)) == 0
-        and _strict_non_negative_int(value.get("route_continuation_replan_count", 0)) == 0
-        and isinstance(proof, dict)
-        and proof.get("schema_version") == "todo_terminal_closure_proof_v0"
-        and proof.get("role") == source_proof.get("role")
-        and proof.get("source_section") == value.get("source_section")
-        and proof.get("item_count") == total_count
-        and (
-            proof.get("all_todos_done") is True
-            or proof.get("all_convergent_todos_done") is True
-        )
-        and _strict_non_negative_int(proof.get("monitor_open_count"))
-        == _strict_non_negative_int(proof.get("watch_only_monitor_count", 0))
-        and _strict_non_negative_int(proof.get("successor_gap_count")) == 0
-        and _strict_non_negative_int(proof.get("route_replan_count")) == 0
-        and _strict_non_negative_int(proof.get("no_followup_count")) is not None
-        and proof.get("derived") is True
-    )
-
-
-def validate_todo_source_contract(
-    value: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    proof = value.get("source_proof")
-    counts = {
-        key: _strict_non_negative_int(value.get(key))
-        for key in ("total_count", "open_count", "done_count", "deferred_count")
-    }
-    total_count = counts["total_count"]
-    open_count = counts["open_count"]
-    done_count = counts["done_count"]
-    deferred_count = counts["deferred_count"]
-    valid_counts = (
-        total_count is not None
-        and open_count is not None
-        and done_count is not None
-        and deferred_count is not None
-        and total_count == open_count + done_count + deferred_count
-    )
-    valid_proof = bool(
-        isinstance(proof, dict)
-        and proof.get("schema_version") == "todo_source_proof_v0"
-        and proof.get("role") in {"user", "agent"}
-        and proof.get("derived") is True
-        and bool(str(value.get("source_section") or "").strip())
-        and type(proof.get("item_count")) is int
-        and proof.get("item_count") == total_count
-    )
-    valid_terminal_closure = bool(
-        valid_counts
-        and valid_proof
-        and isinstance(proof, dict)
-        and _terminal_closure_proof_is_valid(
-            value,
-            counts=counts,
-            source_proof=proof,
-        )
-    )
-    completeness = {
-        "schema_version": "todo_source_completeness_v0",
-        "status": "valid" if valid_terminal_closure else "invalid",
-        "source": "structured_todo_projection",
-        "role": proof.get("role") if isinstance(proof, dict) else None,
-        "terminal_closure": "valid" if valid_terminal_closure else "invalid",
-    }
-
-    intent = value.get("closure_intent")
-    terminal_proof = value.get("terminal_closure_proof")
-    intent_count = intent.get("count") if isinstance(intent, dict) else None
-    valid_intent = bool(
-        valid_terminal_closure
-        and isinstance(intent, dict)
-        and intent.get("schema_version") == "todo_closure_intent_v0"
-        and intent.get("kind") == "no_followup"
-        and intent.get("derived") is True
-        and type(intent_count) is int
-        and done_count is not None
-        and 0 < intent_count <= done_count
-        and isinstance(terminal_proof, dict)
-        and intent_count == terminal_proof.get("no_followup_count")
-    )
-    closure_intent = (
-        {**intent, "source": "todo_no_followup"}
-        if valid_intent and isinstance(intent, dict)
-        else None
-    )
-    return completeness, closure_intent
-
-
 def summarize_user_todos_for_quota(
     value: Any,
     *,
@@ -342,7 +201,6 @@ def summarize_user_todos_for_quota(
 ) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    source_completeness, closure_intent = validate_todo_source_contract(value)
     all_open_items = sorted(
         todo_summary_source_items(value),
         key=todo_presentation_sort_key,
@@ -397,7 +255,7 @@ def summarize_user_todos_for_quota(
         "work_counts": planning["work_counts"],
         "done_count": value.get("done_count"),
         "deferred_count": value.get("deferred_count"),
-        "source_completeness": source_completeness,
+        "source_completeness": planning["source_completeness"],
         "first_open_items": lanes.display_open_items[:3],
         "first_executable_items": lanes.executable_items[:3],
         "gate_open_items": gate_items[:3],
@@ -447,8 +305,8 @@ def summarize_user_todos_for_quota(
         summary["current_agent_blocker_items"] = current_agent_blocker_items[
             :QUOTA_PAYLOAD_DIAGNOSTIC_LANE_LIMIT
         ]
-    if closure_intent:
-        summary["closure_intent"] = closure_intent
+    if planning["closure_intent"]:
+        summary["closure_intent"] = planning["closure_intent"]
     monitor_writeback = todo_summary_monitor_writeback_contract(value)
     if monitor_writeback:
         summary["monitor_writeback"] = monitor_writeback

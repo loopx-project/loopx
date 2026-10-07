@@ -711,7 +711,7 @@ def test_turn_envelope_omits_oversized_scheduler_argv_instead_of_truncating() ->
     assert "ack_cli_args" not in codex_app
     assert codex_app["ack_cli_args_detail_ref"] == {
         "reason": "omitted_to_preserve_executable_argv",
-        "request": "loopx quota should-run --include-detail scheduler",
+        "detail_ref": "full_decision.scheduler_hint.codex_app.ack_hint.cli_args",
     }
 
 
@@ -820,7 +820,7 @@ def test_turn_envelope_stays_actionable_during_scheduler_reset() -> None:
     assert "failure_cli_args" not in compact_app
     assert compact_app["failure_cli_args_detail_ref"] == {
         "reason": "cold_path_until_host_update_failure",
-        "request": "loopx quota should-run --include-detail scheduler",
+        "detail_ref": "full_decision.scheduler_hint.codex_app.failure_hint.cli_args",
     }
     assert envelope["action_signature"]["matches"] is True
     assert envelope["compaction"]["within_budget"] is True

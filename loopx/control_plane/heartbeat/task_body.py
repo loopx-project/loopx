@@ -741,13 +741,26 @@ def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
         f"- agent_model: `{payload.get('agent_model')}`",
         f"- agent_role: `{payload.get('agent_role')}`",
     ]
+    lines.append(f"- agent_scopes: `{payload.get('agent_scopes')}`")
+    if payload.get("thin") is True:
+        lines.append(
+            f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`"
+        )
+    elif payload.get("brief") is True:
+        lines.append(
+            f"- brief_prompt_command: `{payload.get('brief_prompt_command')}`"
+        )
+    else:
+        lines.extend(
+            [
+                f"- expanded_prompt_command: `{payload.get('expanded_prompt_command')}`",
+                f"- compact_prompt_command: `{payload.get('compact_prompt_command')}`",
+                f"- brief_prompt_command: `{payload.get('brief_prompt_command')}`",
+                f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`",
+            ]
+        )
     lines.extend(
         [
-            f"- agent_scopes: `{payload.get('agent_scopes')}`",
-            f"- expanded_prompt_command: `{payload.get('expanded_prompt_command')}`",
-            f"- compact_prompt_command: `{payload.get('compact_prompt_command')}`",
-            f"- brief_prompt_command: `{payload.get('brief_prompt_command')}`",
-            f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`",
             "- pr_review_pre_quota_command: "
             f"`{payload.get('pr_review_pre_quota_command')}`",
             f"- quota_guard_command: `{payload.get('quota_guard_command')}`",

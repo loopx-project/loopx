@@ -170,6 +170,29 @@ A source already marked partial cannot regain `source_proof` or
 rows. Query scope and source completeness are independent conditions. These
 proofs remain read-only observations, not permission to settle a Goal.
 
+Route-replan facts now participate in the same full-source succession evidence.
+Changing a typed route flag or a historical handoff label after evaluation
+rejects filtered readback; it cannot reuse the old evidence to change a closure
+obligation. An explicit boolean, including `false`, takes precedence. The
+historical “stale handoff closeout” prose hint remains a bounded compatibility
+advisory in the TS succession owner, never gate clearance, successor evidence
+or execution permission. Supported old writers and their migration readers
+remain intact; retiring this Python decision does not force a Goal upgrade.
+
+Quota validates retained closure witnesses through the existing
+`todo.quota_planning.project` batch, alongside selection and resume planning.
+The TS succession owner now validates the source and terminal proofs as well as
+producing them; Python transports compact source facts and materializes fields.
+The internal request is versioned to v2; v0/v1 readers retain their wire behavior.
+No extra RPC, provider setting or persisted schema is added.
+
+**Closure read correction:** boolean, null, string, fractional and negative
+counts cannot certify terminal closure. Equal malformed Monitor counts are
+invalid evidence, not proof that the two counts agree. Invalid evidence clears
+the derived no-followup intent instead of suppressing quota work. Genuine empty
+sources, complete proofs with bounded displays and watch-only Monitor closure
+remain supported. This does not itself complete or settle a Goal.
+
 This changes status, Todo-list and quota summary readback for both legacy and
 promoted Goals without a flag. Existing frontend and Lark views consume these
 Core projections; no new setting or frontend asset is required. No provider,
@@ -187,6 +210,17 @@ Python 继续负责旧数据解码、公开字段筛选、隐私处理与文本�
 微秒，不再把较晚编辑误作较晚完成。缺失／非法时间仍计入已完成总数和历史，但不进入
 最近完成列表。后继缺口警告仍按最后更新时间排序，未知时间靠后，不丢弃警告。
 已有 partial 来源不会因为再次筛选命中所有可见行，就重新获得整个来源的收尾证明。
+route-replan 的类型化标记及旧 handoff 文本提示现在绑定同一份完整来源证据；求值后
+修改这些事实，筛选读取会拒绝旧证据。显式 `false` 优先于旧提示，提示仍只是重规划
+建议，不能解除 gate、证明后继或授予执行权。此次只退役 Python 重复决策，不删除
+仍有调用方的旧 writer／迁移 reader，也不强制升级既有 Goal。
+
+quota 在原有 `todo.quota_planning.project` 批次中同时验证来源／收尾证明，不再由
+Python 独立判断。TS succession owner 负责生成和验证；Python 只传紧凑事实并还原展示。
+内部请求升级为 v2，保留 v0/v1 兼容。布尔、null、字符串、小数和负数不能充当计数，
+两个非法 Monitor 计数相同也不构成证明；非法证明不再产生 no-followup 停止意图。
+合法空来源、有界展示保留的完整来源证明及 watch-only Monitor 收尾保持原行为。
+没有新增 RPC、设置或持久化格式，这条读取规则本身不能完成或结算 Goal。
 
 覆盖 legacy 与 canonical 的 status、Todo 查询和 quota 摘要；展示预算保持原值。
 没有新增设置、权限或 writer，不改变 provider 默认值，也不宣称完成整 Goal 迁移。

@@ -1810,19 +1810,28 @@ def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
 
     assert exit_code == 0, text
     payload = json.loads(text)
-    command_prefix = f"loopx --runtime-root {runtime}"
     cli_channel = payload["interaction_contract"]["cli_channel"]
+
+    def assert_selected_runtime_root(command: str) -> None:
+        argv = shlex.split(command)
+        assert argv[0] == "loopx"
+        assert "--runtime-root" in argv
+        assert argv[argv.index("--runtime-root") + 1] == str(runtime)
+        assert "--registry" in argv
+        assert argv[argv.index("--registry") + 1] == str(registry_path)
+
     assert cli_channel["next_cli_actions"]
-    assert all(
-        action.startswith(command_prefix)
-        for action in cli_channel["next_cli_actions"]
-    )
+    for action in cli_channel["next_cli_actions"]:
+        assert_selected_runtime_root(action)
     settlement_plan = cli_channel["settlement_plan"]
-    assert all(
-        step["command_template"].startswith(command_prefix)
+    settlement_commands = [
+        step["command_template"]
         for step in settlement_plan["ordered_steps"]
         if "command_template" in step
-    )
+    ]
+    assert settlement_commands
+    for command in settlement_commands:
+        assert_selected_runtime_root(command)
 
 
 def test_first_class_runtime_profiles_fit_thin_prompt_budget_and_cli_round_trip(

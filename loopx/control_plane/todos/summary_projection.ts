@@ -68,7 +68,8 @@ function validateSummarySuccession(request: JsonObject, rows: readonly JsonObjec
     const evaluation = Object.fromEntries(SUCCESSION_EVALUATION_COLUMNS.map((name, column) => [name, evaluations[index][column]]));
     if (row.todo_id !== fact.todo_id || row.status !== fact.status || row.no_followup !== fact.no_followup ||
         (row.task_class === "advancement_task") !== fact.advancement ||
-        row.successor_gap !== evaluation.successor_gap || row.handoff_state !== evaluation.handoff_state) {
+        row.successor_gap !== evaluation.successor_gap || row.handoff_state !== evaluation.handoff_state ||
+        row.replan !== evaluation.route_continuation_replan_required) {
       throw new EffectRuntimeRequestError("summary facts disagree with validated succession evidence");
     }
   }

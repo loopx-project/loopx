@@ -115,7 +115,9 @@ def build_frontier_recheck_plan(
     if not deadlines:
         return None
 
-    selected = min(deadlines, key=lambda item: item["next_due_at"])
+    # Projected deadlines retain their original ISO spelling. Agent/User
+    # summaries can use different offsets, so compare actual instants.
+    selected = min(deadlines, key=lambda item: parse_timestamp(item["next_due_at"]))
     next_due_at = parse_timestamp(selected["next_due_at"])
     if next_due_at is None:
         return None

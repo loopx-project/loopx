@@ -11,18 +11,25 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...history import load_registry
+from ...file_lock import (
+    LockAcquireTimeoutError, cross_runtime_lock_witness, exclusive_cross_runtime_file_lock,
+)
 from ...registry import find_registry_goal
 from ...state_refresh import now_local
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.public_safety import validate_public_safe_value
 from ..coordination.local_authority import read_canonical_todos_if_promoted
 from ..coordination.local_authority_shadow_adapter import effective_runtime_root
-from ..coordination.legacy_writer_fence import legacy_todo_write_transaction
+from ..coordination.legacy_writer_fence import (
+    legacy_coordination_todo_lock_path, legacy_todo_write_transaction,
+)
+from ..coordination.shadow_management import shadow_maintenance_lock_target
 from ..coordination.runtime_shadow_writer_adapter import (
     begin_todo_runtime_shadow_capture, write_captured_todo_state,
     settle_todo_runtime_shadow_capture,
@@ -137,20 +144,34 @@ def apply_team_plan(
     validate_public_safe_value(dict(proposal), path="team_plan")
     registry_path = Path(registry_path).expanduser()
     runtime = effective_runtime_root(registry_path, None)
-    goal = find_registry_goal(load_registry(registry_path), goal_id)
-    if goal is None:
+    if find_registry_goal(load_registry(registry_path), goal_id) is None:
         raise ValueError("steward team plan proposal names an unknown Goal")
     project, state = resolve_todo_state_path(registry_path=registry_path, goal_id=goal_id)
     request = {
         "goal_id": goal_id, "plan": dict(proposal),
         "actor_agent_id": agent_id,
-        "registered_agents": registered_agent_ids_for_goal(goal),
         "supported_action_kinds": sorted(TODO_ACTION_KIND_ADVANCEMENT_VALUES),
         "observed_at": now_local(),
         "expected_state_fingerprint": expected_state_fingerprint,
-        "intent_basis": steward_team_plan_intent_basis(
-            goal_id=goal_id, goal=goal, registry_path=registry_path, plan=proposal),
     }
+
+    def read_source_request() -> None:
+        # Called under the registry and state locks, including on the legacy
+        # path. A registry rebind while acquiring the guards must not redirect
+        # the operation to an unguarded source or provider.
+        goal = find_registry_goal(load_registry(registry_path), goal_id)
+        if goal is None:
+            raise ValueError("steward team plan proposal names an unknown Goal")
+        _, current_state = resolve_todo_state_path(registry_path=registry_path, goal_id=goal_id)
+        if (effective_runtime_root(registry_path, None).resolve() != runtime.resolve()
+                or current_state.resolve() != state.resolve()):
+            raise TeamPlanCommitError("team_plan_preview_stale", "team plan source binding changed after preview")
+        request.update(
+            registered_agents=registered_agent_ids_for_goal(goal),
+            intent_basis=steward_team_plan_intent_basis(
+                goal_id=goal_id, goal=goal, registry_path=registry_path, plan=proposal),
+        )
+
     identity = effect_runtime_result("work_items.team_plan.identity", request)
     marker = f"<!-- loopx:team-plan:{identity['operation_id'].split(':')[1]} "
 
@@ -164,17 +185,40 @@ def apply_team_plan(
 
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
     if canonical is not None:
-        # Receipts created before promotion remain immutable historical facts.
-        # Read only; never fall back to a legacy writer for a promoted goal.
-        previous = previous_receipt(state.read_text(encoding="utf-8"))
-        if previous is not None:
-            return dict(effect_runtime_result("work_items.team_plan.plan", {
-                **request, "previous_receipt": previous})["result"])
-        response = effect_runtime_result("work_items.team_plan.commit", {
-            **request, "runtime_root": str(runtime.resolve()),
-            "expected_provider_revision": canonical["provider_revision"],
-            "current_state_fingerprint": read_fingerprint() if read_fingerprint else None,
-        })
+        targets = (
+            shadow_maintenance_lock_target(runtime, goal_id),
+            legacy_coordination_todo_lock_path(runtime_root=runtime, goal_id=goal_id),
+            state, registry_path,
+        )
+        with ExitStack() as guards:
+            for target in targets[:-1]:
+                guards.enter_context(exclusive_cross_runtime_file_lock(target, operation="team_plan_commit"))
+            try:
+                # Registry administration can hold R before T/S. Like promotion,
+                # never wait for R while holding source locks in reverse order.
+                guards.enter_context(exclusive_cross_runtime_file_lock(
+                    registry_path, operation="team_plan_commit", timeout_seconds=0))
+            except LockAcquireTimeoutError:
+                raise TeamPlanCommitError("team_plan_commit_failed",
+                    "team plan registry is busy; retry the original confirmation") from None
+            read_source_request()
+            # Pre-promotion receipts remain historical facts; never fall back
+            # to a legacy writer for a promoted Goal.
+            previous = previous_receipt(state.read_text(encoding="utf-8"))
+            if previous is not None:
+                return dict(effect_runtime_result("work_items.team_plan.plan", {
+                    **request, "previous_receipt": previous})["result"])
+            response = effect_runtime_result("work_items.team_plan.commit", {
+                **request, "runtime_root": str(runtime.resolve()),
+                "expected_provider_revision": canonical["provider_revision"],
+                "current_state_fingerprint": read_fingerprint() if read_fingerprint else None,
+                "source": {
+                    "registry": str(registry_path.resolve()), "state_file": str(state.resolve()),
+                    "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest(),
+                    "state_sha256": hashlib.sha256(state.read_bytes()).hexdigest(),
+                },
+                "locks": [cross_runtime_lock_witness(target) for target in targets],
+            })
         if response.get("status") not in {"applied", "recovered", "replayed", "no_change"}:
             raise TeamPlanCommitError(str(response.get("reason_code") or "team_plan_commit_failed"),
                 str(response.get("reason") or "team plan commit could not be verified"),
@@ -187,8 +231,10 @@ def apply_team_plan(
         result["projection_delivery"] = projected.get("projection_delivery")
         return result
 
-    with legacy_todo_write_transaction(registry_path, goal_id, state, agent_id,
+    with exclusive_cross_runtime_file_lock(registry_path, operation="team_plan_commit"), \
+            legacy_todo_write_transaction(registry_path, goal_id, state, agent_id,
             "todo_add", False, runtime_root=runtime):
+        read_source_request()
         original = state.read_text(encoding="utf-8")
         previous = previous_receipt(original)
         existing = [metadata for line in original.splitlines()

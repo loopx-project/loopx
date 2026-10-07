@@ -9,6 +9,7 @@ import { missingRequiredCapabilities } from "../agents/capability_gate.ts";
 import {claimedAdvancementCountFromIndex} from "./frontier_revision.ts";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import type {HandoffState} from "./succession.ts";
+import {validateTodoClosureSource} from "./succession.ts";
 
 interface Row {
   payload: JsonObject; display: JsonObject; claim: string | null;
@@ -268,7 +269,8 @@ function handoffGateLanes(value: unknown, agent: string | null, limit: number): 
   return result;
 }
 
-/** One quota read boundary composes scope/claim selection, resume and hint visibility. */
+/** One quota read boundary composes scope/claim selection, resume, hint
+ * visibility and the typed source closure rules. */
 export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "quota planning");
   if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1", "todo_quota_planning_request_v2"].includes(String(request.schema_version))) throw new EffectRuntimeRequestError("quota planning schema mismatch");
@@ -276,8 +278,10 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
     requireStringArray(requireJsonObject(request.selection, "selection").available, "available");
   }
   const selection = requireJsonObject(request.selection, "selection");
+  const closure = request.schema_version === "todo_quota_planning_request_v2"
+    ? validateTodoClosureSource(request.source_contract) : {};
   return {schema_version: "todo_quota_planning_v0", resume_planning: projectTodoResumePlanning(request.resume),
-    ...projectQuotaSelection(selection),
+    ...projectQuotaSelection(selection), ...closure,
     ...(request.schema_version === "todo_quota_planning_request_v2" ? {handoff_lanes:
       handoffGateLanes(request.handoff_items, optionalNonEmptyString(selection.agent_id, "agent_id"),
         requireInteger(selection.backlog_limit, "backlog_limit")), route_lanes:

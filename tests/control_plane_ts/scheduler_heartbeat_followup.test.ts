@@ -324,6 +324,42 @@ test("another Agent receipt cannot supersede ACK or host-failure writeback", asy
   assert.equal(failed.failure_count, 1);
 });
 
+test("a successful identity-less quota guard supersedes an older host receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: scope.agent_id,
+    status: "normal_run",
+    details: { ok: true, should_run: true },
+  })}\n`, { flag: "a" });
+
+  const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
+  assert.equal(stale.scheduler_state_mutated, false);
+  assert.equal(stale.write_performed, false);
+  assert.equal(stale.appended, false);
+});
+
+test("an identity-less quota guard from another Agent does not supersede a receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: "other-agent",
+    status: "normal_run",
+    details: { ok: true, should_run: true },
+  })}\n`, { flag: "a" });
+
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(acknowledged.ok, true);
+  assert.equal((acknowledged.scheduler_commit as Record<string, unknown>).status, "written");
+});
+
 test("a quota audit cannot manufacture a missing heartbeat receipt", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const path = receiptPath(runtimeRoot);

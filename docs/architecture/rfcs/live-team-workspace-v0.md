@@ -416,6 +416,24 @@ only when it clarifies these transitions;
 remove effects that obscure absent execution, absent acceptance or source loss.
 Broader semantic zoom, extra actors and renderer experiments follow this exit.
 
+Evidence feedback retains its original submission identity, text and observed
+versions in tab-local recovery state before inbox dispatch. Following a linked
+report or reloading restores that attempt without sending it; an explicit retry
+uses the same envelope even when the current artifact read becomes unavailable.
+The existing inbox still owns admission and deduplication. A current receipt is
+shown as pending read or delivered, never applied; another feedback intent is
+available only after the prior delivery is confirmed. Unavailable or malformed
+recovery storage prevents a fresh dispatch instead of silently losing its retry
+identity. This affects the packaged evidence reader; CLI and Lark effect rules
+are unchanged. The packaged recovery smoke uses synthetic team evidence and the
+production HTTP/inbox store to prove one durable input after acknowledgement
+loss, navigation, reload and retry, plus paused-coordinator refusal. It does not
+qualify an independent verifier, live adoption or installed native behavior.
+
+Public-safe fixture views: [unconfirmed feedback on desktop](../../reference/images/team-feedback-recovery/unconfirmed-desktop.png)
+and [reconciled feedback at 390px](../../reference/images/team-feedback-recovery/recovered-mobile.png).
+These show synthetic report content and the packaged reader, not a live team.
+
 ### Qualification matrix
 
 | ID | Required evidence | Passing result / exclusion |

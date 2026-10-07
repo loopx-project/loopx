@@ -158,6 +158,9 @@ class _EvaluatedTodo(dict[str, Any]):
 
 def succession_facts(item: dict[str, Any]) -> dict[str, Any]:
     resume = normalize_todo_resume_when(item.get("resume_when")) or ""
+    handoff = bool(normalize_todo_excluded_agents(item.get("excluded_agents"))) \
+        and bool(normalize_todo_id(item.get("unblocks_todo_id")))
+    route_flag = item.get("route_continuation_replan_required")
     return {
         "todo_id": normalize_todo_id(item.get("todo_id")),
         "status": normalize_todo_status(item.get("status")) or ("done" if item.get("done") else "open"),
@@ -169,8 +172,15 @@ def succession_facts(item: dict[str, Any]) -> dict[str, Any]:
         "superseded_by": normalize_todo_id(item.get("superseded_by")),
         "unblocks": normalize_todo_id(item.get("unblocks_todo_id")),
         "resumes": normalize_todo_id(resume.partition(":")[2]) if resume.startswith("todo_done:") else None,
-        "handoff": bool(normalize_todo_excluded_agents(item.get("excluded_agents")))
-            and bool(normalize_todo_id(item.get("unblocks_todo_id"))),
+        "handoff": handoff,
+        "done": item.get("done") is True,
+        "route_flag": route_flag if isinstance(route_flag, bool) else None,
+        # Carry prose only for historical handoff rows without a typed flag.
+        # The existing TS owner decides whether it is a replan advisory.
+        "legacy_route_label": " ".join(str(item.get(key) or "")
+            for key in ("action_kind", "title", "text")
+            if str(item.get(key) or "").strip())
+            if handoff and not isinstance(route_flag, bool) else "",
         "context_fields": sorted(key for key, value in item.items()
             if value is not None and key != "succession_evaluation"),
     }
