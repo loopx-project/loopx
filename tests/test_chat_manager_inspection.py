@@ -223,6 +223,65 @@ def test_exact_todo_retains_existing_encoded_row_budget(monkeypatch, tmp_path):
     assert 'x' * 25000 not in json.dumps(result)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_attention_reference_recovers_canonical_long_todo(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.chat_manager_context import manager_turn_context
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    full_text = "[P0] Compare the evidence. " + "背景😀。" * 180 + "Only publish after owner acceptance."
+    full_note = "Original constraints. " * 50 + "Keep the original audience."
+    created = add_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+        role="user", text=full_text, note=full_note, task_class="user_gate",
+        operation_id="long-owner-request-fixture",
+    )
+    assert created["ok"], created
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    todo_id = before["todos"][0]["todo_id"]
+    native = details.list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a", todo_id=todo_id,
+    )
+    assert native["authority_read"]["decision_read_from_provider"] is True
+    assert native["authority_read"]["legacy_fallback_used"] is False
+    assert native["todos"][0]["text"] == full_text
+    # The native read also supplies a derived summary; exact inspection must not prefer it.
+    assert native["todos"][0]["title"] != full_text
+    grants = {"current": True}
+    for channel in ("manager", "goal.goal-a"):
+        context = manager_turn_context(
+            registry, {"channel_id": channel, "goal_id": "goal-a"}, runtime, include_details=False,
+        )
+        item = manager_index(context)["goals"][0]["attention"]["items"][0]
+        assert item["details_omitted"] is True
+        reference = item["read_reference"]
+        assert reference == {"view": "todos", "goal_id": "goal-a", "todo_id": todo_id}
+        records = []
+        tool = ManagerInspection(
+            context=context, registry_path=registry, runtime_root=runtime, owner_scope=True,
+            scope_valid=lambda: grants["current"], record=records.append,
+        )
+        result = tool.read(TOOL_NAME, reference)
+        assert result["ok"] is True and result["matched"] == 1
+        assert result["rows"][0]["title"] == full_text
+        assert result["rows"][0]["continuation"] == full_note
+        assert result["rows"][0]["content_truncated"] is False
+        tool.owner_scope = False
+        external = tool.read(CONTEXT_TOOL_NAME, reference)
+        assert external["rows"][0]["title"] == full_text
+        assert "continuation" not in external["rows"][0]
+        grants["current"] = False
+        assert tool.read(TOOL_NAME, reference)["error"] == "authorization_changed"
+        assert len(records) == 2
+        grants["current"] = True
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+
+
 def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
     tool, records = inspector(tmp_path)
     result = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "alpha"})

@@ -42,7 +42,8 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
       truncated = true;
       return characters.slice(0, cap - 3).join("") + "...";
     };
-    row.title = text(record.title || record.text, 420);
+    // Native exact reads restore text; title may still be a derived summary.
+    row.title = text(exact ? record.text || record.title : record.title || record.text, 420);
     if (owner) row.continuation = text(record.note || record.continuation_hint, 280);
     row.content_truncated = truncated;
     return row;
