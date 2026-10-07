@@ -387,8 +387,9 @@ private statements or source quotes.
 The command reads all current scoped entries, including retired/expired markers,
 instead of relying on embedding or keyword ranking to find a prohibition.
 
-The managed `/loopx` instructions teach the host to persist explicit corrections,
-read them back, and re-read before a preference-dependent external action.
+The [participating hook](#preference-guidance-belongs-to-the-participating-hook)
+delivers `current.instructions` that teach the host to persist explicit
+corrections, read them back, and re-read before a preference-dependent external action.
 A new user instruction overrides old context immediately, including while a
 write is being recovered. An unreadable store is unavailable, not empty. The shared Turn capsule signs
 failed/partial/unavailable hook observations and carries them into the execution
