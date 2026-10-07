@@ -6,6 +6,10 @@ patterns, not published chat transcripts. Setup and failure injections are
 constructed fixtures. No private conversations, organization projects, account
 identifiers or live operating state belong in this pack.
 
+The peer [community assistant pack](../community/golden-queries.md) covers public
+project questions and contributions under a narrower audience/workspace grant;
+it does not inherit this owner's portfolio or delegation authority.
+
 The product objective is simple: say what you need, let LoopX find or establish
 the right execution path, change direction when needed, and receive a useful
 result. Creation, connection, collaboration and presentation are all part of
