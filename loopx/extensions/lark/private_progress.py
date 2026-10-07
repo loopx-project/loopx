@@ -42,9 +42,13 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str
                 # Older adapters emit only this fixed vocabulary, without steps.
                 label = {"Agent 正在思考": "正在思考", "Agent 正在执行命令": "正在执行命令", "Agent 正在调用工具": "正在调用工具",
                          "Agent 正在检索": "正在检索资料", "Agent 正在修改文件": "正在修改文件",
-                         "Agent 正在生成回答": "正在生成回答"}.get(payload.get("label"))
+                         "Agent 正在生成回答": "正在生成回答",
+                         "Agent 正在压缩会话上下文": "正在压缩会话上下文"}.get(payload.get("label"))
                 if label:
                     state["label"] = label
+            elif (payload.get("method") == "item/completed"
+                  and payload.get("label") == "Agent 会话上下文压缩已结束"):
+                state["label"] = "会话上下文压缩已结束，继续处理"
     if not state.get("label") and not state.get("answer"):
         return None
     header = f"⏳ **{state.get('label') or '正在处理'}**"

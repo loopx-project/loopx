@@ -188,6 +188,7 @@ def test_codex_chat_app_server_stdio_uses_utf8(
         ({"type": "agentMessage"}, "Agent 正在生成回答"),
         ({"type": "commandExecution"}, "Agent 正在执行命令"),
         ({"type": "reasoning"}, "Agent 正在思考"),
+        ({"type": "contextCompaction"}, "Agent 正在压缩会话上下文"),
         ({"type": "mcpToolCall"}, "Agent 正在调用工具"),
         ({"type": "futureItem", "text": "private-fixture-content"}, "Agent 正在处理"),
         ({}, "Agent 正在处理"),
@@ -230,7 +231,10 @@ def test_turn_activity_does_not_invent_goal_reads_or_successful_checks(
     phases = [p for kind, p in events if kind == "agent.phase"]
     assert phases[1]["label"] == expected_activity
     assert phases[0]["label"] == "Agent 已开始处理"
-    assert phases[2]["label"] == "Agent 返回了处理状态"
+    assert phases[2]["label"] == (
+        "Agent 会话上下文压缩已结束" if item.get("type") == "contextCompaction"
+        else "Agent 返回了处理状态"
+    )
     assert not any("检查" in p["label"] or "Goal" in p["label"] for p in phases)
     assert "private-fixture-content" not in json.dumps(phases)
     assert any(kind == "answer.delta" and p["text"] == "Ready." for kind, p in events)

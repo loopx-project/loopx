@@ -656,6 +656,15 @@ cover the matching blocker revision; generation failures remain pending. Local
 autonomous wake, change/read/recovery receipts and sustained model quality remain
 Stage 2/R3 work. The external synthesis transcript is isolated from live owner Turns.
 
+The prompt directory uses the existing bounded attention projection to supply
+short blocker/request excerpts with explicit omission, coverage and exact Todo
+read references. All authorized Goals, Agents and source quality remain visible;
+the existing scoped reader restores complete records before decisions or action.
+The native host's observed context-compaction start/end phases appear through
+the same Chat and Lark progress path, without reasoning text or a completion
+claim. This bounded A20/A22 slice does not qualify end-to-end latency or network
+recovery, and does not change context storage, Session identity or authority.
+
 
 The shared [conversation work surface](intelligent-review-presentation-surfaces-v0.md#88-reusable-conversation-work-surface) owns adaptive reports, truthful event presentation, Turn-scoped stop/steer, reconnect and cross-channel density for all LoopX conversations. This RFC applies those same rules to the steward's owner conversation; it owns recipient selection, receiver assessment and the original-route return. A manager-specific answer format or transport must not become a second presentation authority.
 

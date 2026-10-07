@@ -1175,6 +1175,8 @@ class CodexChatAgentSession:
                 step = None
                 if method == "item/completed":
                     step = steps.completed(item)
+                    if isinstance(item, dict) and item.get("type") == "contextCompaction":
+                        phase = "Agent 会话上下文压缩已结束"
                 elif method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"} and isinstance(params, dict):
                     step = steps.reasoning_delta(
                         params.get("itemId"), params.get("delta"),
@@ -1195,6 +1197,7 @@ class CodexChatAgentSession:
                         "userMessage": "Agent 已收到消息",
                         "agentMessage": "Agent 正在生成回答",
                         "reasoning": "Agent 正在思考",
+                        "contextCompaction": "Agent 正在压缩会话上下文",
                         "commandExecution": "Agent 正在执行命令",
                         "mcpToolCall": "Agent 正在调用工具",
                         "dynamicToolCall": "Agent 正在调用工具",

@@ -259,6 +259,39 @@ def test_current_work_portfolio_keeps_authorization_fence(tmp_path):
     assert not records and "private" not in json.dumps(result)
 
 
+def test_directory_attention_preview_keeps_all_workers_and_exact_scoped_read(monkeypatch, tmp_path):
+    text = "Review the complete plan. " * 50 + "Only proceed after owner acceptance."
+    task = {"todo_id": "todo_gate", "role": "user", "task_class": "user_gate",
+            "status": "blocked", "text": text, "note": "Do not bypass acceptance"}
+    monkeypatch.setattr(details, "list_goal_todos", lambda **_: {
+        "ok": True, "source": "file_authority", "todos": [task]})
+    tool, _ = inspector(tmp_path)
+    tool.owner_scope = True
+    row = tool.context["goals"][0]
+    row.update(quality="stale", source={"revision": "revision-original"},
+               agents=[{"agent_id": f"worker_{i}", "source_verified": False} for i in range(40)],
+               attention={"status": "read", "coverage": {"known": 1, "included": 1, "omitted": 0},
+                          "items": [{"todo_id": task["todo_id"], "owner_must_act": True,
+                                     "blocker": {"blocker_identity": "todo:todo_gate", "task": task,
+                                                 "cause": text, "delivery": {"receipt": "x" * 20000}},
+                                     "request": {"request_id": task["todo_id"], "text": text}}]})
+    before = json.dumps(tool.context, sort_keys=True)
+    index = manager_index(tool.context)
+    preview = index["goals"][0]
+    assert [a["agent_id"] for a in preview["agents"]] == [f"worker_{i}" for i in range(40)]
+    assert preview["quality"] == "stale" and preview["source"]["revision"] == "revision-original"
+    item = preview["attention"]["items"][0]
+    assert item["request"]["content_truncated"] is True and item["details_omitted"] is True
+    assert "receipt" not in json.dumps(item) and len(json.dumps(item)) < 1400
+    assert json.dumps(tool.context, sort_keys=True) == before
+    result = tool.read(TOOL_NAME, item["read_reference"])
+    assert result["ok"] and result["rows"][0]["title"] == text
+    assert result["rows"][0]["continuation"] == task["note"]
+    assert result["rows"][0]["content_truncated"] is False
+    tool.scope_valid = lambda: False
+    assert tool.read(TOOL_NAME, item["read_reference"])["error"] == "authorization_changed"
+
+
 def test_delivery_pages_cross_day_without_duplication(tmp_path):
     path = tmp_path / "goals" / "alpha" / "runs" / "index.jsonl"
     path.parent.mkdir(parents=True)
