@@ -433,8 +433,8 @@ def main() -> int:
         assert scoped_gate_lookup["relations"]["decision_scope"]["scope_key"] == (
             "external_publish_channel"
         ), scoped_gate_lookup
-        assert scoped_gate_lookup["user_todos"]["open_count"] == 1, scoped_gate_lookup
-        assert scoped_gate_lookup["agent_todos"]["open_count"] == 0, scoped_gate_lookup
+        assert scoped_gate_lookup["todo"]["role"] == "user", scoped_gate_lookup
+        assert scoped_gate_lookup["todo"]["status"] == "open", scoped_gate_lookup
 
         agent_lookup = run_cli(
             registry_path,

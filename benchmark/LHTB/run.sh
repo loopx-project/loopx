@@ -184,7 +184,9 @@ receipt="$CODE_DIR/reports/${job_name}.env"
   printf 'gateway=%s\nwire_api=%s\nweb_search=disabled\n' "$OPENAI_BASE_URL" "$CODEX_WIRE_API"
   printf 'execution_mode=%s\niteration_context=%s\ncodex_home_scope=trial\n' "$LOOPX_EXECUTION_MODE" "$LOOPX_ITERATION_CONTEXT"
   printf 'scheduler_terminal_packet_compatibility=true\n'
-  printf 'replan_after_completed_todos=3\nverifier_policy=44_shared_2_separate\n'
+  # Cadence comes from the resolved adapter configuration in preflight and the
+  # per-trial bootstrap receipt; do not hard-code a second value here.
+  printf 'verifier_policy=44_shared_2_separate\n'
   printf 'loopx_commit=%s\n' "$(git -C "$LOOPX_SRC_DIR" rev-parse HEAD)"
   "$CODEX_BIN" --version 2>/dev/null | sed 's/^/codex_version=/' || true
 } | tee "$receipt"

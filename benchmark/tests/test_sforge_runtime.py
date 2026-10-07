@@ -136,11 +136,12 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
     env = worker.runtime._worker_env(cwd="/task")
     assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == expected
     assert worker.runtime.scheduler_timeout == total
-    expected_cadence = ({"replan_after_effective_turns": turns} if turns else
+    expected_cadence = ({"replan_after_effective_turns": turns or 3}
+                        if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
     assert worker.runtime._replan_receipt() == expected_cadence
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
-    if turns is not None:
+    if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
     else:
         assert "replan_after_effective_turns" not in receipt
@@ -357,7 +358,7 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
     env = worker.runtime._worker_env(cwd='/task')
     assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
     assert worker.runtime.execution.turn_envelope is enabled
-    assert worker.runtime.replan_after_turns == cadence
+    assert worker.runtime.replan_after_turns == (cadence or 3)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
     assert receipt.get('turn_envelope') is (True if enabled else None)
@@ -385,18 +386,31 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
                      profile=profile, cwd='/task', turn_envelope=True)
 
 
-def test_edgebench_rejects_envelope_before_creating_trial(tmp_path):
+@pytest.mark.parametrize("profile,options", [
+    ("native-goal", ["--turn-envelope"]),
+    ("official", ["--replan-after-turns", "3"]),
+    ("single", ["--replan-after-todos", "3"]),
+    ("native-goal", ["--replan-after-todos", "3"]),
+    ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
+    ("heartbeat-explore", ["--replan-after-todos", "0"]),
+])
+def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from benchmark.edgebench.run import main
     with pytest.raises(SystemExit) as error:
         main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
-              '--run-id', 'invalid', '--worker', 'native-goal', '--model', 'fixture',
-              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', '--turn-envelope'])
+              '--run-id', 'invalid', '--worker', profile, '--model', 'fixture',
+              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
     assert not (tmp_path / 'runs').exists()
 
 
+@pytest.mark.parametrize("cadence_args,field,count", [
+    ([], "replan_after_effective_turns", 3),
+    (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
+    (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
+])
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
@@ -405,7 +419,7 @@ def test_edgebench_rejects_envelope_before_creating_trial(tmp_path):
     ("lean_analysis_proofs", [], 86400, 1800),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 86400, 0)])
-def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry):
+def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -435,11 +449,15 @@ def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path
     if entry:
         args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
-        run.main(args + timeout_args + (["--turn-envelope"] if enabled else []))
+        run.main(args + timeout_args + cadence_args + (["--turn-envelope"] if enabled else []))
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
     assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
     assert receipt["eval_interval"] == interval
+    assert receipt[field] == count
+    other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
+             else "replan_after_effective_turns")
+    assert other not in receipt
     assert ("turn_envelope" in receipt) is enabled
     if enabled:
         assert receipt["turn_envelope"] is True
@@ -506,3 +524,25 @@ def test_edgebench_task_default_rejects_invalid_file_values(monkeypatch, value):
     monkeypatch.setattr(run.json, "loads", lambda _: {"fixture": {"eval_interval_seconds": value}})
     with pytest.raises(ValueError, match="Invalid EdgeBench eval_interval_seconds"):
         run._task_default("fixture", "eval_interval_seconds", None, 300)
+
+
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monkeypatch, profile):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+
+    async def installed(self, environment):
+        pass
+
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                          profile=profile, cwd="/task", replan_after_todos=3)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.replan_after_turns is None
+    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3}
+    receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert receipt["replan_after_completed_todos"] == 3
+    assert "replan_after_effective_turns" not in receipt

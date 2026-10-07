@@ -4,7 +4,6 @@ import re
 from typing import Any
 
 from .control_plane.goals.goal_vision_policy import (
-    COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD,
     completed_todo_replan_threshold,
     normalize_completed_todo_replan_threshold,
 )
@@ -162,9 +161,10 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
             raise ValueError("replan_after_effective_turns must be an integer from 1 to 5")
         profile["replan_after_effective_turns"] = effective
 
-    threshold = completed_todo_replan_threshold(value)
-    if threshold != COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD:
-        profile["replan_after_completed_todos"] = threshold
+    if "replan_after_completed_todos" in value:
+        # Retain explicit legacy-unit overrides, including five. Omitting one
+        # now means inheriting the settled-Turn default.
+        profile["replan_after_completed_todos"] = completed_todo_replan_threshold(value)
 
     if "turn_granularity" in value:
         turn_granularity = normalize_turn_granularity(value.get("turn_granularity"))

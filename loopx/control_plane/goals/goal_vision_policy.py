@@ -13,8 +13,11 @@ GOAL_VISION_ADVANCEMENT_POLICY_CHOICES = tuple(
     policy.value for policy in GoalVisionAdvancementPolicy
 )
 
-# A completed advancement chain gets one outcome-continuity checkpoint at this
-# cadence. Agent-facing projections must preserve at least the same window.
+# Default review cadence counts settled work Turns, not Todo size.
+DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD = 5
+
+# Explicit completed-Todo cadence remains bounded by the retained evidence
+# window. This is a legacy-unit limit, not the product default.
 COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD = 5
 
 

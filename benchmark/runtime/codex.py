@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Benchmarks deliberately review earlier than the product default of five.
+DEFAULT_REPLAN_AFTER_TURNS = 3
+
+
 MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
 CONTEXTS = ("fresh", "resume")
 TASK_ENTRIES = ("seeded-todo", "loopx-planned")

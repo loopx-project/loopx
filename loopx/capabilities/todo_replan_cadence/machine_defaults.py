@@ -4,9 +4,10 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 from enum import Enum
+from pathlib import Path
 
 from ...control_plane.goals.goal_vision_policy import (
-    COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD,
+    DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
     normalize_completed_todo_replan_threshold,
 )
 from ..machine_configuration.contract import (
@@ -81,6 +82,14 @@ def cadence_configuration_value(raw: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
+def default_replan_cadence_configuration() -> dict[str, Any]:
+    """One capability default for configuration editors and runtime inheritance."""
+    return {
+        "count_unit": ReplanCadenceUnit.EFFECTIVE_TURNS.value,
+        "count": DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+    }
+
+
 def todo_replan_cadence_machine_configuration_namespace() -> (
     MachineConfigurationNamespace
 ):
@@ -98,13 +107,13 @@ def todo_replan_cadence_machine_configuration_namespace() -> (
         title="Goal review cadence",
         description=(
             "Live review threshold for Goals without an explicit cadence override. "
-            "Choose completed Todos or settled work Turns. It does not create "
+            "Defaults to five settled work Turns; completed Todos remain an explicit option. "
+            "It does not create "
             "turns, spend quota, or grant authority."
         ),
         default_configuration={
             "schema_version": TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V1,
-            "count_unit": ReplanCadenceUnit.COMPLETED_TODOS.value,
-            "count": COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD,
+            **default_replan_cadence_configuration(),
         },
     )
 
@@ -146,7 +155,7 @@ def apply_todo_replan_cadence_machine_default(
         return projected
     cadence = _machine_default(machine_configuration)
     if cadence is None:
-        return projected
+        cadence = default_replan_cadence_configuration()
     profile = dict(raw_profile) if isinstance(raw_profile, Mapping) else {}
     field = (
         "replan_after_effective_turns"
@@ -156,3 +165,28 @@ def apply_todo_replan_cadence_machine_default(
     profile[field] = cadence["count"]
     projected["execution_profile"] = profile
     return projected
+
+
+def resolve_todo_replan_cadence_goal(
+    goal: Mapping[str, Any], runtime_root: Path | None,
+) -> dict[str, Any]:
+    """Resolve live cadence for raw-registry writeback callers, without writes.
+
+    History already composes machine defaults before calling the history codec.
+    Explicit Goal cadence remains independent of device configuration IO.
+    """
+    profile = goal.get("execution_profile")
+    if isinstance(profile, Mapping) and (
+        "replan_after_effective_turns" in profile
+        or "replan_after_completed_todos" in profile
+    ):
+        return apply_todo_replan_cadence_machine_default(goal, None)
+    from ..machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from ..machine_configuration.store import read_machine_configuration
+
+    machine = (
+        read_machine_configuration(
+            runtime_root, registry=build_builtin_machine_configuration_registry(),
+        ) if runtime_root is not None else None
+    )
+    return apply_todo_replan_cadence_machine_default(goal, machine)

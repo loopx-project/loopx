@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
+from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from ..control_plane.coordination.local_authority import (
     local_authority_is_promoted,
@@ -233,7 +234,9 @@ def _validated_replan_successor_obligation(
         goal_id=args.goal_id,
         registry_goal=registry_goal,
         effective_turn_cadence=effective_turn_cadence_context(
-            registry_goal or {"id": args.goal_id}, runtime_root,
+            resolve_todo_replan_cadence_goal(
+                registry_goal or {"id": args.goal_id}, runtime_root,
+            ), runtime_root,
             registry_path=registry_path,
         ),
     )

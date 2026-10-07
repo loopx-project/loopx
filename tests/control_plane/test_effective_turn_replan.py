@@ -7,6 +7,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+from loopx.capabilities.machine_configuration.store import configure_machine_configuration
 from tests.control_plane.test_quota_settlement_cli import (
     _write_fixture,
     _run_cli,
@@ -25,25 +28,51 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 )
 
 
-def test_open_todo_settled_turn_cadence_and_evidence_linked_review(tmp_path: Path) -> None:
+@pytest.mark.parametrize("threshold_override,device_count,threshold", [
+    (None, None, 5), (2, 3, 2), (None, 3, 3),
+])
+def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
+    tmp_path: Path, threshold_override: int | None, device_count: int | None,
+    threshold: int,
+) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     fixture = json.loads(registry.read_text())
-    fixture["goals"][0]["quota"]["allowed_slots"] = 4
+    fixture["goals"][0]["quota"]["allowed_slots"] = threshold + 2
     registry.write_text(json.dumps(fixture))
+    if device_count is not None:
+        machine_registry = build_builtin_machine_configuration_registry()
+        configuration = {
+            "schema_version": "loopx_machine_configuration_v0",
+            "namespaces": {"todo_replan_cadence": {
+                "schema_version": "todo_replan_cadence_machine_defaults_v1",
+                "count_unit": "effective_turns", "count": device_count,
+            }},
+        }
+        preview = configure_machine_configuration(
+            runtime_root=runtime, registry=machine_registry, configuration=configuration,
+        )
+        configure_machine_configuration(
+            runtime_root=runtime, registry=machine_registry, configuration=configuration,
+            execute=True, expected_plan_revision=preview["plan_revision"],
+        )
     rc, configured = _run_cli(
         registry,
         runtime,
         "configure-goal",
         "--goal-id",
         GOAL_ID,
-        "--execution-replan-after-turns",
-        "2",
-        "--execute",
+        *(["--execution-replan-after-turns", str(threshold_override), "--execute"]
+          if threshold_override else []),
     )
     assert rc == 0, configured
     goal = json.loads(registry.read_text())["goals"][0]
-    assert goal["execution_profile"]["replan_after_effective_turns"] == 2
-    context = effective_turn_cadence_context(goal, runtime)
+    if threshold_override:
+        assert goal["execution_profile"]["replan_after_effective_turns"] == threshold_override
+    else:
+        assert "replan_after_effective_turns" not in goal.get("execution_profile", {})
+    context = effective_turn_cadence_context(
+        resolve_todo_replan_cadence_goal(goal, runtime), runtime,
+    )
 
     def periodic():
         path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
@@ -60,7 +89,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(tmp_path: Pat
             effective_turn_cadence=context,
         )
 
-    for i in range(2):
+    for i in range(threshold):
         turn = f"effective-turn-{i}"
         rc, guard = _run_cli(
             registry,
@@ -124,12 +153,12 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(tmp_path: Pat
             turn,
         )
         assert rc == 0, spent
-        if i == 0:
+        if i < threshold - 1:
             assert periodic() is None
     trigger = periodic()
     assert trigger is not None
     assert trigger["kind"] == "periodic_review_due"
-    assert trigger["run_count"] == 2
+    assert trigger["run_count"] == threshold
     rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
     assert (
@@ -182,7 +211,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(tmp_path: Pat
             json.dumps(row) + "\n"
             for row in events
             if not (
-                row.get("run_id") == "effective-turn-1"
+                row.get("run_id") == f"effective-turn-{threshold - 1}"
                 and row.get("event_kind") == "quota_spend"
             )
         )
@@ -252,9 +281,11 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(tmp_path: Pat
     assert rc == 0, cleared
     assert (
         effective_turn_cadence_context(
-            json.loads(registry.read_text())["goals"][0], runtime
-        )
-        is None
+            resolve_todo_replan_cadence_goal(
+                json.loads(registry.read_text())["goals"][0], runtime,
+            ), runtime,
+        )["threshold"]
+        == (device_count or 5)
     )
 
 

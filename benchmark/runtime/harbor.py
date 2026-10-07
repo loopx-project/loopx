@@ -17,7 +17,7 @@ from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
 from .codex_offline import CodexOffline
-from .codex import Execution
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 
 
 _ROOT = "/opt/loopx-benchmark"
@@ -88,6 +88,8 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("replan_after_turns must be an integer between 1 and 5")
             if not self.execution.uses_loopx:
                 raise ValueError("replan_after_turns requires a LoopX execution mode")
+        if replan_after_turns is None and replan_after_todos is None and self.execution.uses_loopx:
+            replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
@@ -441,7 +443,7 @@ class BenchmarkCodex(CodexOffline):
                 "todo", "list", "--goal-id", _GOAL_ID, "--role", "agent",
                 "--todo-id", self._seeded_todo_id,
             ], cwd=cwd)
-            current = next(iter(listed["todos"]), None)
+            current = listed["todo"]
             if current and current.get("status") in {"open", "blocked"}:
                 if current.get("claimed_by") != _AGENT_ID:
                     raise RuntimeError("Seeded task Todo is no longer owned by this agent")

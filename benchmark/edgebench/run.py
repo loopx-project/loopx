@@ -95,8 +95,11 @@ def main(argv=None):
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
                         help="Heartbeat default: loopx-planned; seeded-todo is an explicit ablation")
-    parser.add_argument("--replan-after-turns", type=int, choices=range(1, 6),
-                        help="Opt in to settled work Turn cadence for heartbeat profiles")
+    cadence = parser.add_mutually_exclusive_group()
+    cadence.add_argument("--replan-after-turns", type=int, choices=range(1, 6),
+                         help="Heartbeat default: 3 settled effective work Turns")
+    cadence.add_argument("--replan-after-todos", type=int, choices=range(1, 6),
+                         help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--eval-interval", type=int,
                         help="Auto-evaluation seconds; task-defaults.json overrides the 300s fallback; 0 disables")
     parser.add_argument("--submission-cooldown", type=int, default=120)
@@ -109,8 +112,9 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
-    if args.replan_after_turns is not None and not args.worker.startswith("heartbeat-"):
-        parser.error("--replan-after-turns requires a heartbeat worker")
+    if (args.replan_after_turns is not None or args.replan_after_todos is not None
+            ) and not args.worker.startswith("heartbeat-"):
+        parser.error("Replan cadence requires a heartbeat worker")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
@@ -148,7 +152,8 @@ def main(argv=None):
                          timeout_seconds=args.timeout, blind_prompt=blind_prompt,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
-                         replan_after_turns=args.replan_after_turns)
+                         replan_after_turns=args.replan_after_turns,
+                         replan_after_todos=args.replan_after_todos)
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
@@ -168,8 +173,10 @@ def main(argv=None):
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
-        **({"replan_after_effective_turns": args.replan_after_turns}
-           if args.replan_after_turns is not None else {}),
+        **({"replan_after_effective_turns": agent.replan_after_turns}
+           if agent.replan_after_turns is not None else {}),
+        **({"replan_after_completed_todos": agent.replan_after_todos}
+           if agent.replan_after_todos is not None else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))
