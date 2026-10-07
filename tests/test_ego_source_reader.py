@@ -101,6 +101,65 @@ def test_rejects_url_before_browser_access(configured, monkeypatch, url, error):
     assert reader.read_public_url(url) == {"ok": False, "error": error}
 
 
+@pytest.mark.parametrize("setting", [None, "*", " * "])
+@pytest.mark.parametrize("image", [False, True])
+def test_all_origins_default_and_wildcard_read_new_sources(configured, monkeypatch, tmp_path, setting, image):
+    if setting is None:
+        monkeypatch.delenv("LOOPX_EGO_READ_ORIGINS")
+    else:
+        monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", setting)
+    url = "https://new-source.example/article#section"
+    config = reader.ReaderConfig.from_environment()
+    assert config.origins == frozenset({"*"})
+    result, observation = run_generated_script(config, url, image, tmp_path / "image.png")
+    assert result["ok"] and result["url"] == url
+    assert observation["domReads"] > 0
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: response(extraction(
+        url=url, requested_url=url, canonical_url=url)))
+    assert reader.read_public_url(url)["ok"]
+
+
+@pytest.mark.parametrize("url", ["http://example.com/", "file:///tmp/source", "javascript:alert(1)",
+                                "https://user:secret@example.com/", "https://example.com:8443/"])
+def test_all_origins_still_rejects_invalid_urls_before_browser_access(configured, monkeypatch, url):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "*")
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: pytest.fail("browser accessed"))
+    assert reader.read_public_url(url) == {"ok": False, "error": "source_url_invalid"}
+    assert json.loads(reader.read_public_image(url, 0)[0].text)["error"] == "source_url_invalid"
+
+
+@pytest.mark.parametrize("url", ["http://example.com/", "file:///tmp/source", "javascript:alert(1)",
+                                "https://user:secret@example.com/", "https://example.com:8443/"])
+def test_all_origins_browser_preflight_preserves_url_constraints(configured, monkeypatch, url):
+    import shutil
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node required for browser preflight")
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "*")
+    script = reader._script(reader.ReaderConfig.from_environment(), url)
+    harness = ("async function taskSpace(){console.log('BROWSER_ACCESSED');throw Error('accessed');}"
+               "(async()=>{" + script + "})().catch(e=>{console.error(e);process.exitCode=1;});")
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1 and "source_url_invalid" in result.stderr
+    assert "BROWSER_ACCESSED" not in result.stdout
+
+
+@pytest.mark.parametrize("setting", ["", "*,https://example.com", "https://*.example.com", "all"])
+def test_invalid_origin_modes_do_not_expand_scope(configured, monkeypatch, setting):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", setting)
+    monkeypatch.setattr(reader, "_run", lambda *_a, **_k: pytest.fail("browser accessed"))
+    assert reader.read_public_url(URL)["error"] == "source_reader_not_configured"
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_all_origins_still_fences_cross_origin_redirects(configured, monkeypatch, tmp_path, image):
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "*")
+    result, observation = run_generated_script(reader.ReaderConfig.from_environment(), URL, image,
+        tmp_path / "image.png", redirect="https://another.example/private")
+    assert result == {"ok": False, "error": "source_url_changed"}
+    assert observation == {"domReads": 0, "captures": 0}
+
+
 def test_ipv6_source_and_origin_use_browser_canonical_host(configured, monkeypatch, tmp_path):
     url = "https://[2606:4700:4700:0000:0000:0000:0000:1111]/article"
     origin = "https://[2606:4700:4700::1111]"
