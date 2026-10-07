@@ -110,7 +110,9 @@ def test_storage_switch_retains_new_metadata_and_history_after_restart(api):
     plan = preview(call, target)
     assert plan["reviewed_source"]["provider"] == initial
     assert call()[1]["current"]["provider"] == initial and read(runtime) == before
-    assert operate(call, plan)[0] == 200
+    code, applied = operate(call, plan)
+    assert code == 200 and applied["reviewed_source"]["provider"] == initial
+    assert applied["target_provider"] == target
     assert call()[1]["current"]["provider"] == target
     assert read(runtime)["todos"] == before["todos"]
     later = add_goal_todo(registry_path=registry, goal_id="example", role="agent", text="New data after migration",

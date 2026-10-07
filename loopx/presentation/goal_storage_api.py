@@ -87,7 +87,7 @@ class GoalStorageRequestMixin:
                 # A committed result survives an independent read failure. The
                 # original carrier is retained until the user reads it back.
                 readback = self._storage_owner(goal_id, action="migration-readback", plan=fields["plan"], plan_sha256=fields["plan_sha256"])
-                result.update({key: readback[key] for key in ("current", "recovery") if key in readback})
+                result.update({key: readback[key] for key in ("current", "recovery", "reviewed_source", "target_provider") if key in readback})
             self._storage_send(result, goal_id, preview_id)
         except (KeyError, TypeError, ValueError):
             self._send_error("Invalid Goal storage request.", status=400, error_code="invalid_goal_storage_request")
