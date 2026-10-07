@@ -304,6 +304,26 @@ class ChatLoopXMode:
     def apply(self, session_id, body, *, work_dir, objective):
         if body.get("operation") in {"inspect", "operations", "read"}:
             return self.read_team(session_id, body)
+        if body.get("operation") == "adopt":
+            if set(body) != {"operation", "operation_id", "consumer_operation_id"}:
+                raise ValueError("adopt requires source and consumer operation ids only")
+            from .control_plane.collaboration.peers import require_operation_id
+
+            operation_id = require_operation_id(body["operation_id"])
+            consumer_id = require_operation_id(body["consumer_operation_id"])
+            with self._lock(session_id):
+                session = self._session(session_id)
+                settings = (session.get("loopx_mode") or {}).get("settings") or {}
+                service, _, _, _ = self._execution(session, settings)
+                goal = self._goal(session)
+                effect_runtime_result("collaboration.chat_mode", {
+                    "session": session, "origin": "web", "operation": "adopt",
+                    "settings": settings,
+                    "registered_agents": registered_agent_ids_for_goal(goal),
+                    "goal_active": goal_accepts_collaboration(goal),
+                    "execution_binding_valid": True,
+                })
+                return {"ok": True, **service.adopt_result(operation_id, consumer_id)}
         if set(body) - {
             "operation",
             "settings",

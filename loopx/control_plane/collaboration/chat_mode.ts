@@ -14,7 +14,7 @@ function requireThat(ok: unknown, message: string): asserts ok {
 export function planChatMode(input: JsonObject): JsonObject {
   const session = requireJsonObject(input.session, "conversation session");
   const operation = input.operation;
-  requireThat(["configure", "start", "resume", "pause", "exit", "message", "wake"].includes(String(operation)), "unsupported conversation operation");
+  requireThat(["configure", "start", "resume", "pause", "exit", "message", "wake", "adopt"].includes(String(operation)), "unsupported conversation operation");
   const localOwner = resolveConversationScope(session).kind === "owner_goal"
     && session.session_mode !== "attached_host" && session.agent_id === "codex";
   // External inbox returns have their own exact audience owner. A recorded
@@ -43,6 +43,15 @@ export function planChatMode(input: JsonObject): JsonObject {
     return {operation, enabled: operation !== "exit"};
   }
   requireThat(input.goal_active === true, "Goal is stopped or unavailable");
+  if (operation === "adopt") {
+    requireThat(typeof settings.agent_id === "string" && Array.isArray(input.registered_agents)
+      && input.registered_agents.includes(settings.agent_id), "select a registered coordinator identity");
+    requireThat(input.execution_binding_valid === true, "configure the coordinator's authorized execution bindings first");
+    // An owner decision over completed work does not resume execution, consume
+    // a model allowance or observe a wake. The delegation owner rechecks both
+    // results and their exact uses input before recording the decision.
+    return {operation};
+  }
   requireThat(!session.active_turn_id, "wait for the current conversation turn before changing execution");
   requireThat(Number.isSafeInteger(settings.token_budget) && Number(settings.token_budget) > 0
     && Number(settings.token_budget) <= 2147483647, "set a positive coordinator token allowance");

@@ -1644,7 +1644,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         await route.fulfill({json: paused});
         return;
       }
-      if (body.operation === "read") {
+      if (body.operation === "adopt") {
+        if (body.operation_id !== "accepted-analysis" || body.consumer_operation_id !== "accepted-synthesis") {
+          return route.fulfill({status: 409, json: {error: "Fixture adoption target unavailable"}});
+        }
+        current.fixtureAdoptionState = "current";
+      }
+      if (body.operation === "read" || body.operation === "adopt") {
         if (current.fixtureTeamReadDelayMs) await new Promise(resolveWait => setTimeout(resolveWait, current.fixtureTeamReadDelayMs));
         if (current.fixtureCorrectionEpisode && body.operation_id === "original-analysis") {
           await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-original",
@@ -1679,7 +1685,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
               consumer_request_id: "request-synthesis", consumer_agent_id: "synthesizer", consumer_todo_id: "todo_synthesis",
               source_artifacts: [{ref: "report.json", sha256: "d".repeat(64)}],
               consumer_artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64)},
-                ...(current.fixturePlanTodoId ? [{ref: "report.md", sha256: "8".repeat(64)}] : [])], state: current.fixtureAdoptionState}]} : {}),
+                {ref: "report.md", sha256: "8".repeat(64)}], state: current.fixtureAdoptionState}]} : {}),
             artifacts: [{ref: "report.json", sha256: "d".repeat(64),
               text: '{"cash_flow":75,"note":"<script>window.artifactExecuted=true</script>"}'},
               {ref: "report.md", sha256: "9".repeat(64), text: "# Cash allocation\n\n| Measure | Value |\n|---|---:|\n| Free cash | 75 |\n\n[Source](https://example.org/report)\n<script>window.artifactExecuted=true</script>"}]}});

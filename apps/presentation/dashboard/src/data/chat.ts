@@ -1153,6 +1153,12 @@ export function readLoopXTeamWork(sessionId: string, operationId: string) {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
   });
 }
+export function adoptLoopXTeamWork(sessionId: string, operationId: string, consumerOperationId: string) {
+  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+    method: "POST", body: JSON.stringify({operation: "adopt", operation_id: operationId,
+      consumer_operation_id: consumerOperationId}),
+  });
+}
 export type ManagedGoalResultRow = {
   todo_id: string; title: string; producer_agent_id: string; sha256: string;
   content_type: string; size_bytes: number; completed_at?: string | null;
