@@ -42,6 +42,9 @@ test("workspace-only filesystem scope is host-owned, persisted and narrower than
     assert.equal(profile.filesystem[":tmpdir"], "deny");
     assert.equal(profile.network.enabled, false);
     assert.equal(identity.host_config.shell_environment_policy.inherit, "none");
+    assert.deepEqual(identity.host_config.shell_environment_policy.include_only, ["PATH"]);
+    assert.equal(identity.host_config.shell_environment_policy.experimental_use_profile, false);
+    assert.deepEqual(identity.host_config.shell_environment_policy.set, {PATH: "/usr/bin:/bin:/usr/sbin:/sbin"});
     assert.deepEqual(identity.host_config.skills, {include_instructions: false});
     assert.equal(identity.host_config.project_doc_max_bytes, 0);
     assert.throws(() => resolveProjectConversation({project_ref: context.project_ref,

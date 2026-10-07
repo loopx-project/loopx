@@ -88,7 +88,9 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         goal_id=None, objective="project", project_context=context,
         resume_thread_id="thread-loopx-chat" if resume else None,
         model="synthetic-model", reasoning_effort="high",
-        host_config={"skills": {"include_instructions": True}, "project_doc_max_bytes": 32768})
+        host_config={"skills": {"include_instructions": True}, "project_doc_max_bytes": 32768,
+                     "shell_environment_policy": {"inherit": "all", "include_only": ["*"],
+                                                  "set": {"PRIVATE_FIXTURE": "synthetic"}}})
     try:
         requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
         method = "thread/resume" if resume else "thread/start"
@@ -99,6 +101,10 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         assert params["config"]["default_permissions"] == profile
         assert params["config"]["skills"]["include_instructions"] is False
         assert params["config"]["project_doc_max_bytes"] == 0
+        environment = params["config"]["shell_environment_policy"]
+        assert environment["inherit"] == "none" and environment["include_only"] == ["PATH"]
+        assert environment["experimental_use_profile"] is False
+        assert "PRIVATE_FIXTURE" not in environment.get("set", {})
         sent = []
         monkeypatch.setattr(session, "_request", lambda method, params, **kw:
             sent.append((method, params)) or {"turn": {"id": "owned-turn"}})

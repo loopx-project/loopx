@@ -36,7 +36,13 @@ export function projectConversationIdentity(input: Record<string, unknown>): Rec
       default_permissions: `loopx_workspace_only_${writable ? "write" : "read"}`,
       allow_login_shell: false,
       web_search: "disabled",
-      shell_environment_policy: {inherit: "none"},
+      shell_environment_policy: {
+        inherit: "none", include_only: ["PATH"], experimental_use_profile: false,
+        // A minimal POSIX search path keeps native file tools usable without
+        // inheriting account-defined variables or user-installed executables.
+        ...(context.workspace_path.startsWith("/")
+          ? {set: {PATH: "/usr/bin:/bin:/usr/sbin:/sbin"}} : {}),
+      },
       // The host may discover instructions outside the filesystem sandbox.
       // Read project instructions/skills through the bounded native tools.
       skills: {include_instructions: false},

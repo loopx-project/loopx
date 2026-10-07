@@ -104,6 +104,11 @@ login shells, web search and tool network access are disabled. The typed context
 persists this selection; changing it invalidates reuse of the old context. Default
 project access remains writable with `host_default` filesystem scope.
 
+The shell environment keeps only `PATH`, disables shell profile snapshots, and
+uses a fixed minimal system search path for POSIX workspaces. This preserves native
+file commands while filtering account-configured environment overrides as well as
+inherited variables. Windows execution remains unqualified by the live probes.
+
 The narrowed profile also disables automatic skill catalog injection and project
 instruction discovery. The agent can read workspace-owned `AGENTS.md` and skills
 through its bounded file tools. Ordinary project Sessions keep native instruction
