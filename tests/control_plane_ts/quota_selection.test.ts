@@ -24,6 +24,7 @@ test("route planning shares claim exclusion, preserves legacy visibility and nev
     display: {todo_id: identity, text: "Review route"}, gate: false, replan: null,
     task_class: "advancement_task", claim: null, excluded: [], sort: [1, 1, "", identity], ...fields});
   const input = {schema_version: "todo_quota_planning_request_v2", selection: request([], {available: [], backlog_limit: 0}),
+    source_contract: {},
     resume: {schema_version: "todo_resume_planning_request_v0", agent_id: "agent-a", item_limit: 8,
       has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null,
       available_capabilities: null, sources: Object.fromEntries(["items", "backlog_items", "first_open_items", "deferred_items",
@@ -65,6 +66,7 @@ test("handoff counts retain addressed review states, source order and duplicates
   handoffs.push(handoffs[1], handoffs[1], {display: {todo_id: "other", gate_state: states[1],
     claimed_by: "agent-a"}, excluded: ["agent-b"]});
   const input = {schema_version: "todo_quota_planning_request_v2", route_items: [], handoff_items: handoffs,
+    source_contract: {},
     selection: request([], {available: [], backlog_limit: 0}),
     resume: {schema_version: "todo_resume_planning_request_v0", agent_id: "agent-a", item_limit: 8,
       has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null,
@@ -218,10 +220,16 @@ test("quota v2 validates closure in the existing batch while retaining v0/v1 wir
   const v1 = projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v1", resume, selection});
   assert.deepEqual(v0, v1);
   assert.equal(v0.source_completeness, undefined);
-  assert.throws(() => projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v2", resume, selection}), /closure source/);
-  const v2 = projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v2", resume, selection, source_contract: {}});
-  const {source_completeness, closure_intent, ...unchanged} = v2;
+  assert.throws(() => projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v2",
+    resume, selection, route_items: [], handoff_items: []}), /closure source/);
+  const v2 = projectTodoQuotaPlanning({schema_version: "todo_quota_planning_request_v2", resume, selection,
+    route_items: [], handoff_items: [], source_contract: {}});
+  // v2 carries the closure result plus the route/handoff hint lanes; the rest
+  // of the projection must stay identical to v1.
+  const {source_completeness, closure_intent, handoff_lanes, route_lanes, ...unchanged} = v2;
   assert.deepEqual(unchanged, v1);
+  assert.deepEqual(handoff_lanes, {});
+  assert.deepEqual(route_lanes, {});
   assert.equal((source_completeness as JsonObject).status, "invalid");
   assert.equal(closure_intent, null);
 });
