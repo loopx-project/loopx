@@ -35,7 +35,15 @@ def _utc_now() -> datetime:
 
 
 def _time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+            return parsed
+    except ValueError:
+        pass
+    # JSON Schema format validation may lack its optional date-time checker.
+    # Enforce comparable clocks here without reflecting a private source value.
+    raise ValueError("position guard input/result failed schema admission")
 
 
 @lru_cache(maxsize=3)
@@ -68,6 +76,15 @@ def _amount(value: Decimal) -> str:
 
 def _cash_amount(value: Decimal) -> str:
     return format(value.quantize(Decimal("0.00000001"), rounding=ROUND_CEILING), "f").rstrip("0").rstrip(".") or "0"
+
+
+def _source_state(observed_at: str | None, decision: datetime, max_age_seconds: int) -> str:
+    if observed_at is None:
+        return "missing"
+    observed = _time(observed_at)
+    return "available_unverified" if (
+        observed <= decision and decision - observed <= timedelta(seconds=max_age_seconds)
+    ) else "stale_or_future"
 
 
 def evaluate_finance_position_guard(request: object) -> dict[str, Any]:
@@ -119,10 +136,7 @@ def _evaluate_partial(request: dict[str, Any]) -> dict[str, Any]:
             quantity = _amount(_number(position["quantity"]))
             if "." in quantity:
                 quantity = quantity.rstrip("0").rstrip(".")
-        observed = _time(position["observed_at"])
-        source_state = "available_unverified" if (
-            observed <= decision and decision - observed <= timedelta(seconds=payload["max_age_seconds"])
-        ) else "stale_or_future"
+        source_state = _source_state(position["observed_at"], decision, payload["max_age_seconds"])
         if position["asset"] is not None:
             asset_matches = position["asset"] == episode["asset"]
         if asset_matches is False:
@@ -149,7 +163,7 @@ def _evaluate_partial(request: dict[str, Any]) -> dict[str, Any]:
         "position_asset_matches": asset_matches,
         "evidence_gaps": gaps, "pending": True,
     }
-    return {
+    result = {
         "schema_version": PARTIAL_RESULT_SCHEMA, "extension_id": EXTENSION_ID,
         "operation": OPERATION, "invocation_id": request["invocation_id"],
         "trade_id": episode["trade_id"], "target_key": episode["target_key"],
@@ -172,6 +186,20 @@ def _evaluate_partial(request: dict[str, Any]) -> dict[str, Any]:
         "effects": {"financial_mutations": False, "monitor_mutations": False, "scheduler_created": False},
         "privacy": "private_account_material",
     }
+    if "source_clocks" in payload:
+        clocks = dict(payload["source_clocks"])
+        states = {kind: _source_state(value, decision, payload["max_age_seconds"])
+                  for kind, value in clocks.items()}
+        # A source bundle still exists when its position parser returns null.
+        # Retain every capture clock; selecting the newest would hide a future
+        # or stale history read. Freshness never authenticates account facts.
+        result["source_clock_projection"] = {
+            "observed_at": clocks, "states": states,
+            "capture_digest": payload.get("source_capture_digest"),
+        }
+        material["source_clock_states"] = states
+        result["material_digest"] = canonical_digest(material)
+    return result
 
 
 def _evaluate(request: dict[str, Any]) -> dict[str, Any]:

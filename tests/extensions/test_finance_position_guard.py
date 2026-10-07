@@ -203,6 +203,8 @@ def test_partial_cannot_claim_verified_closure_or_extension(field, value):
 
 def test_partial_actual_stdin_and_direct_cli_and_generic_private_error(monkeypatch, capsys, tmp_path):
     r = partial_example()
+    r["input"]["source_clocks"] = {"positions": NOW, "orders": NOW, "history": None}
+    r["input"]["source_capture_digest"] = SCOPE
     expected = guard.evaluate_finance_position_guard(r)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(r)))
     assert run([]) == 0 and json.loads(capsys.readouterr().out) == expected
@@ -213,6 +215,79 @@ def test_partial_actual_stdin_and_direct_cli_and_generic_private_error(monkeypat
     r["input"]["credential"] = "private-sentinel-do-not-reflect"
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(r)))
     assert run([]) == 1 and "private-sentinel" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("deadline", ["2026-01-03T12:00:01Z", NOW, "2026-01-03T11:59:59Z"])
+@pytest.mark.parametrize("clocks,states", [
+    ({"positions": NOW, "orders": NOW, "history": NOW},
+     {"positions": "available_unverified", "orders": "available_unverified", "history": "available_unverified"}),
+    ({"positions": NOW, "orders": NOW, "history": "2026-01-03T12:00:01Z"},
+     {"positions": "available_unverified", "orders": "available_unverified", "history": "stale_or_future"}),
+    ({"positions": "2026-01-03T11:50:00Z", "orders": "2026-01-03T11:50:01Z", "history": "2026-01-03T11:50:02Z"},
+     {"positions": "stale_or_future", "orders": "stale_or_future", "history": "stale_or_future"}),
+    ({"positions": NOW, "orders": None, "history": NOW},
+     {"positions": "available_unverified", "orders": "missing", "history": "available_unverified"}),
+    ({"positions": "2026-01-03T11:58:00Z", "orders": NOW, "history": NOW},
+     {"positions": "available_unverified", "orders": "available_unverified", "history": "available_unverified"}),
+])
+def test_capture_clocks_survive_null_position_without_displacing_deadline(deadline, clocks, states):
+    r = partial_example()
+    r["input"].update(position=None, source_clocks=clocks, source_capture_digest=SCOPE)
+    r["input"]["episode"]["max_hold_until"] = deadline
+    original = deepcopy(bind_partial(r))
+    out = guard.evaluate_finance_position_guard(r)
+    assert out["source_clock_projection"] == {"observed_at": clocks, "states": states, "capture_digest": SCOPE}
+    assert out["material_projection"]["source_clock_states"] == states
+    assert out["state"] == ("attention_required" if deadline > NOW else "exit_review_required")
+    assert out["urgent"] == (deadline <= NOW)
+    assert out["source_projections"]["position"] is None
+    assert out["obligation"]["pending"] and not out["obligation"]["closeout_verified"]
+    assert not out["position_verified"] and out["exit_draft"] is None
+    assert r == original
+    out["source_clock_projection"]["observed_at"]["positions"] = None
+    assert r == original
+
+
+def test_capture_clock_opt_in_preserves_legacy_shape_and_unknown_digest():
+    r = partial_example()
+    legacy = guard.evaluate_finance_position_guard(r)
+    assert "source_clock_projection" not in legacy
+    assert "source_clock_states" not in legacy["material_projection"]
+    r["input"]["source_clocks"] = {"positions": None, "orders": None, "history": None}
+    out = guard.evaluate_finance_position_guard(r)
+    assert out["source_clock_projection"]["capture_digest"] is None
+    assert out["source_clock_projection"]["states"] == dict.fromkeys(["positions", "orders", "history"], "missing")
+    assert out["state"] == legacy["state"] and out["evidence_gaps"] == legacy["evidence_gaps"]
+
+
+def test_capture_freshness_is_material_but_recapture_digest_is_not():
+    r = partial_example()
+    r["input"]["source_clocks"] = {"positions": NOW, "orders": NOW, "history": NOW}
+    r["input"]["source_capture_digest"] = SCOPE
+    before = guard.evaluate_finance_position_guard(r)
+    r["input"]["source_capture_digest"] = "sha256:" + "c" * 64
+    r["input"]["source_clocks"]["history"] = "2026-01-03T11:59:59Z"
+    recaptured = guard.evaluate_finance_position_guard(r)
+    assert before["material_digest"] == recaptured["material_digest"]
+    assert before["request_digest"] != recaptured["request_digest"]
+    r["input"]["source_clocks"]["history"] = "2026-01-03T11:50:00Z"
+    assert guard.evaluate_finance_position_guard(r)["material_digest"] != before["material_digest"]
+
+
+@pytest.mark.parametrize("fields", [
+    {"source_capture_digest": SCOPE},
+    {"source_clocks": {"positions": NOW, "orders": NOW}},
+    {"source_clocks": {"positions": NOW, "orders": NOW, "history": "private-invalid-time"}},
+    {"source_clocks": {"positions": NOW, "orders": NOW, "history": "2026-01-03T12:00:00"}},
+    {"source_clocks": {"positions": NOW, "orders": NOW, "history": NOW, "first_public": NOW}},
+    {"source_clocks": {"positions": NOW, "orders": NOW, "history": NOW}, "source_capture_digest": "private-invalid-digest"},
+])
+def test_capture_clock_shape_does_not_admit_guessed_or_private_fields(fields):
+    r = partial_example()
+    r["input"].update(fields)
+    with pytest.raises(ValueError, match="schema admission") as error:
+        guard.evaluate_finance_position_guard(r)
+    assert "private-invalid" not in str(error.value)
 
 
 def test_full_alternative_legs_cover_once_without_authority():

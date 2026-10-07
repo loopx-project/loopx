@@ -186,6 +186,57 @@ and execution evidence instead of overwriting it with an earlier capture.
 Lark 消费/投递须各自验收。回退沿用严格 v0 和既有 extension 生命周期；旧包
 应拒绝 v1，不能静默丢掉义务。回滚保留后续周期/执行证据，不用旧采集覆盖。
 
+### Independent capture clocks (0.8.9) / 独立捕获时钟
+
+The partial request optionally accepts `input.source_clocks`, with all three
+`positions`, `orders` and `history` keys. Each value is its original capture
+timestamp or explicit `null`. Optional `input.source_capture_digest` retains
+the adapter's capture-bundle digest; it requires `source_clocks`, and omission
+means unknown. Neither field authenticates the source or account. Use the
+existing `evaluate-position --input-json FILE` or managed stdin entrypoint.
+
+The result's opt-in `source_clock_projection` preserves every timestamp and
+the declared digest, even when `position=null`. Each clock is evaluated
+independently against `decision_at` and `max_age_seconds`: equality at the age
+limit is available but unverified; a future or older clock is stale or future;
+null is missing. A fresh orders capture cannot mask stale history. Clock states
+enter the semantic material digest, so eligibility changes are observable;
+new timestamps or raw capture hashes alone do not constitute material change.
+Deadline precedence, pending obligations, missing facts, and the prohibition on
+verified closure or an executable draft are unchanged. Consumers must use the
+same provider version and pass original capture clocks rather than poll time.
+
+Omit both fields to restore the legacy request/result shape and material digest.
+The strict v0 receipt request is unchanged and does not accept these fields.
+Disable or roll back through the existing extension lifecycle; this addition
+does not add a new activation switch, scheduler, permission, or Memory policy.
+CLI and managed-provider behavior are covered here; automatic venue bridging,
+App/Lark presentation and investment utility require their own adoption evidence.
+
+These are account-source capture clocks. A market query's start/end bounds,
+each returned candle's economic period, capture version, first-public time,
+vendor finalization and current quote expiry are different facts. Do not map
+query bounds or a historical candle close into these capture fields. Retain
+both raw captures when values change under the same period identity; an elapsed
+period alone proves neither an immutable vendor revision nor historical PIT.
+
+显式 partial 请求可选传入 `input.source_clocks`，须包含 `positions`、
+`orders`、`history` 三个键；每项保留原捕获时间，未知写 null。可选
+`source_capture_digest` 保存适配器声明的捕获包摘要，须同时传时钟；省略
+表示摘要未知。它们不认证来源或账户，沿用已有 direct/managed 入口。
+
+输出 `source_clock_projection` 在 position 为 null 时仍保留全部原时钟和
+摘要，分别评估新鲜度。恰等于时效上限为可得但未验证；未来/过旧为不可用，
+null 为缺证。不能用新鲜订单遮蔽过旧历史。语义 material digest 包含各项
+时效状态，捕获时间或原件摘要变化本身不算材料变化。到期优先级、待办、
+未知及禁止认证结案/执行草案的边界保持；调用者按同版本传原捕获时间。
+
+省略两个字段即恢复旧请求/输出形状及材料摘要，严格 v0 四回执契约不变。
+沿已有 extension 生命周期关闭/回滚，不增加授权、定时器或 Memory 政策。
+此为 CLI/managed provider 切片；场所自动桥、App/Lark 和投资效用另验。
+查询范围、每根柱的经济期间、捕获版本、首次公开、供应商最终版本与报价
+期限分别保留；同期间数值变化保留两个原件，窗口经过不证明最终版本或 PIT。
+
 ## Existing entry points / 已有入口
 
 ```sh

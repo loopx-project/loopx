@@ -339,6 +339,19 @@
             },
             "evidence_gaps": {
               "$ref": "#/$defs/gaps"
+            },
+            "source_clocks": {
+              "$ref": "#/$defs/source_clocks"
+            },
+            "source_capture_digest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -349,7 +362,12 @@
             "decision",
             "execution",
             "evidence_gaps"
-          ]
+          ],
+          "dependentRequired": {
+            "source_capture_digest": [
+              "source_clocks"
+            ]
+          }
         }
       },
       "required": [
@@ -597,6 +615,9 @@
                 "boolean",
                 "null"
               ]
+            },
+            "source_clock_states": {
+              "$ref": "#/$defs/source_clock_states"
             }
           },
           "required": [
@@ -655,6 +676,33 @@
           "enum": [
             "private_account_material"
           ]
+        },
+        "source_clock_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/source_clocks"
+            },
+            "states": {
+              "$ref": "#/$defs/source_clock_states"
+            },
+            "capture_digest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "observed_at",
+            "states",
+            "capture_digest"
+          ]
         }
       },
       "required": [
@@ -683,6 +731,80 @@
         "monitor_projection",
         "effects",
         "privacy"
+      ]
+    },
+    "source_clocks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Original source capture clocks, never economic periods, first-public times or account verification. Each unknown is explicit null.",
+      "properties": {
+        "positions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orders": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "history": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "positions",
+        "orders",
+        "history"
+      ]
+    },
+    "source_clock_states": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "positions": {
+          "enum": [
+            "available_unverified",
+            "stale_or_future",
+            "missing"
+          ]
+        },
+        "orders": {
+          "enum": [
+            "available_unverified",
+            "stale_or_future",
+            "missing"
+          ]
+        },
+        "history": {
+          "enum": [
+            "available_unverified",
+            "stale_or_future",
+            "missing"
+          ]
+        }
+      },
+      "required": [
+        "positions",
+        "orders",
+        "history"
       ]
     }
   }
