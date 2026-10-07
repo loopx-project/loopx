@@ -8,6 +8,7 @@ import { gateAddressesAgent, actionAddressesAgent, claimAllowsAgent } from "./ag
 import { missingRequiredCapabilities } from "../agents/capability_gate.ts";
 import {claimedAdvancementCountFromIndex} from "./frontier_revision.ts";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
+import type {HandoffState} from "./succession.ts";
 
 interface Row {
   payload: JsonObject; display: JsonObject; claim: string | null;
@@ -243,7 +244,31 @@ function routeContinuationLanes(value: unknown, agent: string | null, limit: num
   return result;
 }
 
-/** One quota read boundary composes scope/claim selection, resume and route rules. */
+/** Exclusion addresses a handoff review lane; it is not execution eligibility.
+ * Preserve projected source order, duplicates and unknown historical display states. */
+function handoffGateLanes(value: unknown, agent: string | null, limit: number): JsonObject {
+  if (!Array.isArray(value)) throw new EffectRuntimeRequestError("handoff items must be an array");
+  const rows = value.map(value => {
+    const row = requireJsonObject(value, "handoff item");
+    return {display: requireJsonObject(row.display, "handoff display"),
+      excluded: requireStringArray(row.excluded, "handoff excluded")};
+  });
+  if (!rows.length) return {};
+  const compact = (items: typeof rows) => items.slice(0, limit).map(row => row.display);
+  const result: JsonObject = {handoff_gate_count: rows.length, handoff_gates: compact(rows)};
+  if (agent) {
+    const current = rows.filter(row => row.excluded.includes(agent));
+    const needsSuccessor: HandoffState = "cleared_without_successor";
+    const cleared = current.filter(row => row.display.gate_state === needsSuccessor);
+    Object.assign(result, {current_agent_handoff_gate_count: current.length,
+      current_agent_handoff_gates: compact(current),
+      current_agent_cleared_without_successor_handoff_count: cleared.length,
+      current_agent_cleared_without_successor_handoff_gates: compact(cleared)});
+  }
+  return result;
+}
+
+/** One quota read boundary composes scope/claim selection, resume and hint visibility. */
 export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "quota planning");
   if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1", "todo_quota_planning_request_v2"].includes(String(request.schema_version))) throw new EffectRuntimeRequestError("quota planning schema mismatch");
@@ -253,7 +278,9 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const selection = requireJsonObject(request.selection, "selection");
   return {schema_version: "todo_quota_planning_v0", resume_planning: projectTodoResumePlanning(request.resume),
     ...projectQuotaSelection(selection),
-    ...(request.schema_version === "todo_quota_planning_request_v2" ? {route_lanes:
+    ...(request.schema_version === "todo_quota_planning_request_v2" ? {handoff_lanes:
+      handoffGateLanes(request.handoff_items, optionalNonEmptyString(selection.agent_id, "agent_id"),
+        requireInteger(selection.backlog_limit, "backlog_limit")), route_lanes:
       routeContinuationLanes(request.route_items, optionalNonEmptyString(selection.agent_id, "agent_id"),
         requireInteger(selection.backlog_limit, "backlog_limit"))} : {})};
 }

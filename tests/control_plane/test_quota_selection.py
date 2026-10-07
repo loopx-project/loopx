@@ -10,7 +10,9 @@ from loopx.control_plane.testing.canary_harness import write_fixture_registry, r
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
-from loopx.control_plane.todos.quota_summary import summarize_user_todos_for_quota
+from loopx.control_plane.todos.quota_summary import (
+    summarize_user_todos_for_quota, summarize_project_asset_todos_for_quota,
+)
 from loopx.control_plane.todos.todo_summary import compact_todo_group
 
 
@@ -85,6 +87,45 @@ def test_route_replan_visibility_counts_before_budget_without_granting_execution
         assert "current_agent_route_continuation_replan_count" not in result
 
 
+@pytest.mark.parametrize("agent", [None, "agent-b"])
+@pytest.mark.parametrize("asset", [False, True])
+def test_handoff_visibility_addresses_excluded_review_lane_without_executing_it(agent, asset):
+    states = ["blocking", "cleared_without_successor", "cleared_with_successor",
+              "cleared_no_followup", "superseded", "deferred", "historical_unknown"]
+    gates = [{"todo_id": f"todo_gate_{i}", "gate_state": state,
+              "excluded_agents": " AGENT-B ", "claimed_by": "agent-a", "index": 20 - i}
+             for i, state in enumerate(states)]
+    gates += [dict(gates[1]), dict(gates[1]),
+              {"todo_id": "todo_other", "gate_state": "cleared_without_successor",
+               "excluded_agents": ["agent-c"], "claimed_by": "agent-b"}]
+    value = {**summary([]), "handoff_gates": [None, *gates]}
+    if asset:
+        value.pop("items")
+        value.pop("first_open_items")
+    project = summarize_project_asset_todos_for_quota if asset else summarize_user_todos_for_quota
+    result = project(value,
+        agent_identity={"agent_id": agent} if agent else None)
+    assert result["handoff_gate_count"] == 10
+    assert result["handoff_gates"] == gates[:8]  # Source order and duplicates survive.
+    assert result["open_count"] == 0 and result["first_executable_items"] == []
+    if agent:
+        assert result["current_agent_handoff_gate_count"] == 9
+        assert result["current_agent_handoff_gates"] == gates[:8]
+        assert result["current_agent_cleared_without_successor_handoff_count"] == 3
+        assert result["current_agent_cleared_without_successor_handoff_gates"] == [gates[1]] * 3
+    else:
+        assert "current_agent_handoff_gate_count" not in result
+
+
+@pytest.mark.parametrize("projected", [[], [None]])
+def test_empty_projected_handoffs_suppress_raw_legacy_reconstruction(projected):
+    raw = item("todo_handoff", task_class="advancement_task", action_kind="handoff_review",
+               excluded_agents=["agent-b"], unblocks_todo_id="todo_target")
+    result = summarize_user_todos_for_quota({**summary([raw]), "handoff_gates": projected},
+        agent_identity={"agent_id": "agent-b"})
+    assert "handoff_gate_count" not in result
+
+
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_public_quota_route_read_keeps_claim_exclusion_and_provider_unchanged(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -120,6 +161,10 @@ def test_public_quota_route_read_keeps_claim_exclusion_and_provider_unchanged(tm
     assert routes["other_agent_route_continuation_replan_count"] == 2
     assert all(row.get("claimed_by") != "agent-a" and "agent-b" not in row.get("excluded_agents", [])
                for row in routes["current_agent_route_continuation_replan_candidates"])
+    assert routes["handoff_gate_count"] == 4
+    assert routes["current_agent_handoff_gate_count"] == 1
+    assert [row["todo_id"] for row in routes["current_agent_handoff_gates"]] == ["todo_route_excluded"]
+    assert routes["current_agent_cleared_without_successor_handoff_count"] == 0
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-route") == before
     assert (state.read_bytes() if state.exists() else None) == narrative
 

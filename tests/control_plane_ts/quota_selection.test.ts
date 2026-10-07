@@ -29,6 +29,7 @@ test("route planning shares claim exclusion, preserves legacy visibility and nev
       available_capabilities: null, sources: Object.fromEntries(["items", "backlog_items", "first_open_items", "deferred_items",
         "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
         "current_agent_claimed_monitor_items", "claimed_monitor_open_items"].map(key => [key, []]))},
+    handoff_items: [],
     route_items: [fact("free", {replan: false}), fact("free"), fact("own", {claim: "agent-a"}),
       fact("peer", {claim: "agent-b"}), fact("excluded", {excluded: ["agent-a"]}),
       fact("monitor", {task_class: "continuous_monitor"}), fact("missing", {gate: true}),
@@ -49,10 +50,48 @@ test("route planning shares claim exclusion, preserves legacy visibility and nev
   assert.throws(() => projectTodoQuotaPlanning({...input, route_items: null}), /route items/);
   assert.throws(() => projectTodoQuotaPlanning({...input, route_items: [fact("bad", {replan: "true"})]}), /classification/);
   assert.equal(projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v1"}).route_lanes, undefined);
+  assert.equal(projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v1"}).handoff_lanes, undefined);
   const legacy = {...input, schema_version: "todo_quota_planning_request_v0"};
   const {available: _available, ...oldSelection} = legacy.selection;
   assert.deepEqual(projectTodoQuotaPlanning({...legacy, selection: oldSelection}),
     projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v1"}));
+});
+
+test("handoff counts retain addressed review states, source order and duplicates before zero display", () => {
+  const states = ["blocking", "cleared_without_successor", "cleared_with_successor",
+    "cleared_no_followup", "superseded", "deferred", "historical_unknown"];
+  const handoffs = states.map((gate_state, i) => ({display: {todo_id: `gate-${i}`, gate_state,
+    claimed_by: "agent-b"}, excluded: ["agent-a"]}));
+  handoffs.push(handoffs[1], handoffs[1], {display: {todo_id: "other", gate_state: states[1],
+    claimed_by: "agent-a"}, excluded: ["agent-b"]});
+  const input = {schema_version: "todo_quota_planning_request_v2", route_items: [], handoff_items: handoffs,
+    selection: request([], {available: [], backlog_limit: 0}),
+    resume: {schema_version: "todo_resume_planning_request_v0", agent_id: "agent-a", item_limit: 8,
+      has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null,
+      available_capabilities: null, sources: Object.fromEntries(["items", "backlog_items", "first_open_items", "deferred_items",
+        "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
+        "current_agent_claimed_monitor_items", "claimed_monitor_open_items"].map(key => [key, []]))}};
+  const before = structuredClone(input);
+  const result = projectTodoQuotaPlanning(input), lanes = result.handoff_lanes as JsonObject;
+  assert.equal(lanes.handoff_gate_count, 10);
+  assert.equal(lanes.current_agent_handoff_gate_count, 9);
+  assert.equal(lanes.current_agent_cleared_without_successor_handoff_count, 3);
+  assert.deepEqual(lanes.handoff_gates, []);
+  assert.deepEqual(lanes.current_agent_handoff_gates, []);
+  assert.deepEqual(lanes.current_agent_cleared_without_successor_handoff_gates, []);
+  assert.deepEqual((result.lanes as JsonObject).executable_items, []);
+  assert.deepEqual(input, before);
+  const visible = {...input, selection: {...input.selection, backlog_limit: 8}};
+  assert.deepEqual((projectTodoQuotaPlanning(visible).handoff_lanes as JsonObject).handoff_gates,
+    handoffs.slice(0, 8).map(row => row.display));
+  assert.deepEqual(projectTodoQuotaPlanning({...visible, handoff_items: []}).handoff_lanes, {});
+  const unscoped = projectTodoQuotaPlanning({...visible, selection: {...visible.selection, agent_id: null}})
+    .handoff_lanes as JsonObject;
+  assert.equal(unscoped.handoff_gate_count, 10);
+  assert.equal(unscoped.current_agent_handoff_gate_count, undefined);
+  for (const handoff_items of [null, [{display: null, excluded: []}], [{display: {}, excluded: "agent-a"}]]) {
+    assert.throws(() => projectTodoQuotaPlanning({...input, handoff_items}), /handoff/);
+  }
 });
 
 test("gate applicability overrides execution claims, but not another lane's explicit scope", () => {

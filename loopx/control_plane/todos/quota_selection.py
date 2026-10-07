@@ -21,6 +21,7 @@ from .resume_planning import build_todo_resume_planning_request
 from .summary_item import compact_todo_summary_item
 from .user_gate import is_user_gate_todo_item
 from .route_continuation import build_todo_route_continuation_facts
+from .handoff_gate import todo_summary_handoff_gates
 
 
 def project_quota_planning(
@@ -33,6 +34,7 @@ def project_quota_planning(
     profile = identity.get("agent_profile")
     profile = profile if isinstance(profile, dict) and profile else None
     agent = normalize_todo_claimed_by(identity.get("agent_id"))
+    handoff_gates = todo_summary_handoff_gates(value)
 
     def encode(item: dict[str, Any]) -> dict[str, Any]:
         priority, index = todo_projection_sort_key(item)
@@ -64,7 +66,10 @@ def project_quota_planning(
     try:
         result = effect_runtime_result("todo.quota_planning.project", {
             "schema_version": "todo_quota_planning_request_v2",
-            "route_items": build_todo_route_continuation_facts(value),
+            "route_items": build_todo_route_continuation_facts(value, handoff_gates=handoff_gates),
+            "handoff_items": [{"display": gate,
+                "excluded": normalize_todo_excluded_agents(gate.get("excluded_agents"))}
+                for gate in handoff_gates],
             "resume": build_todo_resume_planning_request(value, agent_id=agent, item_limit=8,
                 available_capabilities=(available_capabilities or []) if resolve_capacity else None),
             "selection": {
