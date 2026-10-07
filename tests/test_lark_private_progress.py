@@ -105,6 +105,55 @@ def allow_update(transport, row):
     _atomic_write_json(path, record)
 
 
+def test_native_preparation_is_visible_without_answer_or_private_labels():
+    state = {}
+    assert project_progress(state, [{"event_id": "context", "kind": "agent.phase", "payload": {
+        "phase": "manager_context", "label": "private Goal name and contents"}}]) == (
+            "⏳ **正在读取当前工作状态**")
+    assert project_progress(state, [{"event_id": "started", "kind": "agent.phase", "payload": {
+        "method": "turn/started", "label": "private host details"}}]) == "⏳ **已开始处理**"
+    assert "answer" not in state
+    assert project_progress({}, [{"event_id": "unknown", "kind": "agent.phase", "payload": {
+        "phase": "unrecognized", "label": "private output"}}]) is None
+
+
+def test_native_preparation_updates_original_post_before_model_output(ordinary):  # noqa: F811
+    store, runtime, provider, transport = streaming(ordinary)
+    # This host accepts the Turn, then waits without any answer/tool/reasoning event.
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace(
+        '            print(json.dumps({"method": "item/started",',
+        '            continue\n            print(json.dumps({"method": "item/started",', 1))
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "early-progress", "wait for interrupt"))
+        row = transport.core.pending()[0]
+        active(store, row)
+        sid, tid = row["session_id"], row["turn_id"]
+        deadline = time.monotonic() + 10
+        while not any(e["kind"] == "agent.phase" and e["payload"].get("method") == "turn/started"
+                      for e in store.events_after(sid, tid, None)):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        transport.reconcile()
+        assert len(provider.writes) == 1 and "已开始处理" in provider.writes[0][1]
+        assert "answer" not in _read_json(transport.root / f"{row['request_ref']}.json")["stream"]
+        assert store.load_turn(sid, tid)["status"] == "running"
+        store.append_event(sid, tid, kind="answer.delta", payload={"text": "后续正文。"})
+        allow_update(transport, row)
+        transport.reconcile()
+        assert "后续正文" in provider.edits[-1][2]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        transport.reconcile()
+        assert provider.edits[-1][2] == "Steered response."
+        assert len(provider.writes) == 1 and {ref for _, ref, _ in provider.edits} == {"om_out_0"}
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(r["method"] == "thread/start" for r in requests) == 1
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+    finally:
+        runtime.close()
+
+
 def test_context_compaction_shows_only_observed_fixed_phase():
     state = {}
     start = {"event_id": "compaction-start", "kind": "agent.phase", "payload": {

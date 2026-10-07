@@ -51,6 +51,15 @@ class Provider:
             if not self.verify_replies and ref.startswith("om_out_"):
                 message = {**message, "body": {"content": json.dumps({"text": "not yet visible"})}}
             data = {"ok": True, "data": {"items": [message]}}
+        elif "+messages-edit" in args:
+            ref = args[args.index("--message-id") + 1]
+            content = args[args.index("--content") + 1]
+            assert self.messages[ref]["chat_id"] == f"oc_{profile.replace('-', '_')}"
+            if "--dry-run" in args:
+                data = {"ok": True, "api": [{"body": {"content": content, "msg_type": "post"}}]}
+            else:
+                self.messages[ref]["body"] = {"content": content}
+                data = {"ok": True}
         elif "+messages-send" in args:
             kind = "post" if "--content" in args else "text"
             content = args[args.index("--content") + 1] if kind == "post" else json.dumps({"text": args[args.index("--text") + 1]})
@@ -60,7 +69,9 @@ class Provider:
             else:
                 ref = f"om_out_{len(self.writes)}"
                 self.writes.append((profile, text))
-                self.messages[ref] = {"message_id": ref, "msg_type": kind, "body": {"content": content}}
+                self.messages[ref] = {"message_id": ref, "msg_type": kind, "body": {"content": content},
+                    "chat_id": args[args.index("--chat-id") + 1],
+                    "sender": {"id": self.profile_apps[profile], "sender_type": "app"}}
                 data = {"ok": True, "data": {"message_id": ref}}
         elif "reactions" in args:
             ref = args[args.index("--message-id") + 1]
