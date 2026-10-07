@@ -56,9 +56,10 @@ python -m benchmark.edgebench.run \
 
 Trial timeouts use **explicit `--timeout` → [task defaults](task-defaults.json)
 → 64,800 seconds (18 hours)**. Portfolio Risk Calibration defaults to
-**43,200 seconds (12 hours)** for all worker and feedback profiles; other tasks
-retain the 18-hour fallback. These are total trial budgets, including planning,
-not per-turn limits.
+**43,200 seconds (12 hours)**; Lean Analysis Proofs defaults to
+**86,400 seconds (24 hours)**. Both task defaults apply to every worker and
+feedback profile; other tasks retain the 18-hour fallback. These are total trial
+budgets, including planning, not per-turn limits.
 
 Auto-evaluation uses **explicit `--eval-interval` → task defaults → 300 seconds**.
 Portfolio defaults to **300 seconds (5 minutes)**; Lean Analysis Proofs defaults
