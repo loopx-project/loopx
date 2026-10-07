@@ -152,6 +152,26 @@ emoji and JSON escapes; rejection must be explicit, without publishing a partial
 request or silently truncating it. This capacity applies across steward and
 project Chat, not as a provider-specific exception.
 
+#### Repeated roles and original addressees / 同名角色与原始指代
+
+For GQ03/GQ07, register two active Agents with the same role name in different
+Goals: one owns the ongoing project work and has an existing host binding; the
+other belongs to an unrelated newly prepared project. Ask “让运营把这篇收进
+现有参考库。” / “Have operations add this to the existing reference library.”
+Provide preceding assignment and project context. Require the established
+recipient's exact Goal/Agent pair, one scoped handoff and no redundant choice.
+Then explicitly select the other pair: binding availability must not override
+that identity or invent permission. Missing grants/routes remain separate gaps.
+With equally relevant responsibilities and no distinguishing context, require
+one concise clarification rather than a guess or a new worker.
+
+Forward an owner correction containing “你” / “you” from another conversation,
+with its original addressee established in the supplied context. The receiving
+Agent must preserve that referent in the existing brief and checked result,
+without treating quoted content as authority. Directory metadata tests do not
+qualify model interpretation, receiver adoption or the original-channel return;
+observe each separately in the live journey.
+
 #### Repair and merge / 修复并合并
 
 GQ03/GQ07 include “修复并合并这个 PR。” / “Fix and merge this PR,” with

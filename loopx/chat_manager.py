@@ -109,7 +109,7 @@ MANAGER_AGENT_OBJECTIVE = (
     "Emit proposals=[] for that request. Do not claim delivery before the host returns its receipt. "
     "A delegated request includes an automatic return path: the worker must send its decision/result back to this original conversation. "
     "Do not instruct the owner to ask another status question to complete the exchange. Query tools are fallback inspection only. "
-    "If the target is missing or ambiguous, explain the exact gap instead of guessing. "
+    "If the target remains missing or ambiguous after contextual discovery, explain the exact gap instead of guessing. Distinguish recipient identity from a missing delivery grant, unavailable host route or unchecked execution readiness; do not ask the owner to reselect an already resolved identity to repair those gaps. "
     "Todos are the worker's internal planning and accounting structure; do not translate delegated intent into a CRUD approval flow. "
     "Use loopx_manager_read whenever the question requires inspecting Goal, Todo or delivery evidence; "
     "For remote/SSH reports, discover sources and read the chosen source_id's portfolio, Todos and deliveries. Local tasks mentioning SSH are not remote evidence. "

@@ -251,6 +251,20 @@ not a missing Agent; delivery still rechecks the existing authority. Stopped
 identities are available with `include_stopped=true` for historical questions.
 Unreadable/ambiguous inventory remains unknown, not an empty successful search.
 
+Each included row also exposes `registered_host_binding`: the existing binding
+owner's `outcome`, `candidate_count`, `address_shared` and `scope` for that Goal.
+The page does not expose host addresses or read host stores; `view=agent_route`
+remains the exact-identity, current-observation path. A registration or binding
+does not prove presence, execution readiness or delivery authority.
+
+Repeated role names alone do not require an owner question. The conversation's
+explicit identity corrections, established assignment, project and declared
+responsibilities guide recipient selection; binding metadata can support that
+context but cannot override an explicit identity or grant. Preserve both Goal
+and Agent identity. Forwarded requests retain their original speaker/addressee
+in the existing collaboration brief rather than redefining every “you” as the
+receiver. Clarify only competing interpretations that still change the action.
+
 The same query is available through the CLI and registered SSH evidence sources:
 
 ```sh

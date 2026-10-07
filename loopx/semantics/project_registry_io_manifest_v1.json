@@ -247,7 +247,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/__init__.py::<module>.configure_delivery_target.update::codec_read:load_project_registry#1",
-      "line": 382,
+      "line": 383,
       "column": 51,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -255,7 +255,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/__init__.py::<module>.configure_evidence_scope::codec_read:load_project_registry#1",
-      "line": 338,
+      "line": 339,
       "column": 16,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -263,7 +263,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/discovery.py::<module>.agent_page::codec_read:decode_registry_snapshot#1",
-      "line": 38,
+      "line": 39,
       "column": 20,
       "kind": "codec_read",
       "api": "decode_registry_snapshot",
@@ -2167,7 +2167,7 @@
     },
     {
       "site": "loopx/runtime.py::<module>.archive_runtime_goal::codec_read:load_registry#2",
-      "line": 138,
+      "line": 142,
       "column": 31,
       "kind": "codec_read",
       "api": "load_registry",
