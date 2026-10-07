@@ -39,10 +39,18 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
 ) -> Any:
-    # Each guard observes the exact scope through the typed store owner.
-    # An absent namespace is fresh empty context, not an unobserved capability.
+    # Explicit local use creates this namespace. Untouched runtimes do not
+    # invoke the preference provider or add capability instructions to a guard.
     if not agent_id:
         return dispatch
+    try:
+        (runtime_root / "agent-preferences").stat()
+    except FileNotFoundError:
+        return dispatch
+    except OSError:
+        # Let the typed provider disclose denial/failure rather than treating
+        # an inaccessible existing namespace as disabled or empty context.
+        pass
     from ...control_plane.capability_hooks import (
         TurnStartHookRegistration, TURN_START_HOOK_RESULT_SCHEMA_VERSION, dispatch_turn_start_hooks,
     )
@@ -91,6 +99,10 @@ def extend_turn_start_dispatch(
     )
 
     extra = dispatch_turn_start_hooks((hook,))
+    # Another Goal/Agent's journal does not opt this scope into preference
+    # context. Retirements and expiry remain present and must invalidate cache.
+    if snapshot is not None and snapshot.get("ok") and snapshot.get("status") == "absent":
+        return dispatch
     result = dict(dispatch or {})
     for key in ("results", "required_reads", "failures", "contexts"):
         if key == "contexts" and not extra.get(key):
