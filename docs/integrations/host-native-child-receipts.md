@@ -102,6 +102,22 @@ Agent 明确记录验收；宿主完成不代表证据已被采纳。
    新写入在既有事件流锁内重新核对读回，每次报告只调用一个粗粒度 TS 边界，
    不增加第二套 Python 阶段判断。
 
+After a lawful deferred-Todo recovery, rerun `quota should-run` with the same
+explicit Turn and Todo. If the original bound guard denied delivery and the
+current guard explicitly admits work, quota appends a work-qualification receipt
+under the event-log lock. The original event remains intact; settlement identity,
+workspace causality and semantic guards stay on the original binding. Replays
+reuse that receipt. Partial or negative facts, identity conflicts and begun
+closeout cannot create a qualification. This grants no execution lease, child
+host invocation or additional quota slot: acquire the required fresh lease and
+keep the normal native-child policy and closeout steps.
+
+合法恢复 deferred Todo 后，以同一显式 Turn 和 Todo 重跑 `quota should-run`。
+原绑定 guard 曾拒绝交付、当前 guard 明确准入工作时，quota 在事件流锁内追加
+工作资格回执，保留原事件、结算身份、工作区因果和语义门禁；再次进入复用该回执。
+不完整或否定事实、身份冲突和已开始结算均不能升级资格。这不授予执行 lease、
+宿主 child 调用或额外 quota；仍须取得要求的 fresh lease，遵守原生 child 策略和结算步骤。
+
 Example / 示例：
 
 ```sh

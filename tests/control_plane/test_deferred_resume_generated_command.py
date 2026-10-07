@@ -13,6 +13,7 @@ from canonical_authority_fixture import (
     isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
@@ -45,6 +46,9 @@ def test_generated_deferred_resume_preserves_execution_lease_boundary(
     peer = "registered-peer"
     registry_data = json.loads(registry.read_text())
     registry_data["goals"][0]["coordination"]["registered_agents"].append(peer)
+    registry_data["goals"][0]["spawn_policy"] = {
+        "mode": "multi_subagent", "allowed": True, "max_children": 2,
+    }
     registry.write_text(json.dumps(registry_data))
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     text = (
@@ -224,4 +228,36 @@ def test_generated_deferred_resume_preserves_execution_lease_boundary(
         reentry["heartbeat_receipt"]["settlement_identity"]
         == guard["heartbeat_receipt"]["settlement_identity"]
     )
+    assert reentry["heartbeat_receipt"]["status"] == "upgraded"
+    assert reentry["heartbeat_receipt"]["event_id"] != guard["heartbeat_receipt"]["event_id"]
+    log_path = rollout_event_log_path(runtime, GOAL_ID)
+    events = load_rollout_events(log_path)
+    original = next(row for row in events if row["event_id"] == guard["heartbeat_receipt"]["event_id"])
+    assert original["details"]["delivery_allowed"] is False
+    qualified = next(row for row in events if row["event_id"] == reentry["heartbeat_receipt"]["event_id"])
+    assert qualified["causality"]["source_event_id"] == original["event_id"]
+    assert qualified["details"]["delivery_allowed"] is True
+    rc, cold = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "resume-command-turn",
+        "--todo-id", TODO_ID, "--scan-path", str(project))
+    assert rc == 0 and cold["heartbeat_receipt"]["status"] == "replayed", cold
+    assert cold["heartbeat_receipt"]["event_id"] == qualified["event_id"]
+    assert load_rollout_events(log_path) == events
+    child = ("native-child", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--turn-instance-id", "resume-command-turn")
+    rc, decision = cli(*child, "record", "--operation-id", "resumed-audit",
+        "--stage", "decision", "--operation", "followup", "--outcome", "started",
+        "--entrypoint-id", "generic_host", "--execute")
+    assert rc == 0 and decision["appended"], decision
+    rc, replay = cli(*child, "record", "--operation-id", "resumed-audit",
+        "--stage", "decision", "--operation", "followup", "--outcome", "started",
+        "--entrypoint-id", "generic_host", "--execute")
+    assert rc == 0 and not replay["appended"]
+    rc, result = cli(*child, "record", "--operation-id", "resumed-audit",
+        "--stage", "result", "--outcome", "completed", "--execute")
+    assert rc == 0 and result["appended"], result
+    rc, reviewed = cli(*child, "record", "--operation-id", "resumed-audit",
+        "--stage", "review", "--outcome", "accepted", "--evidence-ref", "synthetic-audit",
+        "--validation-ref", "synthetic-validation", "--execute")
+    assert rc == 0 and reviewed["native_child_activity"]["parent_accepted_count"] == 1
     assert _spend_run_count(runtime) == 0

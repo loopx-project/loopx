@@ -4297,8 +4297,18 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     assert resumed["workspace_repair_allowed"] is False
     assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert resumed["selected_todo"]["selection_binding"] == "heartbeat_receipt"
-    assert resumed["heartbeat_receipt"]["status"] == "replayed"
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+    # Workspace recovery admits work on the already selected identity. Keep
+    # the repair receipt intact and append qualification rather than replaying
+    # its stale negative delivery facts to downstream admission readers.
+    assert resumed["heartbeat_receipt"]["status"] == "upgraded"
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == repair["heartbeat_receipt"]["settlement_identity"]
+    assert resumed["heartbeat_receipt"]["event_id"] != repair["heartbeat_receipt"]["event_id"]
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args,
+        "--todo-id", ALTERNATIVE_TODO_ID, cwd=linked_worktree)
+    assert replay_rc == 0 and replay["heartbeat_receipt"]["status"] == "replayed", replay
+    assert replay["heartbeat_receipt"]["event_id"] == resumed["heartbeat_receipt"]["event_id"]
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
 
 
 def test_boundary_projection_repair_keeps_same_turn_alternative_selectable(
