@@ -128,10 +128,14 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     assert code == 0 and listed["todo"]["text"] == text, listed
     assert listed["todo"]["title"] == todo_priority_parts(summary_text)[1]
     assert listed["authority_read"]["provider_revision"] == before["provider_revision"]
-    code, thin = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"], "--thin")
-    assert code == 0 and thin["todo"]["todo_id"] == record["todo_id"], thin
-    assert len(thin["todo"]["text"]) <= 500
-    assert "retain the final obligation" not in thin["todo"]["text"]
+    code, rejected = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"], "--thin")
+    assert code == 1 and rejected["ok"] is False, rejected
+    assert "Exact Todo reads return full requirements" in rejected["error"]
+    assert _read(runtime) == before and state.read_text() == rendered
+    code, thin = _cli(registry, "list", "--goal-id", "goal-a", "--thin")
+    assert code == 0 and thin["todos"][0]["todo_id"] == record["todo_id"], thin
+    assert len(thin["todos"][0]["text"]) <= 500
+    assert "retain the final obligation" not in thin["todos"][0]["text"]
     code, hot = _cli(registry, "list", "--goal-id", "goal-a")
     assert code == 0 and hot["todos"][0]["text"] == summary_text, hot
     assert _read(runtime) == before

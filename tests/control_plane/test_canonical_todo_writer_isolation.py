@@ -72,8 +72,9 @@ def test_canonical_cli_lifecycle_without_source_todo_writers(tmp_path, provider,
                   "--note", "Retain source identity", "--update-operation-id", "update",
                   "--update-expected-provider-revision", listing["authority_read"]["provider_revision"])
     assert updated["todo_id"] == original
-    updated_records = cli("list", "--goal-id", "goal-a", "--todo-id", original)["todos"]
-    assert updated_records[0]["note"] == "Retain source identity"
+    updated_record = cli("list", "--goal-id", "goal-a", "--todo-id", original)["todo"]
+    assert updated_record["todo_id"] == original
+    assert updated_record["note"] == "Retain source identity"
     completed = cli("complete", "--goal-id", "goal-a", "--todo-id", user,
                     "--no-follow-up", "--note", "Independent user action accepted")
     assert completed["completed"] and completed["todo_id"] == user

@@ -171,7 +171,7 @@ def test_terminal_lease_survives_public_cutover_and_original_recovery(tmp_path: 
     assert recovered["promotion"]["status"] == "replayed", recovered
     assert ws.cli("task-lease", "inspect", "--todo-id", todo_id)["lease"] == expected
     retained = ws.cli("todo", "list", "--todo-id", later["todo_id"])
-    assert retained["todos"][0]["text"] == "Later canonical work must survive recovery"
+    assert retained["todo"]["text"] == "Later canonical work must survive recovery"
     assert lease.read_bytes() == original
     assert not ws.state.exists()
 

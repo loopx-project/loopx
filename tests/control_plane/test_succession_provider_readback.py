@@ -10,7 +10,12 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.chat_manager_details import read_manager_goal_details
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.coordination.local_authority import (
+    canonical_todo_summary_fields, read_canonical_todos_if_promoted,
+)
+from loopx.control_plane.todos.goal_todo_projection import (
+    goal_todo_summaries, todo_summaries_from_fields,
+)
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.todos import list_goal_todos
@@ -29,6 +34,26 @@ def cli(registry: Path, *args: str):
         'todo', 'list', '--goal-id', 'goal-a', *args], capture_output=True, text=True, timeout=60)
     assert child.returncode == 0, child.stdout or child.stderr
     return json.loads(child.stdout)
+
+
+def selected_summary(registry: Path, runtime: Path, state: Path, todo_id: str, *, limit: int | None = None):
+    # Exact CLI detail owns the full task body. Relationship/closure judgments
+    # belong to the existing summary owner over the complete provider graph,
+    # before presentation selection; never reconstruct them from detail.
+    options = dict(rollout_events=[], roles=['agent'], status=None,
+                   todo_id=todo_id, agent_id=None, limit=limit)
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')
+    if canonical is not None:
+        projected = todo_summaries_from_fields(
+            fields=canonical_todo_summary_fields(canonical['todos']),
+            source='file_authority', **options,
+        )
+    else:
+        projected = goal_todo_summaries(
+            json.loads(registry.read_text())['goals'][0],
+            state_text=state.read_text(), state_path=state, **options,
+        )
+    return projected.summaries['agent_todos']
 
 
 @pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
@@ -55,7 +80,9 @@ def test_real_cli_historical_route_advisory_preserves_old_source_and_provider(tm
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')
     for todo_id, expected in [('todo_legacy', True), ('todo_ordinary', False), ('todo_closed', False)]:
         result = cli(registry, '--todo-id', todo_id)
-        summary = result['agent_todos']
+        assert result['todo']['todo_id'] == todo_id
+        assert all(key not in result for key in ('todos', 'agent_todos', 'user_todos'))
+        summary = selected_summary(registry, runtime, state, todo_id)
         handoff = summary['handoff_gates'][0]
         assert (handoff.get('route_continuation_replan_required') is True) is expected
         assert handoff['gate_state'] == ('cleared_no_followup' if todo_id == 'todo_closed' else 'blocking')
@@ -88,7 +115,9 @@ def test_real_cli_graph_selection_history_and_read_only_manager(tmp_path, monkey
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')
     for name, gap in [('inferred_source', 0), ('missing_source', 1), ('self_source', 1), ('handoff_source', 0)]:
         result = cli(registry, '--todo-id', cases[name], '--limit', '1')
-        summary = result['agent_todos']
+        assert result['todo']['todo_id'] == cases[name]
+        assert all(key not in result for key in ('todos', 'agent_todos', 'user_todos'))
+        summary = selected_summary(registry, runtime, state, cases[name], limit=1)
         assert summary.get('completed_without_successor_count', 0) == gap
         assert 'terminal_closure_proof' not in summary
         if name == 'handoff_source':
@@ -134,7 +163,11 @@ def test_large_goal_reuses_complete_succession_without_exceeding_rpc_budget(tmp_
     assert summary['open_count'] == 1
     assert summary.get('completed_without_successor_count', 0) == 0
     assert 'terminal_closure_proof' not in summary
-    selected = cli(registry, '--todo-id', 'todo_capacity_00000', '--limit', '1')['agent_todos']
+    detail = cli(registry, '--todo-id', 'todo_capacity_00000', '--limit', '1')
+    assert detail['todo']['todo_id'] == 'todo_capacity_00000'
+    assert detail['todo']['note'] == 'Retained metadata 完整🙂'
+    assert all(key not in detail for key in ('todos', 'agent_todos', 'user_todos'))
+    selected = selected_summary(registry, runtime, state, 'todo_capacity_00000', limit=1)
     assert selected.get('completed_without_successor_count', 0) == 0
     assert 'terminal_closure_proof' not in selected
     after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')

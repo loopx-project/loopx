@@ -79,7 +79,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert rc == 0 and guard["should_run"] is True, guard
     rc, original = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, original
-    digest = original["todos"][0]["completion_validation_sha256"]
+    digest = original["todo"]["completion_validation_sha256"]
     rc, wait = cli("todo", "update", "--goal-id", GOAL_ID,
                        "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
                        "--resume-when", f"{kind}:{MONITOR_ID}",
@@ -121,7 +121,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert _spend_run_count(runtime) == 0
     rc, after = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, after
-    todo = after["todos"][0]
+    todo = after["todo"]
     assert todo["status"] == ("deferred" if defer else "open") and todo["resume_ready"] is False
     assert todo["resume_when"] == f"{kind}:{MONITOR_ID}"
     assert todo["completion_validation_sha256"] == digest
