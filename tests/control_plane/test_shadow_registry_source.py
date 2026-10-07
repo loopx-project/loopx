@@ -149,11 +149,14 @@ def test_terminal_lease_survives_public_cutover_and_original_recovery(tmp_path: 
     original = json.dumps(expected, indent=2).encode()
     lease.write_bytes(original)
     if provider == "sqlite":
-        subprocess.run([os.environ.get("LOOPX_CONTROL_PLANE_NODE", "node"),
+        selection = subprocess.run([os.environ.get("LOOPX_CONTROL_PLANE_NODE", "node"),
             "--no-warnings", "--experimental-strip-types", "--experimental-sqlite",
-            "loopx/control_plane/coordination/local_authority_provider.ts", "--runtime-root",
+            str((REPO / "loopx/control_plane/coordination/local_authority_provider.ts").resolve()), "--runtime-root",
             str(ws.runtime), "--goal-id", ws.goal, "--execute"], cwd=REPO,
             capture_output=True, text=True, timeout=45, check=True)
+        assert json.loads(selection.stdout) == {
+            "ok": True, "provider": "sqlite", "changed": True, "executed": True,
+        }
     assert ws.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
     for index in range(3):
         ws.add(f"Independent migration work {index}")
