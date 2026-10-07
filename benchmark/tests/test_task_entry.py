@@ -222,7 +222,7 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
 
     async def cli(environment, args, **kwargs):
         calls.append(args)
-        return {"after": {"execution_profile": {"replan_after_completed_todos": 3}}}
+        return {"after": {"execution_profile": {"replan_after_effective_turns": 3}}}
 
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
@@ -437,7 +437,7 @@ def test_seeded_task_acceptance_survives_phase_update_without_reviving_terminal_
         original = agent._seeded_todo_id
         first = await cli(None, ["todo", "list", "--goal-id", "planning-goal",
                                 "--role", "agent", "--todo-id", original])
-        initial_text = first["todos"][0]["text"]
+        initial_text = first["todo"]["text"]
         transition = (["complete", "--no-follow-up", "--note", "Synthetic task independently validated; no remaining work"]
                       if status == "done" else ["update", "--status", status])
         if status == "deferred":
@@ -517,3 +517,50 @@ def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
     with pytest.raises(RuntimeError):
         prepare_entry(planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)})
     assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+
+
+@pytest.mark.parametrize("settings,field,value", [
+    ({}, "replan_after_effective_turns", 3),
+    ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
+    ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
+])
+def test_runner_cadence_persists_through_real_configure_goal(
+    planning_env, tmp_path, monkeypatch, settings, field, value
+):
+    import contextlib
+    import io
+    pytest.importorskip("harbor")
+    from benchmark.runtime import harbor
+    from loopx.cli import main
+
+    monkeypatch.setattr(harbor, "_GOAL_ID", "planning-goal")
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+
+    async def cli(environment, args, **kwargs):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main([
+                "--format", "json", "--registry", planning_env["LOOPX_REGISTRY"],
+                "--runtime-root", planning_env["LOOPX_RUNTIME_ROOT"], *args,
+            ])
+        assert code == 0, output.getvalue()
+        return json.loads(output.getvalue())
+
+    async def prepared(*args, **kwargs):
+        return True
+
+    async def no_pending(**kwargs):
+        return SimpleNamespace(return_code=1)
+
+    monkeypatch.setattr(agent, "_loopx", cli)
+    monkeypatch.setattr(agent, "_registry_exists", prepared)
+    monkeypatch.setattr(agent, "_write_task_document", prepared)
+    asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task",
+                                     cwd=planning_env["LOOPX_PROJECT"]))
+    readback = asyncio.run(cli(None, ["configure-goal", "--goal-id", "planning-goal"]))
+    profile = readback["after"]["execution_profile"]
+    assert profile[field] == value
+    other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
+             else "replan_after_effective_turns")
+    assert other not in profile
+    assert agent._replan_receipt() == {field: value}

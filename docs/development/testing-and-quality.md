@@ -844,6 +844,38 @@ it does not grant execution quota, spending, or provider authority.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+The fixed public CLI matrix at `2244b96f1e2e5c90bef43ae4c140c0994bfcc07a`
+and the settled-Turn cadence candidate exposed stale absolute ceilings on both
+revisions. The 96-row comparison retained 1/36/18 Todos and 1/12/12 history
+records, full command paths, enabled multi-subagent and blocking-gate cases.
+Quota's selected-Todo source carries current requirements, read freshness,
+before-work ordering and unavailable-source recovery; Turn transports that
+same context, and diagnose serves both selected and Goal-array consumers.
+Retain these caller contracts while calibrating the existing regression limits:
+
+| Output / 输出 | Same base/head measurement / 同口径测量 | Revised ceiling / 新上限 |
+| --- | --- | --- |
+| Quota small JSON / Markdown | 21,871 / 8,690 chars; 579 / 134 lines | 22,000 / 9,000 chars; 600 / 140 lines |
+| Quota crowded JSON / Markdown | 35,710 / 7,772 chars; 836 / 84 lines | 36,000 / 7,800 chars; 850 / 90 lines |
+| Quota explicit-detail Markdown | 8,760 chars; 134 lines | 9,000 chars; 140 lines |
+| Turn small / crowded / multi-agent JSON | 12,060 / 16,250 / 14,098 chars | 12,500 / 17,000 / 14,500 chars |
+| Crowded quota / Turn JSON with Agent vision | 41,503 / 16,679 chars; 939 / 427 lines | 42,000 / 17,000 chars; Turn 440 lines |
+| Turn transaction detail JSON | 13,688 chars | 14,000 chars |
+| TurnEnvelope JSON / enabled multi-subagent / Markdown | 10,498 / 11,426 / 3,949 chars; 255 / 279 / 90 lines | 12,000 JSON / 4,100 Markdown chars; 300 / 95 lines |
+| Diagnose small / crowded JSON | 21,521 / 45,122 chars | 22,000 / 46,000 chars |
+
+Only exceeded character/line guards change; semantic, duplication, per-Todo and
+fixed-growth assertions retain their existing limits. Headroom is bounded by
+the frozen workload, not a universal percentage. This calibration changes
+output regression guards, leaving execution quota, envelope wire limits and
+frozen experiment/promotion criteria with their existing owners. The original
+failures remain failures under the old ceilings; rerun the complete matrix and
+affected semantic tests under the revised contract.
+
+同一冻结负载在主干和候选上均超出旧回归预算；保留当前任务原文、读取时序、
+新鲜度、恢复和停止条件，并按上表校准已有输出检查。增长、语义及去重检查仍独立
+生效；此调整不授予执行额度，也不改写历史实验或验收结果。
+
 1. **同口径测量。** 记录 base/head、负载、指标和测量边界。紧凑 JSON 字符、UTF-8
    字节、嵌套键数、真实 stdout 和 token 不可互换。延迟要保留样本窗口、负载和
    分布，并承认噪声。保留失败场景与原结果，不缩小 fixture、扫描范围或采样深度。

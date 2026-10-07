@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-01
+- Last revised: 2026-10-07
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -29,15 +29,30 @@ required for the first App outcome. These are planned product consumers of
 T0–T4, not additional provider promotion or completed migration claims.
 
 
-## Current delivery frontier (2026-10-02)
+<a id="current-delivery-frontier-2026-10-02"></a>
 
-At main `9b0486dc1`, #4931, #5251, #5395, #5417 and #5436 are merged.
-Do not recount their storage improvements or Python retirement as pending work.
+## Current delivery frontier (2026-10-07)
+
+Rechecked at main `06b6caa07`: #5413/#5466/#5283 and the affected creation,
+Host-stop and UI-history owners #5500/#5805/#5308/#5398 are merged. Reuse
+their delivered boundaries rather than reopening the October 2 merge queue.
 The [current validation, migration and deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02)
-prioritizes #5413/#5466/#5283 closeout, installed reversible qualification,
-bounded opt-in adoption, canonical creation/defaults and last-caller deletion.
+now prioritizes installed reversible qualification, affected consumer adoption,
+policy migration and last-caller deletion; it records the merged sources and
+the remaining evidence separately.
+
+Canonical new-Goal creation is already implemented by #5500/#5805. The existing
+machine setting and `coordination/local_authority_defaults.ts` choose canonical
+SQLite with `hard_lease` for unconfigured new Goals; CLI bootstrap and App
+creation share the typed initialization and original-operation recovery owner.
+Explicit v0 settings and v1 `canonical_creation=false` preserve post-promotion
+target behavior. Existing Goals keep their recorded selection. See the
+[configuration and disable contract](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting).
+This is the source candidate, not certification of installed adoption, a released
+default, full shared Goal intent or D2/D3. Do not rebuild a creation/default owner.
+
 Existing Goal migration, two-policy ownership retirement and storage-format
-upgrade have separate receipts and exits. Original-receipt recovery does not
+upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
 
 A bounded cohort can start after its installed recovery and relevant execution
@@ -2130,7 +2145,8 @@ Keep the remaining Python current-time/raw-summary rule: bounded resume/handoff
 sources and scheduler freshness still need a cohesive already-needed batch,
 with same-load cost and installed File/SQLite negative cases before retirement.
 Do not open a duplicate follow-up or treat rule relocation as optimization.
-Default SQLite, full T4 and live host wait qualification remain open.
+Release-default SQLite qualification, full T4 and live host wait qualification
+remain open; the source new-Goal default is recorded in the current frontier above.
 
 One TS summary batch now owns selected-source counts, display allocation,
 recent-completion chronology, orchestration candidate positions and closure

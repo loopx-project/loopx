@@ -1,6 +1,6 @@
 # Local authority: retirement cadence after integration
 
-- Current plan: October 2, 2026, `9b0486dc1`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
+- Current plan: October 7, 2026, `06b6caa07`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
 - Owners: overall roadmap R3/R4/R5/R6; shared authority D1–D3; TS migration T0–T4.
 - This replaces the **current inventory/estimates** in the September 27 recovery
   and Host-supervision ledgers, not their historical validation results.
@@ -19,9 +19,10 @@
 | #5170 | App delegated-result continuity; not every Turn/instance consumer |
 | #4931 | Owned TS state replay reduces SQLite/archive historical reconstruction; no default change or D2 qualification |
 
-At the adoption follow-up #5106 (collaboration GoalRef), #5130
+At the September 28 adoption follow-up #5106 (collaboration GoalRef), #5130
 (session GoalRef), #5139 (App Turn acceptance recovery) and #4915 (local-state
-location migration) remain open. Integrate/review those owners rather than
+location migration) were open. This is a historical inventory, not today's merge
+queue. Recheck those owners rather than
 reimplementing them. Their scopes are dependencies only for affected callers;
 local default does not wait for unrelated cloud or hundred-Agent work.
 
@@ -123,9 +124,11 @@ entrypoint tests, not attached-App or sustained-cost qualification. No store,
 writer, outbox, historical format/receipt reader or permanent Host IO is retired;
 C1, D2 and release-default adoption remain separate acceptance boundaries.
 
-## Current closeout: validation, migration and deletion (2026-10-02)
+<a id="current-closeout-validation-migration-and-deletion-2026-10-02"></a>
 
-Rechecked against main `8b5335a72` and the linked PR heads. This is the current
+## Current closeout: validation, migration and deletion (2026-10-07)
+
+Rechecked against main `06b6caa07` and the linked merged PRs. This is the current
 execution plan for **R5 / D1–D3 / T0–T4**, replacing the previous A–D schedule;
 older measurements remain source-specific evidence. R6 is a separate successor.
 Storage format, authority selection and ownership policy are three distinct
@@ -141,13 +144,14 @@ retirement of the `legacy` handoff policy.
 | Merged: #5436 | Original delegated Host lease renewal. Final Todo validation and stop acknowledgement remain distinct boundaries. |
 | Merged: [#5413](https://github.com/loopx-project/loopx/pull/5413), head `2c99505c7` | Separate provider promotion from backed-up policy migration; reject fresh legacy configuration but recover historical operations. Retain the original CLI recovery evidence. Existing legacy Goals are not automatically migrated; a successful plan does not qualify their execution consumers. |
 | Merged: [#5466](https://github.com/loopx-project/loopx/pull/5466), merge `066b5bf26` | Preserve the original lease through final acceptance. Installed consumer qualification remains distinct from merge. |
-| Review: [#5283](https://github.com/loopx-project/loopx/pull/5283), `1012d37f3` | Preflight optimization remains under review. Retain failed cold-CLI qualification rows; functional projection parity alone does not establish a performance pass. Do not declare the historical transient open failure explained by a synthetic failure. |
-| Approved, awaiting maintainer merge: [#5500](https://github.com/loopx-project/loopx/pull/5500), `a9e3d722c` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
-| Affected-lane dependencies | [#5308](https://github.com/loopx-project/loopx/pull/5308) must prove child stop before settled acknowledgement; [#5398](https://github.com/loopx-project/loopx/pull/5398) preserves complete UI history/inspector facts. Scope these to consumers actually included in the trial. They are not SQLite-engine prerequisites or permission to ship a known broken journey. |
+| Merged: [#5283](https://github.com/loopx-project/loopx/pull/5283), merge `fd65e71f4` | Reuse the preflight optimization. Retain failed cold-CLI qualification rows; functional projection parity or merge alone does not establish a performance pass. Do not declare the historical transient open failure explained by a synthetic failure. |
+| Merged: [#5500](https://github.com/loopx-project/loopx/pull/5500), merge `9c8961076` | App retries recover the original canonical Goal creation operation. This delivered recovery boundary does not retire existing ownership policies. |
+| Merged: [#5805](https://github.com/loopx-project/loopx/pull/5805), merge `3a1a92ebd` | Canonical creation is the unconfigured new-Goal source default, with SQLite and `hard_lease`. Existing selections and explicit disabled/v0 behavior remain pinned; installed adoption, D2/D3 and release-default qualification remain separate. |
+| Merged affected-lane owners: [#5308](https://github.com/loopx-project/loopx/pull/5308), merge `7b13f88e8`; [#5398](https://github.com/loopx-project/loopx/pull/5398), merge `3870aa12d` | Reuse child-stop-before-settlement control and complete UI history/inspector facts. Qualify the actual consumers included in the trial; merge is neither a SQLite-engine qualification nor permission to ship a known broken journey. |
 
-The remaining open heads above concern preflight and creation recovery, not a
-fixed number of PRs to universal completion. The implementation packages remain creation/default adoption,
-policy migration plus legacy-policy retirement, and old-writer/capture retirement.
+The October 2 preflight/creation recovery queue above is merged; do not recreate
+those repairs. Remaining packages are installed creation/default and upgrade
+adoption, policy migration plus legacy-policy retirement, and old-writer/capture retirement.
 They may combine only when caller ownership and rollback are coherent. Validation
 can expose concrete repairs; do not manufacture a fixed remaining-PR total or
 restart completed work to maintain one.
@@ -199,10 +203,10 @@ below.
 
 | Package / existing owner | Work and decisive exit | Dependency / deletion / schedule |
 | --- | --- | --- |
-| Close current heads; R3/R5 | Resolve exact-head findings in the open PRs above, inspect affected failures/conflicts, and present reviewed heads for maintainer merge. Record what is merged versus installed. | First target: 1–2 working days, subject to actual review/fix results. No unrelated optimization PR before closing these outcomes. |
+| Qualify merged consumers and current findings; R3/R5 | Reuse the merged owners above, inspect current affected failures and related open PRs, and assign only demonstrated remaining repairs. Record what is merged versus installed. | The old merge queue is closed. Proceed to the bounded installed matrix; do not reopen merged work or make unrelated consumers a universal prerequisite. |
 | Installed recovery candidate; D1/D3, existing whole-Goal promotion task | Pin one merged source and actual CLI/App/Effect Node/SQLite identity. Independently restore a verified backup, run the matrix below on detached real data plus synthetic negatives, and complete File→SQLite→new writes→File. Then perform authorized per-Goal adoption and ordinary readback. | Begin immediately after relevant merges; target 1–2 working days for the bounded matrix. Keep the compatible recovery binary and archives. No live corruption/crash injection. |
 | Bounded opt-in cohort; D2/D3 | When installed recovery and relevant execution controls pass, offer a reversible trial to at most 20 core developers. Publish workload/platform limits, backup/migration/disable instructions, known gaps, stop conditions and reporting route. Collect real daily use and failed cases. | Does not wait for every formal D2 axis or a new ten-day certificate. No invitation until rollback retains new writes. Does not certify a release default. |
-| Canonical creation/default adoption; D3/T3 | Reuse `machine_configuration/goal_storage.py` and `local_authority_defaults.ts`. Current setting only chooses the **post-promotion target** (`promotion_performed: false`). Complete new-Goal initialization, retry and upgrade, settings plus packaged App/CLI/Lark readback; explicit existing selectors stay pinned. | Implement after the bounded candidate is useful; activate the release default only at the decision below. Remove replaced creation/selection decisions in this package. Changing `file` to `sqlite` in one setting is insufficient. |
+| Installed canonical creation/default adoption; D3/T3 | Reuse #5500/#5805, `machine_configuration/goal_storage.py` and `coordination/local_authority_defaults.ts`. Unconfigured new Goals already initialize canonical SQLite/`hard_lease`; v0 and v1 `canonical_creation=false` retain post-promotion target behavior. Qualify installed initialization/retry, settings, upgrade and packaged App/CLI readback, with Lark when an affected caller is included. Existing Goal selections stay pinned. | Do not implement a second creation/default owner. Follow the [configuration/disable contract](../../../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting); removing the preference restores the source candidate default rather than disabling creation. Existing-Goal adoption and release-default qualification remain independent exits. |
 | Two ownership policies; R3/R5/T4 | Use #5413's backup/plan/migrate owner. Inventory old/missing modes, finish eligible claims/leases and Host effects, migrate each authorized Goal, then narrow normal runtime types and defaults to `soft_claim` / `hard_lease`. Expose preview, authorized apply, result and failure/recovery in the existing Goal settings surface through the same owner; a CLI-only migration stage is partial. | Can proceed alongside cohort observation. Policy migration is independent of File↔SQLite conversion. Delete legacy execution only after the supported upgrade path and affected callers pass; never silently reinterpret legacy as soft. |
 | Legacy writer and crossing removal; T3/T4 | Switch each last real caller to its TS owner, verify the matrix, delete Python decisions/private dispatch and old Markdown writes together. Reconcile shadow backlog before removing producers. Test the packaged CLI with retired paths absent. | Start already-proven internal deletions now; writer deletion follows that caller family's migration/adoption, not every R6 task or all Python disappearing. Each deletion has a concrete inventory and rollback. |
 | Release-default decision; R5/D2/D3 | Reconcile supported installations, current-release comparison, representative sustained reads/writes/recovery, resource growth and existing soak applicability. Publish exact supported profile, failed/missing rows, release/upgrade guidance and disable path; disclose the default change. | No date inferred from test/PR counts. Formal ten-day/100k qualification retains its own required evidence. Existing File selections remain supported and pinned; unavailable SQLite never silently revives an old writer. |
@@ -303,6 +307,27 @@ discovery and archive IO, not a second SQLite engine or migration decision.
 This closes a per-database backup defect; whole-Goal multi-file quiescence,
 subsequent-write rollback, installed consumer recovery and D2 observation remain
 separate evidence requirements.
+
+The installed CLI continuity slice now has a single real-provider journey in
+`tests/control_plane/test_local_provider_settlement_journey.py`: canonical File
+→ SQLite → acknowledged Todo additions/updates/completion → fresh-process reads
+→ File. It compares the complete retained domain journal, original operation
+receipts and current Todo records, retries add/update/completion/spend without
+another business commit or debit, and rejects cutover while a task lease is
+active. An old backup matches only its retained prefix after new writes; it is
+not a rollback of the current head. A new wake still owes final-outcome replan
+when its checkpoint lacks a qualified path decision. Provider recovery must not
+erase that obligation or turn Todo completion into Goal acceptance.
+
+This closes the bounded CLI composition gap, not the entire installed product
+journey. The App's existing task-ownership editor migrates execution policy;
+it has no existing-Goal File/SQLite cutover interaction. The next companion
+belongs to the same TS migration owner: a path-free preview/apply transport,
+durable original-preview recovery after response loss/restart, explicit failures
+and separate selected-source readback in the existing Goal settings. Qualify it
+with the real packaged UI and backend, including pending projection/outbox and
+stopped/settled Host work. Legacy Markdown capture, isolated checkpoint import,
+whole-Goal recovery, D2 and release-default decisions remain independent gates.
 
 These are proposed engineering windows from a frozen candidate, not promised
 release dates. Run faults on disposable runtimes and detached verified copies;

@@ -31,7 +31,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         choices=TURN_GRANULARITY_CHOICES,
         help=(
             "Set sticky goal turn granularity. fine plans small checkpoints within "
-            "a coherent work slice; completed-Todo review cadence defaults to 5 in both modes."
+            "a coherent work slice; review defaults to 5 settled work Turns in both modes."
         ),
     )
     configure_goal_parser.add_argument(
@@ -40,7 +40,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         choices=range(1, 6),
         help=(
             "Require goal review after this many same-agent advancement Todo completions "
-            "without a covering outcome checkpoint. Default 5; use 2 or 3 for earlier "
+            "without a covering outcome checkpoint, instead of the default settled-Turn "
             "review. This writes a Goal override; use the clear flag to inherit the "
             "machine default. Applies to standard and fine modes."
         ),
@@ -55,7 +55,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     )
     configure_goal_parser.add_argument(
         "--execution-replan-after-turns", type=int, choices=range(1, 6),
-        help="Review direction after this many settled work Turns, independently of Todo completion (explicit opt-in).",
+        help="Review direction after this many settled work Turns, independently of Todo completion (product default: 5).",
     )
     configure_goal_parser.add_argument(
         "--clear-execution-replan-after-turns", action="store_true",

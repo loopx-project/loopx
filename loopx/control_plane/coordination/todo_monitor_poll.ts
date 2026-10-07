@@ -81,7 +81,7 @@ function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
   const result = planMonitorBatch({...input, todos: [...indexed.todos.values()],
     read_model_schema: String(readModel.schema_version),
     admit_monitor(monitor) {
-      const rejected = monitorMutationRejection({goal_id: input.goal_id, todo: monitor,
+      const rejected = monitorMutationRejection({goal_id: input.goal_id, todo: monitor, todos: indexed.todos,
         lease: indexed.leases.get(String(monitor.todo_id)), handoff_mode: head.handoff_mode,
         actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
         operation: "observe", proof: input.lease_proof, now: input.now});

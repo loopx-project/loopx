@@ -7,7 +7,7 @@ from typing import Any
 from .capabilities.configuration_ui import build_capability_configuration_catalog
 from .control_plane.agent_context import agent_context_descriptor
 from .explore_graph import explore_configuration
-from .capabilities.todo_replan_cadence.goal_configuration import configuration_summary as cadence_configuration_summary
+from .capabilities.todo_replan_cadence.machine_defaults import default_replan_cadence_configuration
 
 DEFAULT_MULTI_SUBAGENT_MAX_CHILDREN = 2
 
@@ -162,11 +162,8 @@ def build_goal_configuration_catalog(
             {
                 "feature_id": "todo_replan_cadence",
                 "display_name": "Goal review cadence",
-                "availability": "supported_opt_in",
-                "default": {"count_unit": "completed_todos", "count": 5},
-                "current": cadence_configuration_summary({"execution_profile": settings.get("execution_profile")}) or {
-                    "count_unit": "completed_todos", "count": 5,
-                },
+                "availability": "supported_explicit_override",
+                "default": default_replan_cadence_configuration(),
                 "consider_when": "Direction needs regular review even while the same Todo remains open.",
                 "effect": (
                     "Choose 1–5 completed Todos or settled work Turns per Agent. "
@@ -179,10 +176,10 @@ def build_goal_configuration_catalog(
                 ],
                 "commands": {
                     "preview_enable": _configure_command(
-                        goal_id, "--execution-replan-after-turns", "3"
+                        goal_id, "--execution-replan-after-turns", "5"
                     ),
                     "apply_enable": _configure_command(
-                        goal_id, "--execution-replan-after-turns", "3", execute=True
+                        goal_id, "--execution-replan-after-turns", "5", execute=True
                     ),
                     "preview_disable": _configure_command(
                         goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns"
@@ -193,10 +190,10 @@ def build_goal_configuration_catalog(
                     "verify": [inspect_command],
                 },
                 "documentation": {
-                    "path": "docs/quota-allocation.md#completed-todo-review-cadence",
+                    "path": "docs/quota-allocation.md#goal-review-cadence",
                     "url": (
                         "https://github.com/loopx-project/loopx/blob/main/"
-                        "docs/quota-allocation.md#completed-todo-review-cadence"
+                        "docs/quota-allocation.md#goal-review-cadence"
                     ),
                 },
             },

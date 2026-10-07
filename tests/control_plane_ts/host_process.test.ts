@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import {existsSync} from "node:fs";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {setTimeout as delay} from "node:timers/promises";
 import test from "node:test";
 import {decodeHostProcessRequest, runHostProcess, type HostProcessRequest} from "../../loopx/control_plane/turn_driver/host_process.ts";
+import {decodeDelegatedHostLease, runLeasedHostProcess} from "../../loopx/control_plane/turn_driver/leased_host_process.ts";
+import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
+import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
+import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {productionScaleLeaseAcquisitionFixture} from "./production_scale_coordination_fixture.ts";
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const request = (script: string, overrides: Partial<HostProcessRequest> = {}): HostProcessRequest => ({
   argv: [process.execPath, "-e", script], cwd: process.cwd(), input: "request\n",
@@ -52,6 +59,114 @@ test("abort before start performs no invocation", async () => {
   const controller = new AbortController(); controller.abort();
   const result = await runHostProcess(request("throw new Error('must not start')"), async () => assert.fail(), controller.signal);
   assert.equal(result.outcome, "cancelled"); assert.equal(result.returncode, null);
+});
+
+async function delegatedCompletionWaitFixture(t: test.TestContext, ttlSeconds: number) {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-dependency-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const goal = "goal-a", storePath = join(root, "authority");
+  const store = new FileAuthorityStore(storePath, goal);
+  const fixture = productionScaleLeaseAcquisitionFixture(goal, "native");
+  const projection = authorityProjectionFixture(goal, (fixture.projection.todos as JsonObject[]).map(row =>
+    row.todo_id === fixture.target ? {...row, required_write_scopes: ["lease-admission/**"]} : row),
+    fixture.projection.leases as JsonObject[], "native", {handoff_mode: "hard_lease"});
+  assert.equal((await store.commitAuthority({operation_id: "seed-host-dependency", expected_provider_revision: null,
+    next_projection: projection, events: [], receipts: []})).status, "applied");
+  const claimRequest = {goal_id: goal, todo_id: fixture.target, claimed_by: "agent-a", actor_agent_id: "agent-a",
+    expected_role: "agent" as const, registered_agents: fixture.registered_agents,
+    operation_id: "host-claim-acquire", lease_request: {idempotency_key: "host-execution", expected_version: 0,
+      ttl_seconds: ttlSeconds}, dry_run: false};
+  const first = await executeCoordinationTodoClaim(store, {...claimRequest, now: new Date()});
+  assert.equal(first.status, "applied", JSON.stringify(first));
+  const requestPath = join(root, "claim.json");
+  await writeFile(requestPath, JSON.stringify({...claimRequest, prerequisite_id: fixture.acquisition.conflict_todo_id}));
+  const scriptPath = join(root, "lease-cli.mjs");
+  const claimUrl = new URL("../../loopx/control_plane/coordination/todo_claim.ts", import.meta.url).href;
+  const lifecycleUrl = new URL("../../loopx/control_plane/coordination/task_lease_lifecycle.ts", import.meta.url).href;
+  const storeUrl = new URL("../../loopx/control_plane/coordination/file_authority_store.ts", import.meta.url).href;
+  const projectionUrl = new URL("../../loopx/control_plane/coordination/coordination_projection.ts", import.meta.url).href;
+  await writeFile(scriptPath, `import {readFileSync} from "node:fs";
+import {FileAuthorityStore} from ${JSON.stringify(storeUrl)};
+import {executeCoordinationTodoClaim} from ${JSON.stringify(claimUrl)};
+import {executeCanonicalTaskLeaseLifecycle} from ${JSON.stringify(lifecycleUrl)};
+import {prepareCoordinationProjectionCommit} from ${JSON.stringify(projectionUrl)};
+const [mode, storePath, requestPath, ...flags] = process.argv.slice(2);
+const request = JSON.parse(readFileSync(requestPath, "utf8"));
+const store = new FileAuthorityStore(storePath, request.goal_id);
+if (mode === "renew") {
+  const head = await store.loadAuthority();
+  if (head.status !== "loaded") throw Error("missing authority");
+  const todo = head.head.todos.find(row => row.todo_id === request.todo_id);
+  const changed = await store.commitAuthority(prepareCoordinationProjectionCommit({
+    goal_id: request.goal_id, operation_id: "host-renewal-add-wait",
+    expected_provider_revision: head.provider_revision, projection: head.head,
+    mutations: [{kind: "todo_upsert", todo: {...todo, resume_when: "todo_done:" + request.prerequisite_id}}]}));
+  if (changed.status !== "applied") throw Error("wait mutation failed");
+  const version = Number(flags[flags.indexOf("--expected-version") + 1]);
+  const ttl = Number(flags[flags.indexOf("--ttl-seconds") + 1]);
+  const result = await executeCanonicalTaskLeaseLifecycle(store, {operation: "renew", goal_id: request.goal_id,
+    todo_id: request.todo_id, owner: request.claimed_by, idempotency_key: request.lease_request.idempotency_key,
+    expected_version: version, ttl_seconds: ttl, registered_agents: request.registered_agents, now: new Date()});
+  process.stdout.write(JSON.stringify({ok: result.status === "applied", lease: result.lease, reason_code: result.reason_code}));
+} else {
+  const result = await executeCoordinationTodoClaim(store, {...request, prerequisite_id: undefined,
+    now: new Date()});
+  process.stdout.write(JSON.stringify({ok: ["applied", "replayed", "recovered", "no_change"].includes(result.status),
+    lease: result.lease, reason_code: result.reason_code}));
+}`);
+  const command = (mode: "read" | "renew") => [process.execPath, "--no-warnings", "--experimental-strip-types",
+    scriptPath, mode, storePath, requestPath];
+  const lease = decodeDelegatedHostLease({lease: first.lease,
+    read_argv: command("read"), renew_argv: command("renew"), ttl_seconds: ttlSeconds});
+  const addWait = async () => {
+    const head = await store.loadAuthority();
+    assert.equal(head.status, "loaded");
+    if (head.status !== "loaded") throw Error("missing authority");
+    const todo = (head.head.todos as JsonObject[]).find(row => row.todo_id === fixture.target)!;
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+      operation_id: "host-initial-add-wait", expected_provider_revision: head.provider_revision,
+      projection: head.head, mutations: [{kind: "todo_upsert", todo: {...todo,
+        resume_when: `todo_done:${fixture.acquisition.conflict_todo_id}`}}]}))).status, "applied");
+  };
+  return {root, store, lease, addWait};
+}
+
+test("pending canonical completion wait rejects delegated Host before spawn", async t => {
+  const {root, lease, addWait} = await delegatedCompletionWaitFixture(t, 30);
+  await addWait();
+  const marker = join(root, "host-started");
+  let spawned = 0;
+  const result = await runLeasedHostProcess(request(`require('fs').writeFileSync(${JSON.stringify(marker)},'started')`),
+    lease, async () => {}, new AbortController().signal, async () => {spawned++;});
+  assert.equal(result.outcome, "cancelled");
+  assert.deepEqual(result.lease_failure, {reason: "execution_proof_rejected", boundary: "initial_proof"});
+  assert.equal(spawned, 0);
+  assert.equal(existsSync(marker), false);
+});
+
+test("completion wait appearing during renewal cancels delegated Host", async t => {
+  const {root, store, lease} = await delegatedCompletionWaitFixture(t, 4);
+  const marker = join(root, "host-heartbeat");
+  let spawned = 0;
+  const running = runLeasedHostProcess(request(`const fs=require('fs');let n=0;
+    setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(++n)),20)`, {timeout_ms: 8000}),
+    lease, async () => {}, new AbortController().signal, async () => {spawned++;});
+  await delay(3500);
+  const stoppedHeartbeat = await readFile(marker, "utf8");
+  await delay(150);
+  assert.equal(await readFile(marker, "utf8"), stoppedHeartbeat,
+    "Host kept executing after renewal rejected the new wait");
+  const result = await running;
+  assert.equal(spawned, 1);
+  assert.equal(result.outcome, "cancelled");
+  assert.deepEqual(result.lease_failure, {reason: "renewal_rejected", boundary: "renewal"});
+  const heartbeat = await readFile(marker, "utf8");
+  await delay(120);
+  assert.equal(await readFile(marker, "utf8"), heartbeat, "Host continued after renewal rejection");
+  const head = await store.loadAuthority();
+  assert.equal(head.status, "loaded");
+  if (head.status === "loaded") assert.equal((head.head.todos as JsonObject[]).some(row =>
+    row.todo_id === lease.lease.todo_id && row.resume_when !== undefined), true);
 });
 
 for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const) {

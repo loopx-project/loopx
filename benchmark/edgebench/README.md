@@ -116,6 +116,20 @@ resume continuity, capability use, evaluator completion and integrity need
 runtime/post-run qualification before any score is countable. Raw trial outputs
 and credentials belong outside the public repository.
 
+## Default replan cadence
+
+New `heartbeat-resume` and `heartbeat-explore` trials replan after **3 settled
+effective work Turns** by default. Use `--replan-after-turns N` to set a different
+count (1–5), or `--replan-after-todos 3` for the previous completed-Todo cadence
+as an explicit ablation. The two options are mutually exclusive and require a
+heartbeat profile. This default is independent of `--task-entry`, feedback mode,
+and `--turn-envelope`. Official, single and native-goal profiles are unchanged.
+
+The shared control plane counts settled work Turns, not tool calls or idle wakes;
+other replan reasons may trigger sooner. Both runtime and worker-profile receipts
+record the resolved cadence. Only newly launched attempts use the new default;
+keep existing runs and archived settings pinned.
+
 ## Optional short-context treatment
 
 Add `--turn-envelope` to an otherwise identical `heartbeat-resume` or

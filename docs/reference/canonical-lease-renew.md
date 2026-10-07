@@ -281,7 +281,9 @@ renewal receipt schema, identity and digest encoding remain compatible.
 
 For maintenance, `status=replayed` and `idempotent=true` return historical results even after a
 later renewal, transfer, release or expiry. They do not grant present execution
-rights or renew again. Freeze the original request after a lost/ambiguous
+rights or renew again. A newly pending or invalid canonical `todo_done` wait
+rejects renew/transfer retries as well as new requests; the original receipt is
+retained, and release remains available. Freeze the original request after a lost/ambiguous
 response; recover its receipt, then inspect current state before new work.
 
 Acquisition identity binds Goal/Todo/owner/execution key; the request digest
@@ -295,8 +297,8 @@ version/expiry in `lease`, with the unchanged original decision in
 readback. A transferred, expired or released execution cannot be revived by its
 old receipt. Atomic `todo claim` with `--task-lease-idempotency-key` now uses the
 same current-proof owner after commit/recovery, including receipt-only no-ops.
-A plain claim without an acquisition request and maintenance receipts retain
-historical semantics; they do not grant new execution.
+A plain claim without an acquisition request and retained maintenance receipts
+do not grant new execution.
 
 For atomic adoption, freeze both identities across an uncertain response:
 
@@ -324,6 +326,37 @@ Switching away from `hard_lease` also invalidates atomic claim/acquire success.
 | `owner_conflicts_with_claim` | Current Todo ownership changed | Let the current owner continue or use an authorized handover. |
 | `canonical_acquire_readback_required` | History is known, current proof is unavailable | Restore the provider and retry the same operation. |
 | Acceptance/source rejection | Current control-plane authority changed | Resolve that boundary before attempting work. |
+| `todo_dependency_pending` / `todo_dependency_invalid` | The canonical completion prerequisite is unfinished or invalid | Complete the actual prerequisite, or repair the wait through its authorized Todo owner. |
+
+For canonical File, SQLite and PostgreSQL Goals, `resume_when=todo_done:todo_prerequisite`
+now fences execution as well as runnable selection. The existing TypeScript resume
+rule reads the exact prerequisite from the same provider head: its actual `done`
+status satisfies the wait, including retained archived completion. A cached
+`resume_ready=true`, an old acquisition receipt, or a superseded prerequisite
+cannot authorize execution. Missing targets and unfinished dependency cycles fail closed.
+
+While the wait is unsatisfied, standalone and atomic claim/acquire, renew/transfer,
+continuation adoption, Monitor execution and new completion reject it. Inspection
+retains the lease record but reports effective `active=false` with the dependency
+diagnosis. Release, historical terminal readback, authorized supersede, ordinary
+assignment and wait editing retain their existing authority. Other resume-condition kinds keep
+their existing behavior; this repair does not introduce governed amendments.
+
+Inspect the waiting task with `loopx todo list --goal-id example-goal --todo-id todo_work`.
+Complete its prerequisite through the normal validation and lease owner, then
+read the same task again: `resume_ready=true` allows acquisition under the usual
+owner/key/version checks. If the wait itself needs correction, use the existing
+authorized `todo update --resume-when ...` or `--clear-resume-when` operation;
+neither inspecting nor editing the wait grants execution authority.
+
+在 canonical File、SQLite 和 PostgreSQL Goal 中，`todo_done` 等待现在同时约束
+实际执行入口，而不只是候选任务展示。必须由真实前置 Todo 的 `done` 状态满足条件，
+保留的已归档完成记录仍有效；缓存的 ready 标志、旧领取收据和 superseded 状态不能
+代替完成。等待期间，领取／原子认领、续租／转交、继续执行、Monitor 执行和新完成均
+被拒绝；新等待也会拒绝续租／转交的重试，原收据仍保留。检查保留原 lease 记录，
+但有效 `active=false`。释放、历史完成读回、授权 supersede、普通分配和等待修复
+沿用原规则。前置任务正常完成后，重新读回并按原 owner、key、
+version 规则继续执行。其他恢复条件及 governed amendment 的边界保持独立。
 
 A successful readback is still a point-in-time proof, not a lock over subsequent
 external effects. Execution must retain its existing mutation fences; this

@@ -17,6 +17,7 @@ import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {evaluateCoordinationTerminalFence, COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 export interface TaskLeaseProof {
   idempotency_key: string;
@@ -142,6 +143,9 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
     return {...base, action: "reconcile_lease_owner",
       reason: "A leased update requires the actor to own the Todo claim. Reconcile ownership before acquiring execution authority."};
   }
+  const dependency = todoExecutionDependencyRejection(index.todos, input.todo_id);
+  if (dependency !== null) return {...base, action: "resolve_acquire_rejection",
+    reason_code: dependency.code, reason: dependency.reason};
   const retry = {command: "loopx todo update",
     requires_flags: ["--task-lease-idempotency-key", "--task-lease-expected-version"],
     proof_source: "current_owner_lease_readback"};

@@ -60,6 +60,8 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
   // Canonical heads prohibit orphan leases; legacy files may retain them.
   if (provider !== "legacy") cases.splice(cases.findIndex(item => item.name === "orphan"), 1);
   if (provider !== "legacy") cases.push(
+    {name: "completion-wait", todo: {resume_when: `todo_done:${fixture.target}`, resume_ready: true},
+      active: false, constraint: {effective: false, reason: "todo_dependency_pending"}},
     {name: "repository-bound", todo: {task_repository: "git:github.com/team/a"},
       lease: {write_repository: "git:github.com/team/a"}, active: true},
     {name: "repository-drift", todo: {task_repository: "git:github.com/team/b"},

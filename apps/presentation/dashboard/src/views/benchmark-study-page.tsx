@@ -67,11 +67,13 @@ function metricAggregate(arm: BenchmarkStudyArm, metricName: string) {
 function largestContrastLabel(item: BenchmarkStudyCase, primaryMetric: string) {
   const contrast = item.largest_eligible_primary_contrast;
   const metric = contrast?.metric_deltas[primaryMetric];
-  if (!contrast || !metric) return null;
-  const prefix = metric.delta > 0 ? "+" : "";
+  if (!contrast || !metric || metric.comparison_unavailable_reason) return null;
+  const value = metric.delta_rate == null ? metric.delta : metric.delta_rate * 100;
+  if (value == null) return null;
+  const prefix = value > 0 ? "+" : "";
   return {
     direction: metric.direction,
-    text: `${contrast.candidate_arm_id}: ${prefix}${compactNumber(metric.delta)}`,
+    text: `${contrast.candidate_arm_id}: ${prefix}${compactNumber(value)}${metric.delta_rate == null ? "" : " pp"}`,
   };
 }
 

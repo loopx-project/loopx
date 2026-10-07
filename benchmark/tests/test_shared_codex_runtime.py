@@ -349,18 +349,22 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert env["LOOPX_EXECUTION_MODE"] == mode
         assert env["LOOPX_PROJECT"] == "/workspace"
         assert env["MODEL_NAME"] == "fixture"
+        assert agent.replan_after_turns == (3 if agent.execution.uses_loopx else None)
 
 
 @pytest.mark.parametrize("existing", [False, True])
-@pytest.mark.parametrize("turns", [None, 2])
-def test_explicit_seeded_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing, turns):
+@pytest.mark.parametrize("settings,field,value", [
+    ({}, "replan_after_effective_turns", 3),
+    ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
+    ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
+])
+def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_path, monkeypatch, existing, settings, field, value):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
     from loopx.cli import build_parser
 
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
-                           replan_after_turns=turns, task_entry="seeded-todo")
-    field = "replan_after_effective_turns" if turns else "replan_after_completed_todos"
+                           **settings, task_entry="seeded-todo")
     calls = []
 
     async def write_task(*args, **kwargs):
@@ -374,7 +378,7 @@ def test_explicit_seeded_phase_bootstrap_uses_current_public_cli(tmp_path, monke
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: turns or 3}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -386,11 +390,12 @@ def test_explicit_seeded_phase_bootstrap_uses_current_public_cli(tmp_path, monke
     assert any(args[:2] == ["todo", "add"] for args in calls)
     assert any(args[0] == "bootstrap" for args in calls) is not existing
     assert all("--clear-waiting-on" not in args for args in calls)
-    option = "--execution-replan-after-turns" if turns else "--execution-replan-after-todos"
+    option = ("--execution-replan-after-turns" if field == "replan_after_effective_turns"
+              else "--execution-replan-after-todos")
     configured = [args for args in calls if option in args]
-    assert configured and all(args[args.index(option) + 1] == str(turns or 3)
+    assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: turns or 3}
+    assert agent._replan_receipt() == {field: value}
 
 
 def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monkeypatch):

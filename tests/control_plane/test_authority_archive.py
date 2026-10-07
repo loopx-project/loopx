@@ -181,40 +181,6 @@ def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp
     assert authority_archive.authority_upgrade_roots(project_registry, str(common), all_known=True) == roots
 
 
-@pytest.mark.parametrize("initial,target", [("file", "sqlite"), ("sqlite", "file")])
-def test_provider_migration_cli_preserves_readback_and_rollback(tmp_path, monkeypatch, initial, target):
-    from canonical_authority_fixture import promoted_create_fixture
-
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = promoted_create_fixture(tmp_path, provider=initial)
-    before = state.read_bytes()
-
-    def cli(*args, expected=0):
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
-                                 "--format", "json", *args], cwd=REPO, capture_output=True, text=True, timeout=90)
-        assert result.returncode == expected, result.stdout + result.stderr
-        return json.loads(result.stdout)
-
-    try:
-        for index, destination in enumerate((target, initial)):
-            plan = tmp_path / f"plan-{index}.json"
-            planned = cli("authority-archive", "plan-migration", "--goal-id", "goal-a", "--provider", destination, "--plan", str(plan))
-            arguments = ("authority-archive", "migrate", "--goal-id", "goal-a", "--plan", str(plan), "--plan-sha256", planned["plan_sha256"])
-            assert cli(*arguments)["status"] == "planned"
-            migrated = cli(*arguments, "--execute")
-            assert migrated["status"] == "migrated", migrated
-            assert migrated["selected_provider"] == destination
-            assert migrated["audit"]["compared_commits"] == "1"
-            assert cli(*arguments, "--execute")["status"] == "already_applied"
-            # Independent production CLI reads must follow the published selector.
-            snapshot = cli("authority-archive", "export", "--goal-id", "goal-a", "--archive", str(tmp_path / f"after-{index}.jsonl"))
-            assert snapshot["archive"]["source_provider"] == destination
-        assert state.read_bytes() == before
-    finally:
-        subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
-                       cwd=REPO, capture_output=True, text=True, timeout=30, check=True)
-
-
 @pytest.mark.parametrize("execute", [False, True])
 def test_migration_transport_loss_never_asserts_that_execution_did_not_publish(tmp_path, monkeypatch, execute):
     from argparse import Namespace

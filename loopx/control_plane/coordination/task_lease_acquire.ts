@@ -5,11 +5,12 @@ import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256} from "./authority_store_codec.ts";
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
-import {prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
+import {indexCoordinationProjection, prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {decideTaskLeaseAcquire, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {acquisitionFacts, currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKey,
   normalizeWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
   TaskLeaseAcquireError} from "../work_items/task_lease_acquire.ts";
@@ -91,6 +92,10 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
       return failed(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
         {goal_acceptance_guard: acceptance});
     }
+    const dependency = todoExecutionDependencyRejection(
+      indexCoordinationProjection(head.head, input.goal_id).todos, input.todo_id);
+    if (dependency !== null) return failed(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition});
     const changed = decision.outcome === "apply";
     const lease = changed ? materializeTaskLeaseAcquire(input, input, decision, input.now) : facts.current;
     if (!lease) throw new AuthorityStoreProtocolError("accepted acquire lacks a lease");

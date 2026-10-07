@@ -28,35 +28,21 @@ function readFacts(): JsonObject {
     selected_todo: {todo_id: "todo_selected"}};
 }
 
-test("fresh empty hook context is visible without a read; missing and denied stay distinct", () => {
-  const request: JsonObject = {required_reads: [], source_results: [], hook_dispatch: {
-    results: [{hook_id: "semantic_preference.agent_context", capability_id: "semantic-preference",
-      status: "empty", observation_count: 0, agent_read_required: false, error_code: null}], failures: []}};
-  const before = structuredClone(request);
-  const result = projectInteractionWorkContext(request);
-  assert.deepEqual(result.required_reads, []);
-  const context = result.work_context as JsonObject;
-  assert.deepEqual(context.sources, []);
-  assert.deepEqual(context.observations, [{hook_id: "semantic_preference.agent_context",
-    capability_id: "semantic-preference", status: "empty"}]);
-  assert.match(String(context.instruction), /fulfilled for this guard's pre-work checks/);
-  assert.match(String(context.instruction), /Later action-specific freshness obligations still require fresh sources/);
-  assert.match(String(context.instruction), /even after an earlier empty or current view/);
-  assert.deepEqual(request, before);
-  const unknown = projectInteractionWorkContext({required_reads: [], source_results: []}).work_context as JsonObject;
-  assert.equal(unknown.observations, undefined);
+test("only participating hooks add unavailable context; generic guidance has no preference recipe", () => {
+  const request = {required_reads: [], source_results: []};
+  const inactive = projectInteractionWorkContext(request).work_context as JsonObject;
+  assert.equal(inactive.unavailable_context, undefined);
+  assert.doesNotMatch(String(inactive.instruction), /preference|empty view|empty observations/);
+  assert.match(String(inactive.instruction), /this guard's pre-work checks/);
+  assert.match(String(inactive.instruction), /source-specific freshness obligations/);
   const denied = projectInteractionWorkContext({...request, hook_dispatch: {results: [{
-    hook_id: "semantic_preference.agent_context", capability_id: "semantic-preference",
-    status: "unavailable", error_code: "agent_preferences_permission_denied"}], failures: []}}).work_context as JsonObject;
-  assert.equal(denied.observations, undefined);
+    hook_id: "optional.context", capability_id: "optional-context",
+    status: "unavailable", error_code: "source_denied"}], failures: []}}).work_context as JsonObject;
   assert.deepEqual((denied.unavailable_context as JsonObject).affected_hooks, [{
-    hook_id: "semantic_preference.agent_context", capability_id: "semantic-preference",
-    status: "unavailable", error_code: "agent_preferences_permission_denied"}]);
-  for (const patch of [{observation_count: 1}, {agent_read_required: true}, {error_code: "failed"}]) {
-    const broken = structuredClone(request);
-    Object.assign(((broken.hook_dispatch as JsonObject).results as JsonObject[])[0], patch);
-    assert.throws(() => projectInteractionWorkContext(broken), /inconsistent/);
-  }
+    hook_id: "optional.context", capability_id: "optional-context",
+    status: "unavailable", error_code: "source_denied"}]);
+  assert.equal((denied.unavailable_context as JsonObject).dependent_action_policy, "hold_until_fresh_context");
+  assert.equal((denied.unavailable_context as JsonObject).independent_work_policy, "preserve_existing_authority");
 });
 
 test("shared reads retain all Goal sources before exact current work and existing hooks", () => {

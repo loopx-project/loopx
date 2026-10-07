@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
 
-from .codex import Execution, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
 from .codex_offline import CodexOffline
 from .harbor import (
     BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
@@ -83,7 +83,8 @@ class SForgeWorker(CodexAgent):
                  blind_prompt: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
-                 replan_after_turns: int | None = None):
+                 replan_after_turns: int | None = None,
+                 replan_after_todos: int | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -104,13 +105,24 @@ class SForgeWorker(CodexAgent):
             mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
             task_entry=task_entry,
         ).task_entry
+        if replan_after_turns is not None and replan_after_todos is not None:
+            raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
+        if replan_after_todos is not None:
+            if type(replan_after_todos) is not int or not 1 <= replan_after_todos <= 5:
+                raise ValueError("replan_after_todos must be an integer between 1 and 5")
+            if not profile.startswith("heartbeat-"):
+                raise ValueError("replan_after_todos requires a heartbeat profile")
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
                     not 1 <= replan_after_turns <= 5):
                 raise ValueError("replan_after_turns must be an integer between 1 and 5")
             if not profile.startswith("heartbeat-"):
                 raise ValueError("replan_after_turns requires a heartbeat profile")
+        if (replan_after_turns is None and replan_after_todos is None
+                and profile.startswith("heartbeat-")):
+            replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
+        self.replan_after_todos = replan_after_todos
         self.profile, self.cwd = profile, cwd
         self.blind_prompt = blind_prompt
         self.prompt_installed = False
@@ -175,6 +187,7 @@ class SForgeWorker(CodexAgent):
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
+                replan_after_todos=self.replan_after_todos,
             )
             asyncio.run(self.runtime.install(self.environment))
         if self.blind_prompt is not None:
@@ -192,7 +205,7 @@ class SForgeWorker(CodexAgent):
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": "blind" if self.blind_prompt is not None else "native",
             **(self.runtime._replan_receipt() if self.runtime and
-               self.replan_after_turns is not None else {}),
+               self.profile.startswith("heartbeat-") else {}),
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):

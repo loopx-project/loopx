@@ -17,6 +17,32 @@ test("two explicit sources normalize and coalesce equivalent scoped evidence", (
   assert.deepEqual(normalizeExploreResultAttachment({attachment, other_attachment: other}), attachment);
 });
 
+test("first capture derives stable scope identity without deriving evidence or merging explicit ids", () => {
+  const {node_id: _id, ...first} = attachment;
+  const result = normalizeExploreResultAttachment({attachment: first});
+  assert.match(result.node_id as string, /^[A-Za-z][A-Za-z0-9_.:-]{0,95}$/);
+  const later = normalizeExploreResultAttachment({attachment: {...first,
+    input_revision: "fixture-v2", observation: "A second counterexample.", status: "tentative"}});
+  assert.equal(result.node_id, later.node_id);
+  assert.equal(later.status, "tentative");
+  for (const different of [{question: "Does a uniform estimate suffice?"},
+    {applicability: "Uniform tail estimate required"}]) {
+    assert.notEqual(normalizeExploreResultAttachment({attachment: {...first, ...different}}).node_id, result.node_id);
+  }
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: first,
+    other_attachment: {...first, node_id: result.node_id}}), result);
+  assert.throws(() => normalizeExploreResultAttachment({attachment: first,
+    other_attachment: attachment}), /sources conflict/);
+  for (const bad of [null, "", " ", "x".repeat(97), "../node"]) {
+    assert.throws(() => normalizeExploreResultAttachment({attachment: {...first, node_id: bad}}), /omit node_id/);
+  }
+  for (const field of ["question", "applicability", "input_revision", "status"]) {
+    const incomplete: Record<string, unknown> = {...first};
+    delete incomplete[field];
+    assert.throws(() => normalizeExploreResultAttachment({attachment: incomplete}));
+  }
+});
+
 test("neither a conflicting nor malformed secondary source can be silently preferred", () => {
   for (const other of [
     {...attachment, applicability: "Uniform tail bound"},
@@ -54,6 +80,14 @@ test("explicit scoped capture reuses the same typed path delta without inferring
   // Stopping a route does not turn tentative evidence into a refutation.
   assert.equal(normalizeExploreResultAttachment({attachment: scope,
     vision_packet: {path_delta: {...delta, outcome: "stop"}}}).status, "tentative");
+});
+
+test("a first path capture and full capture derive the same scoped question identity", () => {
+  const {node_id: _id, ...newScope} = scope;
+  const {node_id: _other, ...full} = resolved;
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: newScope,
+    vision_packet: {path_delta: delta}, other_attachment: full}),
+  normalizeExploreResultAttachment({attachment: full}));
 });
 
 test("full and path-delta sources share canonical conflict and coalescing rules", () => {

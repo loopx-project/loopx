@@ -205,12 +205,7 @@ def main() -> int:
     rc, help_text = command(
         [str(args.loopx_src / "scripts" / "loopx"), "configure-goal", "--help"]
     )
-    check(
-        "Todo replan cadence CLI",
-        rc == 0 and "--execution-replan-after-todos {1,2,3,4,5}" in help_text,
-        "supports threshold 1..5",
-    )
-
+    replan_receipt: dict[str, int] = {}
     try:
         from benchmark.runtime.harbor import BenchmarkCodex
 
@@ -223,6 +218,14 @@ def main() -> int:
                 True,
                 f"{candidate.execution.mode}/{candidate.execution.context}",
             )
+            if candidate.execution.uses_loopx:
+                field, option, count = candidate._replan_configuration()
+                check(
+                    "resolved replan cadence CLI",
+                    rc == 0 and f"{option} {{1,2,3,4,5}}" in help_text,
+                    f"{field}={count}",
+                )
+                replan_receipt = candidate._replan_receipt()
     except (ImportError, TypeError, ValueError) as exc:
         check("shared runtime configuration", False, str(exc))
 
@@ -294,7 +297,7 @@ def main() -> int:
         "home_scope": "trial",
         "model": agent.get("model_name"),
         "reasoning_effort": kwargs.get("reasoning_effort"),
-        "replan_after_completed_todos": 3,
+        **replan_receipt,
         "verifier_policy": {"shared": 44, "separate": sorted(EXPECTED_SEPARATE)},
         "failures": failures,
     }

@@ -1,6 +1,6 @@
 # 合并后的本地权威退役节奏
 
-- 当前计划：2026-10-02，`9b0486dc1`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 当前计划：2026-10-07，`06b6caa07`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
@@ -19,9 +19,9 @@
 | #5170 | App 委派结果连续性；不代表全部 Turn／实例消费者完成 |
 | #4931 | TS 私有状态重放降低 SQLite／archive 历史重建成本；未切默认、未完成 D2 |
 
-采用后续核对时，#5106（collaboration GoalRef）、#5130
+在 9 月 28 日采用后续核对时，#5106（collaboration GoalRef）、#5130
 （session GoalRef）、#5139（App Turn 接受恢复）、#4915（本地状态路径迁移）仍开放。
-复用和推进这些 owner，不重复实现；只对确实受影响的调用方建立依赖，本地默认切换
+这是历史清单，不是今天的合并队列。重新核对这些 owner，不重复实现；只对确实受影响的调用方建立依赖，本地默认切换
 不等待无关云端或百 Agent 工作。
 
 **File 是默认 store factory，不等于所有新旧 Goal 默认以 File 为权威。**
@@ -107,9 +107,11 @@ actor。基线 Python bridge 已拒绝这些状态，直接基线 TS 尚未如�
 App 或持续成本资格。未退役 store、writer、outbox、历史格式／回执 reader 或永久
 Host IO；C1、D2 和发布默认采用仍是独立验收边界。
 
-## 当前收尾：验证、迁移与删除（2026-10-02）
+<a id="当前收尾验证迁移与删除2026-10-02"></a>
 
-按 main `8b5335a72` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
+## 当前收尾：验证、迁移与删除（2026-10-07）
+
+按 main `06b6caa07` 和所列已合并 PR 重新核对。本节是 **R5 / D1–D3 / T0–T4**
 的当前执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
 存储格式、权威选择、所有权策略是三种不同迁移：有 SQLite 数据库，不代表新 Goal
 已经默认使用 canonical authority，也不代表 `legacy` handoff 策略已经退役。
@@ -123,13 +125,14 @@ Host IO；C1、D2 和发布默认采用仍是独立验收边界。
 | 已合并：#5436 | 委派 Host 原租约续期；最终 Todo 验收和停止确认仍是不同边界。 |
 | 已合并：[#5413](https://github.com/loopx-project/loopx/pull/5413)，head `2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。保留原 CLI 恢复证据。没有自动迁移存量 legacy Goal，成功生成计划也不代表执行消费者已验收。 |
 | 已合并：[#5466](https://github.com/loopx-project/loopx/pull/5466)，merge `066b5bf26` | 原租约保持到最终验收；安装态消费者验收与合并分开记录。 |
-| 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`1012d37f3` | preflight 优化仍在评审；冷 CLI 资格失败行保留，功能投影等价不等于性能通过。合成故障不证明历史瞬态打开失败的根因。 |
-| 已批准，待维护者合并：[#5500](https://github.com/loopx-project/loopx/pull/5500)，`a9e3d722c` | App 重试恢复原 canonical Goal 创建操作；这是创建／默认接入的前置修复，不退役存量所有权策略。 |
-| 按实际路径建立依赖 | [#5308](https://github.com/loopx-project/loopx/pull/5308) 要证明子进程停止后才报告已结算；[#5398](https://github.com/loopx-project/loopx/pull/5398) 保留 UI 历史和 inspector 完整事实。只对纳入试用的相关消费者建依赖，不将其说成 SQLite 引擎前置，也不能发布已知损坏的用户路径。 |
+| 已合并：[#5283](https://github.com/loopx-project/loopx/pull/5283)，merge `fd65e71f4` | 复用 preflight 优化；冷 CLI 资格失败行保留，功能投影等价或合并均不等于性能通过。合成故障不证明历史瞬态打开失败的根因。 |
+| 已合并：[#5500](https://github.com/loopx-project/loopx/pull/5500)，merge `9c8961076` | App 重试恢复原 canonical Goal 创建操作；这条已交付恢复边界不退役存量所有权策略。 |
+| 已合并：[#5805](https://github.com/loopx-project/loopx/pull/5805)，merge `3a1a92ebd` | 未配置的新 Goal 在源码中默认创建 canonical SQLite／`hard_lease`。存量选择和显式关闭／v0 行为保持固定；安装采用、D2/D3 与发布默认资格仍分别验收。 |
+| 已合并的相关路径 owner：[#5308](https://github.com/loopx-project/loopx/pull/5308)，merge `7b13f88e8`；[#5398](https://github.com/loopx-project/loopx/pull/5398)，merge `3870aa12d` | 复用子进程停止后才结算的控制，以及完整 UI 历史／inspector 事实。验收实际纳入试用的消费者；合并既不是 SQLite 引擎资格，也不能用于发布已知损坏的用户路径。 |
 
-上述开放 head 分别解决 preflight 与创建恢复，不代表固定“剩余 PR 数”。
-剩余实现包仍是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
-捕获退役。仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
+10 月 2 日的 preflight／创建恢复队列已合并，不重做这些修复。剩余交付包是安装态
+canonical 创建／默认与升级采用、策略迁移与 legacy 策略删除、旧 writer／捕获退役。
+仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
 不再制造固定“剩余 PR 数”，也不为维持这个数字重做已完成的工作。
 
 Goal 设置的策略迁移已复用 CLI 的同一 TS 备份迁移 owner：读取当前策略、预览
@@ -167,10 +170,10 @@ Goal 的 provider 或所有权策略；继续保留这些已有出口。恢复�
 
 | 交付包／既有 owner | 要做什么、凭什么完成 | 依赖／删除机会／节奏 |
 | --- | --- | --- |
-| 现有 head 收尾；R3/R5 | 修完上述开放 PR 的 exact-head finding，处理相关失败与冲突，提交已评审 head 给维护者合并；区分已合并和已安装。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
+| 已合并消费者与当前 finding 验收；R3/R5 | 复用上述已合并 owner，核对当前相关失败和开放 PR，只分配已证实的剩余修复；区分已合并和已安装。 | 旧合并队列已关闭，进入有界安装态矩阵；不重开已合并工作，也不把无关消费者当成统一前置。 |
 | 安装态恢复候选；D1/D3、整 Goal 晋升任务 | 固定合并源码和 CLI/App/Effect 实际 Node/SQLite 身份；独立恢复并验证备份，用隔离真实快照及合成负例执行下表，完成 File→SQLite→新增写入→File。之后按授权逐 Goal 采用并日常回读。 | 相关 PR 合并后立即开始，有界矩阵目标 1–2 个工作日；保留兼容的恢复版本和 archive，不对活跃 Goal 注入崩溃／损坏。 |
 | 有界自愿试用；D2/D3 | 安装态恢复及相关执行控制通过后，邀请不超过 20 位核心开发者。公开负载／平台范围、备份迁移关闭步骤、已知缺口、停止条件与反馈入口；观察真实日常使用和失败。 | 不必等待全部正式 D2 轴或一份新的十天证书；携带新写入回退未通过前不邀请。试用不认证发布默认值。 |
-| Canonical 创建／默认接入；D3/T3 | 复用 `machine_configuration/goal_storage.py` 和 `local_authority_defaults.ts`。当前设置只选择**晋升后的目标**，返回 `promotion_performed: false`。补齐新建初始化／重试、升级、设置及打包 App/CLI/Lark 读回，已有显式 selector 保持固定。 | 有界候选可用后实现，发布默认启用仍服从下方决策；同包删除被替代的创建／选择决策。只把设置里的 file 改成 sqlite 不够。 |
+| 安装态 canonical 创建／默认采用；D3/T3 | 复用 #5500/#5805、`machine_configuration/goal_storage.py` 和 `coordination/local_authority_defaults.ts`。未配置的新 Goal 已初始化 canonical SQLite／`hard_lease`；v0 与 v1 `canonical_creation=false` 保留晋升后目标行为。验收安装态初始化／重试、设置、升级及打包 App/CLI 读回，纳入相关调用方时验证 Lark；存量 Goal 选择保持固定。 | 不实现第二份创建／默认值 owner。遵循[配置／关闭契约](../../../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)；移除偏好会恢复源码候选默认值，不会关闭创建。存量 Goal 采用和发布默认资格仍有独立出口。 |
 | 两种所有权策略；R3/R5/T4 | 复用 #5413 的 backup/plan/migrate owner。清点旧／缺省 mode，结清适用的 claim／lease 和 Host 效果，逐个迁移获授权 Goal，再将正常运行类型及默认值收敛为 soft_claim / hard_lease。复用既有 Goal 设置入口和同一 owner，提供预览、获授权执行、结果及失败／恢复；只有 CLI 的迁移阶段标为部分交付。 | 与试用观察并行；不和 File↔SQLite 转换绑定。受支持升级路径和调用方通过后删除 legacy 执行，不能默默把 legacy 当成 soft。 |
 | 旧 writer／跨界删除；T3/T4 | 最后真实调用方切到 TS owner 后验证下表，同时删除 Python 决策／私有 dispatch 和旧 Markdown 写入；清理 capture producer 前对账 outbox。在旧路径已不存在的包上验证 CLI。 | 已证明无消费者的内部删除现在就做；业务 writer 删除随对应迁移接入，不等 R6 全部完成或所有 Python 消失。每批有具体清单和回退方式。 |
 | 发布默认决策；R5/D2/D3 | 对账受支持安装、当前 release 对照、代表性持续读写／恢复、资源增长和既有 soak 适用性；发布明确 profile、failed/missing、升级说明及关闭路径，显式披露默认变化。 | 不按测试／PR 数推算日期；正式十天／100k 资格保留各自证据要求。已有 File 选择继续受支持并固定；SQLite 不可用不能静默唤回旧 writer。 |
@@ -244,6 +247,21 @@ PR 不构成重复开工的理由。现有收尾 monitor 归并相关 head／rev
 不进入公共文档。
 
 ## 删除 writer 前，本机可以积极做的验证
+
+安装态 CLI 的连续性已有一个真实 provider 综合旅程：
+`tests/control_plane/test_local_provider_settlement_journey.py` 验证 canonical
+File → SQLite → 已确认的 Todo 新增／修改／完成 → 新进程读回 → File。逐项比较
+完整领域 journal、原操作回执和当前 Todo，重试 add/update/completion/spend 不再
+提交业务效果或扣费；未结算的 active lease 阻止切换。新写入后，旧备份只能匹配
+保留前缀，不能充当当前 head 的回退。checkpoint 缺少合格路径决策时，新一轮仍
+须重规划；provider 恢复不能抹掉这项义务，也不能把 Todo 完成当作 Goal 验收。
+
+这补齐了有界 CLI 组合验收，不是完整安装态产品验收。App 的任务所有权编辑器
+只迁移执行策略，尚无已有 Goal 的 File/SQLite 切换交互。下一配套仍复用同一 TS
+migration owner：在现有 Goal 设置中提供不接收调用者路径的 preview/apply，
+失响应／重启后恢复原预览，明确拒绝原因，并单独读回当前选中来源。须用真实
+packaged UI 和后端核验 pending projection/outbox、Host 停止及结算。旧 Markdown
+完整捕获、隔离 checkpoint 导入、全 Goal 恢复、D2 与发布默认决策仍各自验收。
 
 以下是冻结候选版本后的工程窗口，不是承诺发布日期。故障注入只用可丢弃 runtime
 和经过验证的隔离副本，不能为了测试杀掉或改写活跃 Goal。

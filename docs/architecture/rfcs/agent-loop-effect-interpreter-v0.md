@@ -517,6 +517,41 @@ Remaining implementation Todos, in dependency order:
 | Adopt one typed projection in real host renderers | Heartbeat full/thin and Turn host consume the same execution facts and per-Turn capture/detail route. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
 | Qualify the context shape and migration default | Compare the same normal, replan, wait/recovery and optional-capability workloads against both current full and compact paths. Measure payload/model tokens, detail IO, latency, resource growth, omissions and decision/outcome quality. Keep data loss, duplicate effects, identity and settlement errors as hard constraints. Preserve supported saved prompts/receipts and reversible rollout; change budgets or defaults only with that evidence. |
 
+The next cost slice has a reproduced regression-budget gap, rather than a
+missing fixture alias or permission to remove required context. Comparing
+`aa87cc019` with `fc411c878` on the unchanged public CLI fixture, identical
+temporary aliases and command arguments produced these JSON stdout costs:
+
+| Public fixture / surface | Base characters | Candidate characters | Base compact JSON | Candidate compact JSON |
+|---|---:|---:|---:|---:|
+| 36 Todos / 1 Agent / 12 runs, `turn plan` | 16,115 | 17,403 | 12,112 | 13,145 |
+| 1 Todo / 1 Agent / 1 run, enabled multi-subagent `quota should-run --turn-envelope` | 10,990 | 11,661 | 8,892 | 9,464 |
+| 36 Todos / 1 Agent / 12 runs, `heartbeat-prompt --thin` | 3,122 | 3,122 | 3,069 | 3,069 |
+
+The crowded Turn increase includes 484 compact characters in the envelope and
+510 in the newly returned hook-dispatch diagnostic. The envelope now states
+which hooks observed empty context, discards cached content for them, and
+distinguishes fulfilled pre-work reads from later action-specific freshness.
+Those instructions and signed observations carry useful decision semantics.
+The hook diagnostic has a separate effect-disclosure role; audit its actual
+consumers before moving or removing it. Pretty-print overhead is measured
+separately and is not a token, latency or model-quality result.
+
+The original runner tests still fail: crowded `turn plan` exceeds its 16,000
+character ceiling, and the enabled multi-subagent runner exceeds its 9,000
+character envelope ceiling. Its nested fixture paths emit 11,291 characters
+on the base and 11,961 on the candidate; that is a different path workload
+from the table. The historical base was already red. These are regression
+budgets, not execution quota or frozen promotion limits. The next bounded
+implementation must characterize diagnostic consumers, compare lossless
+compaction with justified headroom, and update the existing budget owner and
+its runner tests together. Preserve the fixture populations, full routes,
+required-source content, hook coordinates, freshness clauses and real stdout
+growth rejection. Follow the
+[budget decision guide](../../development/testing-and-quality.md#budget-failure-decisions).
+Until that slice passes the original workload, this measurement is not a
+budget pass, a transport-default decision or installed host qualification.
+
 Do not add a generic executor or lower an acceptance threshold to make a short
 packet pass. Preserve unsatisfied requirements and distinguish transport parity,
 installed host adoption and useful model outcomes. See the

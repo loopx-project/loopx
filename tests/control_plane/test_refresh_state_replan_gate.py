@@ -407,7 +407,7 @@ def test_refresh_state_run_atomic_blocker_delta_persists_repair_and_semantic_evi
     assert semantic_delta.get("satisfying_outcomes") == ["new_concrete_blocker"]
 
 
-def test_refresh_state_run_rejects_maintenance_writeback(tmp_path: Path) -> None:
+def test_legacy_material_run_cadence_rejects_maintenance_writeback(tmp_path: Path) -> None:
     project = tmp_path / "project"
     state = (
         project
@@ -426,6 +426,7 @@ def test_refresh_state_run_rejects_maintenance_writeback(tmp_path: Path) -> None
                     {
                         "id": GOAL_ID,
                         "status": "active",
+                        "execution_profile": {"replan_after_completed_todos": 5},
                         "repo": str(project),
                         "state_file": str(state.relative_to(project)),
                         "coordination": {

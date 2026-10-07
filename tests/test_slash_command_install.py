@@ -62,14 +62,11 @@ def test_host_materialization_installs_generated_loopx_entry_skill(
     assert "explicit new-Goal request" in skill_text
     assert "`ordered_steps` and `goal_start_contract` as authoritative" in skill_text
     assert "surface the exact pasteable gate" in skill_text
-    assert "A fresh empty hook observation" in skill_text
-    assert "Missing observation means unknown" in skill_text
-    assert "unavailable/denied context is not empty" in skill_text
-    assert "do not repeat a pre-work preference read already fulfilled by this guard" in skill_text
-    assert "Before every preference-dependent external action, obtain a fresh exact-scope preference view" in skill_text
-    assert "through a new guard or `loopx semantic-preference agent read" in skill_text
-    assert "This still applies after an earlier empty or current view" in skill_text
-    assert "an external action needing a newer preference view" not in skill_text
+    # Optional preference instructions belong to its active hook, not this
+    # universally installed entry skill (including the empty-store recipe).
+    assert "semantic-preference" not in skill_text
+    assert "Agent preferences" not in skill_text
+    assert "preference-dependent" not in skill_text
     assert "follow its exact CLI `interaction_contract` or quota command first" in skill_text
     assert "reuse the packet's verified thread binding" not in skill_text
     assert "capability show <capability-id> --format json" not in skill_text

@@ -99,7 +99,9 @@ def test_sqlite_cli_reopens_updates_and_recovers_missing_markdown(tmp_path, monk
 def test_promotion_failure_evidence_survives_real_python_runtime(tmp_path, monkeypatch, fault, reason):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
-    selector_cli = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts"
+    # Node resolves module URLs through symlinks; direct-entry detection needs
+    # the same physical path in relocated installed-package test layouts.
+    selector_cli = (Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts").resolve()
     process = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", str(selector_cli),
         "--runtime-root", str(runtime), "--goal-id", "sqlite-goal", "--execute"],
         capture_output=True, text=True, timeout=45)

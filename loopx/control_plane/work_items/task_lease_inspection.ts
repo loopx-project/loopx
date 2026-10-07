@@ -13,6 +13,7 @@ import {decodeTaskLeaseAuthority, leaseIsActive, normalizeGoalId, normalizeTodoI
   type LeaseRecord, type TodoFact} from "./task_lease_acquire.ts";
 import {leaseOwnerConstraint} from "./task_lease_eligibility.ts";
 import {leaseRepositoryRejection} from "./task_lease_repository.ts";
+import {todoExecutionDependencyRejection} from "../coordination/todo_execution_dependency.ts";
 
 export const TASK_LEASE_INSPECT_REQUEST = "loopx_task_lease_inspect_request_v0";
 
@@ -54,6 +55,7 @@ export async function inspectTaskLease(value: unknown,
       ...(canonical ? {todos: [], todo_projection_error: null} : {})});
     await revalidateAuthoritySources(authority.source_receipts);
     let lease: LeaseRecord | null, todo: TodoFact | null, mode: string | null, leasePath: string | null;
+    let dependency: ReturnType<typeof todoExecutionDependencyRejection> = null;
     if (canonical) {
       const {store, sourceAuthority} = await openLocalAuthorityStoreHandle(root, goalId, dependencies.authorityProvider);
       evidence.source_authority = sourceAuthority;
@@ -66,6 +68,7 @@ export async function inspectTaskLease(value: unknown,
       const rawLease = index.leases.get(todoId);
       lease = rawLease ? canonicalTaskLease(rawLease, goalId, todoId) : null;
       todo = canonicalLeaseTodoFact(index.todos.get(todoId));
+      dependency = todoExecutionDependencyRejection(index.todos, todoId);
       mode = normalizeHandoffMode(loaded.head.handoff_mode);
       leasePath = null;
       evidence.provider_revision = loaded.provider_revision;
@@ -88,7 +91,9 @@ export async function inspectTaskLease(value: unknown,
         ? {effective: false, reason: authority.todo_projection_error.code}
         : leaseOwnerConstraint(todo, typeof lease.owner === "string" ? lease.owner : null, authority.registered_agents);
     const repositoryRejection = canonical && ownerConstraint?.effective === true ? leaseRepositoryRejection(todo, lease) : null;
-    const constraint = repositoryRejection === null ? ownerConstraint : {effective: false, reason: repositoryRejection};
+    const constraint = repositoryRejection !== null ? {effective: false, reason: repositoryRejection}
+      : dependency !== null && ownerConstraint?.effective === true
+        ? {effective: false, reason: dependency.code} : ownerConstraint;
     // Both registration and route must still describe the source we inspected.
     // No lock is held and no promise is made about later commits or expiry.
     await revalidateAuthoritySources(authority.source_receipts);
@@ -102,7 +107,8 @@ export async function inspectTaskLease(value: unknown,
       goal_id: goalId, todo_id: todoId, active: timeActive && constraint?.effective === true,
       lease, lease_path: leasePath, ...evidence,
       ...(mode === null ? {} : {handoff_mode: mode}),
-      ...(constraint?.effective === false ? {executor_constraint: constraint} : {})};
+      ...(constraint?.effective === false ? {executor_constraint: constraint} : {}),
+      ...(dependency === null ? {} : {resume_condition: dependency.condition})};
   } catch (error) {
     const opening = localAuthorityOpenFailure(error);
     return {ok: false, schema_version: TASK_LEASE_SCHEMA_VERSION, action: "inspect",

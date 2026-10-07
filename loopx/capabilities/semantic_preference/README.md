@@ -238,24 +238,39 @@ No copying host conversations, cross-home rebinding or implicit global corpus.
 Moving the Goal state file requires an explicit context migration; it is not
 silently treated as the same private scope.
 
-### Fresh Turn context without a separate preference read
+### Preference guidance belongs to the participating hook
 
-Ordinary quota guards and TurnEnvelope now observe the exact Agent preference
-scope even when no store exists. `work_context.observations` carries a fresh
-`empty` hook observation: clear cached preference context and do not probe the
-same empty source again. Missing observations mean unknown, not empty. A known
-filesystem permission denial and other source failures remain unavailable
-context, with the existing dependent-action hold and independent-work policy.
-This changes the default empty-source projection; it grants no work authority.
+The generic `/loopx` skill no longer teaches preference discovery, reads or
+corrections. Shared work-context guidance stays capability-neutral. Preference
+instructions accompany the capability-owned current view through its turn-start
+hook, so Agents that never use local preferences do not receive this recipe or
+an extra preference-read obligation.
 
-Each guard rereads the source without a negative cache. Newly written preferences,
-corrections, retirements and expiry therefore appear in the next guard. A single
-capability-owned snapshot supplies both discovery and current bodies, avoiding
-an additional provider read after discovery. Read delivered current bodies once
-for this guard's pre-work checks; execute only remaining `required_reads` at that
-stage. Before every preference-dependent external action, obtain a fresh scoped
-view through a new guard or explicit `agent read`, even if an earlier view was
-empty or already consumed. The explicit read also precedes durable corrections.
+Local participation retains the existing explicit-use boundary: the first
+`semantic-preference agent remember --execute` commits a journal for the exact
+Goal/Agent scope. A read or preview does not activate it. Another scope's journal
+does not opt this scope in. With no namespace, quota/Turn skips the preference
+provider; with no exact-scope journal it leaves the hook projection unchanged.
+This local lifecycle is separate from the external recall `enabled` setting;
+turning external recall off does not erase explicitly committed local preferences.
+
+For participating scopes, a single capability-owned snapshot supplies both
+observation and current bodies. Each guard rereads without a negative cache, so
+corrections, retirements and expiry appear in the next guard. Retired/expired
+markers remain visible to invalidate cached advice; an unreadable journal is
+unavailable, not inactive or empty. Permission denial remains distinguishable.
+Recover the source before preference-dependent work; independent work keeps its
+existing authority.
+
+The delivered view includes the operating rules previously in the generic skill:
+consume it once for this guard's pre-work checks, then execute any remaining
+`required_reads`. Before every preference-dependent external action, obtain a
+fresh exact-scope view through a new guard or explicit `agent read`, even after
+an earlier empty or current view. Read explicitly before a durable correction;
+reuse the subject key, current revision, stable operation identity and exact user
+source, then preview, execute and read back. Missing hook context is unknown, not
+an instruction to discover preferences. An explicit empty read clears cached
+advice; neither context nor its absence grants authority.
 
 ### Memory service providers and the next integration boundary
 
@@ -361,7 +376,7 @@ a newly fetched revision, which would hide a concurrent correction.
 ### Fresh-turn adoption
 
 CLI quota and native Turn share the
-[fresh scoped context contract](#fresh-turn-context-without-a-separate-preference-read)
+[participating hook contract](#preference-guidance-belongs-to-the-participating-hook)
 above. Native hosts consume delivered current bodies and execute remaining
 required reads. Every remaining read and its exact executable command survive
 Turn compaction, including long quoted paths and more than five hooks; size
@@ -372,8 +387,9 @@ private statements or source quotes.
 The command reads all current scoped entries, including retired/expired markers,
 instead of relying on embedding or keyword ranking to find a prohibition.
 
-The managed `/loopx` instructions teach the host to persist explicit corrections,
-read them back, and re-read before a preference-dependent external action.
+The [participating hook](#preference-guidance-belongs-to-the-participating-hook)
+delivers `current.instructions` that teach the host to persist explicit
+corrections, read them back, and re-read before a preference-dependent external action.
 A new user instruction overrides old context immediately, including while a
 write is being recovered. An unreadable store is unavailable, not empty. The shared Turn capsule signs
 failed/partial/unavailable hook observations and carries them into the execution

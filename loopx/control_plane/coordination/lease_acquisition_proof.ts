@@ -12,6 +12,7 @@ import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {leaseEpoch, leaseVersion, leaseIsActive} from "../work_items/task_lease_acquire.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseRepositoryRejection, leaseWriteRepository} from "../work_items/task_lease_repository.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 interface AcquisitionIdentity {
   goal_id: string; todo_id: string; owner: string; idempotency_key: string;
@@ -67,6 +68,10 @@ export async function currentLeaseAcquisitionProof<S extends string>(store: Auth
     return failed(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
       {...details, goal_acceptance_guard: acceptance});
   }
+  const dependency = todoExecutionDependencyRejection(
+    indexCoordinationProjection(head.head, input.goal_id).todos, input.todo_id);
+  if (dependency !== null) return failed(dependency.code, dependency.reason,
+    {...details, resume_condition: dependency.condition});
   // A renewal advances version/expiry within this execution. Never rewrite the
   // immutable acquisition receipt to make it look like the renewed decision.
   return {...result, ...details, lease: current};

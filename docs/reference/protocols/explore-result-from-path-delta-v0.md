@@ -22,7 +22,6 @@ following explicit scope in its top-level `explore_result` field:
   },
   "explore_result": {
     "schema_version": "explore_result_from_path_delta_v0",
-    "node_id": "prefix-bound",
     "question": "Does a finite prefix establish the tail bound?",
     "applicability": "Finite prefix only; no uniform tail estimate.",
     "input_revision": "fixture-v1",
@@ -41,6 +40,24 @@ It normalizes the result to the existing
 No finding status is inferred from the route outcome. The caller must choose
 `tentative`, `confirmed` or `refuted` from the evidence, within the declared scope.
 
+For **first capture**, omit `node_id`. The typed Explore owner derives a stable
+question id from the exact trimmed `question` and `applicability` strings
+(SHA-256 of their JSON array, prefixed `question_`). The hook creates the question,
+records the finding and links the claimed Todo in the same existing writeback
+flow. No separate `explore node` call is required. This applies to both attachment
+forms. Revision, observation and status do not affect question identity.
+
+For later observations, reuse the returned question id and canonical scope.
+Explicit ids remain supported and are never silently remapped; a blank, null or
+malformed id is rejected with recovery instructions. Changed question or
+applicability text without an id creates a distinct scoped question; this is
+exact identity, not semantic deduplication or a lookup of legacy/manual ids.
+
+首次记录新问题时省略 `node_id`，由 Explore 根据明确填写的问题和适用范围生成稳定标识，
+随后通过原有 hook 写入发现并关联当前 Todo，无须先调用 `explore node`。
+后续记录复用返回的标识和原始范围；输入版本、观察和结论仍须由调用者明确提供。
+空值或冲突标识不会被静默修正，也不会覆盖已有问题。
+
 Question identity and applicability remain stable across later observations.
 When the selected Todo already links a stored question, the same schema also
 accepts this shorter explicit reference:
@@ -48,7 +65,7 @@ accepts this shorter explicit reference:
 ```json
 {
   "schema_version": "explore_result_from_path_delta_v0",
-  "node_id": "prefix-bound",
+  "node_id": "<returned-question-id>",
   "input_revision": "fixture-v2",
   "status": "tentative"
 }
@@ -92,7 +109,14 @@ revision and applicability, fits within the 2000-character stored and next-turn
 summary budget. This replaces the previous 300/300 attachment and 1200 summary
 limits; the default three-result page and progressive reads are unchanged. No
 condition or route item is silently truncated. Malformed or disabled capture
-fails before primary commit. Correct the input and retry. A partial post-commit
+fails before primary commit. On an identity conflict the error names the
+mismatched `node_kind`, `title` or `summary` without copying stored text. Read the
+canonical question scope when adding to that question. If this is a distinct
+scoped question, omit the conflicting id and supply full question/applicability;
+do not overwrite the old node. The standalone `explore node` command defaults
+to an `area`, which cannot serve as a capture question. Correct the input and
+retry the same writeback; rejected attempts leave primary history, graph and
+Todo links unchanged. A partial post-commit
 link failure uses the existing exact-writeback replay recovery; replay does not
 duplicate graph events.
 

@@ -31,6 +31,7 @@ def effective_turn_cadence_context(
     goal_ref: dict[str, str] | None = None,
     source_admission: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    """Encode a Goal whose live cadence was resolved by the caller."""
     profile = goal.get("execution_profile") or {}
     threshold = profile.get("replan_after_effective_turns")
     if threshold is None:

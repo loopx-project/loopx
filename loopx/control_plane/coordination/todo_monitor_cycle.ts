@@ -9,6 +9,7 @@ import type {CoordinationProjectionMutation} from "./coordination_projection.ts"
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {leaseEpoch, leaseVersion} from "../work_items/task_lease_acquire.ts";
 import {releasedTaskLeaseRecord} from "../work_items/task_lease_lifecycle_decision.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 export function planMonitorCycleTransition(input: {
   goal_id: string; before: JsonObject; after: JsonObject; lease: JsonObject | undefined;
@@ -31,12 +32,17 @@ export function planMonitorCycleTransition(input: {
 /** Observation and reactivation share actor admission; only an open cycle may
  * consume current execution proof. No delegated grant turns polling into work. */
 export function monitorMutationRejection(input: {
-  goal_id: string; todo: JsonObject; lease: JsonObject | undefined; handoff_mode: unknown;
+  goal_id: string; todo: JsonObject; todos: ReadonlyMap<string, JsonObject>;
+  lease: JsonObject | undefined; handoff_mode: unknown;
   actor_agent_id: string | null; registered_agents: readonly string[];
   operation: "observe" | "reactivate"; proof: TaskLeaseProof | null; now: Date;
 }): {code: string; reason: string} | null {
   const reject = (code: string, reason: string) => ({code, reason});
   const {todo, lease, actor_agent_id: actor, registered_agents: registered} = input;
+  const executionWait = () => {
+    const dependency = todoExecutionDependencyRejection(input.todos, String(todo.todo_id));
+    return dependency === null ? null : reject(dependency.code, dependency.reason);
+  };
   if (todo.role !== "agent" || todo.task_class !== "continuous_monitor" || todo.archive_state !== "active" ||
       todo.status !== (input.operation === "reactivate" ? "done" : "open")) {
     return reject("invalid_monitor_observation_target", "Observation requires an active Agent Monitor in the requested lifecycle state");
@@ -68,9 +74,9 @@ export function monitorMutationRejection(input: {
       if (input.proof !== null || (lease !== undefined && lease.status !== "released")) {
         return reject("handoff_mode_forbids_lease", "soft_claim forbids lease-backed Monitor observation; release retained active execution first");
       }
-      return null;
+      return executionWait();
     }
-    if (lease === undefined && mode !== "hard_lease" && input.proof === null) return null;
+    if (lease === undefined && mode !== "hard_lease" && input.proof === null) return executionWait();
     const fence = evaluateCanonicalTaskLeaseProof({todo, lease, handoff_mode: mode,
       actor_agent_id: actor, registered_agents: registered, now: input.now,
       lease_idempotency_key: input.proof?.idempotency_key ?? null,
@@ -78,7 +84,7 @@ export function monitorMutationRejection(input: {
     if (fence.outcome !== "apply") return reject(String(fence.code), `Monitor requires current lease proof: ${fence.code}`);
     if (lease !== undefined && todo.claimed_by !== actor) return reject("update_owner_mismatch",
       "Leased Monitor observation requires the current claim owner");
-    return null;
+    return executionWait();
   } catch (error) {
     return reject("invalid_coordination_projection", error instanceof Error ? error.message : "invalid Monitor authority");
   }

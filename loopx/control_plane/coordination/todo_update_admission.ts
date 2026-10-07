@@ -14,6 +14,7 @@ import {evaluateCoordinationTodoMutationDecision,
 import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection} from "./task_lease_proof.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
+import {indexCoordinationProjection} from "./coordination_projection.ts";
 
 interface TodoUpdateRejection {code: string; reason: string; handoff_mode?: string; recovery?: JsonObject}
 const reject = (code: string, reason: string): TodoUpdateRejection => ({code, reason});
@@ -29,7 +30,9 @@ export function todoUpdateAdmissionRejection(
     return reject("todo_archived", "Todo update requires an active Todo");
   }
   if (input.monitor_observation !== undefined) {
-    return monitorMutationRejection({goal_id: input.goal_id, todo, lease: leases.get(input.todo_id), handoff_mode: head.handoff_mode,
+    return monitorMutationRejection({goal_id: input.goal_id, todo,
+      todos: indexCoordinationProjection(head, input.goal_id).todos,
+      lease: leases.get(input.todo_id), handoff_mode: head.handoff_mode,
       actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
       operation: todo.status === "done" && input.planning_intent?.status === "open" ? "reactivate" : "observe",
       proof: decodeTaskLeaseProof(input.lease_idempotency_key == null && input.lease_expected_version == null ? null :

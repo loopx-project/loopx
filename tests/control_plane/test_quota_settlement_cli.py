@@ -4536,11 +4536,18 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
 
 
 @pytest.mark.parametrize("capture", [False, True])
-def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
-    tmp_path: Path, capture: bool,
+@pytest.mark.parametrize("legacy_cadence", [False, True])
+def test_pending_selection_periodic_review_uses_selected_counting_unit(
+    tmp_path: Path, capture: bool, legacy_cadence: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    if legacy_cadence:
+        rc, configured = _run_cli(
+            registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+            "--execution-replan-after-todos", "5", "--execute",
+        )
+        assert rc == 0, configured
     turn_instance_id = "turn-pending-selection-replan-preemption"
     guard_args = (
         "quota",
@@ -4574,6 +4581,13 @@ def test_pending_action_selection_returns_fresh_autonomous_replan_inline(
     )
 
     assert selected_rc == 0, selected
+    if not legacy_cadence:
+        # Unsettled run records cannot become effective work Turns, even across
+        # pending action selection and decision-file capture.
+        assert selected["decision"] == "run"
+        assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert not selected.get("autonomous_replan_obligation")
+        return
     assert selected["decision"] == "autonomous_replan_required"
     assert selected["normal_delivery_allowed"] is False
     assert selected["heartbeat_receipt"]["status"] == "upgraded"

@@ -58,6 +58,7 @@ import {
   TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA,
 } from "./todo_successor_derivation.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
@@ -1203,6 +1204,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {terminal_decision: authority},
       "decision_rejection",
     );
+  }
+  // Supersede retires waiting work through its existing terminal owner; it is
+  // not execution of the deferred Todo or proof that its prerequisite ran.
+  if (input.command === "complete" && authority.outcome === "apply") {
+    const dependency = todoExecutionDependencyRejection(projection.todos, input.todo_id);
+    if (dependency !== null) return terminalFailure(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition}, "decision_rejection");
   }
   if (update === undefined && input.command === "complete" && authority.outcome === "apply") {
     try {

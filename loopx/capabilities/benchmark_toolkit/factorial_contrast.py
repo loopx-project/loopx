@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import math
 from typing import Any
 
 from .experiment_identity import experiment_token_text as _token
@@ -23,17 +24,38 @@ def _optional_token(value: Any, *, field: str) -> str | None:
     return _token(value, field=field)
 
 
+def _metric_comparison_issue(
+    baseline: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> str | None:
+    """Check metric meaning, without imposing a study's fixed-total policy."""
+
+    if baseline.get("unit") != candidate.get("unit"):
+        return "unit_mismatch"
+    if baseline.get("higher_is_better") != candidate.get("higher_is_better"):
+        return "direction_mismatch"
+    if ("total" in baseline) != ("total" in candidate):
+        return "denominator_presence_mismatch"
+    if "total" in baseline and any(metric["total"] <= 0 for metric in (baseline, candidate)):
+        return "non_positive_denominator"
+    return None
+
+
 def build_benchmark_metric_delta(
     baseline: Mapping[str, Any], candidate: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Compare two normalized experiment-board metric values."""
 
-    delta = float(candidate["value"]) - float(baseline["value"])
     result: dict[str, Any] = {
         "baseline_value": baseline["value"],
         "candidate_value": candidate["value"],
-        "delta": delta,
     }
+    issue = _metric_comparison_issue(baseline, candidate)
+    if issue is not None:
+        return {**result, "comparison_unavailable_reason": issue}
+    delta = float(candidate["value"]) - float(baseline["value"])
+    if not math.isfinite(delta):
+        return {**result, "comparison_unavailable_reason": "non_finite_difference"}
+    result["delta"] = delta
     baseline_total = baseline.get("total")
     candidate_total = candidate.get("total")
     if (
@@ -46,6 +68,15 @@ def build_benchmark_metric_delta(
     ):
         baseline_rate = float(baseline["value"]) / float(baseline_total)
         candidate_rate = float(candidate["value"]) / float(candidate_total)
+        if not all(
+            math.isfinite(value)
+            for value in (baseline_rate, candidate_rate, candidate_rate - baseline_rate)
+        ):
+            return {
+                "baseline_value": baseline["value"],
+                "candidate_value": candidate["value"],
+                "comparison_unavailable_reason": "non_finite_difference",
+            }
         result.update(
             {
                 "baseline_total": baseline_total,
@@ -60,13 +91,23 @@ def build_benchmark_metric_delta(
         isinstance(higher_is_better, bool)
         and baseline.get("higher_is_better") == higher_is_better
     ):
-        if delta == 0:
+        directional_delta = result.get("delta_rate", delta)
+        if directional_delta == 0:
             result["direction"] = "flat"
-        elif (delta > 0) == higher_is_better:
+        elif (directional_delta > 0) == higher_is_better:
             result["direction"] = "improved"
         else:
             result["direction"] = "regressed"
     return result
+
+
+def benchmark_metric_comparison_value(metric: Mapping[str, Any]) -> float | None:
+    """Read the comparison scale while retaining the raw delta in the packet."""
+
+    if metric.get("comparison_unavailable_reason"):
+        return None
+    value = metric.get("delta_rate", metric.get("delta"))
+    return float(value) if isinstance(value, (int, float)) and math.isfinite(value) else None
 
 
 def _normalize_four_arm_design(contract: Mapping[str, Any]) -> dict[str, Any]:
@@ -252,6 +293,9 @@ def _interaction_metric(
     anchor_effect: Mapping[str, Any],
     higher_is_better: bool | None,
 ) -> dict[str, Any]:
+    for effect in (candidate_effect, anchor_effect):
+        if effect.get("comparison_unavailable_reason"):
+            return {"comparison_unavailable_reason": effect["comparison_unavailable_reason"]}
     candidate_delta = candidate_effect.get("delta")
     anchor_delta = anchor_effect.get("delta")
     result: dict[str, Any] = {
@@ -263,12 +307,6 @@ def _interaction_metric(
     ):
         difference = candidate_delta - anchor_delta
         result["difference_in_differences"] = difference
-        if difference == 0:
-            result["direction"] = "flat"
-        elif isinstance(higher_is_better, bool):
-            result["direction"] = (
-                "improved" if (difference > 0) == higher_is_better else "regressed"
-            )
     candidate_rate = candidate_effect.get("delta_rate")
     anchor_rate = anchor_effect.get("delta_rate")
     if isinstance(candidate_rate, (int, float)) and isinstance(
@@ -277,6 +315,17 @@ def _interaction_metric(
         result["candidate_effect_delta_rate"] = candidate_rate
         result["anchor_effect_delta_rate"] = anchor_rate
         result["difference_in_differences_rate"] = candidate_rate - anchor_rate
+    if any(not math.isfinite(value) for value in result.values()):
+        return {"comparison_unavailable_reason": "non_finite_difference"}
+    difference = result.get(
+        "difference_in_differences_rate", result.get("difference_in_differences")
+    )
+    if difference == 0:
+        result["direction"] = "flat"
+    elif isinstance(higher_is_better, bool):
+        result["direction"] = (
+            "improved" if (difference > 0) == higher_is_better else "regressed"
+        )
     return result
 
 
@@ -353,17 +402,18 @@ def build_benchmark_factorial_contrasts(
             design=design,
             effect_by_pair=effect_by_pair,
         )
+        primary_metric = (
+            next(iter(selected.values())).get("primary_metric") if selected else None
+        )
+        if interaction_metrics.get(primary_metric, {}).get("comparison_unavailable_reason"):
+            reasons.append("primary_metric_definition_mismatch")
         contrasts.append(
             {
                 "schema_version": BENCHMARK_FACTORIAL_CONTRAST_SCHEMA_VERSION,
                 "benchmark_id": benchmark_id,
                 "study_id": study_id,
                 "case_id": case_id,
-                "primary_metric": (
-                    next(iter(selected.values())).get("primary_metric")
-                    if selected
-                    else None
-                ),
+                "primary_metric": primary_metric,
                 "factorial_contrast_countable": not reasons,
                 "qualification_scope": "declared_factor_design_and_board_results",
                 "reason_codes": sorted(set(reasons)),
@@ -454,7 +504,13 @@ def _qualify_selected_cells(
         }
         for row in selected_rows
     ]
-    if any(signature != metric_signatures[0] for signature in metric_signatures[1:]):
+    if (
+        any(signature != metric_signatures[0] for signature in metric_signatures[1:])
+        or build_benchmark_metric_delta(
+            selected_rows[0]["metrics"][primary_metric],
+            selected_rows[0]["metrics"][primary_metric],
+        ).get("comparison_unavailable_reason")
+    ):
         reasons.append("primary_metric_definition_mismatch")
 
 
@@ -504,6 +560,19 @@ def _interaction_metrics(
     interaction_metrics: dict[str, Any] = {}
     for name in sorted(set(candidate_metrics) & set(anchor_metrics)):
         metric_source = selected[candidate_effect["candidate_arm_id"]]["metrics"][name]
+        # Conditional effects can each be valid while using different units or
+        # scales. Check all four cells before subtracting those effects.
+        issue = next(
+            (
+                reason
+                for row in selected.values()
+                if (reason := _metric_comparison_issue(metric_source, row["metrics"][name]))
+            ),
+            None,
+        )
+        if issue is not None:
+            interaction_metrics[name] = {"comparison_unavailable_reason": issue}
+            continue
         interaction_metrics[name] = _interaction_metric(
             candidate_effect=candidate_metrics[name],
             anchor_effect=anchor_metrics[name],

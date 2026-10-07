@@ -8,6 +8,7 @@ import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receip
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {computeContinuationTodoFacts, validateContinuationNote} from "./continuation_note.ts";
 import {evaluateCanonicalTaskLeaseProof, type TaskLeaseProof} from "./task_lease_proof.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 interface ExecutionInput {
   goal_id: string; todo_id: string; agent_id: string;
@@ -25,7 +26,10 @@ export function continuationExecutionAuthority(head: JsonObject, input: Executio
     handoff_mode: String(head.handoff_mode ?? "legacy"), actor_agent_id: input.agent_id,
     registered_agents: input.registered_agents, lease_idempotency_key: input.proof?.idempotency_key ?? null,
     lease_expected_version: input.proof?.expected_version ?? null, now: new Date()});
-  return {allowed: decision.outcome === "apply", reason_code: String(decision.code)};
+  if (decision.outcome !== "apply") return {allowed: false, reason_code: String(decision.code)};
+  const dependency = todoExecutionDependencyRejection(index.todos, input.todo_id);
+  return dependency === null ? {allowed: true, reason_code: String(decision.code)}
+    : {allowed: false, reason_code: dependency.code};
 }
 
 export async function sealLeasedContinuationAdoption(store: AuthorityStore, input: ExecutionInput & {

@@ -1,17 +1,31 @@
 # Canonical authority archive and isolated recovery
 
-`loopx authority-archive` exports a pinned prefix of the selected coordination
-AuthorityStore and restores that history into a separate File or SQLite store.
+`loopx authority-archive export` exports a pinned prefix of the selected coordination
+AuthorityStore; `restore` recovers that history into a separate File or SQLite store.
 It preserves the full committed projections, events, operation ids and receipts,
 including archived Todos and retained leases. It does not export the registry,
 quota ledger, external artifacts, host sessions or the rest of a Goal's runtime.
 
-This is the recovery-artifact part of shared-authority D3/L8. It does not promote
+Export, verification and isolated restore are the recovery-artifact part of
+shared-authority D3/L8. These operations do not promote
 a Goal, switch providers, release a writer fence, register a restored runtime,
 or qualify the default local profile. The recovered lease records are historical
 state, not a new execution grant. Canonical writes made after the captured cursor
 are outside that archive and must be accounted for by a separate fenced cutover.
 Never reactivate an older Markdown state as a rollback after canonical writes.
+
+Changing an existing canonical File Goal to SQLite uses the separate
+[reviewed provider cutover](file-authority-state-log.md#reviewed-filesqlite-cutover)
+in this command family. Returning to File needs a new plan from the **current**
+SQLite head. For example, after migration adds two Todos and completes another,
+the return must retain those additions, the completion result and its original
+receipts. Restoring only the pre-migration backup loses acknowledged work.
+The quota ledger and Host/Turn state have separate owners: in-place provider
+cutover keeps their runtime location; an archive alone cannot recover them.
+
+This is distinct from promoting an unpromoted Markdown Goal or changing its
+ownership policy. The App's task-ownership editor changes policy; it does not
+migrate storage. New-Goal defaults also do not migrate existing Goals.
 
 ## Export and verify
 

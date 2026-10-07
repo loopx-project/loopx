@@ -27,6 +27,16 @@ vision drift or missing closeout satisfy, block, or wake another role.
 `goal_frontier_projection`. It should not grow per-agent vision storage,
 budgeting, dreaming, or product-specific replan logic.
 
+## Default review cadence
+
+Goals without an explicit Goal or device cadence use five settled effective work
+Turns per Agent. This replaces the implicit five-completed-Todo default; existing
+explicit Todo values keep their unit. Benchmark runners pin three effective Turns.
+The existing TypeScript replan history owner counts verified settlement receipts;
+no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
+configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)
+for configuration precedence, rollback and independent review triggers.
+
 ## Replan ACK freshness
 
 An accepted ACK with a legal vision outcome covers gaps at or before its

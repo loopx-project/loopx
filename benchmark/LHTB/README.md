@@ -8,7 +8,7 @@ LoopX source from the current checkout (optionally pinned with LOOPX_EXPECTED_CO
 + current LoopX external_scheduler_worker.py
 + one fresh codex exec per heartbeat (never exec resume)
 + openai/gpt-5.6-sol, reasoning=max
-+ execution_profile.replan_after_completed_todos=3
++ execution_profile.replan_after_effective_turns=3
 ```
 
 This runner includes one narrow scheduler compatibility fix in
@@ -71,8 +71,8 @@ stage native Codex + current LoopX source/profile
   -> create trial-local registry/runtime/task document
   -> bootstrap one trial-local Goal
   -> register benchmark-agent
-  -> configure replan_after_completed_todos=3 and read it back
-  -> add the current Harbor phase as a claimed advancement Todo
+  -> configure replan_after_effective_turns=3 and read it back
+  -> plan phase Todos from the task (or seed one Todo for explicit seeded entry)
   -> start LoopX external_scheduler_worker.py
        -> quota should-run --runtime-profile generic_cli
        -> when allowed, invoke benchmark.runtime.worker
@@ -139,16 +139,21 @@ The runner applies and reads back:
 ```bash
 loopx configure-goal \
   --goal-id benchmark-goal \
-  --execution-replan-after-todos 3 \
+  --execution-replan-after-turns 3 \
   --execute
 ```
 
-This does not roll back the third Todo and does not force a plan change. After
-three qualifying advancement Todos completed by this agent without a covering
-outcome checkpoint, the next quota/frontier evaluation opens a review/replan
-obligation. The review may keep a correct plan (`continue`/`no_change`) or
-change it. Open Todos, protocol steps, work by another agent, and unqualified
-refreshes do not increment or reset this counter.
+New LoopX runs default to three settled effective work Turns through the shared
+control-plane counter. Tool calls and idle wakes are not effective Turns. The
+threshold opens a review/replan obligation; it does not force a plan change, and
+other replan triggers can act sooner. TurnEnvelope is not required.
+
+Set agent kwargs `replan_after_turns` to 1..5 to change the threshold, or use
+`replan_after_todos: 3` to select the former completed-Todo cadence as an explicit
+ablation. The two settings are mutually exclusive. Preflight checks the resolved
+CLI option and reports its count; the per-trial bootstrap receipt records the
+same setting. Non-LoopX baselines have no LoopX replan cadence. Existing attempts
+and archived study configurations retain their original settings.
 
 ## LHTB and fairness settings
 

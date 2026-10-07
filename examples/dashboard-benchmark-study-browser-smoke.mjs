@@ -142,6 +142,28 @@ async function assertCaseScopedRunSelection(page, url) {
   await page.getByRole("complementary").getByText("case-state-transition · goal_plain", { exact: true }).waitFor();
 }
 
+async function assertRatioComparisonReadback(page, url) {
+  // Synthetic projection isolates formatting from Python's independently tested selection.
+  const packet = JSON.parse(readFileSync(resolve(dashboardDir, "public/benchmark-study.example.json"), "utf8"));
+  const metric = packet.cases[1].largest_eligible_primary_contrast.metric_deltas.feature;
+  await page.route("**/ratio-comparison.json", (route) => route.fulfill({ json: packet }));
+  const target = new URL(url);
+  target.search = new URLSearchParams({ dashboardUrl: "/ratio-comparison.json", view: "cases" }).toString();
+  for (const [delta, rate, direction, label, className] of [
+    [-41, 0.4, "improved", "goal_hint: +40 pp", "benchmark-positive"],
+    [10, -0.2, "regressed", "goal_hint: -20 pp", "benchmark-negative"],
+    [50, 0, "flat", "goal_hint: 0 pp", ""],
+  ]) {
+    Object.assign(metric, { delta, delta_rate: rate, direction });
+    await page.goto(target.toString(), { waitUntil: "networkidle" });
+    const cell = page.getByRole("cell", { name: label, exact: true });
+    await cell.waitFor();
+    if ((await cell.getAttribute("class") ?? "") !== className) {
+      throw new Error(`ratio comparison direction style is inconsistent: ${label}`);
+    }
+  }
+}
+
 async function main() {
   const { chromium } = loadPlaywright();
   const server = process.env.LOOPX_BENCHMARK_STUDY_URL ? null : startDashboardServer();
@@ -195,6 +217,7 @@ async function main() {
     await rejected.getByText("Benchmark dashboard source must use same-origin local readback", { exact: true }).waitFor();
 
     await assertCaseScopedRunSelection(desktop, url);
+    await assertRatioComparisonReadback(desktop, url);
     if (pageErrors.length) throw new Error(`browser errors: ${pageErrors.join(" | ")}`);
     console.log("benchmark study browser smoke passed");
   } finally {

@@ -30,7 +30,7 @@ agents:
       codex_sandbox: danger-full-access
       turn_timeout_sec: null
       scheduler_timeout_sec: 5080
-      replan_after_todos: 3
+      replan_after_turns: 3
 ```
 
 For an explicitly selected **heartbeat-only** context experiment, add
@@ -260,23 +260,26 @@ and native sessions when comparing planning cost; no active attempt is changed
 by selecting this option for a new run.
 
 
-### Explicit effective-Turn cadence
+### Default effective-Turn cadence
 
-Harbor `BenchmarkCodex` accepts `replan_after_turns: 3`; the native EdgeBench
-launcher accepts `--replan-after-turns 3` for `heartbeat-resume` and
-`heartbeat-explore`. This passes the existing Goal option
+Harbor LoopX modes (`heartbeat`, `turn`, `loopx-goal`) default to
+`replan_after_turns: 3`; native EdgeBench `heartbeat-resume` and
+`heartbeat-explore` default to `--replan-after-turns 3`. This passes the existing Goal option
 `--execution-replan-after-turns` and verifies the persisted
 `replan_after_effective_turns` value before execution. The shared TypeScript
 control plane still owns which settled work Turns count; adapters do not count
 records or completed Todos themselves.
 
-Omitting the option preserves the legacy three-completed-Todo setting. Harbor
-rejects simultaneous explicit Todo and Turn settings. To roll back, omit the
-Turn option in a new trial or select `replan_after_todos` in Harbor; do not alter
-an active matched trial. Receipts name the selected unit. Values must be integers
-from one through five, and non-LoopX profiles reject the option. No task, scoring,
-feedback, spawn permission, or total-budget change is implied. This adapter
-option alone does not enable SForge planned task entry.
+Omitting both cadence options now selects three effective work Turns instead
+of three completed Todos. Idle wakes, tool calls and the planning checkpoint do
+not count as effective work Turns; this is a deterministic threshold rather than
+a per-wake probability, and other replan triggers can act sooner.
+To retain the old cadence in a new trial, pass `replan_after_todos: 3` in Harbor
+or `--replan-after-todos 3` in EdgeBench. Explicit Turn/Todo settings are mutually
+exclusive and accept counts from one through five. Resolved runtime and worker
+receipts name the selected unit even when no flag was supplied. Non-LoopX
+profiles retain their existing behavior. No active attempt, task, scoring, feedback,
+spawn permission, or total-budget change is implied.
 
 The two options are independent: `--task-entry` selects where the initial Todo
 comes from, while `--replan-after-turns` selects which cadence the shared control

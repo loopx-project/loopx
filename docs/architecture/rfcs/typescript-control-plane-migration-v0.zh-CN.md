@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-01
+- Last revised：2026-10-07
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -27,14 +27,27 @@ R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 这里是 T0–T4 的产品消费计划，不新增 provider promotion，也不声称迁移完成。
 
 
-## 当前交付边界（2026-10-02）
+<a id="当前交付边界2026-10-02"></a>
 
-按 main `9b0486dc1` 核对，#4931、#5251、#5395、#5417、#5436 已合并，
-不再把这些存储改进和 Python 退役重复记作待办。
+## 当前交付边界（2026-10-07）
+
+按 main `06b6caa07` 复核，#5413/#5466/#5283，以及创建、Host 停止、UI 历史
+相关 owner #5500/#5805/#5308/#5398 均已合并。复用各自已交付的边界，不重开
+10 月 2 日的合并队列。
 [当前验证、迁移与删除计划](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#当前收尾验证迁移与删除2026-10-02)
-优先收尾 #5413/#5466/#5283，再做安装态可回退验证、有界自愿采用、canonical
-创建／默认接入及最后调用方删除。存量 Goal 迁移、两策略退役和格式升级各有独立
-回执及出口；原回执恢复不能成为保留 legacy 活跃策略的理由，必要迁移 reader 保留。
+现在优先安装态可回退验证、相关消费者采用、策略迁移及最后调用方删除，并分别
+记录已合并源码和仍缺的证据。
+
+#5500/#5805 已实现 canonical 新 Goal 创建。既有机器设置与
+`coordination/local_authority_defaults.ts` 为未配置的新 Goal 选择 canonical
+SQLite／`hard_lease`；CLI bootstrap 和 App 创建共享 typed 初始化及原操作恢复
+owner。显式 v0 设置和 v1 `canonical_creation=false` 保留晋升后目标行为；存量
+Goal 保持已记录的选择。见[配置及关闭契约](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)。
+这是源码候选，不认证安装采用、发布默认、完整共享 Goal 意图或 D2/D3；不重建
+创建／默认值 owner。
+
+存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
+保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
 有界 cohort 在安装恢复和相关执行控制通过后可开始，不代表发布默认值或正式十天
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
@@ -1581,8 +1594,8 @@ quota 压缩、Monitor 等待、scheduler 接续三个真实调用方。此前�
 Monitor due/gap 共用同一观察时刻，保留旧版 planning wire，删除 Python 的第二份
 gate 筛选。剩余 Python 当前时刻／原始摘要规则继续保留：有界 resume/handoff 来源
 和 scheduler 新鲜度还需要合入已有批次，并先验证同负载代价及安装态 File/SQLite
-负例，再删除。不要新增重复任务，也不要把规则迁移算作优化。默认 SQLite、完整 T4
-和真实 App 等待态验收仍开放。
+负例，再删除。不要新增重复任务，也不要把规则迁移算作优化。SQLite 发布默认
+资格、完整 T4 和真实 App 等待态验收仍开放；源码新 Goal 默认值见上方当前边界。
 
 已选来源的计数、展示分配、最近完成时间顺序、编排候选位置与收尾证明，收口到一个
 TS 摘要批次；Python 保留旧格式解码、公开字段筛选及渲染。删除旧 Python claim 分配

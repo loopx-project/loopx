@@ -198,12 +198,17 @@ def prepare_result_attachment(
         goal_id=goal_id,
     )
     for node in existing.get("nodes", []):
-        if node.get("node_id") == result["node_id"] and any(
-            node.get(key) != events[0].get(key)
-            for key in ("node_kind", "title", "summary")
-        ):
+        if node.get("node_id") != result["node_id"]:
+            continue
+        conflicts = [key for key in ("node_kind", "title", "summary")
+                     if node.get(key) != events[0].get(key)]
+        if conflicts:
             raise ValueError(
-                "Explore question identity conflicts with its existing scope"
+                "Explore question identity conflicts with its existing scope "
+                f"({', '.join(conflicts)}). Reuse the canonical question and "
+                "applicability for this question id; for a distinct scoped question, "
+                "omit node_id and provide explicit question and applicability. "
+                "An area node cannot be reused as a question; do not rewrite its scope."
             )
     readback = update_goal_todo(
         **_link_arguments(
