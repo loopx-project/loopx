@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
-import { projectQuotaSelection } from "../../loopx/control_plane/todos/quota_selection.ts";
+import { projectQuotaSelection, projectTodoQuotaPlanning } from "../../loopx/control_plane/todos/quota_selection.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
 import {projectAdvancementFrontier} from "../../loopx/control_plane/todos/frontier_revision.ts";
 
@@ -18,6 +18,42 @@ function request(items: JsonObject[], fields: JsonObject = {}): JsonObject {
     backlog_limit: 8, visibility_limit: 16, profile: null, source_open_count: items.length, ...fields};
 }
 const ids = (value: unknown) => (value as JsonObject[]).map(item => item.todo_id);
+
+test("route planning shares claim exclusion, preserves legacy visibility and never grants execution", () => {
+  const fact = (identity: string, fields: JsonObject = {}) => ({identity,
+    display: {todo_id: identity, text: "Review route"}, gate: false, replan: null,
+    task_class: "advancement_task", claim: null, excluded: [], sort: [1, 1, "", identity], ...fields});
+  const input = {schema_version: "todo_quota_planning_request_v2", selection: request([], {available: [], backlog_limit: 0}),
+    resume: {schema_version: "todo_resume_planning_request_v0", agent_id: "agent-a", item_limit: 8,
+      has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null,
+      available_capabilities: null, sources: Object.fromEntries(["items", "backlog_items", "first_open_items", "deferred_items",
+        "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
+        "current_agent_claimed_monitor_items", "claimed_monitor_open_items"].map(key => [key, []]))},
+    route_items: [fact("free", {replan: false}), fact("free"), fact("own", {claim: "agent-a"}),
+      fact("peer", {claim: "agent-b"}), fact("excluded", {excluded: ["agent-a"]}),
+      fact("monitor", {task_class: "continuous_monitor"}), fact("missing", {gate: true}),
+      fact("gate", {gate: true, replan: true}), fact(""), fact("peer")]};
+  const before = structuredClone(input);
+  const result = projectTodoQuotaPlanning(input), routes = result.route_lanes as JsonObject;
+  assert.equal(routes.route_continuation_replan_count, 5);
+  assert.equal(routes.current_agent_route_continuation_replan_count, 3);
+  assert.equal(routes.unclaimed_route_continuation_replan_count, 3);
+  assert.equal(routes.other_agent_route_continuation_replan_count, 2);
+  assert.deepEqual(routes.route_continuation_replan_candidates, []);
+  assert.deepEqual((result.lanes as JsonObject).executable_items, []);
+  assert.deepEqual(input, before);
+  const visible = structuredClone(input); visible.selection.backlog_limit = 8;
+  assert.deepEqual(ids((projectTodoQuotaPlanning(visible).route_lanes as JsonObject)
+    .current_agent_route_continuation_replan_candidates), ["free", "gate", "own"]);
+  // Malformed current carriers fail; older co-deployed requests stay unchanged.
+  assert.throws(() => projectTodoQuotaPlanning({...input, route_items: null}), /route items/);
+  assert.throws(() => projectTodoQuotaPlanning({...input, route_items: [fact("bad", {replan: "true"})]}), /classification/);
+  assert.equal(projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v1"}).route_lanes, undefined);
+  const legacy = {...input, schema_version: "todo_quota_planning_request_v0"};
+  const {available: _available, ...oldSelection} = legacy.selection;
+  assert.deepEqual(projectTodoQuotaPlanning({...legacy, selection: oldSelection}),
+    projectTodoQuotaPlanning({...input, schema_version: "todo_quota_planning_request_v1"}));
+});
 
 test("gate applicability overrides execution claims, but not another lane's explicit scope", () => {
   const rows = [row("global", {gate: true, global: true, claim: "agent-b", excluded: ["agent-a"]}),

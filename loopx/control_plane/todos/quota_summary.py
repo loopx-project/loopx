@@ -19,7 +19,6 @@ from .todo_semantics import (
     todo_summary_monitor_schedule_gap_items,
     todo_summary_monitor_writeback_contract,
 )
-from .route_continuation import build_todo_route_continuation_lanes
 from .succession_warning import build_todo_succession_warning_lanes
 from .summary_item import (
     compact_todo_summary_item,
@@ -464,13 +463,7 @@ def summarize_user_todos_for_quota(
             item_limit=TODO_BACKLOG_ITEM_LIMIT,
         )
     )
-    summary.update(
-        build_todo_route_continuation_lanes(
-            value,
-            agent_identity=agent_identity,
-            item_limit=TODO_BACKLOG_ITEM_LIMIT,
-        )
-    )
+    summary.update(planning["route_lanes"])
     summary.update(
         build_todo_succession_warning_lanes(
             value,
@@ -861,13 +854,7 @@ def summarize_project_asset_todos_for_quota(
             item_limit=TODO_BACKLOG_ITEM_LIMIT,
         )
     )
-    summary.update(
-        build_todo_route_continuation_lanes(
-            value,
-            agent_identity=agent_identity,
-            item_limit=TODO_BACKLOG_ITEM_LIMIT,
-        )
-    )
+    summary.update(planning["route_lanes"])
     source_claimed_open_count = None if filter_user_gate_blocks_agent else value.get("claimed_open_count")
     if lanes.claimed_open_items or source_claimed_open_count:
         summary["claimed_open_count"] = source_claimed_open_count or len(lanes.claimed_open_items)

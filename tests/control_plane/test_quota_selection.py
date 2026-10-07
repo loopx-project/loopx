@@ -3,7 +3,9 @@ import pytest
 import json
 from pathlib import Path
 
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
@@ -52,6 +54,74 @@ def test_agent_execution_still_respects_claim_and_exclusion():
     assert [row["todo_id"] for row in result["first_executable_items"]] == ["todo_owned", "todo_free"]
     assert result["claim_scope"]["executor_excluded_self_count"] == 1
     assert result["claim_scope"]["other_agent_claimed_open_count"] == 1
+
+
+@pytest.mark.parametrize("agent", [None, "agent-b"])
+def test_route_replan_visibility_counts_before_budget_without_granting_execution(agent):
+    own = [item(f"todo_route_{i}", task_class="advancement_task", claimed_by="agent-b",
+                index=i + 1, status="done", route_continuation_replan_required=True)
+           for i in range(10)]
+    free = item("todo_free", task_class="advancement_task", index=12)
+    peer = item("todo_peer", task_class="advancement_task", claimed_by="agent-a", index=13)
+    excluded = item("todo_excluded", task_class="advancement_task", excluded_agents=["agent-b"], priority="P2", index=14)
+    value = summary([])
+    value["route_continuation_replan_candidates"] = own + [free, peer, excluded]
+    # Explicitly-disabled duplicates must not hide an enabled row.
+    value["route_continuation_candidates"] = [
+        {**free, "route_continuation_replan_required": False}, peer,
+        item("todo_monitor", task_class="continuous_monitor"),
+    ]
+    result = summarize_user_todos_for_quota(value,
+        agent_identity={"agent_id": agent} if agent else None)
+    assert result["route_continuation_replan_count"] == 13
+    assert len(result["route_continuation_replan_candidates"]) == 8
+    assert result["open_count"] == 0 and result["first_executable_items"] == []
+    if agent:
+        assert result["current_agent_route_continuation_replan_count"] == 11
+        assert result["unclaimed_route_continuation_replan_count"] == 2
+        assert result["other_agent_route_continuation_replan_count"] == 2
+        assert [row["todo_id"] for row in result["other_agent_route_continuation_replan_candidates"]] == ["todo_peer", "todo_excluded"]
+    else:
+        assert "current_agent_route_continuation_replan_count" not in result
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_public_quota_route_read_keeps_claim_exclusion_and_provider_unchanged(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    records = [{"schema_version": "todo_item_v0", "todo_id": f"todo_route_{name}",
+                "role": "agent", "source_section": "Agent Todo", "archive_state": "active",
+                "text": "[P1] Repair stale handoff closeout", "task_class": "advancement_task",
+                "action_kind": "handoff_review", "status": "open", "done": False,
+                "priority": "P1", "unblocks_todo_id": "todo_target",
+                "excluded_agents": ["agent-c"], **scope}
+               for name, scope in [("own", {"claimed_by": "agent-b"}), ("free", {}),
+                                   ("peer", {"claimed_by": "agent-a"}),
+                                   ("excluded", {"excluded_agents": ["agent-b"]})]]
+    state.write_text(render_canonical_todo_sections("# Goal\n\n## Agent Todo\n", records,
+        provider_revision="fixture-source").markdown)
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="goal-route", domain="quota-route", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), extra_goal_fields={"coordination": {
+            "registered_agents": ["agent-a", "agent-b", "agent-c"], "handoff_mode": "soft_claim"}})
+    if provider != "legacy":
+        projection = build_todo_runtime_shadow_projection(goal_id="goal-route", todos=records, handoff_mode="soft_claim")
+        initialize_canonical_authority(runtime, "goal-route", projection, state_path=state, provider=provider)
+        state.unlink()
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-route")
+    narrative = state.read_bytes() if state.exists() else None
+    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-route", "--agent-id", "agent-b",
+        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+    assert code == 0, packet
+    routes = packet["agent_todo_summary"]
+    assert routes["route_continuation_replan_count"] == 4
+    assert routes["current_agent_route_continuation_replan_count"] == 2
+    assert routes["unclaimed_route_continuation_replan_count"] == 2
+    assert routes["other_agent_route_continuation_replan_count"] == 2
+    assert all(row.get("claimed_by") != "agent-a" and "agent-b" not in row.get("excluded_agents", [])
+               for row in routes["current_agent_route_continuation_replan_candidates"])
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-route") == before
+    assert (state.read_bytes() if state.exists() else None) == narrative
 
 
 @pytest.mark.parametrize("reverse", [False, True])

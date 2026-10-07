@@ -20,6 +20,7 @@ from .todo_semantics import (
 from .resume_planning import build_todo_resume_planning_request
 from .summary_item import compact_todo_summary_item
 from .user_gate import is_user_gate_todo_item
+from .route_continuation import build_todo_route_continuation_facts
 
 
 def project_quota_planning(
@@ -62,7 +63,8 @@ def project_quota_planning(
 
     try:
         result = effect_runtime_result("todo.quota_planning.project", {
-            "schema_version": "todo_quota_planning_request_v1",
+            "schema_version": "todo_quota_planning_request_v2",
+            "route_items": build_todo_route_continuation_facts(value),
             "resume": build_todo_resume_planning_request(value, agent_id=agent, item_limit=8,
                 available_capabilities=(available_capabilities or []) if resolve_capacity else None),
             "selection": {

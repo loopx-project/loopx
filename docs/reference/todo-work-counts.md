@@ -85,6 +85,22 @@ lane and closure RPC calls; it does not change persisted Todo or public summary
 schemas. Python decodes legacy input, validates source ordinals and materializes
 public fields, with no independent summary count, cap or claimant-allocation rule.
 
+Route-continuation visibility also uses the existing typed quota planning batch.
+It shares the normal claim/exclusion rule; eligibility, first-identity deduplication,
+sorting and counts precede the display cap. Disabled candidates do not hide later
+eligible copies. Historical unclaimed visibility may include excluded records,
+but the current-Agent lane excludes them and the execution consumer rechecks
+eligibility. A route hint never grants execution or clears a handoff gate.
+Python retains legacy field decoding and display formatting. There is no new
+RPC, persisted field, provider default or forced migration; supported old planning
+requests and legacy/File/SQLite records retain their behavior.
+
+重规划候选的展示也复用既有 TS quota planning 批处理与 claim/exclusion 规则。
+资格、首个有效身份去重、排序和计数先于展示裁剪；显式关闭的副本不遮挡后续有效
+副本。历史 unclaimed 展示可包含被排除的记录，current-Agent 分组会排除它们，
+执行方仍重新校验资格。建议不授予执行权限或清除 handoff 阻塞。Python 保留旧字段
+解码和展示；不新增 RPC、持久字段、provider 默认值或强制迁移。
+
 ## 中文说明
 
 `work_counts` 由完整来源计算，随后才裁剪展示。Agent quota 先按原有归属、排除、
