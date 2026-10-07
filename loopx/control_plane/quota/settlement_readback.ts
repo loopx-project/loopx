@@ -51,6 +51,7 @@ import {
   normalizeHeartbeatTodoId as normalizeTodoId,
   optionalHeartbeatString as optionalString,
   selectEffectiveHeartbeatReceipt,
+  heartbeatWorkRequalification,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -86,6 +87,7 @@ interface ReadbackRequest {
   resolve_original_binding: boolean;
   borrow_source_admission: boolean;
   refresh_retry: RefreshRetryRequest | null;
+  heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
 }
 
@@ -246,6 +248,8 @@ function decodeRequest(
     resolve_original_binding: request.resolve_original_binding === true,
     borrow_source_admission: request.borrow_source_admission === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
+    heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
+      : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
     owner,
   };
 }
@@ -1074,6 +1078,8 @@ function readQuotaSettlementFromRequest(
   const spendEvent = findStepEvent(events, identity, "quota_spend");
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
+  const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
+    .some((receipt) => receipt !== null);
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
@@ -1185,9 +1191,12 @@ function readQuotaSettlementFromRequest(
     replay_phase: replayPhase,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
-      [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
-        .some((receipt) => receipt !== null),
+      closeoutStarted,
     ),
+    ...(request.heartbeat_reentry_guard === null ? {} : {
+      heartbeat_reentry_qualification: heartbeatWorkRequalification(heartbeatReceipt,
+        request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted),
+    }),
   };
 }
 

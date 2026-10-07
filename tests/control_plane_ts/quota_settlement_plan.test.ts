@@ -19,6 +19,9 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.equal(plan.steps[0].command_condition, "todo_deliverable_complete");
   assert.equal(plan.steps[0].conditional, undefined); // Validation itself is never optional.
   assert.match(plan.steps[0].precondition, /original declaration and current lease/);
+  assert.match(plan.steps[0].precondition, /Use --evidence for an artifact pointer/);
+  assert.match(plan.steps[0].precondition,
+    /--result-file requires approved Goal acceptance criteria bound to this Todo, not merely a Todo validator/);
   assert.match(plan.steps[0].precondition, /Todo done does not settle the Turn/);
   assert.match(plan.steps[1].precondition, /--agent-vision-json/);
   assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);

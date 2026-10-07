@@ -11,9 +11,11 @@ initial `p1` per MCP process. Ego's named factory can reuse an existing space,
 so the adapter generates a unique host nonce once and keeps that name throughout
 its lifecycle and confirmed-missing recovery. This avoids expired fixed ids and
 keeps concurrent hosts on separate Pages. Alternatively, reserve an existing numeric TaskSpace
-and Page for this process. Allow only the public-source origins needed for the
-task. Do not reserve a Page
-shared with another process or grant a private account/admin origin. Navigation
+and Page for this process. Once explicitly enabled, the reader defaults to all
+HTTPS origins; `LOOPX_EGO_READ_ORIGINS = "*"` selects that mode explicitly.
+Existing comma-separated origin lists retain their restricted behavior. Use an
+explicit list for a community or otherwise restricted host. Do not reserve a Page
+shared with another process. Navigation
 may use the existing browser's session; origin configuration does not prove that
 every page on that origin is public. Follow the browser's installed skill for
 TaskSpace/Page ownership and user consent.
@@ -32,8 +34,22 @@ tool_timeout_sec = 40
 LOOPX_EGO_READ_BIN = "/absolute/path/to/installed/ego-browser"
 LOOPX_EGO_READ_TASK_SPACE = "auto"
 LOOPX_EGO_READ_PAGE = "p1"
-LOOPX_EGO_READ_ORIGINS = "https://example.com,https://www.example.org"
+LOOPX_EGO_READ_ORIGINS = "*"
 ```
+
+All-origin mode removes per-site configuration for source links, including
+links discovered while reading another source. It changes this provider's origin
+policy only: URLs still require HTTPS with no credentials and only the default
+port, and navigation cannot read a redirected or raced Page. It does not grant
+login, browser control, filesystem writes, publishing or private-account access.
+The tools retain their existing `read_public_url` and `read_public_image` names;
+the host must still distinguish public sources from signed-in private pages.
+The adapter remains optional and disabled until configured on the execution host.
+
+To restrict or roll back that origin scope, set
+`LOOPX_EGO_READ_ORIGINS = "https://example.com,https://www.example.org"` and reload
+the idle host. An empty value, `all`, subdomain wildcards or a list mixing `*`
+with origins is invalid and does not expand the scope.
 
 Use a supported LoopX installation containing this module. Restart an idle host
 through its existing service path and resume the original Session. Do not change
@@ -56,7 +72,7 @@ stopping the process. Configured numeric spaces are never finished by the
 adapter. Shutdown failures may require operator cleanup; a killed process cannot
 guarantee cleanup. No login/profile selection or browser-control tool is exposed.
 
-The tool accepts an HTTPS URL, checks the configured origin before navigation,
+The tool accepts an HTTPS URL, checks the configured origin policy before navigation,
 and uses WHATWG URL normalization for the target before checking the exact
 resulting URL before DOM extraction. Equivalent dot segments and query escaping
 do not count as redirects. The fixed operator-owned script supplies the canonical
@@ -89,8 +105,9 @@ actual PNG image-content block and its digest/dimensions. It scrolls the selecte
 image into view and waits up to 10 seconds for it to load. Capture is bounded to
 4 MB and 4,096 pixels per edge; hidden, oversized, unloaded or missing images
 fail visibly. Temporary screenshots use a private directory and are removed
-after the response is assembled. No arbitrary URL download or new origin is
-exposed to the caller. Images and text share the existing per-process read lock.
+after the response is assembled. No arbitrary URL download is exposed to the
+caller. Images use the same origin policy as text, and both share the existing
+per-process read lock.
 
 The image result is a **rendered region**, possibly occluded by page overlays,
 not the original image file. URL, image source and geometry are checked before
@@ -108,6 +125,7 @@ Tests cover transport and scope boundaries with a simulated CLI and execute
 the generated scripts in Node to check canonical URLs and rejection before DOM
 access. These fixtures do not operate the user's browser. Release
 qualification must separately verify a tool call by the original native Bot
-Session, a visible channel reply, a rejected out-of-scope URL, preserved Session
+Session, a visible channel reply, a rejected invalid URL (and an out-of-scope URL
+when using an explicit list), preserved Session
 identity and unchanged workspace grants. Record failure/untested cases rather
 than treating provider metadata or a host-side probe as native Bot acceptance.

@@ -37,7 +37,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     validation.command_template = requireNonEmptyString(commands.todo_completion, "todo_completion");
     validation.command_condition = "todo_deliverable_complete";
     validation.precondition = "validate the deliverable; when complete, run ordinary Todo completion " +
-      "with its original declaration and current lease before writeback/spend. No invented successor " +
+      "with its original declaration and current lease before writeback/spend. Use --evidence for " +
+      "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
+      "not merely a Todo validator. No invented successor " +
       "or --no-follow-up is required. Todo done does not settle the Turn";
   } else if (inFlight) {
     validation.precondition = "validate bounded in-flight progress; keep the Todo open and its " +

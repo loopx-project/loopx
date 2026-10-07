@@ -165,6 +165,7 @@ class QuotaSettlementReadback:
     external_delivery: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
     native_child_admission: dict[str, Any] | None = None
+    heartbeat_reentry_qualification: dict[str, Any] | None = None
 
 
 def attach_settlement_progress(
@@ -318,6 +319,7 @@ def read_heartbeat_settlement(
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
     borrow_source_admission: bool = False,
+    heartbeat_reentry_guard: dict[str, Any] | None = None,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
@@ -358,6 +360,11 @@ def read_heartbeat_settlement(
                     **(
                         {"borrow_source_admission": True}
                         if borrow_source_admission
+                        else {}
+                    ),
+                    **(
+                        {"heartbeat_reentry_guard": heartbeat_reentry_guard}
+                        if heartbeat_reentry_guard is not None
                         else {}
                     ),
                 },
@@ -420,6 +427,7 @@ def read_heartbeat_settlement(
         external_delivery=_optional_readback_record(payload.get("external_delivery")),
         progress=_optional_readback_record(payload.get("progress")),
         native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
+        heartbeat_reentry_qualification=_optional_readback_record(payload.get("heartbeat_reentry_qualification")),
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
