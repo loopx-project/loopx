@@ -99,6 +99,34 @@ def test_silent_baseline_then_positive_only_disclosure_and_source_identity(publi
     assert publisher.notifications == 1
 
 
+def test_native_ranking_alone_controls_improvement_notifications(publisher):
+    from sforge.harness.selection import select_best
+    transport = Transport()
+    publisher.selection = "pass_rate_first"
+    entries = [row(1, .2, pass_rate=.9), row(2, .4, pass_rate=.8)]
+    publisher.update(history(entries[0]), transport, None)
+    archive(publisher, 2)
+    publisher.update(history(*entries), transport, None)
+    assert not transport.files
+    native = select_best(entries, "maximize", "pass_rate_first")
+    assert native["best_round"] == "auto-1"
+    assert native["best_score"] == .2
+    assert entries[1]["pass_rate"] == .8
+    entries.append(row(3, .3, pass_rate=.95))
+    archive(publisher, 3)
+    publisher.update(history(*entries), transport, None)
+    assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-3"
+    # A higher native pass rate is an improvement even with a lower score.
+    entries.append(row(4, .1, pass_rate=.96))
+    archive(publisher, 4)
+    publisher.update(history(*entries), transport, None)
+    assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-4"
+    previous = dict(transport.files)
+    entries.append(row(5, .1, pass_rate=.96))
+    publisher.update(history(*entries), transport, None)
+    assert transport.files == previous  # Equal native rank is silent.
+
+
 @pytest.mark.parametrize("patch", [
     {"score": None}, {"score": math.nan}, {"score": math.inf}, {"score": True},
     {"score": "9"}, {"status": "running"}, {"status": "error"}, {"valid": False},
@@ -198,13 +226,20 @@ def test_close_prevents_late_feedback_and_native_resume_does_not_restart(publish
 
 
 @pytest.mark.parametrize("policy,direction,interval", [
-    ("pass_rate_first", "maximize", 300), ("score_first", "unknown", 300),
+    ("unknown", "maximize", 300), ("score_first", "unknown", 300),
     ("score_first", "maximize", 0), ("score_first", "maximize", -1),
 ])
 def test_unsupported_task_semantics_fail_before_launch(policy, direction, interval):
     task = SimpleNamespace(judge=SimpleNamespace(selection=policy, score_direction=direction))
     with pytest.raises(ValueError):
         validate_best_only(task, interval)
+
+
+@pytest.mark.parametrize("policy", ["score_first", "valid_then_score", "pass_rate_first"])
+def test_best_only_accepts_native_rankings_without_changing_task_policy(policy):
+    task = SimpleNamespace(judge=SimpleNamespace(selection=policy, score_direction="maximize"))
+    validate_best_only(task, 1800)
+    assert task.judge.selection == policy
 
 
 @pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
