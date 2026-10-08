@@ -116,6 +116,33 @@ def test_answer_and_every_stream_split_hide_equivalent_nested_private_paths(priv
         assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
 
 
+@pytest.mark.parametrize("root,private_root,separator,path_separator", [
+    ("/custom-volume/project", "/custom-volume/project/runtime", "%2F", "%2F"),
+    ("/custom-volume/project", "/custom-volume/project/runtime", "%2f", "/"),
+    (r"Q:\project", r"Q:\project\runtime", "%5c", "%5C"),
+])
+def test_answer_and_every_stream_split_hide_private_paths_with_encoded_root_separator(
+    root, private_root, separator, path_separator
+):
+    private_path = root + separator + "runtime" + path_separator + "private/gate.json"
+    text = f"Read back `{private_path}`.\n"
+    expected = "Read back `[local-path]`.\n"
+    paths = [root, private_root]
+    assert redact_local_paths(private_path, protected_paths=paths) == "[project]"
+    assert redact_local_paths(private_path, protected_paths=paths, project_relative=True) == "[local-path]"
+    assert parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
+    for split in range(len(text) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=paths)
+        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+
+
+def test_project_answer_retains_safe_filename_after_encoded_root_separator():
+    root = "/custom-volume/project"
+    text = f"Read {root}%2fnotes%2Freport.md."
+    assert redact_local_paths(text, protected_paths=[root], project_relative=True) == "Read ./notes/report.md."
+    assert parse_agent_response(text, protected_paths=[root])["message"] == "Read ./notes/report.md."
+
+
 def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(tmp_path):
     project = tmp_path / "project"
     private = project / "runtime"

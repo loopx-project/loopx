@@ -49,9 +49,11 @@ def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
     if not replacements:
         return LOCAL_PATH_SURFACE_PATTERN
     roots = "|".join(re.escape(raw) for raw, _ in replacements)
+    separator = r"(?:[/\\]|%2[fF]|%5[cC])"
     return re.compile(
         r"(?<![:/A-Za-z0-9_.\\])(?:" + roots + r")"
-        r"(?=$|[/\\\s`'\"<>.,;:!?)}\]])(?:[/\\][^\s`'\"<>]*)?"
+        + r"(?=$|" + separator + r"|[\s`'\"<>.,;:!?)}\]])"
+        + r"(?:" + separator + r"[^\s`'\"<>]*)?"
         + "|(?i:" + LOCAL_PATH_SURFACE_PATTERN.pattern + ")"
     )
 
@@ -170,9 +172,15 @@ def redact_local_paths(
         candidate = matched.rstrip(".,;:!?)]}")
         suffix = matched[len(candidate) :]
         for raw, label in replacements:
-            if candidate == raw or candidate.startswith(f"{raw}/") or candidate.startswith(f"{raw}\\"):
+            remainder = candidate[len(raw) :] if candidate.startswith(raw) else None
+            if remainder is not None and (
+                not remainder
+                or remainder.startswith(("/", "\\"))
+                or re.match(r"(?i)^%(?:2f|5c)", remainder)
+            ):
                 if project_relative and label == "[project]" and candidate != raw:
-                    relative = re.sub(r"\\+", "/", candidate[len(raw):]).lstrip("/")
+                    relative = re.sub(r"(?i)%(?:2f|5c)", "/", remainder)
+                    relative = re.sub(r"\\+", "/", relative).lstrip("/")
                     components = unquote(relative).replace("\\", "/").split("/")
                     if ".." not in components:
                         # Equivalent spellings must not bypass a nested private
