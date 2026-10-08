@@ -27,7 +27,7 @@ POLICY = "edgebench_online_cohort_v1"
 
 def resource_preflight(client, slots, *, worker_cpu=4, judge_cpu=4,
                        worker_memory=16 << 30, judge_memory=8 << 30,
-                       allow_resource_overcommit=False):
+                       allow_resource_overcommit=False, shared_startup_memory_gib=None):
     """Reserve the whole finite cohort, retaining 2 CPUs and 4 GiB host headroom.
 
     Existing containers count at their hard limits. An unlimited container makes
@@ -36,6 +36,12 @@ def resource_preflight(client, slots, *, worker_cpu=4, judge_cpu=4,
     """
     if type(slots) is not int or slots < 1:
         raise ValueError("Online slots must be a positive integer")
+    if shared_startup_memory_gib is not None:
+        if not allow_resource_overcommit:
+            raise ValueError("A shared startup floor requires explicit resource overcommit")
+        minimum_gib = (judge_memory + min(worker_memory, 4 << 30) + (4 << 30) + (1 << 30) - 1) >> 30
+        if type(shared_startup_memory_gib) is not int or shared_startup_memory_gib < minimum_gib:
+            raise ValueError(f"Shared startup floor must be at least {minimum_gib} GiB")
     info = client.info()
     used_cpu, used_memory = 0.0, 0
     for container in client.containers.list():
@@ -58,6 +64,8 @@ def resource_preflight(client, slots, *, worker_cpu=4, judge_cpu=4,
             Path("/proc/meminfo").read_text().splitlines()
             if line.startswith("MemAvailable:"))) * 1024
         minimum = slots * (judge_memory + min(worker_memory, 4 << 30)) + (4 << 30)
+        if shared_startup_memory_gib is not None:
+            minimum = shared_startup_memory_gib << 30
         if available < minimum:
             raise ValueError("Insufficient available memory for shared-pool startup")
         return dict(slots=slots, reserved_cpu=0, reserved_memory=0,
@@ -176,6 +184,8 @@ def main():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--allow-resource-overcommit", action="store_true",
                         help="Use an operator-monitored shared pool; container ceilings are not reserved")
+    parser.add_argument("--shared-startup-memory-gib", type=int,
+                        help="Explicit shared-pool startup floor; requires overcommit and ongoing load monitoring")
     args = parser.parse_args()
     config = load_config()
     if config.backend != "docker":
@@ -187,7 +197,8 @@ def main():
             client = docker.from_env()
             try:
                 reservation = resource_preflight(client, args.slots,
-                    allow_resource_overcommit=args.allow_resource_overcommit)
+                    allow_resource_overcommit=args.allow_resource_overcommit,
+                    shared_startup_memory_gib=args.shared_startup_memory_gib)
             finally:
                 client.close()
             uvicorn.run(create_app(config, slots=args.slots, reservation=reservation),

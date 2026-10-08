@@ -73,7 +73,14 @@ zero exclusive reservation and the monitoring requirement. Monitor actual memory
 CPU pressure and grading latency throughout the cohort and stop affected trials
 if sustained pressure makes operation unreliable. This mode preserves per-run
 evaluation lanes but does not guarantee dedicated compute or equal latency;
-record shared-pool contention when comparing experiments.
+record shared-pool contention when comparing experiments. For a larger explicitly
+shared cohort, `--shared-startup-memory-gib 16` may replace the per-slot startup
+estimate. It requires `--allow-resource-overcommit`, cannot be below one evaluator,
+one worker startup allowance and host headroom (16 GiB with current limits), and
+still fails on insufficient available memory or unbounded containers. This is a
+startup margin, not sustained capacity qualification: retain continuous load and
+grading-latency monitoring and stop affected trials on sustained pressure. Strict
+admission and the shared mode without this explicit option retain their defaults.
 
 Then run:
 
