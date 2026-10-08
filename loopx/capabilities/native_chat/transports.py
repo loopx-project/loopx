@@ -27,6 +27,11 @@ def close_transports(transports: Sequence[Any]) -> None:
 
 def install_conversation_transports(server: Any, *, observe_default: Callable[[str], dict[str, Any]],
                                     factories: Sequence[Callable[[Any], Any]]) -> None:
+    if not factories:
+        server.runtime_controller.project_contexts.conversation_bindings = ChatConversationBindings(
+            root=server.chat_store.root, project_contexts=server.runtime_controller.project_contexts,
+            observe=observe_default)
+        return
     transports = []
     try:
         for factory in factories:

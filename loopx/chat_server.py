@@ -1713,7 +1713,8 @@ def serve_chat(
     if open_browser:
         webbrowser.open(url)
     try:
-        server.conversation_transports.start(server)
+        if external_conversation_factories:
+            server.conversation_transports.start(server)
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)

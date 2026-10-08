@@ -166,7 +166,8 @@ def test_return_rechecks_actual_typed_binding_after_owner_disconnect(ordinary): 
     assert len(external.calls) == before
 
 
-def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch):
+@pytest.mark.parametrize("installed", [False, True])
+def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch, installed):
     import loopx.chat_server as chat
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     home = tmp_path / "home"
@@ -183,27 +184,35 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
     entered = threading.Event()
     captured = []
     external = Transport("external-owner")
-    def start(server):
-        captured.append(server)
-        entered.set()
-    external.start = start
+    class Server(chat.ChatHTTPServer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured.append(self)
+            entered.set()
+    monkeypatch.setattr(chat, "ChatHTTPServer", Server)
     worker = threading.Thread(target=chat.serve_chat, kwargs={"registry_path": registry, "port": 0,
         "runtime_root_override": tmp_path / "runtime", "assets_dir": assets,
-        "external_conversation_factories": (lambda server: external,), "codex_bin": "unavailable-fixture"}, daemon=True)
+        "external_conversation_factories": (lambda server: external,) if installed else (),
+        "codex_bin": "unavailable-fixture"}, daemon=True)
     worker.start()
     try:
         assert entered.wait(8)
         server = captured[0]
+        with urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=8) as response:
+            assert json.load(response)["ok"] is True
         assert server.manager_return_service.args[2] is server.chat_store
-        assert server.manager_return_service.args[3] is server.conversation_transports
-        assert server.conversation_transports.bindings is server.runtime_controller.project_contexts.conversation_bindings
+        if installed:
+            assert server.manager_return_service.args[3] is server.conversation_transports
+            assert server.conversation_transports.bindings is server.runtime_controller.project_contexts.conversation_bindings
+        else:
+            from loopx.extensions.lark.manager_returns import LarkManagerReturnTransport
+            assert not hasattr(server, "conversation_transports")
+            assert isinstance(server.manager_return_service.args[3], LarkManagerReturnTransport)
         assert server.lark_private_conversations.core.controller is server.runtime_controller
         assert server.lark_private_conversations.core.actions is server.action_service
-        with urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=2) as response:
-            assert json.load(response)["ok"] is True
     finally:
         if captured:
             captured[0].shutdown()
         worker.join(8)
     assert not worker.is_alive()
-    assert external.calls == ["close"]
+    assert external.calls == [("start", server), "close"] if installed else external.calls == []
