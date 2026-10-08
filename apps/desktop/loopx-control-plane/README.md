@@ -107,6 +107,9 @@ startup. An incomplete App installation retains its recovery state; runtime
 freshness must prevent a journal from silently downgrading a newer CLI.
 Concurrent transactions and another install before restart remain rejected.
 macOS keeps a signature-verified previous App for **Restore previous version**;
+recovery can restore the original install path even when a failed update moved
+the App away entirely. If another installer recreates that path during recovery,
+rollback stops without replacing the concurrent installation.
 Goal data is not deleted or migrated backwards, so data-schema compatibility
 still governs rollback suitability. Older backups may consume disk space.
 
