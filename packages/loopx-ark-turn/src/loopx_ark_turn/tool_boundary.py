@@ -13,9 +13,14 @@ from .config import AdapterError, Config, digest
 from .receipt import Receipt
 
 
-REVISION = "sandbox_tools_v2"
-NETWORK = {"type": "limited", "allowed_hosts": [],
-           "allow_mcp_servers": False, "allow_package_managers": False}
+REVISION = "sandbox_tools_v3"
+NETWORK = {"type": "unrestricted"}
+
+
+def boundary_revision(config: Config) -> str:
+    # The new network policy applies only to explicitly enabled cloud builtins.
+    # Disabled-mode receipts retain their existing runtime/replay semantics.
+    return REVISION if config.sandbox_builtins else "sandbox_tools_v2"
 
 
 def declarations(config: Config, custom: list[ToolItem]) -> list[ToolItem]:

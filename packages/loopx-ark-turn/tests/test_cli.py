@@ -26,6 +26,7 @@ def test_doctor_and_receipt_readback_need_no_provider_credential(tmp_path, monke
     command = argv(tmp_path)
     doctor = subprocess.run([*command, "--doctor"], capture_output=True, text=True, check=True)
     assert json.loads(doctor.stdout)["network_checked"] is False
+    assert "sandbox_networking" not in json.loads(doctor.stdout)
     cfg = Config("public-model", "env-fixture", tmp_path / "work", tmp_path / "receipts")
     receipt = Receipt(cfg.state_dir, "sha256:" + "a" * 64)
     receipt.load("fixture-binding")
@@ -83,6 +84,7 @@ def test_sandbox_flag_and_file_profile_agree_without_claiming_live_enforcement(t
     data = json.loads(file_result.stdout)
     assert data == json.loads(inline_result.stdout)
     assert data["sandbox_builtins"] is True and data["sandbox_enforcement_verified"] is False
+    assert data["sandbox_networking"] == "unrestricted"
     bad = subprocess.run([*command, "--sandbox-builtins", "--doctor"], capture_output=True, text=True)
     assert bad.returncode == 1 and "exclusive" in bad.stderr
     raw = json.loads(profile.read_text()) | {"sandbox_builtins": "true"}

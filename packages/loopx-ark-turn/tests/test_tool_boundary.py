@@ -144,7 +144,7 @@ def test_sandbox_bash_and_local_custom_tool_coexist_with_exact_cleanup(tmp_path)
     assert not any(method != "GET" and path.startswith("/environments") for method, path, _ in provider.calls)
     creation = next(body for method, path, body in provider.calls if method == "POST" and path == "/sessions")
     assert "environment_id" not in creation
-    assert creation["environment"]["config"]["networking"] == NETWORK
+    assert creation["environment"]["config"]["networking"] == {"type": "unrestricted"}
     assert creation["resources"] == creation["vault_ids"] == []
     row = state(cfg)
     assert row["builtin_tools"]["call-public"]["name"] == "bash"
@@ -219,12 +219,12 @@ def test_unsafe_environment_rejected_before_input_or_startup(tmp_path, settings,
 
 
 @pytest.mark.parametrize("mutation", ["network", "missing", "resource", "vault"])
-def test_weaker_or_missing_frozen_isolation_is_rejected(tmp_path, mutation):
+def test_different_or_missing_frozen_policy_is_rejected(tmp_path, mutation):
     cfg = replace(config(tmp_path, tools=False), sandbox_builtins=True)
     provider = Provider([])
     provider.frozen_environment = {"id": "env-fixture", "config": {"type": "cloud", "networking": NETWORK}}
     if mutation == "network":
-        provider.frozen_environment["config"]["networking"] = NETWORK | {"allowed_hosts": ["example.invalid"]}
+        provider.frozen_environment["config"]["networking"] = {"type": "limited", "allowed_hosts": []}
     elif mutation == "missing":
         provider.frozen_environment = {}
     else:
@@ -263,6 +263,28 @@ def test_legacy_candidate_is_inspectable_but_cannot_gain_new_qualification(tmp_p
     receipt.read()
     assert receipt.projection()["has_candidate"] is True
     assert config_digest(replace(cfg, sandbox_builtins=False)) == row["provider_config_digest"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_previous_v2_receipt_policy_does_not_silently_change(tmp_path, enabled):
+    cfg = replace(config(tmp_path, tools=False), sandbox_builtins=enabled)
+    provider = Provider([])
+    result = asyncio.run(execute(provider, cfg))
+    row = state(cfg)
+    assert row["tool_boundary_revision"] == ("sandbox_tools_v3" if enabled else "sandbox_tools_v2")
+    row["tool_boundary_revision"] = "sandbox_tools_v2"
+    path = Receipt(cfg.state_dir, request()["turn_key"]).path
+    path.write_text(json.dumps(row))
+    before = len(provider.calls)
+    if enabled:
+        with pytest.raises(AdapterError, match="legacy_attempt"):
+            asyncio.run(execute(provider, cfg))
+    else:
+        assert asyncio.run(execute(provider, cfg)) == result
+    assert len(provider.calls) == before
+    receipt = Receipt(cfg.state_dir, request()["turn_key"])
+    receipt.read()
+    assert receipt.projection()["has_candidate"] is True
 
 
 def test_enabled_checkpoint_replays_observation_without_repeating_effects(tmp_path, monkeypatch):

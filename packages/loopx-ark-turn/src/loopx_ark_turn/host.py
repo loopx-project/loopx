@@ -19,7 +19,7 @@ from loopx.control_plane.turn_driver.host_candidate import extract_turn_authorit
 from .config import AdapterError, Config, digest, require_request
 from .mcp_tools import Tools, connect
 from .receipt import Receipt, Stage, ToolStage, CleanupStatus
-from .tool_boundary import (REVISION, declarations, environment_override, qualify_environment,
+from .tool_boundary import (boundary_revision, declarations, environment_override, qualify_environment,
                             observe_builtin, require_builtin_results)
 
 
@@ -230,7 +230,7 @@ async def _execute(client: AsyncArk, config: Config, request: Mapping[str, Any],
     receipt.update(stage=Stage.SESSION_CREATED, session_id=session.id)
     snapshot = data(await client.sessions.retrieve(session.id, timeout=15))
     _qualify_snapshot(snapshot, config, agent.id, tools)
-    receipt.update(tool_boundary_revision=REVISION, session_boundary_digest=digest(snapshot.get("environment")))
+    receipt.update(tool_boundary_revision=boundary_revision(config), session_boundary_digest=digest(snapshot.get("environment")))
     receipt.update(stage=Stage.SENDING_INPUT)
     sent = await client.sessions.events.send(session.id, events=[ManagedAgentsUserMessageEventParams(
         type="user.message", content=[{"type": "text", "text": render_prompt(extract_turn_authority(request))}],
@@ -301,7 +301,7 @@ async def run(request: Mapping[str, Any], config: Config, client: AsyncArk) -> d
     with exclusive_file_lock(receipt.path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
         receipt.load(binding)
         receipt.update(provider_config_digest=provider_config_digest)
-        if receipt.data["stage"] != Stage.PREPARED and receipt.data.get("tool_boundary_revision") != REVISION:
+        if receipt.data["stage"] != Stage.PREPARED and receipt.data.get("tool_boundary_revision") != boundary_revision(config):
             raise AdapterError("legacy_attempt_tool_boundary_not_qualified")
         recovering = (receipt.data["stage"] in {Stage.RUNNING, Stage.TERMINAL}
                       and not receipt.data.get("cleanup") and not receipt.data.get("error")
@@ -326,7 +326,7 @@ async def run(request: Mapping[str, Any], config: Config, client: AsyncArk) -> d
                     raise AdapterError("recovery_tool_schema_changed")
                 if not recovering:
                     receipt.update(tool_schema_digest=schema_digest,
-                                   tool_boundary_revision=REVISION,
+                                   tool_boundary_revision=boundary_revision(config),
                                    execution_deadline=time.time() + config.timeout_seconds)
                 else:
                     snapshot = data(await client.sessions.retrieve(receipt.data["session_id"], timeout=15))

@@ -88,16 +88,18 @@ can accept the resulting artifact.
 Cloud builtin tools are explicitly disabled by default; an omitted declaration
 does not reliably disable provider defaults. To allow bash and other sandbox
 tools, add `--sandbox-builtins` or `"sandbox_builtins": true` to the operator
-profile. This mode permits temporary sandbox computation and file writes. It
+profile. This mode permits temporary sandbox computation, file writes and
+unrestricted outbound networking. Enable it only when the operator authorizes
+that network access; it is not a no-egress or side-effect-free mode. It
 does not classify shell commands by substring or claim that bash is read-only.
 
 Before creating a Session, the adapter checks that the selected Environment is
 cloud-hosted with no injected variables, startup script, package installation
 or configured output storage. It applies a Session-only networking override:
-`limited`, no allowed hosts, no MCP-server or package-manager exceptions, no
-resource mounts and no Vault access. The frozen Session must read back those
-restrictions before input is sent. The shared Environment is never changed.
-Missing or weaker readback refuses the attempt. Trusted local custom MCP tools
+`unrestricted`, no resource mounts and no Vault access. The frozen Session must
+read back that exact network policy and the credential/resource restrictions
+before input is sent. The shared Environment is never changed.
+Missing or different readback refuses the attempt. Trusted local custom MCP tools
 retain their separate host permissions; this cloud policy does not isolate them.
 
 Runtime builtin calls require the selected root thread, an observed `allow`
@@ -117,7 +119,7 @@ Tool failure alone neither validates an earlier result nor forbids repair.
 `--doctor` reports configuration only and always leaves
 `sandbox_enforcement_verified` false. SDK wire fixtures qualify this adapter's
 requests and refusals, not live sandbox enforcement. Before enabling this mode
-in production, qualify the provider's actual no-egress, no-secret/no-mount
+in production, qualify the provider's actual selected network policy, no-secret/no-mount
 behavior and cleanup with an authorized disposable cloud attempt. Configuration
 readback alone cannot establish that all builtin tools have no external effect.
 
@@ -133,9 +135,10 @@ usage for reconciliation. Raw model thinking/events and credentials are not
 stored. Provider usage is separate from LoopX quota; unavailable usage stays
 unknown, and rejected work can still cost tokens.
 
-Receipts from before `sandbox_tools_v2` remain inspectable and cleanable
-with their original options, but their candidates cannot be replayed or their
-sessions resumed as newly qualified work. Changing builtin mode binds a different
+Enabled-builtin receipts from before `sandbox_tools_v3` remain inspectable and
+cleanable with their original options, but their candidates cannot be replayed
+or their sessions resumed under the unrestricted policy. Disabled-mode v2
+receipts retain their original replay semantics. Changing builtin mode binds a different
 configuration; it cannot retarget or rerun an existing Turn key. Keep stopped
 attempts and their unknown usage instead of resetting them to retry input.
 

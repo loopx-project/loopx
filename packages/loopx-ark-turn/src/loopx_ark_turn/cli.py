@@ -81,6 +81,7 @@ async def execute(args: argparse.Namespace) -> dict:
                 "credential_present": bool(os.environ.get("ARK_API_KEY")), "selected_tools": list(config.tool_names),
                 "continuation_owner": "loopx_turn", "network_checked": False,
                 "sandbox_builtins": config.sandbox_builtins,
+                **({"sandbox_networking": "unrestricted"} if config.sandbox_builtins else {}),
                 "sandbox_enforcement_verified": False}
     receipt = None
     if args.inspect_turn_key or args.cleanup_turn_key:
