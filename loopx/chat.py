@@ -49,15 +49,36 @@ def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
     if not replacements:
         return LOCAL_PATH_SURFACE_PATTERN
     separator = r"(?:[/\\]|%2[fF]|%5[cC])"
+
+    def component_pattern(component: str) -> str:
+        if not component:
+            return ""
+        encoded_chars = []
+        for char in component:
+            encoded = "".join(
+                f"%{byte:02X}"
+                for byte in char.encode("utf-8", errors="surrogateescape")
+            )
+            encoded_chars.append(f"(?:{re.escape(char)}|(?i:{encoded}))")
+        return "".join(encoded_chars)
+
     roots = "|".join(
-        separator.join(re.escape(part) for part in re.split(r"[/\\]", raw))
+        separator.join(component_pattern(part) for part in re.split(r"[/\\]", raw))
         for raw, _ in replacements
     )
     return re.compile(
-        r"(?<![:/A-Za-z0-9_.\\])(?:" + roots + r")"
-        + r"(?=$|" + separator + r"|[\s`'\"<>.,;:!?)}\]])"
-        + r"(?:" + separator + r"[^\s`'\"<>]*)?"
-        + "|(?i:" + LOCAL_PATH_SURFACE_PATTERN.pattern + ")"
+        r"(?<![:/A-Za-z0-9_.\\])(?:"
+        + roots
+        + r")"
+        + r"(?=$|"
+        + separator
+        + r"|[\s`'\"<>.,;:!?)}\]])"
+        + r"(?:"
+        + separator
+        + r"[^\s`'\"<>]*)?"
+        + "|(?i:"
+        + LOCAL_PATH_SURFACE_PATTERN.pattern
+        + ")"
     )
 
 
@@ -163,7 +184,7 @@ def redact_local_paths(
     replacements = _protected_path_replacements(protected_paths)
 
     def path_parts(value: str) -> tuple[str, ...]:
-        decoded = unquote(value).replace("\\", "/")
+        decoded = value.replace("\\", "/")
         if re.match(r"^[A-Za-z]:/", decoded):
             decoded = decoded.casefold()
         return tuple(part for part in decoded.split("/") if part not in {"", "."})
@@ -174,20 +195,27 @@ def redact_local_paths(
         matched = match.group(0)
         candidate = matched.rstrip(".,;:!?)]}")
         suffix = matched[len(candidate) :]
-        normalized_candidate = re.sub(r"(?i)%(?:2f|5c)", "/", candidate).replace("\\", "/")
+        decoded_candidate = unquote(candidate, errors="surrogateescape").replace(
+            "\\", "/"
+        )
+        normalized_candidate = re.sub(r"(?i)%(?:2f|5c)", "/", candidate).replace(
+            "\\", "/"
+        )
+        candidate_forms = (normalized_candidate, decoded_candidate)
         for raw, label in replacements:
             normalized_root = raw.replace("\\", "/")
-            remainder = (
-                normalized_candidate[len(normalized_root) :]
-                if normalized_candidate.startswith(normalized_root)
-                else None
+            remainder = next(
+                (
+                    value[len(normalized_root) :]
+                    for value in candidate_forms
+                    if value == normalized_root
+                    or value.startswith(f"{normalized_root}/")
+                ),
+                None,
             )
-            if remainder is not None and (
-                not remainder
-                or remainder.startswith("/")
-            ):
-                candidate_parts = path_parts(normalized_candidate)
-                if any(candidate_parts[:len(root)] == root for root in private_roots):
+            if remainder is not None and (not remainder or remainder.startswith("/")):
+                candidate_parts = path_parts(decoded_candidate)
+                if any(candidate_parts[: len(root)] == root for root in private_roots):
                     return f"[local-path]{suffix}"
                 if project_relative and label == "[project]" and candidate != raw:
                     relative = remainder.lstrip("/")
