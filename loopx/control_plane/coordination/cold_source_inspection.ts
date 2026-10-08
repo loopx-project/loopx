@@ -105,3 +105,26 @@ export async function inspectColdCoordinationSource(value: unknown): Promise<Jso
       reason: error instanceof Error ? error.message : "cold source inspection failed"};
   }
 }
+
+/** App read model of the same verified observation. No source bytes, paths,
+ * execution identities or original receipts cross the HTTP boundary. */
+export async function inspectColdCoordinationStorage(value: unknown): Promise<JsonObject> {
+  const observed = await inspectColdCoordinationSource(value);
+  const base = {ok: observed.status === "inspected", status: observed.status,
+    authority_changed: false, execution_authority_granted: false};
+  if (observed.status !== "inspected") return {...base, current: null, reason_code: observed.reason_code};
+  const capture = observed.capture as JsonObject;
+  const artifacts = capture.artifacts as JsonObject;
+  const outbox = artifacts.outbox as JsonObject | null;
+  const outboxInventory = outbox?.inventory as JsonObject | undefined;
+  return {...base, current: {goal_id: observed.goal_id, canonical: false, provider: null},
+    cold_source: {
+      active_todo_count: observed.active_todo_count, archived_todo_count: observed.archived_todo_count,
+      lease_file_count: observed.lease_file_count,
+      unsettled_lease_count: (observed.leases_requiring_settlement as string[]).length,
+      capture_artifacts_present: artifacts.management_state !== null || artifacts.runtime_store !== null ||
+        artifacts.legacy_store !== null || (artifacts.rollback_archives as JsonObject[]).length > 0,
+      outbox_files_present: ((outboxInventory?.entries ?? []) as JsonObject[]).some(entry => entry.kind === "file"),
+      import_ready: false, writer_stop_verified: false, outbox_reconciliation_verified: false,
+    }};
+}

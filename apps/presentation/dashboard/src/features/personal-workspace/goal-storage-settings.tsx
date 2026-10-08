@@ -9,6 +9,7 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
   const {t} = useWorkspaceI18n();
   const key = `loopx-storage-preview:${goalId}`;
   const [current, setCurrent] = useState<StorageSource | null>(null);
+  const [cold, setCold] = useState<StorageResult["cold_source"]>();
   const [carrier, setCarrier] = useState<StorageCarrier | null>(null);
   const [result, setResult] = useState<StorageResult | null>(null);
   const [target, setTarget] = useState<MigrationProvider>("sqlite");
@@ -21,7 +22,7 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
   const generation = useRef(0);
   useEffect(() => {
     const token = ++generation.current;
-    setCurrent(null); setResult(null); setCarrier(null); setConfirmed(false); setInvalidSaved(false); setError(null); setBusy(true);
+    setCurrent(null); setCold(undefined); setResult(null); setCarrier(null); setConfirmed(false); setInvalidSaved(false); setError(null); setBusy(true);
     let saved: StorageCarrier | null = null;
     try {
       const raw = localStorage.getItem(key);
@@ -33,10 +34,11 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
       try {
         const observed = await fetchGoalStorage(goalId);
         if (token !== generation.current) return;
+        setCold(observed.cold_source);
         if (observed.ok && observed.current) {
           setCurrent(observed.current);
           setTarget(observed.current.provider === "sqlite" ? "file" : "sqlite");
-        } else setError(t("storage.unavailable"));
+        } else { setResult(observed); setError(t(saved ? "storage.unavailable" : "storage.readUnavailable")); }
         if (saved) {
           const recovered = await recoverGoalStorage(saved);
           if (token !== generation.current) return;
@@ -45,7 +47,7 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
           if (!recovered.ok) setError(t("storage.rejected"));
           else if (!recovered.current) setError(t("storage.unavailable"));
         }
-      } catch { if (token === generation.current) setError(t("storage.unavailable")); }
+      } catch { if (token === generation.current) setError(t(saved ? "storage.unavailable" : "storage.readUnavailable")); }
       finally { if (token === generation.current) setBusy(false); }
     })();
     return () => { generation.current++; };
@@ -89,10 +91,17 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
   return <section className="personal-cadence-settings" aria-label={t("storage.title")}>
     <div className="personal-cadence-form">
       <h3>{t("storage.title")}</h3>
-      <p>{t("storage.boundary")}</p>
+      {current?.canonical || carrier ? <p>{t("storage.boundary")}</p> : null}
       {current ? <div className="personal-cadence-readback"><small>{t("storage.current")}</small>
-        <strong>{current.provider ?? t("ownership.unpromoted")}</strong>
-        {current.canonical ? <span>{t("storage.counts", {todos: current.todo_count ?? 0, leases: current.unsettled_lease_count ?? 0})}</span> : <p>{t("storage.promoteFirst")}</p>}
+        <strong>{current.provider ?? t("storage.oldSource")}</strong>
+        {current.canonical ? <span>{t("storage.counts", {todos: current.todo_count ?? 0, leases: current.unsettled_lease_count ?? 0})}</span> : <>
+          {cold ? <>
+            <span>{t("storage.coldCounts", {active: cold.active_todo_count, archived: cold.archived_todo_count, leases: cold.unsettled_lease_count})}</span>
+            {cold.capture_artifacts_present ? <span>{t("storage.coldCapture")}</span> : null}
+            {cold.outbox_files_present ? <span>{t("storage.coldOutbox")}</span> : null}
+          </> : null}
+          <p>{t("storage.coldBoundary")}</p>
+        </>}
       </div> : null}
       {current?.canonical || carrier ? <>
         {carrier ? <p>{t("storage.reviewed", {source: result?.reviewed_source?.provider ?? "?", target: result?.target_provider ?? "?", cursor: result?.reviewed_source?.cursor ?? "?"})}</p>

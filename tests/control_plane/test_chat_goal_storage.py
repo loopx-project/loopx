@@ -199,3 +199,97 @@ def test_original_receipt_is_readable_when_live_provider_is_unavailable(api):
         assert operate(call, plan)[0] == 409
     finally:
         unavailable.rename(directory)
+
+
+@pytest.fixture(params=[False, True], ids=["cold", "retained-capture"])
+def old_api(tmp_path, monkeypatch, request):
+    from tests.control_plane.test_cold_source_inspection import cold_workspace
+    from tests.control_plane.shadow_e2e_fixture import workspace
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    ws = workspace(tmp_path) if request.param else cold_workspace(tmp_path)
+    if request.param:
+        ws.add("Private original history must stay on disk")
+        outbox = ws.runtime / "authority-shadow" / "outbox" / ws.goal / "todos"
+        (outbox / "original-unrecognized.json").write_bytes(b"{malformed original outbox")
+    directory = ws.runtime / "goals" / ws.goal / "task-leases"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "removed.json").write_text(json.dumps({
+        "schema_version": "task_lease_v0", "goal_id": ws.goal, "todo_id": "removed",
+        "owner": "agent-a", "status": "active", "idempotency_key": "old-work",
+        "version": 4, "lease_epoch": 2, "expires_at": "2000-01-01T00:00:00Z", "write_scopes": [],
+    }))
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.runtime_root, server.registry_path = ws.runtime, ws.registry
+    server.runtime_root_override, server.verbose = str(ws.runtime), False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def call():
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=90)
+        connection.request("GET", f"/api/chat/goal-storage?goal_id={ws.goal}")
+        response = connection.getresponse()
+        result = json.loads(response.read())
+        connection.close()
+        encoded = json.dumps(result)
+        assert str(tmp_path) not in encoded and "Private original history" not in encoded
+        assert "old-work" not in encoded and "malformed original outbox" not in encoded
+        return response.status, result
+
+    yield call, ws, request.param
+    server.shutdown()
+    thread.join(5)
+    server.server_close()
+    restart_effect_runtime()
+
+
+def test_registered_old_source_read_failure_is_unavailable_and_recovers(old_api):
+    call, ws, _ = old_api
+    source = ws.state.read_bytes()
+    ws.state.write_bytes(b"\xff")
+    code, failed = call()
+    assert code == 503 and failed["error_code"] == "goal_storage_unavailable"
+    assert "cold_source" not in failed and "current" not in failed
+    ws.state.write_bytes(source)
+    code, result = call()
+    assert code == 200 and result["cold_source"]["import_ready"] is False
+
+
+def test_old_source_http_inventory_keeps_history_and_does_not_grant_import(old_api):
+    from tests.control_plane.test_cold_source_inspection import capture_bytes
+
+    call, ws, captured = old_api
+    before = capture_bytes(ws)
+    source = ws.state.read_bytes(), ws.registry.read_bytes()
+    for _ in range(2):
+        code, result = call()
+        assert code == 200 and result["ok"], result
+        assert result["current"]["canonical"] is False and result["current"]["provider"] is None
+        old = result["cold_source"]
+        assert old["active_todo_count"] == 1
+        assert old["archived_todo_count"] == (0 if captured else 1)
+        # Even an orphan, expired active lease needs settlement; not Host stop.
+        assert old["unsettled_lease_count"] == 1
+        assert old["capture_artifacts_present"] is captured
+        assert old["outbox_files_present"] is captured
+        assert old["writer_stop_verified"] is old["outbox_reconciliation_verified"] is old["import_ready"] is False
+        assert result["authority_changed"] is result["execution_authority_granted"] is False
+    assert before == capture_bytes(ws)
+    assert source == (ws.state.read_bytes(), ws.registry.read_bytes())
+    assert not (ws.runtime / "authority").exists()
+
+
+def test_old_source_http_refuses_canonical_presence_and_recovers_fresh_observation(old_api):
+    import hashlib
+
+    call, ws, _ = old_api
+    marker = ws.runtime / "authority" / ("provider-" + hashlib.sha256(ws.goal.encode()).hexdigest() + ".json")
+    marker.parent.mkdir(parents=True)
+    marker.write_text('{"provider":"sqlite"}')
+    code, result = call()
+    assert code == 409 and result["ok"] is False and result["current"] is None, result
+    assert result["reason_code"] == "cold_source_canonical_authority_present"
+    assert "cold_source" not in result
+    assert marker.read_text() == '{"provider":"sqlite"}'
+    marker.unlink()
+    assert call()[0] == 200

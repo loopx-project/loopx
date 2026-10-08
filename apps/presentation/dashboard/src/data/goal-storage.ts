@@ -23,6 +23,12 @@ export const storageResultSchema = z.object({
   target_provider: provider.optional(), selected_provider: provider.optional(),
   reviewed_source: z.object({provider, cursor: z.string(), provider_revision: z.string(), store_identity: z.string()}).optional(),
   current: storageSourceSchema.nullable().optional(),
+  cold_source: z.object({
+    active_todo_count: z.number().int().nonnegative(), archived_todo_count: z.number().int().nonnegative(),
+    lease_file_count: z.number().int().nonnegative(), unsettled_lease_count: z.number().int().nonnegative(),
+    capture_artifacts_present: z.boolean(), outbox_files_present: z.boolean(),
+    import_ready: z.literal(false), writer_stop_verified: z.literal(false), outbox_reconciliation_verified: z.literal(false),
+  }).optional(),
   recovery: z.object({phase: z.enum(["prepared", "completed"]), target_store_identity: z.string(), archive_sha256: z.string()}).nullable().optional(),
   reason_code: z.string().optional(),
 });

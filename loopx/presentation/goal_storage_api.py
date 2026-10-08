@@ -44,6 +44,7 @@ class GoalStorageRequestMixin:
             "ok", "status", "authority_changed", "execution_authority_granted",
             "plan_sha256", "reviewed_source", "target_provider", "selected_provider",
             "current", "recovery", "reason_code",
+            "cold_source",
         ) if key in result}
         payload["goal_id"] = goal_id
         if preview_id is not None:
@@ -56,9 +57,29 @@ class GoalStorageRequestMixin:
             if set(query) != {"goal_id"} or len(query["goal_id"]) != 1:
                 raise ValueError("goal_id is required exactly once")
             goal_id = query["goal_id"][0]
-            self._storage_send(self._storage_owner(goal_id, action="migration-readback"), goal_id)
+            registry, goal = self._registry_and_goal(goal_id)
         except (KeyError, TypeError, ValueError):
             self._send_error("Choose a registered Goal.", status=400, error_code="invalid_goal_storage_request")
+            return
+        try:
+            result = self._storage_owner(goal_id, action="migration-readback")
+            current = result.get("current")
+            if result.get("ok") and isinstance(current, dict) and current.get("canonical") is False:
+                from ..control_plane.coordination.local_authority_shadow_projection import source_effect_runtime_result
+                from ..control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
+                from ..state_refresh import resolve_goal_state
+
+                _, _, state_path = resolve_goal_state(registry=registry, goal_id=goal_id,
+                    project_override=None, state_file_override=None)
+                projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal,
+                    runtime_root=self.server.runtime_root, state_path=state_path,
+                    registry_path=self.server.registry_path, include_all_archived_todos=True)
+                result = source_effect_runtime_result("coordination.source.inspect_storage", {
+                    "schema_version": "loopx_cold_source_inspection_request_v0",
+                    "runtime_root": str(self.server.runtime_root.expanduser().absolute()),
+                    "goal_id": goal_id, "projection": projection, "source_snapshot": snapshot,
+                })
+            self._storage_send(result, goal_id)
         except Exception:  # noqa: BLE001 - local provider errors stay private.
             self._send_error("Current storage unavailable.", status=503, error_code="goal_storage_unavailable")
 
