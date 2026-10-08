@@ -1,11 +1,144 @@
 """A cold source can be inventoried without manufacturing capture history."""
 import json
+import hashlib
+from pathlib import Path
 import subprocess
 import sys
 
 import pytest
 
 from tests.control_plane.shadow_e2e_fixture import workspace
+
+
+def capture_bytes(fixture):
+    """Original history files; transient lock files are not receipt sources."""
+    return {str(p.relative_to(fixture.runtime)): p.read_bytes()
+            for root in (fixture.runtime / "authority-shadow", fixture.runtime / "authority-transition")
+            for p in root.rglob("*") if p.is_file() and not p.name.endswith(".lock")}
+
+
+def test_capture_inventory_keeps_original_history_and_outbox_bytes(tmp_path):
+    fixture = workspace(tmp_path)
+    fixture.add("Original captured operation")
+    outbox = fixture.runtime / "authority-shadow" / "outbox" / fixture.goal / "todos"
+    outbox.mkdir(exist_ok=True)
+    residue = outbox / "unrecognized-original-receipt.json"
+    residue.write_bytes(b"{malformed original bytes")
+    before = capture_bytes(fixture)
+    result = fixture.cli("coordination-shadow", "inspect-source")["source_inventory"]
+    capture = result["capture"]
+    assert capture["management_state"]["status"] == "active"
+    assert capture["runtime_shadow_readback"]["status"] == "loaded"
+    assert capture["runtime_shadow_readback"]["proof"]["last_applied_sequences"]["todos"] >= 1
+    witness = capture["artifacts"]["runtime_store"]
+    original = next(data for path, data in before.items()
+                    if path == str(Path(witness["path"]).relative_to(fixture.runtime)))
+    assert witness["sha256"] == "sha256:" + hashlib.sha256(original).hexdigest()
+    entries = capture["artifacts"]["outbox"]["inventory"]["entries"]
+    raw = next(e for e in entries if e["path"] == "todos/" + residue.name)
+    assert raw["sha256"] == "sha256:" + hashlib.sha256(residue.read_bytes()).hexdigest()
+    assert result["outbox_reconciliation_verified"] is False
+    assert result["import_ready"] is False
+    assert before == capture_bytes(fixture)
+    assert not (fixture.runtime / "authority").exists()
+
+
+def test_capture_inventory_keeps_rolled_back_operation_archives(tmp_path):
+    fixture = workspace(tmp_path)
+    fixture.add("Original operation before rollback")
+    revision = fixture.cli("coordination-shadow", "inspect")["inspection"]["provider_revision"]
+    rollback = fixture.cli("coordination-shadow", "rollback", "--provider-revision", revision, "--execute")
+    assert rollback["rollback"]["status"] == "applied"
+    before = capture_bytes(fixture)
+    capture = fixture.cli("coordination-shadow", "inspect-source")["source_inventory"]["capture"]
+    assert capture["management_state"]["status"] == "inactive"
+    assert capture["artifacts"]["runtime_store"] is None
+    assert capture["runtime_shadow_readback"] is None
+    archives = capture["artifacts"]["rollback_archives"]
+    assert len(archives) == 1
+    assert archives[0]["path"] == rollback["rollback"]["candidate_archive_path"]
+    assert archives[0]["sha256"] == "sha256:" + hashlib.sha256(Path(archives[0]["path"]).read_bytes()).hexdigest()
+    assert before == capture_bytes(fixture)
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_capture_inventory_reads_original_observation_through_existing_store(tmp_path, corrupt):
+    fixture = workspace(tmp_path)
+    source = fixture.runtime / "authority-shadow" / "file-v0"
+    retained = fixture.runtime / "authority-shadow" / "file" / fixture.goal
+    retained.mkdir(parents=True)
+    # A synthetic historical copy of a real provider document, not a mock or
+    # an import receipt. The historical reader owns its schema validation.
+    for path in source.iterdir():
+        if path.is_file() and not path.name.endswith(".lock"):
+            (retained / path.name).write_bytes(path.read_bytes())
+    if corrupt:
+        next(retained.glob("authority-store-*.json")).write_text('{"invalid":true}')
+    before = capture_bytes(fixture)
+    result = fixture.cli("coordination-shadow", "inspect-source", success=not corrupt)
+    if corrupt:
+        assert result["source_inventory"]["status"] == "failed"
+    else:
+        capture = result["source_inventory"]["capture"]
+        assert capture["legacy_observation_readback"]["status"] == "loaded"
+        assert capture["artifacts"]["legacy_store"]["path"].startswith(str(retained))
+        assert result["source_inventory"]["import_ready"] is False
+    assert before == capture_bytes(fixture)
+
+
+@pytest.mark.parametrize("unsafe", ["corrupt_history", "symlink_outbox", "symlink_shadow_root", "invalid_original_result"])
+def test_capture_inventory_refuses_unreadable_or_unsafe_original_history(tmp_path, unsafe):
+    fixture = workspace(tmp_path)
+    if unsafe == "corrupt_history":
+        store = next((fixture.runtime / "authority-shadow" / "file-v0").glob("authority-store-*.json"))
+        store.write_text('{"invalid":true}')
+    elif unsafe == "symlink_outbox":
+        outbox = fixture.runtime / "authority-shadow" / "outbox" / fixture.goal
+        (outbox / "external").symlink_to(fixture.state)
+    elif unsafe == "symlink_shadow_root":
+        shadow = fixture.runtime / "authority-shadow"
+        original = tmp_path / "external-shadow"
+        shadow.rename(original)
+        shadow.symlink_to(original, target_is_directory=True)
+    else:
+        state = next((fixture.runtime / "authority-transition").rglob("state.json"))
+        original = json.loads(state.read_text())
+        original["result"]["primary_writeback_preserved"] = False
+        state.write_text(json.dumps(original))
+    before = capture_bytes(fixture)
+    result = fixture.cli("coordination-shadow", "inspect-source", success=False)
+    assert result["ok"] is False
+    assert result["source_inventory"]["status"] == "failed"
+    assert result["source_inventory"]["import_ready"] is False
+    assert before == capture_bytes(fixture)
+
+
+@pytest.mark.parametrize("window", ["before_commit", "after_commit"])
+def test_capture_inventory_does_not_drain_crashed_original_outbox(tmp_path, window):
+    fixture = workspace(tmp_path)
+    fixture.crash(window, "todo", "add", "--role", "agent", "--text", "Retained original operation")
+    before = capture_bytes(fixture)
+    result = fixture.cli("coordination-shadow", "inspect-source")["source_inventory"]
+    entries = result["capture"]["artifacts"]["outbox"]["inventory"]["entries"]
+    assert any(e["path"].endswith(".prepared.json") for e in entries)
+    assert any(e["path"].endswith(".committed.json") for e in entries)
+    assert result["import_ready"] is False and result["outbox_reconciliation_verified"] is False
+    assert before == capture_bytes(fixture)
+
+
+@pytest.mark.parametrize("archive", ["candidate", "outbox"])
+def test_capture_inventory_refuses_missing_terminal_rollback_archive(tmp_path, archive):
+    fixture = workspace(tmp_path)
+    revision = fixture.cli("coordination-shadow", "inspect")["inspection"]["provider_revision"]
+    result = fixture.cli("coordination-shadow", "rollback", "--provider-revision", revision, "--execute")
+    if archive == "candidate":
+        Path(result["rollback"]["candidate_archive_path"]).unlink()
+    else:
+        Path(result["rollback"]["outbox_archive_path"], "manifest.json").unlink()
+    before = capture_bytes(fixture)
+    refused = fixture.cli("coordination-shadow", "inspect-source", success=False)
+    assert refused["source_inventory"]["reason_code"] == "rollback_archive_readback_mismatch"
+    assert before == capture_bytes(fixture)
 
 
 def cold_workspace(tmp_path):

@@ -50,7 +50,7 @@ def register_coordination_shadow_command(
     )
     for name, help_text in (
         ("inspect", "Compare the current legacy projection with the file shadow."),
-        ("inspect-source", "Inventory complete old Markdown Todos and retained leases without enabling a shadow or importing."),
+        ("inspect-source", "Inventory old Markdown Todos, retained leases and original capture artifacts without enabling a shadow or importing."),
         (
             "qualify",
             "Validate bounded parity and transaction coverage for the active outbox lineage.",
