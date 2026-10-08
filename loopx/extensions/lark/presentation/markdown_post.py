@@ -187,30 +187,75 @@ def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any], atta
     )
 
 
-def lark_markdown_readback_matches(*, text: str, message: Mapping[str, Any], attachment_keys: tuple[str, ...] = ()) -> bool:
-    """Accept the raw post or CLI's md text, never a plain-text lookalike."""
+def _readback_post(message: Mapping[str, Any], attachment_keys: tuple[str, ...],
+                   attachment_names: tuple[str, ...]) -> tuple[str, tuple[str, ...]] | None:
     if message.get("msg_type", message.get("message_type")) != "post":
-        return False
+        return None
     if message.get("mentions") not in (None, []):
-        return False
+        return None
+    if attachment_names and len(attachment_names) != len(attachment_keys):
+        return None
     body = message.get("body")
-    if isinstance(body, Mapping):
-        actual = _single_markdown_post(body.get("content"), attachment_keys)
+    actual = body.get("content") if isinstance(body, Mapping) else message.get("content")
+    files = []
+    if isinstance(body, Mapping) or not isinstance(actual, str):
+        if isinstance(actual, str):
+            try:
+                actual = json.loads(actual)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(actual, Mapping) and attachment_keys:
+            files = actual.get("files")
+        keys = tuple(file.get("key") for file in files if isinstance(file, Mapping)) if isinstance(files, list) else ()
+        actual = _single_markdown_post(actual, keys)
     else:
-        actual = message.get("content")
-        if not isinstance(actual, str):
-            actual = _single_markdown_post(actual, attachment_keys)
-        elif attachment_keys:
+        if attachment_keys:
             # The CLI renders the post's attachment zone as trailing file tags.
-            # The transport separately downloads and hashes these resources.
             lines = actual.rstrip().splitlines()
             try:
-                files = [ElementTree.fromstring(tag.strip()) for tag in lines[-len(attachment_keys):]]
+                tags = [ElementTree.fromstring(tag.strip()) for tag in lines[-len(attachment_keys):]]
             except ElementTree.ParseError:
-                return False
-            if tuple(file.get("key") for file in files) != attachment_keys or any(file.tag != "file" for file in files):
-                return False
+                return None
+            if any(tag.tag != "file" or len(tag) or (tag.text or "").strip() or tag.tail for tag in tags):
+                return None
+            files = [tag.attrib for tag in tags]
             actual = "\n".join(lines[:-len(attachment_keys)]).rstrip()
-    return isinstance(actual, str) and actual.replace(
+    if not isinstance(actual, str) or not isinstance(files, list) or len(files) != len(attachment_keys):
+        return None
+    keys = []
+    for index, file in enumerate(files):
+        if not isinstance(file, Mapping) or not re.fullmatch(r"file_[A-Za-z0-9_-]{1,240}", str(file.get("key") or "")):
+            return None
+        key = file["key"]
+        if attachment_names:
+            # Feishu may replace upload keys with message-scoped resource keys.
+            # A replacement must retain the exact ordered display name; bytes
+            # are independently downloaded and hashed by the transport.
+            name = file.get("name")
+            if name != attachment_names[index] and not (name is None and key == attachment_keys[index]):
+                return None
+        elif key != attachment_keys[index]:
+            return None
+        keys.append(key)
+    return actual, tuple(keys)
+
+
+def lark_markdown_readback_attachment_keys(*, text: str, message: Mapping[str, Any],
+                                         attachment_keys: tuple[str, ...] = (),
+                                         attachment_names: tuple[str, ...] = ()) -> tuple[str, ...] | None:
+    """Resolve keys only from the exact post; this alone never verifies files."""
+    parsed = _readback_post(message, attachment_keys, attachment_names)
+    if parsed is None:
+        return None
+    actual, keys = parsed
+    return keys if actual.replace(
         "\r\n", "\n"
-    ).strip() == normalize_lark_markdown_emphasis(text)
+    ).strip() == normalize_lark_markdown_emphasis(text) else None
+
+
+def lark_markdown_readback_matches(*, text: str, message: Mapping[str, Any],
+                                 attachment_keys: tuple[str, ...] = (),
+                                 attachment_names: tuple[str, ...] = ()) -> bool:
+    """Accept the raw post or CLI's md text, never a plain-text lookalike."""
+    return lark_markdown_readback_attachment_keys(text=text, message=message,
+        attachment_keys=attachment_keys, attachment_names=attachment_names) is not None

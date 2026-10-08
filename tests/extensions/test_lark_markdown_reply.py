@@ -34,6 +34,36 @@ def test_result_attachment_zone_matches_raw_post_and_flattened_cli_readback():
     assert not lark_markdown_readback_matches(text=TEXT, message={"msg_type": "post", "body": {"content": content}})
 
 
+@pytest.mark.parametrize("flattened", [False, True])
+def test_result_readback_allows_provider_resource_keys_only_for_exact_file_names(flattened):
+    from loopx.extensions.lark.presentation.markdown_post import lark_markdown_readback_attachment_keys
+
+    uploaded = ("file_upload_first", "file_upload_second")
+    names = ("first.pdf", "second.csv")
+    resources = ("file_message_first", "file_message_second")
+    content = json.loads(lark_markdown_post_content(TEXT))
+    content["files"] = [{"key": key, "name": name} for key, name in zip(resources, names)]
+    message = {"msg_type": "post", **({"content": TEXT + '\n\n' + '\n'.join(
+        f'<file key="{key}" name="{name}"/>' for key, name in zip(resources, names))}
+        if flattened else {"body": {"content": content}})}
+    assert lark_markdown_readback_attachment_keys(text=TEXT, message=message,
+        attachment_keys=uploaded, attachment_names=names) == resources
+    assert lark_markdown_readback_matches(text=TEXT, message=message,
+        attachment_keys=uploaded, attachment_names=names)
+    assert not lark_markdown_readback_matches(text=TEXT, message=message, attachment_keys=uploaded)
+    for wrong_names in [("second.csv", "first.pdf"), ("first.pdf", "other.csv"), ("first.pdf",)]:
+        assert not lark_markdown_readback_matches(text=TEXT, message=message,
+            attachment_keys=uploaded, attachment_names=wrong_names)
+    for replacement in ['<image key="file_message_first" name="first.pdf"/>',
+                        '<file key="../outside" name="first.pdf"/>',
+                        '<file key="file_message_first"/>',
+                        '<file key="file_message_first" name="first.pdf"><text>extra</text></file>']:
+        changed = {"msg_type": "post", "content": TEXT + '\n' + replacement +
+                   '\n<file key="file_message_second" name="second.csv"/>'}
+        assert not lark_markdown_readback_matches(text=TEXT, message=changed,
+            attachment_keys=uploaded, attachment_names=names)
+
+
 def test_safe_plain_text_fallback_repairs_presentation_without_forging_mentions():
     text = (
         r"结论：通过\n下一步：@LoopX 管家查看"

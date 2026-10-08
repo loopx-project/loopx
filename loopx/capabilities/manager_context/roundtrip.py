@@ -591,6 +591,10 @@ def _write_exact_return_state(
                 raise ValueError("exact return delivery admission changed")
             result = {**value, "goal_ref": row["goal_ref"],
                       **({"result_key": reply["result_key"]} if "result_key" in reply else {})}
+            # A refusal does not erase evidence that the provider already wrote.
+            # Terminal state remains terminal; preserving its locator is no retry.
+            if result.get("status") == "explicit_unverified" and current.get("attempt") is not None:
+                result["attempt"] = current["attempt"]
             if preserve_admission:
                 result["admission"] = admission
             else:
@@ -1064,6 +1068,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     _write(
                         state_path,
                         {
+                            **state,
                             "status": "explicit_unverified",
                             "error": "manager_return_payload_conflict",
                         },
@@ -1082,6 +1087,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": "provider_locator_unavailable",
                                 },
@@ -1093,6 +1099,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": "provider_locator_unavailable",
                                 },
@@ -1119,6 +1126,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": "provider_verifier_unavailable",
                                 },
@@ -1138,7 +1146,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             if error:
                                 _write(
                                     state_path,
-                                    {"status": "explicit_unverified", "error": error},
+                                    {**state, "status": "explicit_unverified", "error": error},
                                 )
                                 continue
                             # An unclassified readback failure keeps the locator and
@@ -1178,6 +1186,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                             _write(
                                 state_path,
                                 {
+                                    **state,
                                     "status": "explicit_unverified",
                                     "error": decision["error"],
                                 },
@@ -1301,7 +1310,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     if error:
                         _write(
                             state_path,
-                            {"status": "explicit_unverified", "error": error},
+                            {**current, "status": "explicit_unverified", "error": error},
                         )
                     elif _attempt_locator(current.get("attempt")) is None:
                         # The record says the provider took the write and named

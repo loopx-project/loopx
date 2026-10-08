@@ -290,6 +290,7 @@ def _deliver_lark_inbox_outbound(
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Deliver through one inbox-configured bot with exact provider readback.
 
@@ -685,7 +686,8 @@ def _deliver_lark_inbox_outbound(
     verified = bool(
         readback.get("returncode") == 0
         and readback_message is not None
-        and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys)
+        and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
+                                          attachment_names=attachment_names)
              if markdown else lark_readback_matches_outbound(
             outbound_text=reply_text,
             message=readback_message,
@@ -762,6 +764,7 @@ def reply_lark_event_inbox(
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy.
 
@@ -788,6 +791,7 @@ def reply_lark_event_inbox(
         short_message_limit=short_message_limit,
         finalize_reactions=finalize_reactions,
         attachment_keys=attachment_keys,
+        attachment_names=attachment_names,
     )
 
     result.setdefault("content_format", "markdown" if content_format == "markdown"
@@ -806,6 +810,7 @@ def verify_lark_inbox_reply(
     source_membership_verifier: Callable[[], bool] | None = None,
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Read back one prior Lark reply without sending another message."""
 
@@ -939,7 +944,8 @@ def verify_lark_inbox_reply(
             "blocker": "provider_message_missing",
         }
     verified = (
-        lark_markdown_readback_matches(text=reply_text, message=message, attachment_keys=attachment_keys)
+        lark_markdown_readback_matches(text=reply_text, message=message, attachment_keys=attachment_keys,
+                                      attachment_names=attachment_names)
         if markdown
         else lark_readback_matches_outbound(
             outbound_text=reply_text,

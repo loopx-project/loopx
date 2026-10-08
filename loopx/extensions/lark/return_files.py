@@ -9,7 +9,9 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .inbox_reply import _default_runner, _json_object
+from .inbox_reply import _default_runner, _json_object, _message
+from .outbound import normalize_lark_outbound_text
+from .presentation.markdown_post import lark_markdown_readback_attachment_keys
 from ...control_plane.collaboration.inbox import _hash, _read, _root, _write
 from ...control_plane.collaboration.result_files import read_result_file
 from ...file_lock import exclusive_file_lock
@@ -69,12 +71,25 @@ def uploaded_result_files(*, root, profile, provider_ref, attachments, runner=No
     return tuple(keys)
 
 
-def verify_result_files(*, profile, message_id, attachments, keys, runner=None, private_transport=None):
+def verify_result_files(*, profile, message_id, text, attachments, keys, runner=None, private_transport=None):
     """Read back actual bytes; matching a filename or text tag is insufficient."""
     with TemporaryDirectory(prefix="loopx-lark-result-readback-") as temporary:
         cwd = Path(temporary).resolve()
-        for index, (attachment, key) in enumerate(zip(attachments, keys, strict=True)):
-            output = f"./resource-{index}"
+        result = _call(["lark-cli", "--profile", profile, "im", "+messages-mget",
+                        "--message-ids", message_id, "--as", "bot", "--no-reactions", "--format", "json"],
+                       cwd, runner=runner, private_transport=private_transport)
+        if result.get("returncode") != 0:
+            return {"reply_verified": False, "verification_performed": False, "blocker": "provider_verification_unavailable"}
+        message = _message(_json_object(result.get("stdout")), message_id)
+        resources = lark_markdown_readback_attachment_keys(
+            text=normalize_lark_outbound_text(text, limit=None, preserve_format=True), message=message or {},
+            attachment_keys=keys, attachment_names=tuple(attachment["name"] for attachment in attachments))
+        if resources is None:
+            return {"reply_verified": False, "verification_performed": True, "blocker": "provider_delivery_mismatch"}
+        for index, (attachment, key) in enumerate(zip(attachments, resources, strict=True)):
+            # A suffix keeps lark-cli from inferring one from remote metadata.
+            # The fixed local name still belongs to this temporary directory.
+            output = f"./resource-{index}.bin"
             result = _call(["lark-cli", "--profile", profile, "im", "+messages-resources-download",
                            "--message-id", message_id, "--file-key", key, "--type", "file", "--output", output,
                            "--as", "bot", "--format", "json"], cwd, runner=runner, private_transport=private_transport)

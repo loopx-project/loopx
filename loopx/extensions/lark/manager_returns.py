@@ -11,7 +11,7 @@ from .goal_channel_targets import goal_channel_target_for_name
 from .goal_topic_runtime import _inbox_config
 from .manager_routing import authorized_manager_goal_ids
 from .event_inbox import load_lark_event_inbox_config, _load_processed
-from .inbox_reply import CommandRunner, _bot_identity_verified, _default_runner, reply_lark_event_inbox, verify_lark_inbox_reply
+from .inbox_reply import CommandRunner, _bot_identity_verified, _default_runner, _verified_reply_result, reply_lark_event_inbox, verify_lark_inbox_reply
 from .return_files import uploaded_result_files, verify_result_files
 from ...capabilities.manager_context import authority
 from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
@@ -192,15 +192,20 @@ def send_return(
         # notification length.
         short_message_limit=None,
         attachment_keys=keys,
+        attachment_names=tuple(attachment["name"] for attachment in attachments),
+        finalize_reactions=not attachments,
         **runner_kwargs,
     )
     if attachments and result.get("reply_verified") is True:
         # The recorder persists the exact message locator before this read.
         # Failure retains that attempt; recovery only reads it, never resends.
         verified = verify_result_files(profile=reply["sender_profile"],
-            message_id=observed_attempt["message_ref"], attachments=attachments, keys=keys,
+            message_id=observed_attempt["message_ref"], text=text, attachments=attachments, keys=keys,
             runner=runner, private_transport=private_transport)
         result.update(verified)
+        if verified.get("reply_verified") is True:
+            result.update(_verified_reply_result(project=project, config_path=config_path,
+                message_id=message_id, runner=runner or _default_runner, finalize_reactions=True))
     return result
 
 
@@ -251,12 +256,17 @@ def verify_return(
         attempt=attempt,
         source_membership_verifier=source_verifier,
         attachment_keys=keys,
+        attachment_names=tuple(attachment["name"] for attachment in attachments),
+        finalize_reactions=not attachments,
         **runner_kwargs,
     )
     if attachments and result.get("reply_verified") is True:
         result.update(verify_result_files(profile=reply["sender_profile"],
-            message_id=attempt["message_ref"], attachments=attachments, keys=keys,
+            message_id=attempt["message_ref"], text=text, attachments=attachments, keys=keys,
             runner=runner, private_transport=private_transport))
+        if result.get("reply_verified") is True:
+            result.update(_verified_reply_result(project=project, config_path=config_path,
+                message_id=message_id, runner=runner or _default_runner, finalize_reactions=True))
     return result
 
 

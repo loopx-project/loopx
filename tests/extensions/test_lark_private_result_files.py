@@ -30,7 +30,7 @@ def file_return(private_return):  # noqa: F811
     (workspace / ref).write_bytes(raw)
     original_runner = transport.runner
     uploads, downloads = [], []
-    state = {"wrong_bytes": False, "download_available": True}
+    state = {"wrong_bytes": False, "download_available": True, "remapped_key": False}
 
     def runner(args, cwd=None, timeout=None):
         if "files" in args and "create" in args:
@@ -41,19 +41,31 @@ def file_return(private_return):  # noqa: F811
             return {"returncode": 0, "stdout": json.dumps({"ok": True, "data": {"file_key": "file_result_fixture"}})}
         if "+messages-resources-download" in args:
             downloads.append(args)
+            expected = "file_message_fixture" if state["remapped_key"] else "file_result_fixture"
+            assert args[args.index("--file-key") + 1] == expected
             if not state["download_available"]:
                 return {"returncode": 1, "stdout": ""}
             raw_bytes = b"wrong bytes" if state["wrong_bytes"] else uploads[0]
-            (Path(cwd) / args[args.index("--output") + 1]).write_bytes(raw_bytes)
+            output = Path(cwd) / args[args.index("--output") + 1]
+            # lark-cli infers a suffix when the caller omits one.
+            if not output.suffix:
+                output = output.with_suffix(".bin")
+            output.write_bytes(raw_bytes)
             return {"returncode": 0, "stdout": json.dumps({"ok": True})}
         if "--attachment" in args:
             # The CLI merges its explicit keys into the post attachment zone.
             args = list(args)
             index = args.index("--content") + 1
             content = json.loads(args[index])
-            content["files"] = [{"key": args[args.index("--attachment") + 1]}]
+            content["files"] = [{"key": args[args.index("--attachment") + 1], "name": ref}]
             args[index] = json.dumps(content)
-        return original_runner(args, cwd, timeout)
+        result = original_runner(args, cwd, timeout)
+        if state["remapped_key"] and "--attachment" in args and "--dry-run" not in args:
+            message = provider.messages["om_out_worker"]
+            content = json.loads(message["body"]["content"])
+            content["files"][0]["key"] = "file_message_fixture"
+            message["body"]["content"] = json.dumps(content)
+        return result
 
     transport.runner = runner
     acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Return the requested file")
@@ -62,6 +74,84 @@ def file_return(private_return):  # noqa: F811
                       "conclusion", "The requested result is attached.", registry=registry,
                       attachment_refs=refs if refs is not None else [ref], update_id=update_id, workspace=workspace)
     return sender, session, turn, route, row, provider, transport, replies, workspace, raw, publish, uploads, downloads, state
+
+
+def test_remapped_message_resource_recovers_without_upload_or_send(file_return):
+    sender, _, _, route, _, provider, transport, replies, _, raw, publish, uploads, downloads, state = file_return
+    state["remapped_key"] = True
+    state["download_available"] = False
+    publish()
+    drain(sender.root, sender.server.registry_path, transport.core.controller.store, sender)
+    assert len(replies) == len(uploads) == 1
+    assert reply_status(sender.root, route)[0]["status"] == "verification_required"
+    state["download_available"] = True
+    # Reload the real store; recovery must use the saved message's resource key.
+    from loopx.chat_store import ChatSessionStore
+    from datetime import datetime, timedelta, timezone
+    recovered = ChatSessionStore(transport.core.controller.store.root.parent)
+    drain(sender.root, sender.server.registry_path, recovered, sender,
+          now=datetime.now(timezone.utc) + timedelta(minutes=10))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered"
+    assert len(replies) == len(uploads) == 1 and uploads == [raw]
+    assert len(downloads) == 2
+
+
+def test_file_completion_feedback_waits_for_verified_bytes(file_return, monkeypatch):
+    from loopx.extensions.lark import inbox_reply
+
+    sender, _, _, route, _, _, transport, _, _, _, publish, _, _, state = file_return
+    cleanups = []
+    def cleanup(**kwargs):
+        cleanups.append(kwargs["message_id"])
+        return {"ok": True}
+    monkeypatch.setattr(inbox_reply, "complete_lark_event_inbox_reactions", cleanup)
+    state["download_available"] = False
+    publish()
+    drain(sender.root, sender.server.registry_path, transport.core.controller.store, sender)
+    assert cleanups == []
+    state["download_available"] = True
+    from datetime import datetime, timedelta, timezone
+    drain(sender.root, sender.server.registry_path, transport.core.controller.store, sender,
+          now=datetime.now(timezone.utc) + timedelta(minutes=10))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered"
+    assert len(cleanups) == 1
+
+
+@pytest.mark.parametrize("update_id", [None, "file-result"])
+def test_route_failure_after_send_preserves_attempt_without_resending(file_return, monkeypatch, update_id):
+    from datetime import datetime, timedelta, timezone
+
+    sender, _, _, route, _, _, transport, replies, _, _, publish, uploads, _, state = file_return
+    store = transport.core.controller.store
+    if update_id is not None:
+        publish(refs=[])
+        drain(sender.root, sender.server.registry_path, store, sender)
+    prior_replies = len(replies)
+    state["download_available"] = False
+    published = publish(update_id=update_id)
+    drain(sender.root, sender.server.registry_path, store, sender)
+    key = published.get("result_key", "conclusion")
+    path = _root(sender.root) / "replies" / route["request_id"] / (key + ".delivery.json")
+    before = json.loads(path.read_text())
+    assert before["attempt"]["message_ref"] == "om_out_worker"
+    original = transport.return_inbox
+    def unavailable(**kwargs):
+        raise ValueError("source unavailable")
+    monkeypatch.setattr(transport, "return_inbox", unavailable)
+    now = datetime.now(timezone.utc) + timedelta(minutes=10)
+    drain(sender.root, sender.server.registry_path, store, sender, now=now)
+    after = json.loads(path.read_text())
+    assert after["status"] == "explicit_unverified"
+    assert after["error"] == "original_route_unavailable"
+    assert after["attempt"] == before["attempt"]
+    for field in ("goal_ref", "result_key"):
+        if field in before:
+            assert after[field] == before[field]
+    monkeypatch.setattr(transport, "return_inbox", original)
+    state["download_available"] = True
+    drain(sender.root, sender.server.registry_path, store, sender, now=now + timedelta(minutes=10))
+    assert json.loads(path.read_text())["status"] == "explicit_unverified"
+    assert len(replies) == prior_replies + 1 and len(uploads) == 1
 
 
 def test_snapshot_is_returned_once_and_restart_only_reads_the_saved_message(file_return):
