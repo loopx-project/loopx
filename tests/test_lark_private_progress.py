@@ -435,6 +435,32 @@ def test_progress_is_bounded_and_does_not_invent_activity_or_show_reasoning():
     assert state["cursor"] == "4"
 
 
+def test_activity_churn_is_coalesced_without_delaying_new_answer_chunks(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        path = transport.root / f"{row['request_ref']}.json"
+        now = _read_json(path)["stream"]["last_attempt_at"]
+        monkeypatch.setattr("loopx.extensions.lark.private_conversations.time.time", lambda: now)
+        sid, tid = row["session_id"], row["turn_id"]
+        for index in range(1, 10):
+            now += 1
+            store.append_event(sid, tid, kind="agent.phase", payload={"method": "item/started",
+                "step": {"kind": "tool" if index % 2 else "command", "state": "running"}})
+            transport.reconcile()
+        assert provider.edits == [] and len(provider.writes) == 1
+        # The coalesced current activity is eventually flushed without another event.
+        now += 1
+        transport.reconcile()
+        assert len(provider.edits) == 1 and "正在调用工具" in provider.edits[-1][2]
+        store.append_event(sid, tid, kind="answer.delta", payload={"text": "及时的新回答。"})
+        now += 2
+        transport.reconcile()
+        assert len(provider.edits) == 2 and "及时的新回答。" in provider.edits[-1][2]
+        assert len(provider.writes) == 1
+    finally:
+        runtime.close()
+
+
 def test_progress_continues_after_edit_budget_across_restart_and_reserves_final(ordinary):  # noqa: F811
     store, runtime, provider, transport, row = start(ordinary)
     try:

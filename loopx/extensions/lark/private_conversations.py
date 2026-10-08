@@ -26,7 +26,7 @@ from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_progress import UPDATE_INTERVAL_SEC, project_progress
+from .private_progress import ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, project_progress
 
 # Conservative transport budget, not a claim about the provider's maximum.
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
@@ -486,7 +486,10 @@ class LarkPrivateConversations:
         if not text or text == stream.get("confirmed_text"):
             return
         now = time.time()
-        if now - float(stream.get("last_attempt_at") or 0) < UPDATE_INTERVAL_SEC:
+        answer_digest = hashlib.sha256(str(stream.get("answer") or "").encode("utf-8")).hexdigest()
+        interval = (ACTIVITY_UPDATE_INTERVAL_SEC if answer_digest == stream.get("confirmed_answer_digest")
+                    else UPDATE_INTERVAL_SEC)
+        if now - float(stream.get("last_attempt_at") or 0) < interval:
             return
         stream["last_attempt_at"] = now
         _atomic_write_json(path, record)
@@ -506,6 +509,9 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, record)
         else:
             self._edit_progress(path, record, text, inbox=inbox)
+        if stream.get("confirmed_text") == text:
+            stream["confirmed_answer_digest"] = answer_digest
+            _atomic_write_json(path, record)
 
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
