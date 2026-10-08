@@ -77,18 +77,26 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
     context = ChatProjectContexts([tmp_path], workspace_grant=grant, filesystem_scope="workspace_only").available()[0]
     profile = "loopx_workspace_only_" + ("write" if grant == "workspace_write" else "read")
-    process = _FakeAppServerProcess(thread_response={"thread": {"id": "thread-loopx-chat"},
+    process = _FakeAppServerProcess(config_response={"config": {"mcp_servers": {"managed_fixture": {"command": "private-command"}}}},
+        thread_response={"thread": {"id": "thread-loopx-chat"},
         "activePermissionProfile": {"id": profile}, "runtimeWorkspaceRoots": [str(tmp_path)]})
     real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
     binary = tmp_path / "native-codex"
     monkeypatch.setattr(chat_agent.shutil, "which", lambda name: str(binary) if name == "codex" else real_which(name))
-    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, *a, **k:
-        process if command[0] == str(binary) else real_popen(command, *a, **k))
+    launched = []
+    monkeypatch.setenv("PRIVATE_FIXTURE_TOKEN", "synthetic-account-secret")
+    def popen(command, *args, **kwargs):
+        if command[0] != str(binary):
+            return real_popen(command, *args, **kwargs)
+        launched.append(kwargs["env"])
+        return process
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", popen)
     session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
-        goal_id=None, objective="project", project_context=context,
+        goal_id=None, objective="project", project_context=context, codex_home=tmp_path / "account-codex",
         resume_thread_id="thread-loopx-chat" if resume else None,
         model="synthetic-model", reasoning_effort="high",
         host_config={"skills": {"include_instructions": True}, "project_doc_max_bytes": 32768,
+                     "mcp_servers": {"caller_fixture": {"enabled": True}},
                      "shell_environment_policy": {"inherit": "all", "include_only": ["*"],
                                                   "set": {"PRIVATE_FIXTURE": "synthetic"}}})
     try:
@@ -101,6 +109,13 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         assert params["config"]["default_permissions"] == profile
         assert params["config"]["skills"]["include_instructions"] is False
         assert params["config"]["project_doc_max_bytes"] == 0
+        assert params["config"]["mcp_servers"] == {
+            "managed_fixture": {"enabled": False}, "caller_fixture": {"enabled": False}}
+        env = launched[0]
+        assert "PRIVATE_FIXTURE_TOKEN" not in env
+        assert Path(env["CODEX_HOME"]).parent == Path(env["HOME"])
+        assert Path(env["HOME"]) != Path.home()
+        assert Path(env["CODEX_HOME"]) != tmp_path / "account-codex"
         environment = params["config"]["shell_environment_policy"]
         assert environment["inherit"] == "none" and environment["include_only"] == ["PATH"]
         assert environment["experimental_use_profile"] is False
@@ -123,7 +138,8 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
 ])
 def test_project_filesystem_scope_rejects_missing_or_changed_native_readback_without_fallback(monkeypatch, tmp_path, response):
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
-    process = _FakeAppServerProcess(thread_response={"thread": {"id": "thread-loopx-chat"}, **response})
+    process = _FakeAppServerProcess(config_response={"config": {}},
+        thread_response={"thread": {"id": "thread-loopx-chat"}, **response})
     real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
     binary = tmp_path / "native-codex"
     monkeypatch.setattr(chat_agent.shutil, "which", lambda name: str(binary) if name == "codex" else real_which(name))
@@ -131,7 +147,8 @@ def test_project_filesystem_scope_rejects_missing_or_changed_native_readback_wit
         process if command[0] == str(binary) else real_popen(command, *a, **k))
     with pytest.raises(chat_agent.CodexChatAgentError, match="did not apply"):
         chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path, goal_id=None,
-            objective="project", project_context=ChatProjectContexts([tmp_path], filesystem_scope="workspace_only").available()[0],
+            objective="project", codex_home=tmp_path / "account-codex",
+            project_context=ChatProjectContexts([tmp_path], filesystem_scope="workspace_only").available()[0],
             resume_thread_id="thread-loopx-chat", model="synthetic-model", reasoning_effort="high")
     requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
     assert sum(r.get("method") == "thread/resume" for r in requests) == 1

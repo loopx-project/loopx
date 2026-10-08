@@ -31,6 +31,11 @@ export function projectConversationIdentity(input: Record<string, unknown>): Rec
   const context = normalizeProjectContext(input.context);
   const writable = context.grant === "workspace_write";
   const permissions = context.filesystem_scope === "workspace_only" ? {
+    // Share authentication within this authorized workspace/owner binding,
+    // never with another App or local-owner context. Source topics retain
+    // separate threads without requiring a new login for every message.
+    host_store_key: [context.project_ref, ...(context.audience === "bound_owner"
+      ? [context.binding_id, context.provider_ref, context.operator_ref] : ["local"])].join("."),
     permissions_profile: `loopx_workspace_only_${writable ? "write" : "read"}`,
     host_config: {
       default_permissions: `loopx_workspace_only_${writable ? "write" : "read"}`,

@@ -25,7 +25,7 @@ from .chat import (
 
 class CodexChatAgentError(RuntimeError):
     def __init__(
-        self, message: str, *, gate: dict[str, str], error_code: str = "host_gate"
+        self, message: str, *, gate: dict[str, str] | None, error_code: str = "host_gate"
     ) -> None:
         super().__init__(message)
         self.gate = gate
@@ -250,11 +250,11 @@ def _model_catalog_compatibility_error() -> CodexChatAgentError:
 
 
 @contextmanager
-def _current_builtin_model_catalog(codex_bin: str) -> Iterator[Path]:
+def _current_builtin_model_catalog(codex_bin: str, *, environment: dict[str, str] | None = None) -> Iterator[Path]:
     """Materialize the selected Codex binary's current built-in catalog only."""
 
     with tempfile.TemporaryDirectory(prefix="loopx-chat-codex-home-") as codex_home:
-        env = os.environ.copy()
+        env = dict(os.environ if environment is None else environment)
         env["CODEX_HOME"] = codex_home
         try:
             result = subprocess.run(
@@ -462,7 +462,7 @@ def _turn_prompt(
         "After resolving the outcome and evidence, exception for the host-supplied context_delegation catalog: when the current user explicitly asks "
         "for ordinary work that belongs to a qualified existing responsible Agent, or to forward context for that Agent to assess/replan, emit context_handoff={goal_id,agent_id,brief} using "
         "one exact catalog recipient, proposals=[], and no confirmation gate. Otherwise context_handoff=null. "
-        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Preserve relevant earlier corrections and rejected approaches in context, explicit constraints, observable acceptance and the owed result. Never invent missing context. inputs are shared-workspace relative files {ref,description,sha256?}; include a digest only when actually read. This is semantic context, never a priority, task edit or new authority. "
+        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; then preserve relevant earlier corrections and rejected approaches, explicit constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. inputs are shared-workspace relative files {ref,description,sha256?}; include a digest only when actually read. This is semantic context, never a priority, task edit or new authority. "
         "Before preparing a new Goal, resolve the current conversation and permitted existing work by semantic relevance, not words like goal, research or continue. "
         "A continuation, correction or status question belongs to the established Goal/owner. Preserve its constraints; do not restart, create a duplicate Goal or ask for permission already granted. "
         "For requested work, inspect the supplied Goal directory and relevant work/Agent evidence (using the declared read tool when incomplete). An empty delivery-grant list does not prove there is no existing work. "
@@ -627,13 +627,14 @@ class CodexChatAgentSession:
             resolved = str(Path(resolved).resolve())
         # Pin the host store explicitly, including compatibility retries. Never
         # redirect an existing thread by inheriting a different launch context.
-        runtime_home = (
+        base_home = (
             (codex_home or Path(os.environ.get("CODEX_HOME") or "~/.codex"))
             .expanduser()
             .resolve()
         )
-        runtime_env = os.environ.copy()
-        runtime_env["CODEX_HOME"] = str(runtime_home)
+        from .capabilities.native_chat import codex_context
+        runtime_home = codex_context.codex_home(base_home, policy if project_context is not None else None)
+        runtime_env = codex_context.process_environment(runtime_home, isolated=bool(permissions_profile))
         # Select an operator-defined native provider for ordinary Chat only.
         # Codex owns its configuration/authentication; never copy credentials
         # or replace a resumed thread to change its upstream transport.
@@ -642,6 +643,10 @@ class CodexChatAgentSession:
             if not execution_mode else ""
         )
         command = [resolved, "app-server"]
+        if permissions_profile:
+            # Keep this native store independent even when the account's
+            # default credential backend is a shared OS keychain.
+            command.extend(["-c", 'cli_auth_credentials_store="file"'])
         if _compatibility_catalog_path is not None:
             command.extend(
                 [
@@ -714,7 +719,7 @@ class CodexChatAgentSession:
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
-            if read_project_defaults:
+            if read_project_defaults or permissions_profile:
                 # Resume otherwise inherits the old thread's model/effort, even
                 # when the owner's effective workspace configuration has changed.
                 # Let Codex resolve trusted layers; never copy sandbox or approval
@@ -726,10 +731,12 @@ class CodexChatAgentSession:
                 effective = config_result.get("config", {})
                 if not isinstance(effective, dict):
                     raise session._runtime_error("Codex returned an invalid project configuration.")
+                if permissions_profile:
+                    host_config = codex_context.disable_mcp_servers(effective, host_config or {})
                 selected = {**effective, **(host_config or {})}
-                if model is None:
+                if read_project_defaults and model is None:
                     model = selected.get("model")
-                if reasoning_effort is None:
+                if read_project_defaults and reasoning_effort is None:
                     reasoning_effort = selected.get("model_reasoning_effort")
                 if any(value is not None and (not isinstance(value, str) or not value.strip())
                        for value in (model, reasoning_effort)):
@@ -807,13 +814,13 @@ class CodexChatAgentSession:
             # that public-safe context in each Turn prompt. Codex Goal mode is reserved
             # for autonomous execution; enabling it here causes conversational messages
             # to be treated as continuation ticks instead of the current user task.
-            session.next_request_id = 4 if read_project_defaults else 3
+            session.next_request_id = 4 if read_project_defaults or permissions_profile else 3
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
             if _compatibility_catalog_path is not None:
                 raise _model_catalog_compatibility_error() from exc
-            with _current_builtin_model_catalog(resolved) as catalog_path:
+            with _current_builtin_model_catalog(resolved, environment=runtime_env) as catalog_path:
                 return cls.start(
                     codex_bin=resolved,
                     work_dir=root,
@@ -828,7 +835,7 @@ class CodexChatAgentSession:
                     runtime_profile=runtime_profile,
                     sandbox=selected_sandbox,
                     project_context=project_context,
-                    codex_home=runtime_home,
+                    codex_home=base_home,
                     model=model,
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,

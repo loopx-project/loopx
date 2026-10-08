@@ -884,6 +884,15 @@ provider. This is a bounded App companion, not full old-source/Host upgrade or
 D2/release-default qualification. Continue those original acceptance frontiers
 and retire each last caller separately.
 
+New-Goal App recovery is a separate bounded R5/T4 gap: after Goal/Todo commit,
+Host startup or a lost response must resume the frozen original operation,
+without regenerating a creator or duplicating its Todo/Session/Turn. Reuse the
+typed action review/checkpoint and native acceptance owners; show committed
+steps without claiming model execution or Goal completion. The [L9 checkpoint](shared-goal-authority-state-provider-v0.md)
+retains installed CLI/HTTP/packaged App negative and restart qualification,
+while old-Goal migration, real-model first-Turn and D2/release-default gates stay
+independent.
+
 The [Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.md)
 adds a bounded R5 dependency for R2/R3 retirement and late-result safety. The
 codec and source-session lifetime transaction exist; attached Chat, handoff and

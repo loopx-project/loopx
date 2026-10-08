@@ -20,6 +20,33 @@ function observe(overrides: Record<string, unknown> = {}) {
     rows: [row("todo_a", "worker-a")], ...overrides});
 }
 
+test("summary classification shares claim scope and keeps visibility floors separate", () => {
+  const fact = (claim: string | null = null, excluded: string[] = [], actionable = true) =>
+    ({claim, excluded, actionable, advancement: true});
+  const request = {schema_version: "todo_frontier_revision_request_v0", operation: "classify",
+    agent_id: "worker-a", claimed_count_floor: "12", diagnostic_peers: [fact(), fact()],
+    sources: {executable_backlog_items: [fact("worker-a"), fact(), fact("worker-b"),
+      fact("worker-a", ["worker-a"]), fact(null, [], false)],
+      unclaimed_priority_open_items: [fact()], claimed_advancement_open_items: [fact("worker-a")]}};
+  assert.deepEqual(projectAdvancementFrontier(request), {groups: {
+    current_agent_claimed_items: {source: "executable_backlog_items", indices: [0]},
+    unclaimed_items: {source: "executable_backlog_items", indices: [1]},
+    other_agent_claimed_items: {source: "executable_backlog_items", indices: [2]},
+  }, counts: {current_agent_claimed_advancement_count: 12,
+    unclaimed_advancement_count: 1, other_agent_claimed_advancement_count: 2}});
+  const empty = projectAdvancementFrontier({...request, sources: {...request.sources, executable_backlog_items: []}});
+  assert.deepEqual((empty.groups as Record<string, unknown>).unclaimed_items,
+    {source: "executable_backlog_items", indices: []});
+  const fallback = projectAdvancementFrontier({...request, sources: {...request.sources, executable_backlog_items: null}});
+  assert.deepEqual((fallback.groups as Record<string, unknown>).current_agent_claimed_items,
+    {source: "claimed_advancement_open_items", indices: [0]});
+  for (const value of ["-1", "0.5", "01", 1, false, "bad"]) assert.throws(() => projectAdvancementFrontier({...request, claimed_count_floor: value}));
+  const large = projectAdvancementFrontier({...request, claimed_count_floor: "9007199254740993"});
+  assert.equal((large.counts as Record<string, unknown>).current_agent_claimed_advancement_count, "9007199254740993");
+  assert.throws(() => projectAdvancementFrontier({...request,
+    sources: {...request.sources, executable_backlog_items: [{...fact(null, [], false), advancement: "true"}]}}));
+});
+
 test("lossless compressed rows preserve index and ACK semantics and reject malformed transport", () => {
   const rows = [row("todo_a", "worker-a"), row("todo_b", null, ["worker-a"])];
   const compressed = {encoding: "deflate-base64-json-v0",

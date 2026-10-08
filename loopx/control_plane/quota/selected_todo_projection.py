@@ -131,6 +131,10 @@ def _compact_selected_todo(
         selected["todo_id"] = todo_id
     if text:
         selected["text"] = text
+        selected["_context_text_display_only"] = True
+    snapshot = item.get("_context_text_sha256")
+    if isinstance(snapshot, str):
+        selected["_context_text_sha256"] = snapshot
     for key in SELECTED_TODO_AGENT_FIELDS:
         if item.get(key) is not None:
             selected[key] = item.get(key)

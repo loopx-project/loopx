@@ -15,9 +15,29 @@ from ...control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from ...history import load_registry
+from ...history import load_index_snapshot, load_registry
 from ...paths import resolve_runtime_root
 from ...registry import find_registry_goal, resolve_state_file
+
+
+def read_report_source_history(
+    *, runtime_root: Path, goal_id: str, run: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Retain only rows appended through this exact committed refresh."""
+    records = load_index_snapshot(
+        runtime_root / "goals" / goal_id / "runs" / "index.jsonl",
+        include_artifact_status=False,
+    ).records
+    positions = [
+        i for i, row in enumerate(records)
+        if row.get("generated_at") == run.get("generated_at")
+        and row.get("settlement_identity") == run.get("settlement_identity")
+        and row.get("json_path") == run.get("json_path")
+    ]
+    if len(positions) != 1:
+        raise ValueError("original refresh history position is unavailable")
+    # Append order also distinguishes later writes with an equal clock.
+    return list(reversed(records[:positions[0] + 1]))
 
 
 def read_report_todo_source(

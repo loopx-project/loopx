@@ -128,7 +128,9 @@ def test_handoff_response_preserves_receipt_and_separate_execution_status(flow):
         source_authorized=lambda: True, execution_allowed=lambda: True)
     assert response["context_handoff_receipt"]["status"] == "delivered"
     assert response["context_execution"]["status"] == "prepared"
-    assert "受理不代表完成" in response["message"]
+    assert "尚未确认完成" in response["message"]
+    assert request["brief"]["purpose"] in response["message"]
+    assert "Unverified model completion claim" not in response["message"]
     assert response["proposals"] == [] and response["gate"] is None
     assert len(started) == 1
 
@@ -207,7 +209,7 @@ def test_stop_during_preview_and_context_only_selection_do_not_launch(flow, monk
     assert not result["submitted"] and not started
     request.pop("execution_binding_id")
     assert dispatch(flow) == {"submitted": False}
-    assert "尚未启动执行" in execution.handoff_message(receipt, {"submitted": False})
+    assert "是否已开始处理尚未核实" in execution.handoff_message(receipt, {"submitted": False})
 
 
 def budget_brief(boundary):

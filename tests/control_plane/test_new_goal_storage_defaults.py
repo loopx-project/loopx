@@ -276,11 +276,191 @@ def app(environment):
             connection.close()
 
     try:
-        yield store, request
+        yield store, request, service
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_goal", [None, "workspace"])
+def test_app_creation_recovers_post_commit_host_failure(environment, app, monkeypatch, provider, context_goal):
+    from loopx.chat_actions import ChatActionService
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, _, _, project, runtime = environment
+    store, request, service = app
+    configure(provider, mode="hard_lease")
+    code, preview = request("/api/actions/preview", {
+        "action_kind": "goal.create", "summary": "Create a Goal",
+        "normalized_parameters": {"goal_id": "host-recovery", "title": "Host recovery",
+            "objective": "Recover the original creation", "workspace_ref": "current", "agent_id": "codex",
+            "heartbeat": {"enabled": False}, "initial_todos": ["First task", "Second task"]},
+        "context": {"kind": "goal_channel", **({"goal_id": context_goal} if context_goal else {})},
+        "idempotency_key": "host-recovery",
+    })
+    assert code == 201, preview
+    proposal_id = preview["proposal"]["proposal_id"]
+    registry = project / ".loopx/registry.json"
+    original_goal = ChatActionService._goal
+
+    def fail_after_todos(self, goal_id):
+        if goal_id == "host-recovery" and "todos_created" in (store.load(proposal_id).get("checkpoint") or {}).get("steps", {}):
+            raise RuntimeError("First Host startup interrupted after durable creation")
+        return original_goal(self, goal_id)
+
+    monkeypatch.setattr(ChatActionService, "_goal", fail_after_todos)
+    apply_path = f"/api/actions/{proposal_id}/apply"
+    code, failed = request(apply_path, {})
+    assert code == 424, failed
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="host-recovery", include_leases=True)
+    assert len(before["todos"]) == 2
+    ids = store.load(proposal_id)["checkpoint"]["steps"]["todos_created"]["todo_ids"]
+    registration = next(g for g in json.loads(registry.read_text())["goals"] if g["id"] == "host-recovery")
+    configure("sqlite" if provider == "file" else "file", mode="soft_claim")
+    restart_effect_runtime()
+    monkeypatch.setattr(ChatActionService, "_goal", original_goal)
+    code, recovered = request(apply_path, {})
+    assert code == 200, recovered
+    assert recovered["proposal"]["receipt"]["resource_ids"]["todo_ids"] == ids
+    assert next(g for g in json.loads(registry.read_text())["goals"] if g["id"] == "host-recovery") == registration
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="host-recovery", include_leases=True) == before
+    assert request(apply_path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_app_creation_recovers_todo_commit_before_response(environment, app, monkeypatch, provider):
+    import loopx.chat_actions as actions
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, _, _, project, runtime = environment
+    store, request, service = app
+    configure(provider, mode="hard_lease")
+    code, preview = request("/api/actions/preview", {
+        "action_kind": "goal.create", "summary": "Create a Goal",
+        "normalized_parameters": {"goal_id": "todo-response", "title": "Todo recovery",
+            "objective": "Retain an accepted Todo after response loss", "workspace_ref": "current",
+            "agent_id": "codex", "heartbeat": {"enabled": False}, "initial_todos": ["One task"]},
+        "context": {"kind": "goal_channel", "goal_id": "workspace"}, "idempotency_key": "todo-response",
+    })
+    assert code == 201, preview
+    proposal_id = preview["proposal"]["proposal_id"]
+    add = actions.add_goal_todo
+
+    def lose_response(**kwargs):
+        add(**kwargs)
+        raise TimeoutError("Todo commit response lost")
+
+    monkeypatch.setattr(actions, "add_goal_todo", lose_response)
+    path = f"/api/actions/{proposal_id}/apply"
+    assert request(path, {})[0] == 424
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="todo-response", include_leases=True)
+    assert len(before["todos"]) == 1
+    restart_effect_runtime()
+    monkeypatch.setattr(actions, "add_goal_todo", add)
+    code, recovered = request(path, {})
+    assert code == 200, recovered
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="todo-response", include_leases=True)
+    assert after == before
+    assert recovered["proposal"]["receipt"]["resource_ids"]["todo_ids"] == [before["todos"][0]["todo_id"]]
+
+
+@pytest.mark.parametrize("fault", ["session", "turn", "checkpoint"])
+def test_app_creation_reuses_real_session_turn_after_response_loss(environment, app, monkeypatch, fault):
+    import runpy
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+
+    _, _, _, project, runtime_root = environment
+    actions, request, service = app
+    capture = runtime_root / "requests.jsonl"
+    fake = runtime_root / "synthetic-codex"
+    source = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))["FAKE_CODEX"]
+    source = source.replace('    method = request.get("method")',
+        f'    with open({str(capture)!r}, "a") as output:\n        output.write(json.dumps(request) + "\\n")\n'
+        '    method = request.get("method")')
+    fake.write_text(source)
+    fake.chmod(0o700)
+    chat = ChatSessionStore(runtime_root / "chat")
+    controller = ChatRuntimeController(store=chat, codex_bin=str(fake), registry_path=service.registry_path,
+        project_contexts=ChatProjectContexts([project]))
+    service.chat_store, service.runtime_controller = chat, controller
+    try:
+        code, preview = request("/api/actions/preview", {
+            "action_kind": "goal.create", "summary": "Create a Goal",
+            "normalized_parameters": {"goal_id": "host-response", "title": "Host response",
+                "objective": "Recover the accepted first Turn", "workspace_ref": "current", "agent_id": "codex",
+                "heartbeat": {"enabled": False}, "initial_todos": ["One task"]},
+            "context": {"kind": "goal_channel"}, "idempotency_key": "host-response",
+        })
+        assert code == 201, preview
+        proposal_id = preview["proposal"]["proposal_id"]
+        target, method = (actions, "save_checkpoint") if fault == "checkpoint" else (controller, "open_session" if fault == "session" else "submit_turn")
+        original = getattr(target, method)
+        def lose_response(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if fault != "checkpoint" or kwargs.get("step") == "first_turn_started":
+                raise TimeoutError("Accepted Host response lost")
+            return result
+        monkeypatch.setattr(target, method, lose_response)
+        path = f"/api/actions/{proposal_id}/apply"
+        code, failure = request(path, {})
+        assert code == 424, failure
+        monkeypatch.setattr(target, method, original)
+        sessions = chat.list_sessions(goal_id="host-response")
+        assert len(sessions) == 1
+        session_id = sessions[0]["session_id"]
+        accepted_turn = chat.turn_for_client(session_id, f"goal-start-{proposal_id}")
+        accepted = [accepted_turn] if accepted_turn else []
+        if fault != "session":
+            assert len(accepted) == 1
+            controller.wait_for_turn(session_id=session_id, turn_id=accepted[0]["turn_id"], timeout_sec=10)
+        assert request(f"/api/actions/{proposal_id}/regenerate", {})[0] == 409
+        controller.close()
+        restart_effect_runtime()
+        controller = ChatRuntimeController(store=chat, codex_bin=str(fake), registry_path=service.registry_path,
+            project_contexts=ChatProjectContexts([project]))
+        service.runtime_controller = controller
+        code, recovered = request(path, {})
+        assert code == 202, recovered
+        resources = recovered["proposal"]["receipt"]["resource_ids"]
+        assert resources["session_id"] == session_id
+        if accepted:
+            assert resources["turn_id"] == accepted[0]["turn_id"]
+        controller.wait_for_turn(session_id=session_id, turn_id=resources["turn_id"], timeout_sec=10)
+        assert len(chat.list_sessions(goal_id="host-response")) == len(list((chat.root / "sessions" / session_id / "turns").glob("*.json"))) == 1
+        assert len([json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]) == 1
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("seed_count", [0, 2])
+def test_app_creation_selects_server_configured_non_git_workspace(environment, app, seed_count):
+    _, bootstrap, _, project, _ = environment
+    _, request, service = app
+    if seed_count == 0:
+        data = json.loads(service.registry_path.read_text())
+        data["goals"] = []
+        service.registry_path.write_text(json.dumps(data))
+    else:
+        bootstrap("other")
+    service.workspace_roots = [project]
+    assert not (project / ".git").exists()
+    code, preview = request("/api/actions/preview", {
+        "action_kind": "goal.create", "summary": "Create a Goal",
+        "normalized_parameters": {"goal_id": "non-git", "title": "Ordinary workspace",
+            "objective": "Create without a Git repository", "workspace_ref": "current", "agent_id": "codex",
+            "heartbeat": {"enabled": False}, "initial_todos": ["First task"]},
+        "context": {"kind": "goal_channel"}, "idempotency_key": "non-git",
+    })
+    assert code == 201, preview
+    assert preview["proposal"]["status"] == "preview_ready"
+    code, actual = request(f"/api/actions/{preview['proposal']['proposal_id']}/apply", {})
+    assert code == 200, actual
+    goal = next(g for g in json.loads(service.registry_path.read_text())["goals"] if g["id"] == "non-git")
+    assert Path(goal["repo"]) == project
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -291,7 +471,7 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
     from loopx.todos import add_goal_todo
 
     configure, _, marker, project, runtime = environment
-    store, request = app
+    store, request, service = app
     configure(provider, mode=mode)
     registry = project / ".loopx/registry.json"
     # Registry-relative runtime routing must agree with CLI bootstrap, regardless
@@ -391,7 +571,7 @@ def test_app_creation_cannot_adopt_a_competing_goal(environment, app, monkeypatc
     from loopx import chat_actions
 
     configure, bootstrap, marker, project, _ = environment
-    store, request = app
+    store, request, service = app
     registry = project / ".loopx/registry.json"
     other_project = project if collision == "same_workspace" else project.parent / "other"
     other_project.mkdir(exist_ok=True)

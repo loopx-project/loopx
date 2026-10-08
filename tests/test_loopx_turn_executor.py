@@ -1061,7 +1061,7 @@ def test_enabled_host_result_rejects_receipt_local_path() -> None:
         (
             "evidence_refs",
             ["file:/tmp/private-result.json"],
-            "opaque 1-192 character public-safe reference",
+            "contains a local path",
         ),
     ],
 )

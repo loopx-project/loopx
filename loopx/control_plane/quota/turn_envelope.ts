@@ -713,7 +713,15 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   const context = object(interaction.agent_context);
   if (Object.keys(context).length > 0) projection.agent_context = context;
   const workContext = object(object(interaction.agent_channel).work_context);
-  if (Object.keys(workContext).length > 0) projection.work_context = workContext;
+  const selectedTodoContextIsAlreadyInAction = workContext.complete === true
+    && workContext.selected_todo_ref === "selected_todo"
+    && Object.keys(workContext).every(field =>
+      ["complete", "selected_todo_ref", "instruction"].includes(field))
+    && (typeof object(action.selected_todo).text === "string"
+      || object(action.selected_todo).text_ref === "action.recommended_action");
+  if (Object.keys(workContext).length > 0 && !selectedTodoContextIsAlreadyInAction) {
+    projection.work_context = workContext;
+  }
   const orchestration = object(payload.task_orchestration_contract);
   if (Object.keys(orchestration).length > 0) projection.task_orchestration_contract = orchestration;
   const plan = responsePlan(interaction);
@@ -760,8 +768,11 @@ function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObj
   const context = object(projection.agent_context);
   // Guidance must not crowd out the actionable contract. Preserve a signed
   // content reference to the existing full-decision route under budget pressure.
+  // Leave room for the CLI's indented JSON and envelope metadata too: a compact
+  // payload can fit the wire-byte ceiling while its emitted form exceeds the
+  // public TurnEnvelope character budget.
   if (Object.keys(context).length > 0
-    && Buffer.byteLength(JSON.stringify(projection), "utf8") > turnEnvelopeBudgetBytes(projection) - 1_400) {
+    && Buffer.byteLength(JSON.stringify(projection), "utf8") > turnEnvelopeBudgetBytes(projection) - 2_200) {
     projection.agent_context = {
       schema_version: context.schema_version, phase: context.phase, scope: context.scope,
       target: "coordinator", authority: "guidance_only", delivery: "projected",

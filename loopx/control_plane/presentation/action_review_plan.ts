@@ -91,7 +91,64 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   decisionFrame?: DecisionReviewFrame;
   /** Recover this exact canonical command; generating a new preview loses its receipt identity. */
   retryOriginal?: true;
+  /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
+  creationProgress?: GoalCreationProgress;
 };
+
+export type GoalCreationProgress = {
+  workspaceDigest: string;
+  goalId?: string;
+  agentId?: string;
+  todoIds?: string[];
+  sessionId?: string;
+  firstTurn?: {sessionId: string; turnId: string};
+};
+
+function goalCreationProgress(proposal: Record<string, unknown>): GoalCreationProgress | undefined {
+  if (proposal.action_kind !== "goal.create") return undefined;
+  const parameters = objectValue(proposal.normalized_parameters);
+  const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
+  const workspace = objectValue(steps?.workspace_validated);
+  const digest = textValue(workspace?.workspace_digest);
+  const goalId = textValue(parameters?.goal_id);
+  if (!goalId || workspace?.outcome !== "workspace_validated" || !digest || !/^[a-f0-9]{64}$/.test(digest)) return undefined;
+  const progress: GoalCreationProgress = {workspaceDigest: digest};
+  const goal = objectValue(steps?.goal_bootstrapped);
+  const agent = objectValue(steps?.agent_bound);
+  const todos = objectValue(steps?.todos_created);
+  const session = objectValue(steps?.first_session_opened);
+  const turn = objectValue(steps?.first_turn_started);
+  if (steps?.goal_bootstrapped != null) {
+    if (goal?.outcome !== "goal_bootstrapped" || goal.goal_id !== goalId) return undefined;
+    progress.goalId = goalId;
+  }
+  if (steps?.agent_bound != null) {
+    const agentId = textValue(parameters?.agent_id);
+    if (!progress.goalId || !agentId || agent?.outcome !== "agent_bound"
+        || agent.goal_id !== goalId || agent.agent_id !== agentId) return undefined;
+    progress.agentId = agentId;
+  }
+  if (steps?.todos_created != null) {
+    const ids = todos?.todo_ids;
+    if (!progress.goalId || (textValue(parameters?.agent_id) && !progress.agentId)
+        || todos?.outcome !== "todos_created" || !Array.isArray(ids)
+        || ids.length !== (Array.isArray(parameters?.initial_todos) ? parameters.initial_todos.length : 0)
+        || !ids.every(id => textValue(id) !== null) || new Set(ids).size !== ids.length) return undefined;
+    progress.todoIds = ids as string[];
+  }
+  if (steps?.first_turn_started != null) {
+    const sessionId = textValue(turn?.session_id), turnId = textValue(turn?.turn_id);
+    if (!progress.agentId || !progress.todoIds || turn?.outcome !== "first_turn_started" || !sessionId || !turnId
+        || (steps?.first_session_opened != null && session?.session_id !== sessionId)) return undefined;
+    progress.firstTurn = {sessionId, turnId};
+  }
+  if (steps?.first_session_opened != null) {
+    const sessionId = textValue(session?.session_id);
+    if (!progress.agentId || !progress.todoIds || session?.outcome !== "first_session_opened" || !sessionId) return undefined;
+    progress.sessionId = sessionId;
+  }
+  return progress;
+}
 
 /**
  * Provider-neutral content for a confirmation card on a surface that is not the
@@ -443,12 +500,14 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const operationFrame = compileOperationReviewFrame(proposal, nowMs);
   const reviewCardFrame = compileReviewCardFrame(proposal);
   const decisionFrame = compileDecisionReviewFrame(proposal);
+  const creationProgress = goalCreationProgress(proposal);
   const finish = (state: ActionReviewState): ActionReviewPlan => ({
     ...identity,
     ...state,
     ...(operationFrame ? { operationFrame } : {}),
     ...(reviewCardFrame ? { reviewCardFrame } : {}),
     ...(decisionFrame ? { decisionFrame } : {}),
+    ...(creationProgress ? { creationProgress } : {}),
   });
   const held = (
     interaction: "gated" | "refresh" | "repair" | "pending" | "completed" | "inactive",
@@ -472,15 +531,12 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   }
   const basis = objectValue(proposal.canonical_update_basis);
   const parameters = objectValue(proposal.normalized_parameters);
-  const creationSteps = objectValue(objectValue(proposal.checkpoint)?.steps);
-  // Bootstrap may have published the registry before storage initialization
-  // failed. Keep its original request; a new preview now sees an existing Goal.
-  // Later creation steps do not yet have the same recovery guarantee.
-  if (proposal.action_kind === "goal.create" && proposal.status === "failed"
+  // Recovery keeps the frozen workspace and committed effects. The server
+  // revalidates their identity and reuses native Todo/Turn idempotency owners.
+  if (proposal.action_kind === "goal.create" && ["failed", "applying"].includes(String(proposal.status))
       && proposal.permission_classification === "durable_write"
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
-      && objectValue(creationSteps?.workspace_validated)?.outcome === "workspace_validated"
-      && creationSteps?.goal_bootstrapped == null) {
+      && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"

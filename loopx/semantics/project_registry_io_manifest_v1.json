@@ -287,7 +287,7 @@
     },
     {
       "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.agent_observation::codec_read:load_registry#1",
-      "line": 202,
+      "line": 209,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -367,7 +367,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/post_writeback_hook.py::<module>._goal_config::codec_read:load_registry#1",
-      "line": 51,
+      "line": 56,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -375,7 +375,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/post_writeback_hook.py::<module>.periodic_report_post_writeback_hooks_for_goal::codec_read:load_registry#1",
-      "line": 82,
+      "line": 87,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -391,7 +391,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/todo_source.py::<module>.read_report_todo_source::codec_read:load_registry#1",
-      "line": 37,
+      "line": 57,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1759,7 +1759,7 @@
     },
     {
       "site": "loopx/control_plane/work_items/context_readback.py::<module>._source_content::codec_read:load_registry#1",
-      "line": 24,
+      "line": 27,
       "column": 22,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2223,7 +2223,7 @@
     },
     {
       "site": "loopx/state_refresh.py::<module>.refresh_state_run::codec_read:load_registry#1",
-      "line": 818,
+      "line": 819,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

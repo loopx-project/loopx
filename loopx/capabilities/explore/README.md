@@ -214,6 +214,15 @@ must keep the same question and applicability; use a distinct id for a changed
 scope. `input_revision` is the caller's recorded revision, not a claim that the
 runtime independently verified the underlying artifact.
 
+For an **open Todo under `hard_lease`**, keep its active task lease through
+`refresh-state` and the graph/Todo-link delivery. Release it only after
+`explore_result_delivery.ok=true`. Releasing early causes attachment preflight
+to reject before primary commit; re-enter the normal guard/claim/lease path
+before retrying. The completed-Todo exception above remains limited to additive
+evidence association. An exact replay of already-successful delivery is
+readback-only and needs no new lease; unfinished delivery still requires the
+applicable claim/lease proof. None of these rules make capture mandatory.
+
 Read back with `loopx explore turn-context --goal-id <id> --agent-id <agent>`
 and `loopx explore summary --goal-id <id>`. The bounded next-turn view retains
 up to three attached result summaries, including their applicability and input

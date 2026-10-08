@@ -35,6 +35,10 @@ def test_settlement_attachment_preserves_commands_and_off_plan(tmp_path, mode):
         assert attachment["inline_field"] == "explore_result"
         assert attachment["attachment_schema"] == "explore_result_attachment_v0"
         assert "Routine work needs no attachment" in attachment["guidance"]
+        assert "open Todo under hard_lease" in attachment["guidance"]
+        assert "release only after explore_result_delivery.ok=true" in attachment["guidance"]
+        assert "readback-only and needs no new lease" in attachment["guidance"]
+        assert "unfinished delivery still requires the applicable claim/lease proof" in attachment["guidance"]
         assert attachment["path_delta_attachment_schema"] == "explore_result_from_path_delta_v0"
         assert "observation" not in attachment["path_delta_attachment_template"]
         assert projected == before  # Including command, order, receipts and gates.

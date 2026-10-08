@@ -53,6 +53,7 @@ from .turn_cadence import managed_cadence_start
 from .turn_decision import collect_turn_status_payload
 from .turn_dsh_host import build_dsh_host_runner
 from .turn_rendering import build_turn_error_payload
+from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
 from .turn_todo_writeback import (
     write_turn_repair_update,
     write_turn_validated_completion,
@@ -863,7 +864,7 @@ def execute_turn_run_once(
         )
 
         execution_started = bool(args.execute)
-        return run_loopx_turn_once(
+        result = run_loopx_turn_once(
             payload,
             host_argv=raw_argv,
             host_runner=host_runner,
@@ -895,6 +896,13 @@ def execute_turn_run_once(
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
         )
+        if args.execute:
+            result.update(drain_committed_turn_post_writeback_hooks(
+                registry_path=registry_path, runtime_root=runtime_root,
+                identity=settlement_identity, goal_ref=goal_ref,
+                available_capabilities=args.available_capabilities,
+            ))
+        return result
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure
         from ..usage_ping import capture_failure
 

@@ -261,16 +261,23 @@ function validateScope(role: string, taskClass: string | null, scope: Scope, age
 }
 
 function planScope(command: string, role: string, taskClass: string | null, todo: JsonObject,
-  intent: JsonObject, agents: string[], goalId: string): Scope {
+  intent: JsonObject, agents: string[], goalId: string): Scope & {
+    actor_agent_id: string | null; claimed_by: string | null;
+  } {
   const registered = (field: string): string | null => {
     if (!intent[field]) return null;
     const value = normalizeTodoAgent(intent[field], field);
+    if (command === "create" && !agents.length && ["actor_agent_id", "claimed_by"].includes(field)) {
+      fail(`${field}='${value}' cannot be used because goal '${goalId}' ` +
+      "has no coordination.registered_agents list. Register this peer identity first: " +
+      `loopx configure-goal --goal-id ${goalId} --registered-agent ${value} --execute`);
+    }
     if (!value || !agents.includes(value)) fail(`${field}='${value}' is not registered for goal '${goalId}'; registered_agents=${agents.join(", ")}`);
     return value;
   };
   const requestedBound = registered("bound_agent");
   const requestedBlocks = registered("blocks_agent");
-  registered("claimed_by");
+  const claim = registered("claimed_by");
   for (const excluded of (intent.excluded_agents ?? []) as string[]) {
     if (!agents.includes(excluded)) fail(`excluded_agents='${excluded}' is not registered for goal '${goalId}'`);
   }
@@ -311,7 +318,8 @@ function planScope(command: string, role: string, taskClass: string | null, todo
     if (requestedBound || intent.goal_bound) fail("bound_agent and goal_bound are only valid for user todos");
     bound = null; goal = null;
   }
-  return {bound_agent: bound, goal_bound: goal, blocks_agent: blocks, global_gate: global};
+  return {bound_agent: bound, goal_bound: goal, blocks_agent: blocks, global_gate: global,
+    actor_agent_id: actor, claimed_by: claim};
 }
 
 export function planTodoAuthoringScope(value: unknown): JsonObject {
@@ -341,7 +349,11 @@ export function planTodoAuthoringScope(value: unknown): JsonObject {
   if (command === "create" && status === "done") fail("todo add cannot create completed work; add it open and use `loopx todo complete`");
   if (command === "update" && role === "agent" && intent.status && status === "done") fail("agent todo completion must use complete_goal_todo " +
     "(CLI: `loopx todo complete`) so completion policy, successor, and no-follow-up contracts are enforced");
-  const scope = planScope(command ?? "", role, taskClass, todo, intent, agents, string(request.goal_id, "goal_id") ?? "");
+  // Create owns the draft class check as well as the resolved-scope invariant.
+  // Keep its diagnostic before scope inference without a separate caller RPC.
+  if (command === "create") requireTaskClass(role, taskClass, intent.blocks_agent, intent.global_gate);
+  const {actor_agent_id: actor, claimed_by: claim, ...scope} = planScope(
+    command ?? "", role, taskClass, todo, intent, agents, string(request.goal_id, "goal_id") ?? "");
   const exclusions = intent.excluded_agents ?? todo.excluded_agents;
   const ownership = todoOwnershipViolations(role, intent.clear_claim ? null : intent.claimed_by || todo.claimed_by, exclusions);
   if (TODO_OWNERSHIP_INTENT_FIELDS.some(field => intent[field] != null && intent[field] !== false)
@@ -363,6 +375,7 @@ export function planTodoAuthoringScope(value: unknown): JsonObject {
   const effectiveResume = intent.clear_resume_when ? null : resume || existingResume;
   if (status === "deferred" && !effectiveResume) fail("transition to deferred requires --resume-when with a supported condition");
   return {schema_version: TODO_AUTHORING_SCOPE_RESULT_SCHEMA, ...scope, task_class: taskClass,
+    ...(command === "create" ? {actor_agent_id: actor, claimed_by: claim} : {}),
     status, normalized_resume_when: resume, effective_resume_when: effectiveResume,
     clear_user_binding: role !== "user" && Boolean(todo.bound_agent || todo.goal_bound != null)};
 }

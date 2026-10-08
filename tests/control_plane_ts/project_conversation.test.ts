@@ -36,6 +36,7 @@ test("workspace-only filesystem scope is host-owned, persisted and narrower than
     assert.deepEqual(selected.context, scoped);
     const identity = projectConversationIdentity({context: selected.context}) as any;
     assert.equal(identity.host_config.default_permissions, identity.permissions_profile);
+    assert.equal(identity.host_store_key, `${context.project_ref}.local`);
     const profile = identity.host_config.permissions[identity.permissions_profile];
     assert.equal(profile.filesystem[":root"], "deny");
     assert.equal(profile.filesystem[":workspace_roots"]["."], grant === "workspace_write" ? "write" : "read");
@@ -55,4 +56,18 @@ test("workspace-only filesystem scope is host-owned, persisted and narrower than
   assert.throws(() => projectConversationIdentity({context: {...context, filesystem_scope: "anything"}}));
   assert.equal(projectConversationIdentity({context}).permissions_profile, undefined);
   assert.equal(projectConversationIdentity({context}).host_config, undefined);
+  assert.equal(projectConversationIdentity({context}).host_store_key, undefined);
+});
+
+test("private native store follows the authorized workspace and App owner, not a source topic or grant", () => {
+  const bound = {...context, audience: "bound_owner", filesystem_scope: "workspace_only",
+    binding_id: "b".repeat(24), provider_ref: "c".repeat(24), operator_ref: "d".repeat(24), source_ref: "e".repeat(24)};
+  const key = projectConversationIdentity({context: bound}).host_store_key;
+  assert.equal(key, [bound.project_ref, bound.binding_id, bound.provider_ref, bound.operator_ref].join("."));
+  for (const patch of [{source_ref: "f".repeat(24)}, {grant: "workspace_write"}]) {
+    assert.equal(projectConversationIdentity({context: {...bound, ...patch}}).host_store_key, key);
+  }
+  for (const field of ["project_ref", "binding_id", "provider_ref", "operator_ref"]) {
+    assert.notEqual(projectConversationIdentity({context: {...bound, [field]: "f".repeat(24)}}).host_store_key, key);
+  }
 });

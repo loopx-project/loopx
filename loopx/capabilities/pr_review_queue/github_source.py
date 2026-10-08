@@ -14,6 +14,8 @@ from .selection_execution import normalize_fresh_audit_exact_heads
 GitHubJsonRunner = Callable[..., Any]
 
 DETAIL_FIELDS = (
+    "headRefOid",
+    "baseRefOid",
     "body",
     "files",
     "reviewDecision",
@@ -143,6 +145,14 @@ def attach_pr_review_details(
         return False
     if not isinstance(details, dict) or any(
         key not in details for key in detail_fields
+    ):
+        return False
+    # Query the version alongside computed merge fields: an unversioned
+    # GitHub detail query can return UNKNOWN while readiness has known state.
+    # Never combine details from a different head/base with the list snapshot.
+    if any(
+        not row.get(key) or details[key] != row[key]
+        for key in ("headRefOid", "baseRefOid")
     ):
         return False
     detail_files = details["files"]

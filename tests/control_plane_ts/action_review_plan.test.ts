@@ -12,17 +12,54 @@ test("interrupted Goal bootstrap retries its original identity before downstream
   const proposal = {proposal_id: "creation", expected_state_fingerprint: "original-registry",
     action_kind: "goal.create", permission_classification: "durable_write", status: "failed",
     normalized_parameters: {goal_id: "new-goal"},
-    checkpoint: {steps: {workspace_validated: {outcome: "workspace_validated"}}}};
+    checkpoint: {steps: {workspace_validated: {outcome: "workspace_validated", workspace_digest: "a".repeat(64)}}}};
   const plan = compileActionReviewPlan(proposal);
   assert.equal(plan.reason, "goal_creation_retry");
   assert.equal(plan.retryOriginal, true);
   assert.equal(plan.canApply, true);
   assert.equal(plan.proposalId, "creation");
-  for (const change of [{checkpoint: null}, {status: "applying"}, {status: "gated"}, {status: "stale"},
+  assert.equal(compileActionReviewPlan({...proposal, status: "applying"}).retryOriginal, true);
+  for (const change of [{checkpoint: null}, {status: "gated"}, {status: "stale"},
     {status: "applied", receipt: {projection_verified: true}}, {action_kind: "goal.update"},
     {permission_classification: "protected"}, {proposal_id: ""}, {normalized_parameters: {}},
-    {checkpoint: {steps: {...proposal.checkpoint.steps, goal_bootstrapped: {goal_id: "new-goal"}}}}]) {
+    {checkpoint: {steps: {...proposal.checkpoint.steps, goal_bootstrapped: {goal_id: "different-goal"}}}}]) {
     assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+});
+
+test("post-commit creation projects its effects without certifying Goal completion", () => {
+  const steps = {workspace_validated: {outcome: "workspace_validated", workspace_digest: "a".repeat(64)},
+    goal_bootstrapped: {outcome: "goal_bootstrapped", goal_id: "new-goal"},
+    agent_bound: {outcome: "agent_bound", goal_id: "new-goal", agent_id: "codex"},
+    todos_created: {outcome: "todos_created", todo_ids: ["todo-original"]}};
+  const proposal = {proposal_id: "creation", expected_state_fingerprint: "registry",
+    action_kind: "goal.create", permission_classification: "durable_write", status: "failed",
+    normalized_parameters: {goal_id: "new-goal", agent_id: "codex", initial_todos: ["One task"]}, checkpoint: {steps}};
+  const plan = compileActionReviewPlan(proposal);
+  assert.equal(plan.retryOriginal, true);
+  assert.notEqual(plan.interaction, "completed");
+  assert.equal(plan.creationProgress?.firstTurn, undefined);
+  assert.deepEqual(plan.creationProgress, {workspaceDigest: "a".repeat(64), goalId: "new-goal", agentId: "codex", todoIds: ["todo-original"]});
+  const withSession = {...steps, first_session_opened: {outcome: "first_session_opened", session_id: "session"}};
+  assert.equal(compileActionReviewPlan({...proposal, checkpoint: {steps: withSession}}).creationProgress?.sessionId, "session");
+  const started = {...withSession, first_turn_started: {outcome: "first_turn_started", session_id: "session", turn_id: "turn"}};
+  assert.deepEqual(compileActionReviewPlan({...proposal, checkpoint: {steps: started}}).creationProgress?.firstTurn,
+    {sessionId: "session", turnId: "turn"});
+  assert.equal(compileActionReviewPlan({...proposal, checkpoint: {steps: {...started,
+    first_turn_started: {...started.first_turn_started, session_id: "other"}}}}).creationProgress, undefined);
+  for (const status of ["gated", "stale", "rejected"]) {
+    const held = compileActionReviewPlan({...proposal, status});
+    assert.equal(held.retryOriginal, undefined);
+    assert.equal(held.creationProgress?.goalId, "new-goal");
+  }
+  for (const invalid of [{...steps, goal_bootstrapped: {...steps.goal_bootstrapped, goal_id: "other"}},
+    {...steps, agent_bound: {...steps.agent_bound, agent_id: "other"}},
+    {...steps, todos_created: {...steps.todos_created, todo_ids: []}},
+    {...steps, workspace_validated: {...steps.workspace_validated, workspace_digest: ""}},
+    {...steps, first_turn_started: {outcome: "first_turn_started", session_id: "session"}}]) {
+    const refused = compileActionReviewPlan({...proposal, checkpoint: {steps: invalid}});
+    assert.equal(refused.retryOriginal, undefined);
+    assert.equal(refused.creationProgress, undefined);
   }
 });
 

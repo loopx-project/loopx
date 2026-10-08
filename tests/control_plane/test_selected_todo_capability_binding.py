@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hashlib import sha256
+
 from loopx.control_plane.quota.selected_todo_projection import (
     selected_todo_projection,
 )
@@ -21,9 +23,7 @@ def test_selected_todo_preserves_capability_binding_ref() -> None:
     )
 
     assert selected is not None
-    assert selected["capability_binding_ref"] == (
-        "issue-fix:feasibility-a1b2c3d4"
-    )
+    assert selected["capability_binding_ref"] == ("issue-fix:feasibility-a1b2c3d4")
 
 
 def test_selected_todo_preserves_task_domain() -> None:
@@ -99,3 +99,22 @@ def test_selected_deferred_resume_adds_missing_content_revision() -> None:
 
     assert selected is not None
     assert selected["content_revision"] == todo_text_content_revision(source_text)
+
+def test_selected_todo_snapshot_hash_covers_unbounded_source_body() -> None:
+    full_text = "Preserve the complete acceptance details. " * 12
+    action = {
+        "todo_id": "todo_long_body",
+        "text": full_text,
+        "_context_text_sha256": sha256(full_text.encode("utf-8")).hexdigest(),
+    }
+    selected = selected_todo_projection(
+        agent_lane_next_action=action,
+        work_lane_contract=None,
+    )
+
+    assert selected is not None
+    assert selected["text"] != full_text
+    assert (
+        selected["_context_text_sha256"]
+        == sha256(full_text.encode("utf-8")).hexdigest()
+    )

@@ -81,7 +81,11 @@ SURFACE_BUDGETS = {
         "owner": "operator dashboard",
         "consumer": "render first-screen operator state",
         "cold_path": "history, run artifacts, or project-local adapter output",
-        "max_json_chars": 22_500,
+        # Selected-work freshness added seven 95-character digest fields to
+        # this unchanged fixture (21,895 -> 22,560). Keep the internal source
+        # revisions: quota consumes this status projection before its own CLI
+        # compaction. The contract records why modest headroom is appropriate.
+        "max_json_chars": 23_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },

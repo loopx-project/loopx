@@ -423,6 +423,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.todo_archive_ack", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({acknowledgeLocalCoordinationTodoArchive}) => acknowledgeLocalCoordinationTodoArchive)],
     ["coordination.local_authority.todo_read", lazyHandler(() => import("./coordination/local_authority_read.ts"), ({readLocalCoordinationTodo}) => readLocalCoordinationTodo)],
     ["coordination.local_authority.operation_receipt", lazyHandler(() => import("./coordination/local_authority_read.ts"), ({readLocalCoordinationOperationReceipt}) => readLocalCoordinationOperationReceipt)],
+    ["coordination.local_authority.todo_source", lazyHandler(() => import("./coordination/local_authority_read.ts"), ({readLocalCoordinationTodoSource}) => readLocalCoordinationTodoSource)],
     ["coordination.ownership_observation", lazyHandler(() => import("./coordination/ownership_observation.ts"), ({projectOwnershipObservation}) => projectOwnershipObservation)],
     ["coordination.local_authority.ownership_observation", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({observeLocalCoordinationOwnership}) => observeLocalCoordinationOwnership)],
     ["coordination.local_authority.todo_snapshot_page", lazyHandler(() => import("./coordination/canonical_snapshot_page.ts"), ({readCanonicalSnapshotPage}) => readCanonicalSnapshotPage)],

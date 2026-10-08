@@ -76,6 +76,7 @@ def _rows() -> list[dict[str, object]]:
             "state": "OPEN",
             "changedFiles": 1,
             "headRefOid": HEAD_1,
+            "baseRefOid": "c" * 40,
             "updatedAt": "2026-08-12T00:00:00Z",
         },
         {
@@ -84,6 +85,7 @@ def _rows() -> list[dict[str, object]]:
             "state": "OPEN",
             "changedFiles": 1,
             "headRefOid": HEAD_2,
+            "baseRefOid": "c" * 40,
             "updatedAt": "2026-08-12T00:00:00Z",
         },
     ]
@@ -111,6 +113,8 @@ def _fake_run_gh_json(args: list[str], *, cwd: Path | None = None):
             ]
         )
         return {
+            "headRefOid": HEAD_1 if number == "1" else HEAD_2,
+            "baseRefOid": "c" * 40,
             "body": f"Body for PR {number}",
             "files": [
                 {
@@ -172,7 +176,7 @@ def test_pr_list_keeps_nested_details_in_bounded_per_pr_reads(monkeypatch) -> No
     assert sorted(args[2] for args in detail_calls) == ["1", "2"]
     assert all(
         args[args.index("--json") + 1]
-        == "body,files,reviewDecision,mergeStateStatus,mergeable,createdAt,commits,reviews,statusCheckRollup"
+        == "headRefOid,baseRefOid,body,files,reviewDecision,mergeStateStatus,mergeable,createdAt,commits,reviews,statusCheckRollup"
         for args in detail_calls
     )
     assert rows[0]["body"] == "Body for PR 1"
@@ -713,6 +717,92 @@ def test_goal_readiness_observation_suppresses_only_unchanged_exact_head(
         changed_item["merge_readiness_observation"]["observation_state"]
         == "material_transition"
     )
+
+
+@pytest.mark.parametrize("wait_for_ci", [False, True])
+def test_live_queue_reuses_readiness_with_versioned_detail_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, wait_for_ci: bool,
+) -> None:
+    pr = _merge_ready_pr()
+    pr.update(baseRefOid="c" * 40, mergeable="MERGEABLE", changedFiles=1)
+    calls: list[list[str]] = []
+
+    def github(args: list[str], *, cwd: Path | None = None):
+        del cwd
+        calls.append(args)
+        fields = args[args.index("--json") + 1].split(",")
+        result = {key: pr.get(key) for key in fields}
+        if args[:2] == ["pr", "list"]:
+            return [result]
+        # A detail request without the version returned UNKNOWN in the real
+        # provider, while the versioned readiness query returned known state.
+        if "headRefOid" not in fields:
+            result.update(mergeStateStatus="UNKNOWN", mergeable="UNKNOWN")
+        return result
+
+    monkeypatch.setattr(pr_review_module, "_run_gh_json", github)
+    monkeypatch.setattr(merge_readiness_module, "_run_gh_json", github)
+    monkeypatch.setattr(pr_review_cli_module, "resolve_current_github_login", lambda: "maintainer")
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_review_thread_summary",
+                        lambda **kwargs: _complete_review_threads())
+    registry = _goal_registry(tmp_path)
+    goal = json.loads(registry.read_text())
+    goal["goals"][0]["control_plane"] = {"pull_request_review": {
+        "schema_version": "pull_request_review_goal_configuration_v0",
+        "wait_for_ci": wait_for_ci,
+    }}
+    registry.write_text(json.dumps(goal))
+
+    def run(args: SimpleNamespace) -> dict[str, object]:
+        out: list[dict[str, object]] = []
+        assert pr_review_cli_module.handle_pr_review_command(
+            args, runtime_root=tmp_path, registry_path=registry,
+            output_format=lambda _: "json", print_payload=_capture_payload(out),
+        ) == 0
+        return out[0]
+
+    readiness = run(_merge_readiness_args())
+    assert readiness["ready"] is True
+    queue = run(_merge_readiness_args(check_merge_readiness=None))
+    assert queue["result_completeness"]["complete"] is True
+    row = queue["pull_requests"][0]
+    assert row["merge_state"] == "CLEAN"
+    assert row["mergeability"] == "MERGEABLE"
+    assert row["review_action_kind"] is None
+    assert row["merge_readiness_observation"]["observation_state"] == "observed_unchanged"
+    assert queue["review_sequence"] == []
+    assert all(("statusCheckRollup" in call[call.index("--json") + 1]) is wait_for_ci
+               for call in calls if call[:2] == ["pr", "view"])
+
+
+@pytest.mark.parametrize("field", ["headRefOid", "baseRefOid"])
+@pytest.mark.parametrize("exact_target", [False, True])
+def test_detail_version_drift_rejects_mixed_pr_snapshot(
+    monkeypatch: pytest.MonkeyPatch, field: str, exact_target: bool,
+) -> None:
+    listed = _rows()[0] | {"baseRefOid": "c" * 40}
+
+    def github(args: list[str], *, cwd: Path | None = None):
+        if args[:2] == ["pr", "list"]:
+            return [dict(listed)]
+        fields = args[args.index("--json") + 1].split(",")
+        if "files" not in fields:
+            return dict(listed)
+        return _fake_run_gh_json(args, cwd=cwd) | {
+            "headRefOid": HEAD_1, "baseRefOid": "c" * 40, field: "d" * 40,
+        }
+
+    if exact_target:
+        with pytest.raises(RuntimeError, match="detail read was incomplete"):
+            github_source_module.scan_github_pull_request_targets(
+                repository="owner/repo", exact_heads=[f"1@{HEAD_1}"], run_gh_json=github,
+            )
+    else:
+        monkeypatch.setattr(pr_review_module, "_run_gh_json", github)
+        scan = pr_review_module.scan_github_pull_requests(repo="owner/repo", limit=10)
+        assert scan["complete"] is False
+        assert scan["states"][0]["detail_read_failures"] == 1
+        assert "files" not in scan["pull_requests"][0]
 
 
 def test_head_drift_observation_does_not_suppress_the_new_remote_head(

@@ -16,6 +16,23 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("only a current verified private steward binding proves the machine owner audience", () => {
+  const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+  const next = planConversationBinding({...request, binding: steward}).state;
+  const use = {current: next, binding_id: row.binding_id, source_ref: "e".repeat(24),
+    sender_ref: row.operator_ref, private_human_message: true, observation, available_projects: [project]};
+  assert.equal(resolveBoundConversation(use).owner_manager_audience, true);
+  assert.equal(resolveBoundConversation({...use,
+    available_projects: [{...project, filesystem_scope: "workspace_only"}]}).owner_manager_audience, false);
+  const projectState = planConversationBinding(request).state;
+  assert.equal(resolveBoundConversation({...use, current: projectState}).owner_manager_audience, false);
+  for (const denied of [{private_human_message: false}, {sender_ref: "f".repeat(24)},
+    {observation: {...observation, provider_ref: "f".repeat(24)}},
+    {observation: {...observation, verified: false}}, {available_projects: []}, {current}]) {
+    assert.throws(() => resolveBoundConversation({...use, ...denied}));
+  }
+});
+
 test("images use the managed conversation and never disappear into commands or an attached host", () => {
   const request = {request_ref: "e".repeat(24), command: null};
   assert.equal(planBoundConversationRequest({request, current_session: null, attachment_count: 1}).operation, "admit_turn");

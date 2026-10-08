@@ -422,6 +422,7 @@ def _build_state_refresh_output_projections(
         "delivery_outcome",
         "delivery_workspace",
         "settlement_identity",
+        "todo_source",
         "blocked_retry",
         "refresh_recovery",
         "turn_instance_id",
@@ -1279,6 +1280,25 @@ def refresh_state_run(
             settlement_identity=settlement_identity,
             todo_fields=todo_fields,
         )
+        source_snapshot = (
+            prior_writeback_run.get("todo_source")
+            if checkpoint_supplement and prior_writeback_run
+            else planning_source.canonical_snapshot
+        )
+        if isinstance(source_snapshot, dict) and all(
+            isinstance(source_snapshot.get(key), str) and source_snapshot[key]
+            for key in (
+                "source_authority", "store_identity", "provider_revision", "cursor"
+            )
+        ):
+            # Retain the source actually consumed by planning, before append.
+            # A later optional hook must never substitute the current Todo head.
+            record["todo_source"] = {
+                key: source_snapshot[key]
+                for key in (
+                    "source_authority", "store_identity", "provider_revision", "cursor"
+                )
+            }
         if blocked_retry is not None:
             record["blocked_retry"] = blocked_retry
         if delivery_workspace_causality:

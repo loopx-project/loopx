@@ -81,6 +81,25 @@ def test_successor_replan_settlement_derives_stage_completion() -> None:
     assert receipt["stage_identity"].startswith("stage-")
 
 
+@pytest.mark.parametrize("ack_obligation_id", ["replan-1234567890abcdef", "replan-fedcba0987654321", "", None])
+def test_native_successor_requires_the_same_accepted_obligation(ack_obligation_id) -> None:
+    values = _successor_inputs()
+    values["replan_obligation"].pop("frontier_identity")
+    values["replan_obligation"]["obligation_id"] = "replan-1234567890abcdef"
+    values["replan_ack"].pop("frontier_identity")
+    values["replan_ack"]["semantic_delta"]["obligation_id"] = ack_obligation_id
+    receipt = derive_periodic_report_stage_completion(
+        closed_vision=_vision(state="vision_closed", generated_at="2026-08-29T10:00:00Z"),
+        outcome_checkpoint=_checkpoint(),
+        **values,
+    )
+    if ack_obligation_id == "replan-1234567890abcdef":
+        assert receipt is not None
+        assert receipt["frontier_identity"] == ack_obligation_id
+    else:
+        assert receipt is None
+
+
 def test_other_agent_only_frontier_cannot_settle_current_agent_stage() -> None:
     values = _successor_inputs()
     values["successor_frontier"] = {
@@ -218,6 +237,66 @@ def test_durable_run_history_derives_successor_boundary() -> None:
     assert receipt["completed_at"] == "2026-08-29T11:00:00Z"
 
 
+@pytest.mark.parametrize("later_generated_at", [None, "2026-08-29T11:00:00Z", "2026-08-29T12:00:00Z"])
+def test_native_ack_is_bound_to_its_successor_vision(later_generated_at) -> None:
+    values = _successor_inputs()
+    values["replan_obligation"].pop("frontier_identity")
+    values["replan_obligation"]["obligation_id"] = "replan-1234567890abcdef"
+    values["replan_ack"].pop("frontier_identity")
+    values["replan_ack"]["semantic_delta"]["obligation_id"] = "replan-1234567890abcdef"
+    runs = [
+        {"agent_vision": values["successor_vision"], "autonomous_replan_ack": values["replan_ack"]},
+        {"agent_vision": _vision(state="vision_closed", generated_at="2026-08-29T10:00:00Z"),
+         "vision_checkpoint": _checkpoint()},
+    ]
+    if later_generated_at is not None:
+        later_vision = _vision(state="active", generated_at=later_generated_at)
+        later_vision["vision_patch"] = {"acceptance_summary": "A separate unacknowledged edit."}
+        runs.insert(0, {"agent_vision": later_vision})
+    receipt = derive_periodic_report_stage_completion_from_runs(
+        latest_runs=runs, agent_id="case-analyst",
+        goal_frontier_projection=values["successor_frontier"],
+        settled_replan_obligation=values["replan_obligation"],
+        settled_replan_ack=values["replan_ack"],
+    )
+    assert (receipt is None) is (later_generated_at is not None)
+
+
+@pytest.mark.parametrize("foreign_evidence", ["different_delta", "run_agent", "ack_agent"])
+def test_native_successor_cannot_borrow_another_writebacks_ack(foreign_evidence) -> None:
+    from copy import deepcopy
+
+    values = _successor_inputs()
+    values["replan_obligation"].pop("frontier_identity")
+    values["replan_obligation"]["obligation_id"] = "replan-1234567890abcdef"
+    values["replan_ack"].pop("frontier_identity")
+    values["replan_ack"]["semantic_delta"]["obligation_id"] = "replan-1234567890abcdef"
+    later = {
+        "agent_vision": _vision(state="active", generated_at="2026-08-29T12:00:00Z"),
+        "autonomous_replan_ack": deepcopy(values["replan_ack"]),
+    }
+    if foreign_evidence == "different_delta":
+        later["autonomous_replan_ack"]["semantic_delta"].update(
+            trigger_kinds=["periodic_review_due"], outcomes=["new_surface"],
+        )
+    elif foreign_evidence == "run_agent":
+        later["agent_id"] = "another-agent"
+    else:
+        later["autonomous_replan_ack"]["agent_id"] = "another-agent"
+    assert derive_periodic_report_stage_completion_from_runs(
+        latest_runs=[
+            later,
+            {"agent_vision": values["successor_vision"], "autonomous_replan_ack": values["replan_ack"]},
+            {"agent_vision": _vision(state="vision_closed", generated_at="2026-08-29T10:00:00Z"),
+             "vision_checkpoint": _checkpoint()},
+        ],
+        agent_id="case-analyst",
+        goal_frontier_projection=values["successor_frontier"],
+        settled_replan_obligation=values["replan_obligation"],
+        settled_replan_ack=values["replan_ack"],
+    ) is None
+
+
 def test_durable_run_history_derives_terminal_boundary_without_successor() -> None:
     projection = {
         "terminal_state": {
@@ -244,6 +323,79 @@ def test_durable_run_history_derives_terminal_boundary_without_successor() -> No
 
     assert receipt is not None
     assert receipt["transition"] == "goal_terminal"
+
+
+@pytest.mark.parametrize(
+    ("newer_agent", "newer_at", "expected"),
+    [
+        ("case-analyst", "2026-08-29T11:00:00Z", False),
+        ("case-analyst", "2026-08-29T10:00:00Z", False),
+        ("peer-analyst", "2026-08-29T11:00:00Z", True),
+    ],
+)
+def test_terminal_stage_requires_the_current_agents_closed_vision(
+    newer_agent: str, newer_at: str, expected: bool,
+) -> None:
+    newer = _vision(state="active", generated_at=newer_at)
+    newer["agent_id"] = newer_agent
+    receipt = derive_periodic_report_stage_completion_from_runs(
+        latest_runs=[
+            {"agent_vision": newer},
+            {"agent_vision": _vision(
+                state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+            ), "vision_checkpoint": _checkpoint()},
+        ],
+        agent_id="case-analyst",
+        goal_frontier_projection={"terminal_state": {
+            "schema_version": "goal_terminal_state_v0", "kind": "no_followup",
+            "derived": True, "source": "validated_goal_closure",
+        }},
+    )
+    assert (receipt is not None) is expected
+
+
+def test_active_vision_cannot_settle_an_older_terminal_stage() -> None:
+    projection = {
+        "terminal_state": {
+            "schema_version": "goal_terminal_state_v0",
+            "kind": "no_followup",
+            "derived": True,
+            "source": "validated_goal_closure",
+        }
+    }
+    assert derive_periodic_report_stage_completion_from_runs(
+        latest_runs=[
+            {"agent_vision": _vision(
+                state="active", generated_at="2026-08-29T11:00:00Z"
+            )},
+            {"agent_vision": _vision(
+                state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+            ), "vision_checkpoint": _checkpoint()},
+        ],
+        agent_id="case-analyst",
+        goal_frontier_projection=projection,
+    ) is None
+
+
+@pytest.mark.parametrize("newer_at", ["2026-08-29T10:00:00Z", "2026-08-29T12:00:00Z"])
+@pytest.mark.parametrize("satisfied", [False, True])
+def test_terminal_stage_cannot_skip_a_newer_nonmaterial_closed_vision(
+    newer_at: str, satisfied: bool,
+) -> None:
+    receipt = derive_periodic_report_stage_completion_from_runs(
+        latest_runs=[
+            {"agent_vision": _vision(state="vision_closed", generated_at=newer_at),
+             "vision_checkpoint": {"satisfied": satisfied, "decision": "patched", "triggers": []}},
+            {"agent_vision": _vision(state="vision_closed", generated_at="2026-08-29T10:00:00Z"),
+             "vision_checkpoint": _checkpoint()},
+        ],
+        agent_id="case-analyst",
+        goal_frontier_projection={"terminal_state": {
+            "schema_version": "goal_terminal_state_v0", "kind": "no_followup",
+            "derived": True, "source": "validated_goal_closure",
+        }},
+    )
+    assert receipt is None
 
 
 def test_stage_receipt_flattens_to_public_rollout_details() -> None:

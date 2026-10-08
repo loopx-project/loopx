@@ -112,9 +112,19 @@ inherited variables. Windows execution remains unqualified by the live probes.
 The narrowed profile also disables automatic skill catalog injection and project
 instruction discovery. The agent can read workspace-owned `AGENTS.md` and skills
 through its bounded file tools. Ordinary project Sessions keep native instruction
-and skill discovery. This does not disable explicit host skill resolution, clear
-old conversation context or suppress account-level instructions supplied by the
-host; those remain separate privacy checks.
+and skill discovery. Workspace-only native Sessions now also launch with a private
+`HOME`/`CODEX_HOME`, a minimal process environment and file-based native credential
+storage. Effective MCP servers, including managed and project configuration layers,
+are disabled before the thread opens. Core derives the store identity from the
+authorized workspace and App/owner binding; topics retain independent threads
+without requiring a new login for every message. Default `host_default` Sessions
+keep the account's existing native configuration and authentication.
+
+No authentication or conversation history is copied into the new store. Log in
+through the native Codex flow with `CODEX_HOME` set to the Session's recorded home.
+Existing workspace-only Sessions created with a shared home cannot silently
+resume or migrate: choose a new Session explicitly after configuring its login.
+Ordinary legacy Sessions keep their existing home and exact-thread resume behavior.
 
 The adapter sends the Core-owned named permissions profile, never a simultaneous
 legacy sandbox override, on start and exact-thread resume. It verifies the returned
@@ -124,10 +134,12 @@ permissions. Other executors are rejected for this scope. The native helper uses
 the canonical Codex executable so a home-directory symlink needs no read grant.
 
 This is a filesystem-tool boundary, not complete community Bot isolation. It does
-not authorize group audiences or isolate host-loaded instructions, skills, MCP
-credentials, dynamic tools or a private registry. Those boundaries need their own
-qualification before a public group is enabled; a successful file probe is not
-public Bot acceptance.
+not authorize group audiences, erase historical context, isolate arbitrary host
+dynamic tools or make a checkout containing private files safe to publish. Group
+admission, a clean public workspace, supported independent authentication and live
+privacy/interaction qualification remain required before public enablement; native
+context isolation and a successful file probe are prerequisites, not public Bot
+acceptance.
 
 Typed Core/HTTP/native-host regressions qualify default writes, explicit read-only,
 workspace identity, independent App grants, old-Session rejection and exact-thread

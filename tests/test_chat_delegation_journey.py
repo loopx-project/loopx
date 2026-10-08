@@ -132,6 +132,12 @@ def test_correction_and_late_draft_return_to_original_conversation(
                 timeout_sec=10,
             )
             assert completed["status"] == "completed", completed
+            reply = completed["response"]["message"]
+            assert "**已转交给 `writer`。**" in reply
+            assert drafts[index][1] in reply
+            assert "是否已开始处理尚未核实" in reply
+            if index:
+                assert "Chinese first" in reply and "Do not publish" in reply
             receipt = completed["response"]["context_handoff_receipt"]
             assert receipt["agent_id"] == "writer"
             assert not completed["response"]["proposals"]

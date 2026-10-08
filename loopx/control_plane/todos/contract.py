@@ -311,18 +311,6 @@ def normalize_removed_todo_continuation_policy(value: Any) -> str | None:
     return None
 
 
-def resolve_todo_continuation_policy(
-    value: Any,
-    *,
-    action_kind: Any = None,
-) -> TodoContinuationPolicy:
-    del action_kind
-    explicit = normalize_todo_continuation_policy(value)
-    if explicit:
-        return TodoContinuationPolicy(explicit)
-    return TodoContinuationPolicy.INDEPENDENT_HANDOFF
-
-
 def normalize_todo_claimed_by(value: Any) -> str | None:
     candidate = compact_todo_text(value).lower().replace(" ", "-")
     if candidate and TODO_AGENT_CLAIM_PATTERN.match(candidate):

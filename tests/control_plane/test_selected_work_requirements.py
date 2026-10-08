@@ -14,12 +14,33 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+from loopx.control_plane.work_items.context_readback import _source_content
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
 from loopx.control_plane.turn_driver.codex_cli import _prompt
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+
+def test_legacy_selected_todo_requires_same_goal_state_revision(tmp_path: Path) -> None:
+    state = tmp_path / "state.md"
+    state.write_text(
+        "---\nstatus: active\n---\n# Goal\n## Agent Todo\n"
+        "- [ ] Keep the selected task current.\n"
+        "  <!-- loopx:todo todo_id=todo_current status=open task_class=advancement_task -->\n"
+    )
+
+    with pytest.raises(ValueError, match="changed after the Goal state read"):
+        _source_content(
+            {"source": "selected_todo"},
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+            goal_id="goal-current",
+            todo_id="todo_current",
+            state_file=state,
+            expected_state_revision="sha256:stale",
+        )
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
@@ -153,7 +174,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     goal_read = channel["required_reads"][0]
     assert "required_reads" not in full["interaction_contract"]["cli_channel"]
     context = channel["work_context"]
-    assert context["complete"] and not context["failures"]
+    assert context["complete"] and not context.get("failures", [])
     reads = context["sources"]
     assert [read["source"] for read in reads] == ["selected_todo"]
     assert not any(read["source"] == "goal_state" for read in reads)
@@ -162,6 +183,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "Stop before an unauthorized deployment." in goal_result.stdout
     assert full["selected_todo"]["todo_id"] == "todo_cursor_work"
     assert full["selected_todo"]["text"] != expected  # Deliberately bounded hot view.
+    assert "_context_text_sha256" not in full["selected_todo"]
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
     assert envelope["required_reads"] == channel["required_reads"]
@@ -319,3 +341,63 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["work_context"]["complete"] is False
     assert channel["delivery_allowed"] is False
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    text = "Keep the release note aligned with the verified behavior."
+    note = "Stop before publication until the evidence is approved."
+    state.write_text(
+        "---\nstatus: active\n---\n# Goal\n## Objective\nVerify the release note.\n"
+        "## Agent Todo\n- [ ] [P1] " + text + "\n"
+        "  <!-- loopx:todo todo_id=todo_release_note status=open task_class=advancement_task claimed_by=agent-a -->\n"
+    )
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="requirements-goal", domain="software", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a"], quota_allowed_slots=None)
+    goal = json.loads(registry.read_text())["goals"][0]
+    fields, _archived, _sections = parse_todo_source(state.read_text(), goal=goal, state_path=state)
+    todos = retained_todo_summary_fields(fields["agent"], rollout_events=[])["agent_todos"]["items"]
+    target = next(item for item in todos if item.get("todo_id") == "todo_release_note")
+    target["note"] = note
+    snapshot = build_todo_runtime_shadow_projection(
+        goal_id="requirements-goal", todos=todos, handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, "requirements-goal", snapshot,
+        state_path=state, provider=provider)
+
+    code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
+        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(Path(sys.executable).parent / "loopx"),
+        registry_path=registry, runtime_root=runtime)
+    assert code == 0 and generated["ok"], generated
+    script = re.search(r"```sh\n(.*?)\n```", generated["task_body"], re.S).group(1)
+    env = {**os.environ, "LOOPX_REGISTRY": str(registry)}
+    result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "short-note-wake")],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=True)
+    full = json.loads(result.stdout)
+    channel = full["interaction_contract"]["agent_channel"]
+    context = channel["work_context"]
+    assert context["complete"] is True
+    assert context["selected_todo_ref"] == "selected_todo"
+    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
+    selected_source = next(source for source in context["sources"] if source["source"] == "selected_todo")
+    source_todo = selected_source["content"]["todo"]
+    assert source_todo.get("text") is None
+    assert source_todo["note"] == note
+    assert selected_source["content"]["authority_read"]["provider_revision"]
+    assert json.dumps(context).count(note) == 1
+
+    code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
+        "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--turn-envelope",
+        registry_path=registry, runtime_root=runtime)
+    assert code == 0 and turn["ok"], turn
+    turn_context = turn["work_context"]
+    assert turn_context["complete"] is True
+    assert turn_context["selected_todo_ref"] == "selected_todo"
+    turn_source = next(source for source in turn_context["sources"] if source["source"] == "selected_todo")
+    assert turn_source["content"]["todo"]["note"] == note
+    assert turn_source["content"]["authority_read"]["provider_revision"]
+    assert json.dumps(turn_context).count(note) == 1

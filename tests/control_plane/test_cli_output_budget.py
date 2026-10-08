@@ -845,6 +845,126 @@ def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
     _assert_scenario_matrix(scenarios)
 
 
+def test_diagnose_keeps_selected_reads_once_and_out_of_the_goal_overview(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "diagnose-selected-read") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[0])
+        command = _surface_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["diagnose"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    payload = json.loads(text)
+    assert payload["selected"]["interaction_contract"]["agent_channel"]["required_reads"]
+    assert "required_reads" not in payload["goals"][0]["interaction_contract"]["agent_channel"]
+
+
+def test_quota_packet_drops_transient_path_but_keeps_verified_todo_reference(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "quota-goal-read") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[0])
+        command = _surface_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["quota_should_run"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    payload = json.loads(text)
+    assert "goal_state_file" not in payload
+    assert payload["interaction_contract"]["agent_channel"]["work_context"]["selected_todo_ref"] == "selected_todo"
+
+
+def test_turn_envelope_references_selected_todo_without_duplicate_context(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "turn-envelope-selected-read") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[0])
+        command = _mode_variant_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["quota_should_run_turn_envelope"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    payload = json.loads(text)
+    assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
+    work_context = payload["work_context"]
+    assert work_context["selected_todo_ref"] == "selected_todo"
+    assert work_context["selected_todo_authority"].startswith("markdown_active_state@sha256:")
+    assert "sources" not in work_context
+
+
+@pytest.mark.parametrize("surface_id", ["quota_should_run", "quota_should_run_turn_envelope"])
+def test_compact_selected_todo_markdown_preserves_work_context_instruction(
+    tmp_path: Path,
+    surface_id: str,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / surface_id) as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root,
+            SCENARIOS[0],
+        )
+        if surface_id == "quota_should_run":
+            json_command = _surface_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="json",
+            )[surface_id]
+            markdown_command = _surface_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="markdown",
+            )[surface_id]
+        else:
+            json_command = _mode_variant_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="json",
+            )[surface_id]
+            markdown_command = _mode_variant_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="markdown",
+            )[surface_id]
+
+        json_exit_code, json_text = _invoke_cli(json_command)
+        markdown_exit_code, markdown_text = _invoke_cli(markdown_command)
+
+    assert json_exit_code == 0, json_text
+    assert markdown_exit_code == 0, markdown_text
+    payload = json.loads(json_text)
+    work_context = (
+        payload["interaction_contract"]["agent_channel"]["work_context"]
+        if surface_id == "quota_should_run"
+        else payload["work_context"]
+    )
+    instruction = work_context["instruction"]
+    assert instruction
+    assert markdown_text.count(instruction) == 1
+
+
 def _assert_scenario_matrix(scenarios: dict[str, dict[str, dict[str, dict]]]) -> None:
     """Keep the pytest and base/head probe on the same matrix assertions."""
 

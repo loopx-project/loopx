@@ -116,10 +116,7 @@ from .control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted as read_canonical_todos_if_promoted,
 )
 from .control_plane.todos.provider_update import update_canonical_todo_if_promoted
-from .control_plane.todos.update_intent import (
-    build_canonical_update_intent,
-    canonical_update_is_supported,
-)
+from .control_plane.todos.update_intent import build_canonical_update_intent
 from .control_plane.todos.provider_create import create_canonical_todo_if_promoted
 from .control_plane.todos.path_resolution import resolve_todo_state_path
 from .control_plane.todos.provider_terminal_lifecycle import provider_first_terminal_lifecycle
@@ -507,12 +504,6 @@ def add_goal_todo(
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
         raise ValueError("todo role must be one of: user, agent")
-    require_user_todo_task_class(
-        role=role,
-        task_class=task_class,
-        blocks_agent=blocks_agent,
-        global_gate=True if global_gate else None,
-    )
     replan_obligation_id = require_replan_successor_scope(
         role=role,
         task_class=task_class,
@@ -549,17 +540,6 @@ def add_goal_todo(
                 "--validation-timeout-seconds must be between 1 and "
                 f"{completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS}"
             )
-    effective_claimed_by = (
-        require_registered_agent_id(
-            registry_path=registry_path, goal_id=goal_id, agent_id=claimed_by,
-        ) if claimed_by else None
-    )
-    effective_agent_id = (
-        require_registered_agent_id(
-            registry_path=registry_path, goal_id=goal_id, agent_id=agent_id,
-            field="agent_id",
-        ) if agent_id else None
-    )
     registered_agents = registered_agent_ids_from_registry(registry_path, goal_id)
     effective_excluded_agents = (
         require_todo_excluded_agents(excluded_agents)
@@ -569,14 +549,18 @@ def add_goal_todo(
     authoring_scope = plan_todo_authoring_scope(
         command="create", role=role, goal_id=goal_id, registered_agents=registered_agents,
         intent={
-            "task_class": task_class, "status": status, "actor_agent_id": effective_agent_id,
-            "claimed_by": effective_claimed_by, "bound_agent": bound_agent, "goal_bound": goal_bound,
+            "task_class": task_class, "status": status, "actor_agent_id": agent_id,
+            "claimed_by": claimed_by, "bound_agent": bound_agent, "goal_bound": goal_bound,
             "blocks_agent": blocks_agent, "global_gate": global_gate,
             "excluded_agents": effective_excluded_agents, "resume_when": resume_when,
             "task_repository": task_repository, "task_domain": task_domain,
             "capability_binding_ref": capability_binding_ref,
         },
     )
+    # The shared plan already validates and normalizes both identities from
+    # this registry snapshot; the transaction still rechecks its own source.
+    effective_claimed_by = authoring_scope["claimed_by"]
+    effective_agent_id = authoring_scope["actor_agent_id"]
     effective_blocks_agent = authoring_scope["blocks_agent"]
     effective_bound_agent = authoring_scope["bound_agent"]
     effective_goal_bound = authoring_scope["goal_bound"]
@@ -973,10 +957,10 @@ def update_goal_todo(
     if clear_priority:
         planning_intent["clear_priority"] = True
     monitor_intent = todo_monitor_metadata.monitor_metadata_intent(monitor_metadata)
-    if not claim_only and (validation_revision_declaration is not None or canonical_update_is_supported(
-        text=text, note=note, intent=planning_intent,
-        monitor_metadata=monitor_metadata,
-    )):
+    # Promotion selects the authority, not Python's estimate of edit validity.
+    # The typed decoder must also reject empty/invalid edits without importing
+    # an unpromoted source writer. Unpromoted Goals retain their legacy route.
+    if not claim_only:
         canonical_edit = update_canonical_todo_if_promoted(
             registry_path=registry_path, runtime_root=shadow_runtime_root,
             goal_id=goal_id, todo_id=normalize_todo_id(todo_id) or todo_id,

@@ -515,7 +515,7 @@ function monitorCycleTerminalOperationId(
   return `todo-terminal:${digest.slice(0, 32)}`;
 }
 
-function completionTurnOperationId(
+export function completionTurnOperationId(
   input: Pick<CoordinationTodoTerminalLifecycleInput, "goal_id" | "todo_id" | "requested_completion_turn_key">,
   closeout: boolean,
 ): string {

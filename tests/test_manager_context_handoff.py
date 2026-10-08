@@ -161,7 +161,7 @@ def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     assert authority(root, registry, session, turn)["targets"] == [
         {"goal_id": "other", "agent_id": "peer"}
     ]
-    with pytest.raises(ValueError, match="not authorized"):
+    with pytest.raises(ValueError, match="stopped or archived"):
         deliver(root, registry, session=session, turn=turn, request=request)
     assert len(pending(root, "research", "worker")["items"]) == 1
 
@@ -183,7 +183,7 @@ def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture, lo
 
     goal_session = {**session, "channel_id": "goal.research", "goal_id": "research"}
     assert authority(root, registry, goal_session, turn)["targets"] == []
-    with pytest.raises(ValueError, match="not authorized"):
+    with pytest.raises(ValueError, match="stopped or archived"):
         deliver(root, registry, session=goal_session, turn=turn, request=request)
 
     lark_session = {**session, "channel_id": "manager.external.group"}
@@ -200,7 +200,7 @@ def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture, lo
                      message=turn["message"], source_id="lark:original")
     expected = [] if local_scope == "selected" else [{"goal_id": "other", "agent_id": "peer"}]
     assert authority(root, registry, lark_session, lark_turn)["targets"] == expected
-    with pytest.raises(ValueError, match="not authorized"):
+    with pytest.raises(ValueError, match="stopped or archived"):
         deliver(root, registry, session=lark_session, turn=lark_turn, request=request)
 
     data["goals"][0]["activation"]["state"] = "unreadable"
@@ -684,7 +684,7 @@ def test_actual_manager_turn_delivers_and_reports_host_receipt(fixture, monkeypa
         assert created and completed["status"] == "completed", completed
         response = completed["response"]
         assert response["context_handoff_receipt"]["status"] == "delivered"
-        assert "已将原消息交给 worker" in response["message"]
+        assert "**已转交给 `worker`。**" in response["message"]
         assert response["proposals"] == [] and response["gate"] is None
         assert len(pending(root, "research", "worker")["items"]) == 1
         assert registry.read_bytes() == original_registry

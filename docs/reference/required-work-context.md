@@ -4,6 +4,16 @@ Ordinary Heartbeat/quota delivers the full effective selected Todo, enabled
 canonical acceptance and Agent-scoped User obligations at
 `interaction_contract.agent_channel.work_context`. These are current work
 sources, with readback/revision metadata; no TurnEnvelope switch is needed.
+The selected Todo's display body is a display-only view and may be bounded.
+Its exact detail read is authoritative for the current body and is validated
+against the selected identity, lifecycle, claim and source revision. When a
+full-body snapshot accompanies the selection, a mismatch remains pending and
+requires a fresh guard. When the selected body is byte-for-byte the same as the exact read, `work_context.selected_todo_ref`
+reuses it and the source retains its identity, lifecycle, claim, continuation,
+relations and authority revision without repeating the body. If no other
+canonical fields need a source record, `work_context.selected_todo_authority`
+carries the source and revision. When the view is bounded, the full canonical
+detail remains in `work_context.sources`.
 Registered Goal state remains a full progressive read in
 `agent_channel.required_reads`: the mixed Markdown document can also contain
 other tasks and historical evidence, so quota checks its availability but does

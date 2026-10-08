@@ -163,6 +163,13 @@ class ChatConversationBindings:
         return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],
                             sender_ref=saved["operator_ref"], private_human_message=True, session_context=saved)
 
+    def manager_runtime_owner(self, saved: dict[str, Any], channel_id: str) -> bool:
+        """Fresh Core audience proof; saved Session text is never authority."""
+        selected = self.session_context(saved)
+        if selected["channel_id"] != channel_id:
+            raise ValueError("bound manager audience changed")
+        return selected["owner_manager_audience"] is True
+
     def steward_scope(self, session: dict[str, Any]) -> list[str] | None:
         saved = session.get("steward_context")
         if not isinstance(saved, dict):

@@ -30,9 +30,10 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   外部 provider 权限、受众边界和 LoopX durable state owner 不被改写。
 - 当前只有 Codex endpoint 能执行 `trusted_owner`。选择其他 endpoint 时必须返回可恢复的
   typed error，不能把受限执行伪装成已开放。
-- `trusted_owner` 当前只对私有 Owner 管家会话生效。外部 audience（包括 Lark 群）是独立
-  信任边界；在既有的 audience/resource grant 能被核验前，同一机器配置在那里仍解析为
-  `restricted`，不能仅凭“同一管家”继承宿主资源权限。
+- `trusted_owner` 适用于本地私有 Owner 管家和由既有 Core conversation owner 重新核验的
+  原生本人管家私聊。Core 核验 App、Owner 身份、私聊来源、当前资源授权和冻结的 Session
+  身份；受众证明本身不授予工具，仍须同一份显式机器授权。其他外部受众（包括 Lark 群）
+  和 `workspace_only` 资源继续受限；个人助手保留独立的工作区授权。
 
 机器配置沿用现有 capability workbench 的 `preview -> apply -> readback` 流程，不建立第二份
 配置源。配置缺失时安全回退 `restricted`；配置损坏时也回退，并在能力投影中显示
@@ -47,16 +48,20 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
 
 Dashboard 同时显示机器配置和当前会话 readback。CLI/managed Turn、Dashboard 与 Lark
 继续调用同一个 manager runtime controller；Lark 是同源会话的入口和投影，不拥有独立
-profile 或权限状态，但当前外部 audience 会明确降级为 `restricted`。后续若开放 Lark
-宿主工具，必须复用已有的 audience/resource authority，不在这里新增管家 ACL。
+profile 或权限状态。原生本人私聊在启动或复用宿主前重新核验 Core 的受众与资源授权；
+不依据 channel 名字、持久化证明或新管家 ACL 推断权限。绑定撤销或 App/Owner 改变时
+停止准入。
 
 本切片只实现 [capable-manager-semantic-handoff-v0](capable-manager-semantic-handoff-v0.zh-CN.md)
 的 M1 私有 Owner 旅程，目标验收为 A1–A3/A12。它不实现 M2 collaboration request、M3
 outbox，也不把管家 session 字段当成工作、请求或送达权威。
 
-### 实现与后继（2026-09-16）
+### 实现与后继
 
-`43d362532` 已有 machine profile、controller 集成与聚焦测试；本次复跑通过不等于本机部署或完整 M1 资格。`restricted` 默认、仅 Codex 支持私人 `trusted_owner` 及外部受众降级保持。DSH 通道选择不继承该强能力 profile。按[统一路线](loopx-overall-roadmap-v0.zh-CN.md) R2 补真实工具/会话/连续执行与设置读回；不得新建第二份机器配置。
+`43d362532` 引入机器模式。原生本人管家私聊在打开、续接和授权范围刷新时，将 Core
+重新核验的 Owner 受众证明传给既有模式。安装默认仍为 `restricted`；DSH 通道选择不继承
+该强能力模式。源码与 RPC 测试不证明已部署的真实模型工作或桌面通知送达；按
+[统一路线](loopx-overall-roadmap-v0.zh-CN.md) R2 完成这些剩余验收。
 
 ### 验收
 
@@ -70,3 +75,6 @@ outbox，也不把管家 session 字段当成工作、请求或送达权威。
    `restricted` 的动作提示。
 7. 桌面和移动 Dashboard 显示有效 profile；配置损坏时显示回退状态。
 8. 外部 audience 在没有既有 scoped grant 时继续 `read-only`，并显示真实降级状态。
+9. 已核验的原生本人管家私聊沿用显式机器授权，模式改变或服务重启保留 Session 与历史；
+   复用健康宿主前重新核验绑定和 Provider 身份。其他 App、群聊和 `workspace_only` 资源
+   不继承该授权。

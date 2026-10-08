@@ -234,16 +234,20 @@ def test_invalidated_successor_cannot_rebind_or_close_original_turn(
     original = _guard(call)
     identity = original["heartbeat_receipt"]["settlement_identity"]
     added = _add(call, identity["replan_obligation_id"])
-    prior_actions = _guard(call)["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    prior_guard = _guard(call)
+    prior_actions = prior_guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     edit = {"wrong_owner": ["--claimed-by", "different-agent"],
             "deferred": ["--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z"],
             "unclaimed": ["--clear-claim"]}[invalidation]
     call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
          "--todo-id", added["todo_id"], *edit)
-    # Invalidation may leave the original duty open, which is a legal guard
-    # read. It must not grant successor settlement from a stale creation ACK.
-    guarded = _guard(call, expected_code=1 if later_vision and invalidation == "unclaimed" else 0)
+    # An unclaimed successor loses its original-lane proof. Fail closed while
+    # retaining the original receipt; a stale creation ACK cannot settle it.
+    guarded = _guard(call, expected_code=1 if invalidation == "unclaimed" else 0)
     assert guarded["heartbeat_receipt"]["settlement_identity"] == identity
+    if invalidation == "unclaimed":
+        assert "settlement identity conflicts" in guarded["reason"]
+        assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
     assert guarded.get("selected_todo") is None
     assert (guarded.get("autonomous_replan_obligation") or {}).get("resolution_mode") != "receipt_bound_replan_settlement"
     assert (guarded.get("replan_action_packet") or {}).get("settlement_only") is not True

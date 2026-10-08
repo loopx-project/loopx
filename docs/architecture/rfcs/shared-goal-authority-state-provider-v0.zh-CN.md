@@ -1086,9 +1086,14 @@ rehearsal 证据（1000 次提交／64 KiB）现为 16 个 checkpoint、63 次 r
 单次历史读取最多重建一个 64 次提交窗口，保留 1,048,576 字节 projection 与
 126,714 字节 delta，而“每提交一份完整拷贝”为 65,536,000 字节。
 
-这仍不代表 lane L 完成。File 与 NoKV 依旧在每次 load 时保留并解码完整 journal，
-因此“有界恢复”是内嵌候选 provider 的性质，不是跨 provider 等价；SQLite profile
-也仍不裁剪 receipt 与 event。逻辑/WAL 流量与 <=15x 累计写入预算、1 MiB 与 300k
+这仍不代表 lane L 完成。当前比较采用 File 的 checkpoint/delta journal 与有界的
+已验证读取视图，见[同负载 provider 比较](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。
+File 在复用已解码视图前仍会重读并哈希完整 envelope、检查 store identity；避免重复
+解码并未消除耐久发布或大历史验证成本。SQLite 历史读取证明覆盖的 checkpoint
+区间，scan 返回完整状态。已交付的 archive audit 已使用索引 receipt 批量读取；
+资格验证应同时覆盖这个完整 consumer 与单条 receipt、scan 查询。这些机制不代表
+跨 provider 恢复等价或 NoKV 资格通过，SQLite 也仍不裁剪 receipt 与 event。
+逻辑/WAL 流量与 <=15x 累计写入预算、1 MiB 与 300k
 headroom、完整领域负载、大历史恢复、fenced backup/restore、受支持升级/回滚、
 OS/runtime 覆盖和 >=10 天自然时间 soak 仍是 hold，工具跑完不能声称已满足。参见
 [SQLite 验证命令](../../reference/sqlite-authority-store.md#reproduce-validation)。

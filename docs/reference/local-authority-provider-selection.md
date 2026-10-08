@@ -126,6 +126,25 @@ fails visibly without Markdown fallback. Lost completed authority requires full
 backup recovery and cannot be treated as empty creation. Generic forced
 bootstrap cannot rebuild a canonically created Goal.
 
+The App also retains the original card after Goal/initial-task commits when
+first-Host startup fails or its response is lost. Its recorded Goal, Agent and
+initial-task steps stay visible; **Retry original operation** resumes them in
+the frozen server workspace, including an ordinary non-Git workspace. Native
+File/SQLite Todo operation ids and the existing Session/Turn acceptance owner
+prevent duplicate writes or first-Turn submission. A started Turn is read back
+from its original Session, not inferred from a creation checkpoint. This
+recovery does not certify model execution or Goal completion. A missing original
+workspace, conflicting identity or unavailable authority still stops recovery.
+Target-only historical creation retains its adapter; it does not gain the
+canonical transaction's response-loss guarantee.
+
+首 Host 启动失败或响应丢失时，App 保留原创建卡片，并分别展示已提交的 Goal、
+Agent 和首批任务。使用“重试原操作”在冻结的服务端工作区恢复，普通非 Git
+工作区同样适用。原生 File/SQLite 复用 Todo 操作身份与既有 Session/Turn
+接纳规则；已启动的 Turn 必须从原 Session 读回。创建步骤不代表模型运行或
+Goal 验收完成；原工作区、操作身份或 authority 不可用时仍须停止恢复。
+历史 target-only 创建保留其适配器，不获得原生事务的响应丢失恢复保证。
+
 <details>
 <summary>Settings and recovery views / 设置与恢复界面</summary>
 

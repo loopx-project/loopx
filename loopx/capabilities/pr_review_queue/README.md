@@ -819,6 +819,19 @@ matches; a changed head, base, review conclusion, CI policy/result, review
 thread, draft flag, merge state, mergeability, or PR state fails open to a fresh
 qualification.
 
+Live queue details request `headRefOid` and `baseRefOid` together with the
+computed merge fields, matching the versioned readiness read. An unversioned
+GitHub detail request can return `UNKNOWN` despite a known exact-head merge
+state, repeatedly reopening an unchanged observation. Head/base drift between
+the list and detail reads makes the source incomplete; rerun discovery before
+selecting work. A genuinely unknown state still requires fresh qualification,
+and the immediately-before-merge gate remains mandatory.
+
+完整队列的详情请求同时读取 head/base OID 和合并状态；缺少版本的 GitHub
+详情读取可能返回 `UNKNOWN`，误使已核验项目反复排入队首。列表与详情之间的
+版本漂移会使来源不完整，须重新发现后再选择工作。真实未知状态仍需核验，
+合并前的精确版本检查和独立授权要求保持。
+
 They must not include raw logs, private connector payloads, credentials, local
 absolute paths, private source bodies, or hidden CI artifacts.
 

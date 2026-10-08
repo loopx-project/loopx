@@ -34,6 +34,64 @@ function databaseFromPool(value: Pool): PostgreSqlAuthorityDatabase {
   };
 }
 
+function pauseAfterStoreIdentityRead(database: PostgreSqlAuthorityDatabase): {
+  database: PostgreSqlAuthorityDatabase;
+  paused: Promise<void>;
+  release: () => void;
+} {
+  let reportPaused: (() => void) | undefined;
+  const paused = new Promise<void>(resolve => {
+    reportPaused = resolve;
+  });
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  let shouldPause = true;
+  return {
+    database: {
+      connect: async () => {
+        const connection = await database.connect();
+        return {
+          ...connection,
+          query: async (text, values) => {
+            const result = await connection.query(text, values);
+            if (shouldPause && text.includes("authority_store_metadata")) {
+              shouldPause = false;
+              reportPaused?.();
+              await gate;
+            }
+            return result;
+          },
+        };
+      },
+    },
+    paused,
+    release: () => release?.(),
+  };
+}
+
+function databaseWithTransactionLockTimeout(
+  database: PostgreSqlAuthorityDatabase,
+  timeout: string,
+): PostgreSqlAuthorityDatabase {
+  return {
+    connect: async () => {
+      const connection = await database.connect();
+      return {
+        ...connection,
+        query: async (text, values) => {
+          const result = await connection.query(text, values);
+          if (text === "BEGIN") {
+            await connection.query("SELECT set_config('lock_timeout', $1, TRUE)", [timeout]);
+          }
+          return result;
+        },
+      };
+    },
+  };
+}
+
 async function cleanScope(tenantId: string, goalId: string): Promise<void> {
   if (!pool) return;
   await pool.query(
@@ -46,6 +104,66 @@ async function cleanScope(tenantId: string, goalId: string): Promise<void> {
 if (pool) {
   const database = databaseFromPool(pool);
   const installed = installPostgreSqlAuthorityStoreSchema(database, STORE_IDENTITY);
+
+  test("PostgreSQL commits fence identity rotation without serializing different Goals", async t => {
+    await installed;
+    const tenantId = `tenant-${randomUUID()}`;
+    const heldGoalId = `goal-held-${randomUUID()}`;
+    const parallelGoalId = `goal-parallel-${randomUUID()}`;
+    t.after(() => Promise.all([
+      cleanScope(tenantId, heldGoalId),
+      cleanScope(tenantId, parallelGoalId),
+    ]));
+
+    const held = pauseAfterStoreIdentityRead(database);
+    const heldStore = new PostgreSqlAuthorityStore(held.database, {
+      tenant_id: tenantId,
+      goal_id: heldGoalId,
+  });
+    const heldCommitPromise = heldStore.commitAuthority(
+      commit(null, "held-before-rotation", 1, 1),
+    );
+    await held.paused;
+
+    const boundedDatabase = databaseWithTransactionLockTimeout(database, "500ms");
+    let parallelCommit;
+    let blockedRotation;
+    try {
+      const parallelStore = new PostgreSqlAuthorityStore(boundedDatabase, {
+        tenant_id: tenantId,
+        goal_id: parallelGoalId,
+      });
+      parallelCommit = await parallelStore.commitAuthority(
+        commit(null, "parallel-goal", 1, 1),
+      );
+      blockedRotation = await rotatePostgreSqlAuthorityStoreIdentity(
+        boundedDatabase,
+        STORE_IDENTITY,
+        NEXT_STORE_IDENTITY,
+      );
+    } finally {
+      held.release();
+    }
+    const heldCommit = await heldCommitPromise;
+
+    assert.equal(parallelCommit?.status, "applied", JSON.stringify(parallelCommit));
+    assert.equal(blockedRotation?.status, "failed", JSON.stringify(blockedRotation));
+    if (blockedRotation?.status === "failed") {
+      assert.equal(blockedRotation.reason_code, "provider_transaction_failed");
+    }
+    assert.equal(heldCommit.status, "applied", JSON.stringify(heldCommit));
+    if (heldCommit.status === "applied") {
+      assert.equal(heldCommit.provider_revision, `${STORE_IDENTITY}:1`);
+    }
+    const readback = await new PostgreSqlAuthorityStore(database, {
+      tenant_id: tenantId,
+      goal_id: heldGoalId,
+    }).loadAuthority();
+    assert.equal(readback.status, "loaded", JSON.stringify(readback));
+    if (readback.status === "loaded") {
+      assert.equal(readback.provider_revision, `${STORE_IDENTITY}:1`);
+    }
+    });
 
   test("PostgreSQL service admits an authorized tenant and rotates a restored incarnation", async t => {
     await installed;

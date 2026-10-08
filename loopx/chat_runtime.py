@@ -19,10 +19,10 @@ from .chat_manager import (
     manager_session_model_allocation,
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
-from .capabilities.native_chat import project_context as project_context_policy
+from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
-    load_effective_manager_runtime_profile, manager_runtime_session_fields,
+    load_bound_manager_runtime_profile, manager_runtime_session_fields,
 )
 from .capabilities.manager_context.team_plan import (
     TeamPlanProjector,
@@ -341,11 +341,12 @@ class ChatRuntimeController:
         self.team_plan_projector: TeamPlanProjector | None = None
 
     def manager_runtime_profile(
-        self, channel_id: str = "manager"
+        self, channel_id: str = "manager", *,
+        steward_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return load_effective_manager_runtime_profile(
-            self.store.root.parent,
-            channel_id=channel_id,
+        return load_bound_manager_runtime_profile(
+            self.store.root.parent, channel_id=channel_id,
+            bindings=self.project_contexts.conversation_bindings, steward_context=steward_context,
         )
 
     def steward_executor_defaults(self) -> dict[str, Any]:
@@ -606,7 +607,7 @@ class ChatRuntimeController:
         if project_context is not None:
             project_context_policy.validate_project_executor_scope(agent_id, project_context, self.capabilities, capability)
         manager_runtime = (
-            self.manager_runtime_profile(selected_channel)
+            self.manager_runtime_profile(selected_channel, steward_context=steward_context)
             if is_manager_channel(selected_channel)
             else None
         )
@@ -690,7 +691,7 @@ class ChatRuntimeController:
                 upstream_thread_id=adapter.upstream_thread_id,
                 upstream_mode="chat" if agent_id == "codex" else "default",
                 channel_id=selected_channel,
-                codex_home=str(self.codex_home) if agent_id == "codex" else None,
+                codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
                 project_context=project_context,
                 steward_context=steward_context,
             )
@@ -717,14 +718,7 @@ class ChatRuntimeController:
     def _check_codex_home(self, session: dict[str, Any]) -> None:
         if session.get("agent_id") != "codex" or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             return
-        bound_home = session.get("codex_home")
-        if bound_home is not None and bound_home != str(self.codex_home):
-            raise CodexChatAgentError(
-                "This managed Session belongs to a different Codex home. Restart LoopX Chat "
-                "with its original LOOPX_CHAT_CODEX_HOME; do not copy or rebind its history.",
-                error_code="codex_home_mismatch",
-                gate=None,
-            )
+        codex_context.require_session_home(self.codex_home, session)
 
     def _ensure_adapter(
         self,
@@ -762,7 +756,8 @@ class ChatRuntimeController:
             project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
             work_dir, objective = context["project"], context["objective"]
         manager_runtime = (
-            self.manager_runtime_profile(str(session.get("channel_id") or "manager"))
+            self.manager_runtime_profile(str(session.get("channel_id") or "manager"),
+                                         steward_context=session.get("steward_context"))
             if is_manager_channel(session.get("channel_id"))
             else None
         )
@@ -969,7 +964,7 @@ class ChatRuntimeController:
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
-                self.store.update_session(session_id, codex_home=str(self.codex_home))
+                self.store.update_session(session_id, codex_home=str(codex_context.home_for_project(self.codex_home, session.get("project_context"))))
             if is_manager_channel(session.get("channel_id")):
                 assert manager_runtime is not None
                 changes = {

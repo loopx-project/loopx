@@ -778,6 +778,89 @@ def test_hard_lease_is_required_for_new_delivery_but_not_successful_readback(
     )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provider):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from tests.control_plane.test_quota_settlement_cli import (
+        _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
+    )
+
+    project, runtime, path = _write_fixture(tmp_path)
+    config = json.loads(path.read_text())
+    config["goals"][0]["explore_graph"] = {"enabled": True}
+    path.write_text(json.dumps(config))
+
+    def run(*command):
+        rc, packet = _run_cli(path, runtime, *command, cwd=project)
+        assert rc == 0, packet
+        return packet
+
+    run("todo", "claim", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID)
+    todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease"),
+        state_path=project / config["goals"][0]["state_file"], provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    guard_command = ["quota", "should-run", "--codex-app", *binding,
+                     "--scan-path", str(project)]
+    guard = run(*guard_command)
+    hint = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]
+    assert "release only after explore_result_delivery.ok=true" in hint["guidance"]
+    lease_binding = ["--goal-id", GOAL_ID, "--todo-id", TODO_ID, "--owner", AGENT_ID]
+    early = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "early-release")["lease"]
+    run("task-lease", "release", *lease_binding, "--idempotency-key", "early-release",
+        "--expected-version", str(early["version"]))
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Require a uniform tail bound."},
+        "explore_result": ATTACHMENT,
+    }))
+    refresh = ["refresh-state", *binding, "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks"]
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    before_index = index.read_bytes() if index.exists() else b""
+    rc, rejected = _run_cli(path, runtime, *refresh, cwd=project)
+    assert rc == 1 and not rejected["ok"] and not rejected["appended"], rejected
+    assert (index.read_bytes() if index.exists() else b"") == before_index
+    log = explore_result_log_path(runtime, GOAL_ID)
+    assert not log.exists()
+    assert list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"] == todos
+
+    # Supported recovery: fresh admission and an active lease, then the same capture.
+    run(*guard_command)
+    current = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "recovery")["lease"]
+    captured = run(*refresh)
+    assert captured["appended"] and captured["explore_result_delivery"]["ok"]
+    assert len(load_explore_result_events(log)) == 2
+    committed_index, committed_log = index.read_bytes(), log.read_bytes()
+    rows = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    target = next(row for row in rows if row["todo_id"] == TODO_ID)
+    assert target["status"] == "open" and target["claimed_by"] == AGENT_ID
+    assert target["explore_result_node_refs"] == [ATTACHMENT["node_id"]]
+    run("task-lease", "release", *lease_binding, "--idempotency-key", "recovery",
+        "--expected-version", str(current["version"]))
+    leases = read_canonical_todos_if_promoted(
+        runtime_root=runtime, goal_id=GOAL_ID, include_leases=True)["leases"]
+    assert leases[0]["status"] == "released"
+    replay = run(*refresh)
+    assert replay["idempotent_replay"] and replay["explore_result_delivery"]["idempotent_replay"]
+    assert index.read_bytes() == committed_index and log.read_bytes() == committed_log
+    assert list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"] == rows
+    assert read_canonical_todos_if_promoted(
+        runtime_root=runtime, goal_id=GOAL_ID, include_leases=True)["leases"] == leases
+    context = run("explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    finding = context["graph"]["writeback_results"][0]
+    assert finding["status"] == "refuted"
+    for field in ("input_revision", "applicability", "observation", "interpretation"):
+        assert ATTACHMENT[field] in finding["summary"]
+
+
 @pytest.mark.parametrize("planning", [True, False])
 def test_selected_route_retains_scope_after_unrelated_newer_results(tmp_path, planning):
     from loopx.configure_goal import configure_goal
