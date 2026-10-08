@@ -1282,7 +1282,7 @@ class ChatRuntimeController:
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
         if session.get("steward_context") is not None:
-            if origin != "lark":
+            if origin not in {"lark", "external"}:
                 raise ValueError("bound steward Chat requires its external source admission")
             self.project_contexts.session_context(session)
         if session.get("project_context") is not None:

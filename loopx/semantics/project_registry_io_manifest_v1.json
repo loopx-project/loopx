@@ -1071,7 +1071,7 @@
     },
     {
       "site": "loopx/control_plane/collaboration/source_grant_observation.py::<module>._source_registry_recipients::codec_read:load_project_registry#1",
-      "line": 125,
+      "line": 128,
       "column": 16,
       "kind": "codec_read",
       "api": "load_project_registry",
