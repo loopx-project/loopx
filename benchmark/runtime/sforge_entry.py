@@ -66,7 +66,9 @@ def main() -> int:
     signal.signal(signal.SIGTERM, cancelled)
     env = dict(os.environ)
     if not prepare_entry(env):
-        return 0
+        # A blocked or exhausted planning checkpoint never ran the solver.
+        # Native process completion must not qualify it as a finished trial.
+        return 1
     # Native SForge owns environment filtering and the outer phase deadline;
     # retain its proxy/isolation inputs rather than launching from setup hooks.
     env["LOOPX_TASK_STAGE"] = "execute"

@@ -54,6 +54,44 @@ def agent_image():
         client.close()
 
 
+def test_native_execution_disposition_uses_real_docker_exit(tmp_path, agent_image):
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    from benchmark.edgebench.run import _result_status, _write_native_final_result
+    from sforge.harness.run_agent import RunResult
+
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
+        logger=logging.getLogger("execution-status-smoke"), oauth_proxy=True)
+    handle = backend.create_container(agent_image.id, "execution-smoke-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    try:
+        for command, expected_exit, expected_status, timeout in [
+            ('python3 -c "print(\'done\'); raise SystemExit(7)"', 7, "runner_failed", 20),
+            ('python3 -c "print(\'failure-looking prose\')"', 0, "terminal", 20),
+            ('python3 -c "import time; time.sleep(10)"', None, "terminal", 1),
+        ]:
+            backend.execution_command = command
+            observed = backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", command], timeout)
+            if expected_exit is None:
+                assert observed.timed_out
+            else:
+                assert observed.exit_code == expected_exit and not observed.timed_out
+            receipt = json.loads((tmp_path / "execution-receipt.json").read_text())
+            assert receipt == backend.execution_receipt
+            status = _result_status(interrupted=False, started=True,
+                runtime_seconds=observed.elapsed_seconds, exit_code=receipt["exit_code"],
+                timed_out=receipt["timed_out"])
+            assert status == expected_status
+            if status == "runner_failed":
+                _write_native_final_result(tmp_path, RunResult(runtime_seconds=observed.elapsed_seconds),
+                    status=status, agent="fixture", task="fixture", run_id="fixture",
+                    model="fixture", effort="xhigh")
+                assert not (tmp_path / "final_result.json").exists()
+    finally:
+        backend.cleanup_container(handle)
+        backend.client.close()
+
+
 def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent_image):
     """Real native copy preserves host permissions; publication must repair only public files."""
     from sforge.harness.backend.docker_backend import DockerBackend

@@ -509,6 +509,11 @@ def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
     assert not prepare_entry(env)
     assert not Path(env["LOOPX_PLANNING_RESULT"]).exists()
     assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
+    result = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_entry",
+        sys.executable, "-c", "raise SystemExit('execution must not start')"],
+        env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "execution must not start" not in result.stderr
 
 
 def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):

@@ -268,18 +268,25 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
         backend.create_network_isolation(None, [alias, api], None)
 
 
-@pytest.mark.parametrize("interrupted,started,runtime,status", [
-    (True, True, 0, "cancelled"),
-    (True, False, 0, "cancelled"),
-    (False, False, 0, "launch_failed"),
-    (False, True, 0, "runner_failed"),
-    (False, True, 1, "terminal"),
+@pytest.mark.parametrize("interrupted,started,runtime,exit_code,timed_out,status", [
+    (True, True, 0, None, False, "cancelled"),
+    (True, False, 0, None, False, "cancelled"),
+    (False, False, 0, None, False, "launch_failed"),
+    (False, True, 0, 0, False, "runner_failed"),
+    (False, True, 1, 0, False, "terminal"),
+    (False, True, 310, 1, False, "runner_failed"),
+    (False, True, 310, None, False, "runner_failed"),
+    (False, True, 43200, -1, True, "terminal"),
+    (True, True, 43200, -1, True, "cancelled"),
 ])
-def test_native_result_disposition_uses_signal_and_start_evidence(interrupted, started, runtime, status):
+def test_native_result_disposition_requires_successful_exit_or_budget_timeout(
+    interrupted, started, runtime, exit_code, timed_out, status,
+):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import _result_status
-    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime) == status
+    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime,
+                          exit_code=exit_code, timed_out=timed_out) == status
 
 
 def test_native_swallowed_interrupt_is_observed_and_handler_restored():
@@ -430,6 +437,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("native-goal", ["--replan-after-todos", "3"]),
     ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
     ("heartbeat-explore", ["--replan-after-todos", "0"]),
+    ("official", ["--planning-timeout", "600"]),
+    ("heartbeat-resume", ["--planning-timeout", "0"]),
+    ("heartbeat-resume", ["--task-entry", "seeded-todo", "--planning-timeout", "600"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
@@ -584,3 +594,54 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt
+
+
+@pytest.mark.parametrize("planning_limit", [600, 900])
+def test_sforge_planning_allowance_is_recorded_without_extending_trial(tmp_path, monkeypatch, planning_limit):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-resume", cwd="/task", timeout_seconds=1800,
+        planning_timeout_seconds=planning_limit)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.runtime.planning_timeout == planning_limit
+    assert worker.runtime.scheduler_timeout == 1800
+    assert worker.turn_timeout == 1640
+    receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert receipt["planning_timeout_seconds"] == planning_limit
+    assert receipt["timeout_seconds"] == 1800
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 2.5, "600"])
+def test_sforge_planning_allowance_rejects_invalid_values(monkeypatch, value):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    with pytest.raises(ValueError, match="planning_timeout_seconds"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+            profile="heartbeat-resume", cwd="/task", planning_timeout_seconds=value)
+
+
+def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.log_dir = tmp_path / "collected"
+    backend.blind_api_endpoint = None
+    backend.feedback = None
+    backend.execution_command = "synthetic solver"
+    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k:
+        SimpleNamespace(exit_code=1, timed_out=False, elapsed_seconds=310,
+                        output="done: successful looking text"))
+    backend.exec_run_with_timeout(None, ["/bin/bash", "-c", backend.execution_command])
+    assert backend.execution_receipt == {"exit_code": 1, "timed_out": False, "elapsed_seconds": 310}
+    assert json.loads((tmp_path / "execution-receipt.json").read_text()) == backend.execution_receipt

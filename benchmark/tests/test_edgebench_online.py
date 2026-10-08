@@ -189,15 +189,17 @@ def test_offline_needs_terminal_solver_final_capture_and_exclusive_capacity(tmp_
         score_captures(tmp_path, task, None, None)
 
 
-def test_solver_completion_pauses_feedback_without_breaking_official_resume(monkeypatch):
+def test_solver_completion_pauses_feedback_without_breaking_official_resume(tmp_path, monkeypatch):
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     calls = []
     backend = object.__new__(RecordingDockerBackend)
     backend.blind_api_endpoint = None
-    backend.feedback_command = "solver invocation"
+    backend.execution_command = "solver invocation"
+    backend.log_dir = tmp_path / "collected"
     backend.feedback = SimpleNamespace(pause=lambda: calls.append("pause"))
-    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k: "result")
-    assert backend.exec_run_with_timeout(None, ["/bin/bash", "-c", "setup"]) == "result"
+    result = SimpleNamespace(exit_code=0, timed_out=False, elapsed_seconds=10, output="result")
+    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k: result)
+    assert backend.exec_run_with_timeout(None, ["/bin/bash", "-c", "setup"]) is result
     assert calls == []
-    assert backend.exec_run_with_timeout(None, ["/bin/bash", "-c", "solver invocation"]) == "result"
+    assert backend.exec_run_with_timeout(None, ["/bin/bash", "-c", "solver invocation"]) is result
     assert calls == ["pause"]

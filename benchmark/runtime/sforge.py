@@ -28,6 +28,7 @@ from .scheduler import worker_command
 # Experiment profiles, local to the research runner; not new LoopX modes.
 PROFILES = ("official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore")
 DEFAULT_TIMEOUT_SECONDS = 18 * 60 * 60
+DEFAULT_PLANNING_TIMEOUT_SECONDS = 600
 
 
 class SForgeEnvironment:
@@ -82,6 +83,7 @@ class SForgeWorker(CodexAgent):
 
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+                 planning_timeout_seconds: int = DEFAULT_PLANNING_TIMEOUT_SECONDS,
                  feedback_prompt: str | None = None,
                  feedback: str = "native",
                  task_entry: str | None = None,
@@ -98,6 +100,9 @@ class SForgeWorker(CodexAgent):
         self.turn_envelope = turn_envelope
         if timeout_seconds <= 160:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
+        if type(planning_timeout_seconds) is not int or planning_timeout_seconds <= 0:
+            raise ValueError("planning_timeout_seconds must be a positive integer")
+        self.planning_timeout_seconds = planning_timeout_seconds
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
         if not os.environ.get("CODEX_AUTH_JSON_PATH"):
@@ -193,6 +198,7 @@ class SForgeWorker(CodexAgent):
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
+                planning_timeout_sec=self.planning_timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
@@ -221,6 +227,8 @@ class SForgeWorker(CodexAgent):
             "profile": self.profile, "model": self._config.agent_model,
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
+            **({"planning_timeout_seconds": self.planning_timeout_seconds}
+               if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
             **({"turn_envelope": True} if self.turn_envelope else {}),
             "outer_resume": self.resume_cmd is not None,
@@ -243,7 +251,7 @@ class SForgeWorker(CodexAgent):
             (self.log_dir / "agent_prompt.md").write_text(self.feedback_prompt)
             self.prompt_installed = True
         if self.profile in {"official", "single"}:
-            return self._feedback_command(super().format_run_cmd(prompt_path, model=model, cwd=cwd,
+            return self._execution_command(super().format_run_cmd(prompt_path, model=model, cwd=cwd,
                                           internet=internet, resume=resume))
         if self.runtime is None:
             raise RuntimeError("Run the native SForge installation hook before execution")
@@ -275,7 +283,7 @@ class SForgeWorker(CodexAgent):
         # an entry command must never grant another full trial budget.
         deadline = "/opt/loopx-benchmark/control/phase-deadline"
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
-        return self._feedback_command(
+        return self._execution_command(
             f"set -eu; test -f {deadline} || echo $(( $(date +%s) + {self.timeout_seconds} )) > {deadline}; "
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
@@ -283,8 +291,9 @@ class SForgeWorker(CodexAgent):
             f"exec timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}"
         )
 
-    def _feedback_command(self, command):
+    def _execution_command(self, command):
+        if getattr(self, "backend", None) is not None:
+            self.backend.execution_command = command
         if self.feedback == "best-only":
-            self.backend.feedback_command = command
             self.backend.start_feedback(self.handle)
         return command
