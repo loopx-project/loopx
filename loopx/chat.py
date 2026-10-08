@@ -48,8 +48,11 @@ def _protected_path_replacements(
 def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
     if not replacements:
         return LOCAL_PATH_SURFACE_PATTERN
-    roots = "|".join(re.escape(raw) for raw, _ in replacements)
     separator = r"(?:[/\\]|%2[fF]|%5[cC])"
+    roots = "|".join(
+        separator.join(re.escape(part) for part in re.split(r"[/\\]", raw))
+        for raw, _ in replacements
+    )
     return re.compile(
         r"(?<![:/A-Za-z0-9_.\\])(?:" + roots + r")"
         + r"(?=$|" + separator + r"|[\s`'\"<>.,;:!?)}\]])"
@@ -171,23 +174,25 @@ def redact_local_paths(
         matched = match.group(0)
         candidate = matched.rstrip(".,;:!?)]}")
         suffix = matched[len(candidate) :]
+        normalized_candidate = re.sub(r"(?i)%(?:2f|5c)", "/", candidate).replace("\\", "/")
         for raw, label in replacements:
-            remainder = candidate[len(raw) :] if candidate.startswith(raw) else None
+            normalized_root = raw.replace("\\", "/")
+            remainder = (
+                normalized_candidate[len(normalized_root) :]
+                if normalized_candidate.startswith(normalized_root)
+                else None
+            )
             if remainder is not None and (
                 not remainder
-                or remainder.startswith(("/", "\\"))
-                or re.match(r"(?i)^%(?:2f|5c)", remainder)
+                or remainder.startswith("/")
             ):
+                candidate_parts = path_parts(normalized_candidate)
+                if any(candidate_parts[:len(root)] == root for root in private_roots):
+                    return f"[local-path]{suffix}"
                 if project_relative and label == "[project]" and candidate != raw:
-                    relative = re.sub(r"(?i)%(?:2f|5c)", "/", remainder)
-                    relative = re.sub(r"\\+", "/", relative).lstrip("/")
+                    relative = remainder.lstrip("/")
                     components = unquote(relative).replace("\\", "/").split("/")
                     if ".." not in components:
-                        # Equivalent spellings must not bypass a nested private
-                        # root when opting into project-relative presentation.
-                        candidate_parts = path_parts(candidate)
-                        if any(candidate_parts[:len(root)] == root for root in private_roots):
-                            return f"[local-path]{suffix}"
                         return f"./{relative}{suffix}"
                 return f"{label}{suffix}"
         return f"[local-path]{suffix}"

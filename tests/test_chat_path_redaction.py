@@ -99,9 +99,12 @@ def test_answer_path_presentation_does_not_relax_nested_private_roots_or_structu
     "/custom-volume/project/runtime/./private/gate.json",
     "/custom-volume/project/%2e/runtime/private/gate.json",
     "/custom-volume/project/runtime%2fprivate/gate.json",
+    "/custom-volume%2Fproject%2Fruntime%2Fprivate%2Fgate.json",
+    "%2Fcustom-volume%2fproject%2fruntime%2fprivate%2fgate.json",
     r"Q:\project\.\runtime\private\gate.json",
     r"Q:\project\\runtime\private\gate.json",
     r"Q:\project\.\RUNTIME\private\gate.json",
+    r"Q:%5Cproject%5CRUNTIME%5Cprivate%5Cgate.json",
 ])
 def test_answer_and_every_stream_split_hide_equivalent_nested_private_paths(private_path):
     paths = [r"Q:\project", r"Q:\project\runtime"] if private_path.startswith("Q:") else [
@@ -128,7 +131,7 @@ def test_answer_and_every_stream_split_hide_private_paths_with_encoded_root_sepa
     text = f"Read back `{private_path}`.\n"
     expected = "Read back `[local-path]`.\n"
     paths = [root, private_root]
-    assert redact_local_paths(private_path, protected_paths=paths) == "[project]"
+    assert redact_local_paths(private_path, protected_paths=paths) == "[local-path]"
     assert redact_local_paths(private_path, protected_paths=paths, project_relative=True) == "[local-path]"
     assert parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
     for split in range(len(text) + 1):
@@ -141,6 +144,17 @@ def test_project_answer_retains_safe_filename_after_encoded_root_separator():
     text = f"Read {root}%2fnotes%2Freport.md."
     assert redact_local_paths(text, protected_paths=[root], project_relative=True) == "Read ./notes/report.md."
     assert parse_agent_response(text, protected_paths=[root])["message"] == "Read ./notes/report.md."
+
+
+def test_project_answer_retains_safe_filename_after_encoded_root_components():
+    root = "/custom-volume/project"
+    text = f"Read {root.replace('/', '%2F')}%2Fnotes%2Freport.md."
+    expected = "Read ./notes/report.md."
+    assert redact_local_paths(text, protected_paths=[root], project_relative=True) == expected
+    assert parse_agent_response(text, protected_paths=[root])["message"] == expected
+    for split in range(len(text) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=[root])
+        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
 
 
 def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(tmp_path):
