@@ -5,6 +5,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
+from urllib.parse import quote
 from urllib.request import urlopen
 
 import pytest
@@ -65,6 +66,25 @@ def test_percent_encoded_root_component_keeps_safe_paths_and_redacts_private_des
             + stream.finish()
             == "[local-path]"
         )
+
+
+def test_dot_segment_encoded_alias_of_private_root_is_fully_redacted(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    private_target = project / "runtime private"
+    private_target.mkdir()
+    private_alias = project / "runtime%20private"
+    private_alias.symlink_to(private_target, target_is_directory=True)
+    secret_file = private_target / "gate.json"
+    secret_file.write_text("{}", encoding="utf-8")
+
+    aliased_path = f"{project}/./runtime%20private/gate.json"
+    assert Path(aliased_path).resolve() == secret_file.resolve()
+    assert redact_local_paths(
+        aliased_path,
+        protected_paths=[str(project), str(private_alias)],
+        project_relative=True,
+    ) == "[local-path]"
 
 
 def test_canonical_private_path_shapes_and_public_urls():
@@ -193,16 +213,7 @@ def test_project_answer_retains_safe_filename_after_encoded_root_components():
         assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
 
 
-def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(tmp_path):
-    project = tmp_path / "project"
-    private = project / "runtime"
-    private.mkdir(parents=True)
-    secret = private / "synthetic-secret.md"
-    secret.write_text("synthetic fixture")
-    aliases = [str(secret), f"{project}/./runtime/{secret.name}", f"{project}//runtime/{secret.name}"]
-    assert all(Path(alias).resolve() == secret.resolve() for alias in aliases)
-    text = "\n".join([*aliases, str(project / "notes/report.md")]) + "\n"
-    expected = "[local-path]\n" * len(aliases) + "./notes/report.md\n"
+def _run_acp_answer(tmp_path, *, project, agent_work_dir, text):
     provider = tmp_path / "synthetic_acp.py"
     provider.write_text('''import json, sys
 for line in sys.stdin:
@@ -225,16 +236,60 @@ for line in sys.stdin:
 ''')
     events = []
     adapter = ACPStdioAdapter.start(
-        command=(sys.executable, str(provider), text), work_dir=project, agent_work_dir=private,
+        command=(sys.executable, str(provider), text), work_dir=project,
+        agent_work_dir=agent_work_dir,
         startup_timeout_sec=5, idle_timeout_sec=5, hard_timeout_sec=10,
     )
     try:
         response = adapter.start_turn("Report fixture locations", lambda kind, payload: events.append((kind, payload)))
     finally:
         adapter.close_session()
+
+    return response, events
+
+
+def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(tmp_path):
+    project = tmp_path / "project"
+    private = project / "runtime private"
+    private.mkdir(parents=True)
+    secret = private / "synthetic-secret.md"
+    secret.write_text("synthetic fixture")
+    private_alias = project / "runtime%20private"
+    private_alias.symlink_to(private, target_is_directory=True)
+    aliases = [
+        str(private_alias / secret.name),
+        f"{project}/./runtime%20private/{secret.name}",
+        f"{project}//runtime%20private/{secret.name}",
+    ]
+    assert all(Path(alias).resolve() == secret.resolve() for alias in aliases)
+    text = "\n".join([*aliases, str(project / "notes/report.md")]) + "\n"
+    expected = "[local-path]\n" * len(aliases) + "./notes/report.md\n"
+    response, events = _run_acp_answer(
+        tmp_path, project=project, agent_work_dir=private_alias, text=text
+    )
+
     assert response["message"] == expected.strip()
     assert "".join(payload["text"] for kind, payload in events if kind == "answer.delta") == expected
     assert [payload["response"]["message"] for kind, payload in events if kind == "answer.final"] == [expected.strip()]
+
+
+def test_acp_stdio_stream_hides_a_long_percent_encoded_private_root(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    private = project.joinpath(*(["private segment"] * 12))
+    private.mkdir(parents=True)
+    encoded_path = quote(f"{private}/secret/gate.json", safe="")
+    response, events = _run_acp_answer(
+        tmp_path,
+        project=project,
+        agent_work_dir=private,
+        text=encoded_path + "\n",
+    )
+
+    assert response["message"] == "[local-path]"
+    assert "".join(
+        payload["text"] for kind, payload in events if kind == "answer.delta"
+    ) == "[local-path]\n"
 
 
 @pytest.mark.parametrize("suffix", ["/../other/private.txt", "/notes/../../private.txt", "/%2e%2e/private.txt"])
@@ -262,6 +317,17 @@ def test_stream_does_not_split_a_long_custom_path_before_redacting(root):
     path = root + "/" + "s" * 190 + "/gate.json"
     chunks = [stream.feed(path[:170]), stream.feed(path[170:] + "\n"), stream.finish()]
     assert "".join(chunks) == "[local-path]\n"
+
+
+def test_stream_holds_a_long_fully_encoded_private_root_until_redacting():
+    root = "/custom-volume/" + "private segment " * 18
+    path = quote(root + "/secret/gate.json", safe="")
+    stream = VisibleResponseStreamFilter(
+        protected_paths=["/custom-project", root]
+    )
+    streamed = "".join(stream.feed(character) for character in path)
+    assert streamed == ""
+    assert stream.feed("\n") + stream.finish() == "[local-path]\n"
 
 
 def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):

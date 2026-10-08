@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from .todos import add_goal_todo
 from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
@@ -189,7 +189,22 @@ def redact_local_paths(
             decoded = decoded.casefold()
         return tuple(part for part in decoded.split("/") if part not in {"", "."})
 
-    private_roots = [path_parts(raw) for raw, label in replacements if label == "[local-path]"]
+    def path_forms(value: str) -> set[str]:
+        separators_normalized = re.sub(
+            r"(?i)%(?:2f|5c)", "/", value
+        ).replace("\\", "/")
+        return {
+            value,
+            separators_normalized,
+            unquote(value, errors="surrogateescape").replace("\\", "/"),
+        }
+
+    private_roots = [
+        path_parts(form)
+        for raw, label in replacements
+        if label == "[local-path]"
+        for form in path_forms(raw)
+    ]
 
     def replace_absolute_path(match: re.Match[str]) -> str:
         matched = match.group(0)
@@ -214,8 +229,16 @@ def redact_local_paths(
                 None,
             )
             if remainder is not None and (not remainder or remainder.startswith("/")):
-                candidate_parts = path_parts(decoded_candidate)
-                if any(candidate_parts[: len(root)] == root for root in private_roots):
+                candidate_parts = {
+                    path_parts(form)
+                    for value in candidate_forms
+                    for form in path_forms(value)
+                }
+                if any(
+                    parts[: len(root)] == root
+                    for parts in candidate_parts
+                    for root in private_roots
+                ):
                     return f"[local-path]{suffix}"
                 if project_relative and label == "[project]" and candidate != raw:
                     relative = remainder.lstrip("/")
@@ -320,6 +343,18 @@ class VisibleResponseStreamFilter:
         self.protected_paths = tuple(protected_paths)
         self._protected = _protected_path_replacements(self.protected_paths)
         self._local_path_pattern = _local_path_pattern(self._protected)
+        self._partial_protected_roots = tuple(
+            spelling + suffix
+            for raw, _label in self._protected
+            for spelling in {
+                raw,
+                quote(raw, safe=""),
+                quote(raw, safe="/\\"),
+            }
+            # Keep a root plus a partially streamed separator too. A percent
+            # encoded separator arrives as three independent characters.
+            for suffix in ("", "/", "\\", "%", "%2", "%5", "%2F", "%5C")
+        )
         self.marker_pending = ""
         self.visible_pending = ""
         self.envelope_started = False
@@ -346,7 +381,10 @@ class VisibleResponseStreamFilter:
             )
             # A declared root itself can span several chunks or contain spaces.
             # Hold its prefix until it becomes a complete path token.
-            partial_root = any(raw.startswith(pending) for raw, _ in self._protected)
+            partial_root = any(
+                root.startswith(pending)
+                for root in self._partial_protected_roots
+            )
             if whitespace >= 0:
                 boundary = whitespace + 1
             elif partial_root:
