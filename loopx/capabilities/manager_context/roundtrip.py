@@ -1370,4 +1370,5 @@ class ReturnService:
 
     def close(self):
         self.stop.set()
-        self.thread.join(timeout=3)
+        if self.thread.ident is not None:
+            self.thread.join(timeout=3)

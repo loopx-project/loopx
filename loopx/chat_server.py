@@ -1690,7 +1690,9 @@ def serve_chat(
     )
     server.lark_goal_topic_runtime.start()
     from .extensions.lark.manager_returns import start_return_service
-    server.manager_return_service = start_return_service(server, server.runtime_controller.coordination_runtime_root)
+    server.manager_return_service = start_return_service(
+        server, server.runtime_controller.coordination_runtime_root, start_service=False
+    )
     from .chat_loopx_mode import DelegationWakeService
 
     def _wake_goal_context(session):
@@ -1717,6 +1719,7 @@ def serve_chat(
     try:
         if external_conversation_factories:
             server.conversation_transports.start(server)
+        server.manager_return_service.start()
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)
