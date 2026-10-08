@@ -26,6 +26,12 @@ loopx --format json coordination-shadow inspect-source \
 缺少归档角色、重复身份、非法历史 lease 和源变化会拒绝；已有 canonical selector、
 文档或 writer fence 时拒绝把 Markdown 投影当作冷旧导入源，provider 不可用也不回退。
 
+`source_inventory.capture` 同时盘点原 management 操作、活跃 outbox、runtime store
+与身份、此 Goal 保留的 rollback store，以及旧 observation 目录。文件指纹绑定原始
+字节；损坏的 outbox 文件仍可见，不 drain 或重写。现有 TS reader 校验存在的活跃
+历史，紧凑读回不包含全部原回执，必须保留所指原文件。已完成 rollback 的归档缺失
+或变化、历史非法及不安全文件布局均拒绝；中断的 management 仍是未完成的原操作。
+
 `import_ready`、`writer_stop_verified`、`outbox_reconciliation_verified` 始终为 false。
 此命令没有 `--execute`，不启用配置、创建 shadow/provider/fence、授予 lease 或制造捕获回执。
 它只交付操作员 CLI 盘点前置；Goal storage owner 仍须完成共享 frontend 盘点、明确停

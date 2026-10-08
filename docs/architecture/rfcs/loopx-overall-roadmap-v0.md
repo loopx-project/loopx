@@ -884,6 +884,11 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 Cold-source inventory is now an explicit read-only CLI prerequisite through the
 same TS source/lease owners. It includes unreferenced archives and retained
 leases, with full text and source-byte witnesses, before any shadow opt-in.
+The same observation discovers original capture stores/identity, management
+operation files, outbox bytes and Goal-bound rollback archives through the
+existing typed owners; present history is validated without replay or drain.
+Compact readback never replaces the witnessed historical files or proves Host
+stop. Invalid history and missing completed rollback archives refuse inspection.
 Expired or orphan `active` leases still require settlement; canonical selectors
 and fences prevent treating display Markdown as an old authority source.
 This observation creates no capture or import receipt and never reports import

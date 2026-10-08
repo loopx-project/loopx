@@ -33,7 +33,16 @@ identities, invalid historical leases and stale sources reject the inspection.
 An existing canonical selector/document or writer fence rejects using Markdown
 as a cold import source, including when the selected provider is unavailable.
 
-Read `source_inventory.active_todo_count`, `archived_todo_count`,
+`source_inventory.capture` also inventories the original management operations,
+active outbox, runtime store and identity, this Goal's retained rollback stores,
+and legacy observation directory. File witnesses use raw byte hashes; malformed
+outbox files remain visible without being drained or rewritten. Existing TS
+readers validate present active history. Their compact readback is not a copy
+of all receipts: preserve the original witnessed files. Missing or altered
+completed rollback archives, invalid history and unsafe file layouts refuse
+inspection. Interrupted management remains an unfinished original operation.
+
+Read `source_inventory.active_todo_count`, `archived_todo_count`, `capture`,
 `retained_leases` and `leases_requiring_settlement`. `import_ready`,
 `writer_stop_verified` and `outbox_reconciliation_verified` remain **false**.
 There is no `--execute` switch, writer fence, bootstrap, provider initialization,
