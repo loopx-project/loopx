@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
@@ -9,6 +10,7 @@ from urllib.request import urlopen
 import pytest
 
 from loopx.chat import VisibleResponseStreamFilter, parse_agent_response, redact_local_paths, redact_response_markdown
+from loopx.chat_acp import ACPStdioAdapter
 from loopx.chat_status_api import ChatStatusRequestMixin
 
 
@@ -89,6 +91,73 @@ def test_answer_path_presentation_does_not_relax_nested_private_roots_or_structu
     assert parsed["message"].startswith("`./notes/report.md`")
     assert parsed["proposals"][0]["text"] == "Read [project]"
     assert parsed["proposals"][0]["rationale"] == "See [local-path]"
+
+
+@pytest.mark.parametrize("private_path", [
+    "/custom-volume/project/./runtime/private/gate.json",
+    "/custom-volume/project//runtime/private/gate.json",
+    "/custom-volume/project/runtime/./private/gate.json",
+    "/custom-volume/project/%2e/runtime/private/gate.json",
+    "/custom-volume/project/runtime%2fprivate/gate.json",
+    r"Q:\project\.\runtime\private\gate.json",
+    r"Q:\project\\runtime\private\gate.json",
+    r"Q:\project\.\RUNTIME\private\gate.json",
+])
+def test_answer_and_every_stream_split_hide_equivalent_nested_private_paths(private_path):
+    paths = [r"Q:\project", r"Q:\project\runtime"] if private_path.startswith("Q:") else [
+        "/custom-volume/project", "/custom-volume/project/runtime",
+    ]
+    text = f"Read back `{private_path}`.\n"
+    expected = "Read back `[local-path]`.\n"
+    assert redact_response_markdown(text, protected_paths=paths) == expected
+    assert parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
+    for split in range(len(text) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=paths)
+        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+
+
+def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(tmp_path):
+    project = tmp_path / "project"
+    private = project / "runtime"
+    private.mkdir(parents=True)
+    secret = private / "synthetic-secret.md"
+    secret.write_text("synthetic fixture")
+    aliases = [str(secret), f"{project}/./runtime/{secret.name}", f"{project}//runtime/{secret.name}"]
+    assert all(Path(alias).resolve() == secret.resolve() for alias in aliases)
+    text = "\n".join([*aliases, str(project / "notes/report.md")]) + "\n"
+    expected = "[local-path]\n" * len(aliases) + "./notes/report.md\n"
+    provider = tmp_path / "synthetic_acp.py"
+    provider.write_text('''import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "fixture"}
+    elif method == "session/prompt":
+        for chunk in sys.argv[1]:
+            print(json.dumps({"jsonrpc": "2.0", "method": "session/update",
+                "params": {"sessionId": "fixture", "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": chunk}}}}), flush=True)
+        result = {"stopReason": "end_turn"}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+''')
+    events = []
+    adapter = ACPStdioAdapter.start(
+        command=(sys.executable, str(provider), text), work_dir=project, agent_work_dir=private,
+        startup_timeout_sec=5, idle_timeout_sec=5, hard_timeout_sec=10,
+    )
+    try:
+        response = adapter.start_turn("Report fixture locations", lambda kind, payload: events.append((kind, payload)))
+    finally:
+        adapter.close_session()
+    assert response["message"] == expected.strip()
+    assert "".join(payload["text"] for kind, payload in events if kind == "answer.delta") == expected
+    assert [payload["response"]["message"] for kind, payload in events if kind == "answer.final"] == [expected.strip()]
 
 
 @pytest.mark.parametrize("suffix", ["/../other/private.txt", "/notes/../../private.txt", "/%2e%2e/private.txt"])

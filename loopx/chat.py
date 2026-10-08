@@ -157,6 +157,14 @@ def redact_local_paths(
     redacted = str(text or "")
     replacements = _protected_path_replacements(protected_paths)
 
+    def path_parts(value: str) -> tuple[str, ...]:
+        decoded = unquote(value).replace("\\", "/")
+        if re.match(r"^[A-Za-z]:/", decoded):
+            decoded = decoded.casefold()
+        return tuple(part for part in decoded.split("/") if part not in {"", "."})
+
+    private_roots = [path_parts(raw) for raw, label in replacements if label == "[local-path]"]
+
     def replace_absolute_path(match: re.Match[str]) -> str:
         matched = match.group(0)
         candidate = matched.rstrip(".,;:!?)]}")
@@ -167,6 +175,11 @@ def redact_local_paths(
                     relative = re.sub(r"\\+", "/", candidate[len(raw):]).lstrip("/")
                     components = unquote(relative).replace("\\", "/").split("/")
                     if ".." not in components:
+                        # Equivalent spellings must not bypass a nested private
+                        # root when opting into project-relative presentation.
+                        candidate_parts = path_parts(candidate)
+                        if any(candidate_parts[:len(root)] == root for root in private_roots):
+                            return f"[local-path]{suffix}"
                         return f"./{relative}{suffix}"
                 return f"{label}{suffix}"
         return f"[local-path]{suffix}"
