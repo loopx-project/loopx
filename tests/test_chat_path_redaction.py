@@ -276,8 +276,7 @@ def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filenam
 def test_acp_stdio_stream_hides_a_long_percent_encoded_private_root(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
-    private = project.joinpath(*(["private segment"] * 12))
-    private.mkdir(parents=True)
+    private = Path("/custom-volume/" + "private segment " * 18)
     encoded_path = quote(f"{private}/secret/gate.json", safe="")
     response, events = _run_acp_answer(
         tmp_path,
