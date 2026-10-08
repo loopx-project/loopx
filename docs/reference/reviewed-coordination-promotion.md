@@ -42,13 +42,20 @@ of all receipts: preserve the original witnessed files. Missing or altered
 completed rollback archives, invalid history and unsafe file layouts refuse
 inspection. Interrupted management remains an unfinished original operation.
 
+In the App, open **Goal settings → Task ownership → Goal data storage** to read
+the same verified inventory. It shows task/archive and unsettled-lease counts
+and retained capture/outbox presence, without exposing source text, local paths
+or execution keys. **Read current storage** performs a fresh observation; a
+failed read clears old counts. Import is explicitly unavailable at this stage.
+There is no confirmation or migration control for an old Markdown source.
+
 Read `source_inventory.active_todo_count`, `archived_todo_count`, `capture`,
 `retained_leases` and `leases_requiring_settlement`. `import_ready`,
 `writer_stop_verified` and `outbox_reconciliation_verified` remain **false**.
 There is no `--execute` switch, writer fence, bootstrap, provider initialization,
-lease grant or capture receipt. This is an operator CLI prerequisite, not the
-complete import journey or a dashboard/Lark operation. The Goal storage owner
-still needs the shared frontend inventory, explicit Host/writer stop, original
+lease grant or capture receipt. This is a shared CLI/App inventory prerequisite,
+not the complete import journey or a Lark operation. The Goal storage owner
+still needs explicit Host/writer stop, original
 outbox reconciliation, backup, reviewed target, confirmation and same-operation
 import recovery. Existing shadow qualification below retains its original gates.
 

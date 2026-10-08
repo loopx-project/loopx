@@ -32,9 +32,14 @@ loopx --format json coordination-shadow inspect-source \
 历史，紧凑读回不包含全部原回执，必须保留所指原文件。已完成 rollback 的归档缺失
 或变化、历史非法及不安全文件布局均拒绝；中断的 management 仍是未完成的原操作。
 
+App 中打开 **Goal 设置 → 任务所有权 → Goal 数据存储**，读取同一 TS owner 核验的
+盘点。页面只显示当前／归档任务及未结算 lease 数量、原 capture/outbox 文件是否存在，
+不暴露源正文、本机路径或执行密钥。“读回当前存储”重新观察，失败时清除旧数量。
+此阶段明确显示导入尚不可用，不为旧 Markdown 源提供确认或迁移按钮。
+
 `import_ready`、`writer_stop_verified`、`outbox_reconciliation_verified` 始终为 false。
 此命令没有 `--execute`，不启用配置、创建 shadow/provider/fence、授予 lease 或制造捕获回执。
-它只交付操作员 CLI 盘点前置；Goal storage owner 仍须完成共享 frontend 盘点、明确停
+它交付共享 CLI/App 盘点前置；Goal storage owner 仍须完成明确停
 writer/Host、原 outbox 对账、备份、审核目标、确认和同操作导入恢复。下方 shadow
 晋升仍遵守原资格，不因盘点通过而放宽。
 

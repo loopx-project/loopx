@@ -892,8 +892,12 @@ stop. Invalid history and missing completed rollback archives refuse inspection.
 Expired or orphan `active` leases still require settlement; canonical selectors
 and fences prevent treating display Markdown as an old authority source.
 This observation creates no capture or import receipt and never reports import
-readiness. R5/D1 and T4/C1 still need the Goal storage frontend, stopped
-writer/Host proof, original outbox disposition, backup-bound reviewed target,
+readiness. Goal settings now consume that same observation: current/archive
+task counts, unsettled historical leases and retained capture/outbox presence,
+with path-free readback, unavailable-source refusal and fresh retry. This is the
+inventory stage only; no import, capture activation or execution grant is exposed.
+R5/D1 and T4/C1 still need stopped writer/Host proof, original outbox disposition,
+the backup-bound reviewed target and its Goal storage frontend,
 confirmation and same-operation import/recovery. Keep the cold-import work open;
 neither this prerequisite nor archive export qualifies writer cutoff or defaults.
 
