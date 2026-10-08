@@ -295,6 +295,79 @@ def test_ambiguous_create_is_not_automatically_retried(tmp_path):
     assert receipt["cleanup"]["unknown_creation"] == "reconcile_required"
 
 
+@pytest.mark.parametrize("path,builtins", [("/agents", False), ("/sessions", False), ("/sessions", True)])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_explicit_create_rejection_retires_only_acknowledged_resources(tmp_path, path, builtins, status):
+    cfg = replace(config(tmp_path, tools=False), sandbox_builtins=builtins)
+
+    class RejectedProvider(Provider):
+        def __call__(self, req):
+            if req.method == "POST" and req.url.path.removeprefix("/api/v3") == path:
+                self.calls.append((req.method, path, json.loads(req.content)))
+                return httpx.Response(status, json={"error": {"message": "synthetic invalid configuration"}})
+            return super().__call__(req)
+
+    provider = RejectedProvider([])
+    with pytest.raises(Exception):
+        asyncio.run(execute(provider, cfg))
+    receipt = json.loads(Receipt(cfg.state_dir, request()["turn_key"]).path.read_text())
+    expected_stage = "creating_agent" if path == "/agents" else "creating_session"
+    assert receipt["creation_rejection"] == {"stage": expected_stage, "status_code": status}
+    assert receipt["stage"] == expected_stage  # Never rewind the attempt.
+    assert "unknown_creation" not in receipt.get("cleanup", {})
+    assert provider.deleted == (set() if path == "/agents" else {"/agents/agnt-fixture"})
+    assert not any(p.endswith("/events") for _, p, _ in provider.calls)
+    before = len(provider.calls)
+    with pytest.raises(AdapterError, match="previous_attempt_requires_reconciliation"):
+        asyncio.run(execute(provider, cfg))
+    assert not any(method == "POST" for method, _, _ in provider.calls[before:])
+
+
+@pytest.mark.parametrize("rejection", [None, {"stage": "creating_session", "status_code": 400}])
+def test_creation_rejection_does_not_clear_existing_uncertainty(tmp_path, rejection):
+    cfg = config(tmp_path, tools=False)
+    receipt = Receipt(cfg.state_dir, request()["turn_key"])
+    receipt.data = {"stage": "creating_session", "agent_id": "agnt-fixture",
+                    "cleanup": {"unknown_creation": "reconcile_required"}}
+    if rejection:
+        receipt.data["creation_rejection"] = rejection
+    provider = Provider([])
+
+    async def attempt_cleanup():
+        from loopx_ark_turn.host import cleanup
+        async with AsyncArk(api_key="synthetic", base_url="https://fixture.invalid/api/v3",
+                            http_client=httpx.AsyncClient(transport=httpx.MockTransport(provider)), max_retries=0) as client:
+            return await cleanup(client, receipt)
+
+    assert asyncio.run(attempt_cleanup()) is False
+    assert receipt.data["cleanup"] == {"unknown_creation": "reconcile_required"}
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize("status", [408, 409, 429, 500])
+def test_uncertain_session_create_keeps_known_parent_for_reconciliation(tmp_path, status):
+    cfg = config(tmp_path, tools=False)
+
+    class UncertainProvider(Provider):
+        def __call__(self, req):
+            if req.method == "POST" and req.url.path.removeprefix("/api/v3") == "/sessions":
+                self.calls.append((req.method, "/sessions", json.loads(req.content)))
+                return httpx.Response(status, json={"error": {"message": "synthetic uncertain creation"}})
+            return super().__call__(req)
+
+    provider = UncertainProvider([])
+    with pytest.raises(Exception):
+        asyncio.run(execute(provider, cfg))
+    receipt = json.loads(Receipt(cfg.state_dir, request()["turn_key"]).path.read_text())
+    assert receipt["cleanup"]["unknown_creation"] == "reconcile_required"
+    assert "creation_rejection" not in receipt
+    assert provider.deleted == set()
+    before = len(provider.calls)
+    with pytest.raises(AdapterError, match="previous_attempt_requires_reconciliation"):
+        asyncio.run(execute(provider, cfg))
+    assert provider.calls[before:] == []
+
+
 def test_tool_budget_prevents_second_effect(tmp_path):
     cfg = replace(config(tmp_path), max_tool_calls=1)
     provider = Provider([tool_event(), tool_event("e2")])

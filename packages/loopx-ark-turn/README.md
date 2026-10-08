@@ -165,6 +165,12 @@ attempt-owned resources without launching a model or repeating a local tool.
 It returns success only after absence is confirmed. A lost create response
 leaves `unknown_creation=reconcile_required`: use the private receipt's exact
 resource label to inspect the provider account and resolve ownership manually.
+An explicit creation rejection (HTTP 400, 401, 403, 404 or 422) records only
+the phase and status code, then retires already acknowledged resources. It
+does not rewind the attempt or retry creation. Timeout, conflict, rate-limit,
+server errors and lost responses remain uncertain; earlier unknown receipts
+are not reclassified. Raw provider error bodies are not stored. A rejected
+configuration does not qualify sandbox enforcement or backend compatibility.
 The adapter cannot safely adopt an unknown resource or declare it absent.
 Keep that attempt blocked; do not delete arbitrary matching resources or edit
 the receipt to make replay look successful. A completed candidate remains
