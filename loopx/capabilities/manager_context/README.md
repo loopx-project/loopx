@@ -64,7 +64,8 @@ an audience-safe conclusion with the existing `manager-inbox report` path, in
 addition to its peer result. Launch submission, receiver conclusion, canonical
 acceptance and provider delivery remain separate evidence. The existing return
 service replies to the original conversation; it does not start another model
-thread. Plain inbox delivery now says that execution has not started.
+thread. Plain inbox delivery leaves receiver activity unverified; it does not claim
+that execution has not started.
 The native postcondition entry retires only its exact operation-owned temporary
 host input before checking a clean delivery worktree; unrelated files and actual
 artifact changes still fail canonical validation. Validation recovery resumes the
@@ -554,23 +555,28 @@ this brief and live receiver/return facts in place. Compatible requests without
 a brief retain their existing shape and identity. A changed brief under the same
 ingress identity is a conflict, not a second delegation.
 
-The shared Chat handoff acknowledgment summarizes the existing brief's purpose,
-recipient-selection context, constraints, acceptance and return requirement.
-Long fields and lists have a visibly abbreviated preview; the receiver gets the
-complete brief unchanged. Start the context with the evidence-based selection
-reason and request interpretation, rather than private chain-of-thought.
-The acknowledgment names both Goal and Agent and distinguishes inbox delivery
-from governed execution submission. Delivery alone leaves receiver execution
-unverified; even a refused sender-side launch cannot prove that the receiver has
-not independently started. Model-authored prose cannot override those facts.
-This applies to the shared App, Goal and Lark handoff path; it changes neither
-grants, dispatch, request identity nor the automatic result-return path.
+The default shared Chat handoff acknowledgment is a short user-facing preview:
+the exact recipient Agent, purpose, a bulleted result checklist (up to three
+items), execution boundaries (up to two items), and the return requirement.
+Each item has a visible text bound; omitted list items are counted. Selection
+evidence, historical context and internal operation identities stay in the full
+brief and diagnostic readback rather than flooding the ordinary conversation.
+The complete normalized brief is delivered unchanged, including every context,
+constraint and acceptance item. This is a presentation default change, not a
+lossy receiver handoff or a new public-safe projection.
+
+The acknowledgment distinguishes inbox delivery from governed execution
+submission. Delivery alone leaves receiver execution unverified; even a refused
+sender-side launch cannot prove that the receiver has not independently started.
+Model-authored prose cannot override those facts. This applies to the shared App,
+Goal and Lark handoff path; grants, dispatch, request identity and the automatic
+result-return path keep their existing owners.
 
 The packaged Chat [before](../../../docs/assets/handoff-ack/before.png) and
-[after](../../../docs/assets/handoff-ack/after.png) views use the same synthetic
-request and production context delivery, with a scripted model-protocol host.
-They show presentation and receipt handling, not real-model routing or receiver
-execution.
+[compact preview](../../../docs/assets/handoff-ack/after.png) views use a
+synthetic request and production context delivery, with a scripted model-protocol
+host. They demonstrate presentation and receipt handling, not real-model routing
+or receiver execution.
 
 Registered workers can ask another worker of the **same Goal on the same host**
 for help or independent review:

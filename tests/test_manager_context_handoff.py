@@ -684,7 +684,7 @@ def test_actual_manager_turn_delivers_and_reports_host_receipt(fixture, monkeypa
         assert created and completed["status"] == "completed", completed
         response = completed["response"]
         assert response["context_handoff_receipt"]["status"] == "delivered"
-        assert "已将原消息交给 research / worker" in response["message"]
+        assert "**已转交给 `worker`。**" in response["message"]
         assert response["proposals"] == [] and response["gate"] is None
         assert len(pending(root, "research", "worker")["items"]) == 1
         assert registry.read_bytes() == original_registry

@@ -133,7 +133,7 @@ def test_correction_and_late_draft_return_to_original_conversation(
             )
             assert completed["status"] == "completed", completed
             reply = completed["response"]["message"]
-            assert "community / writer" in reply
+            assert "**已转交给 `writer`。**" in reply
             assert drafts[index][1] in reply
             assert "是否已开始处理尚未核实" in reply
             if index:

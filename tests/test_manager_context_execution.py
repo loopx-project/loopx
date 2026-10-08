@@ -128,7 +128,7 @@ def test_handoff_response_preserves_receipt_and_separate_execution_status(flow):
         source_authorized=lambda: True, execution_allowed=lambda: True)
     assert response["context_handoff_receipt"]["status"] == "delivered"
     assert response["context_execution"]["status"] == "prepared"
-    assert "受理不代表完成" in response["message"]
+    assert "尚未确认完成" in response["message"]
     assert request["brief"]["purpose"] in response["message"]
     assert "Unverified model completion claim" not in response["message"]
     assert response["proposals"] == [] and response["gate"] is None
