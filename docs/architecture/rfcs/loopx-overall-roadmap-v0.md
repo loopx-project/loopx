@@ -798,8 +798,13 @@ Readable R2/R3 answers reuse shared adaptive authoring guidance across ordinary
 project Chat, steward context and the collaboration return tool. This narrows
 routine protocol noise without cutting substantive answers or judging
 acceptance; it does not close sustained worker, steering or original-route
-return qualification. Private Markdown delivery is already owned by the
-existing Lark transport and is unchanged here.
+return qualification. Private Markdown delivery remains owned by the existing
+Lark transport. Ordinary answers and asynchronous worker returns now share its
+presentation fallback: unresolved visual handles render with an inert full-width
+marker, while valid structured mentions retain membership verification. The
+original stored result is unchanged; delivery and saved-attempt readback use the
+same rendered text. File-backed return/restart regressions cover this bounded
+repair, not sustained receiver adoption or the complete R3 journey.
 
 For App continuity in GQ07–GQ09, qualify chosen Manager/Goal view restoration
 through reload and browser Back/Forward using the existing typed route and

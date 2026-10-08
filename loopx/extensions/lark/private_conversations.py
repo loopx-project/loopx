@@ -24,20 +24,13 @@ from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_arg
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
-from .outbound import LarkOutboundTextError, normalize_lark_outbound_text, safe_lark_plain_text_fallback
+from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
 from .private_progress import UPDATE_INTERVAL_SEC, project_progress
 
 # Conservative transport budget, not a claim about the provider's maximum.
 # Reserve edits for a canonical final or the oversized-final closing notice.
 PROGRESS_EDIT_BUDGET = 12
-
-
-def _presentation_text(text: str) -> str:
-    try:
-        return normalize_lark_outbound_text(text, limit=None, preserve_format=True)
-    except LarkOutboundTextError:
-        return safe_lark_plain_text_fallback(text)
 
 
 class LarkPrivateConversations:
