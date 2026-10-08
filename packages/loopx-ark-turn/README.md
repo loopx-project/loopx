@@ -142,7 +142,10 @@ receipts retain their original replay semantics. Changing builtin mode binds a d
 configuration; it cannot retarget or rerun an existing Turn key. Keep stopped
 attempts and their unknown usage instead of resetting them to retry input.
 
-Mutating provider requests are not automatically retried. A duplicate exact
+The SDK does not automatically retry mutating provider requests. Resource
+retirement may retry a rejected DELETE after the bounded ownership/stop checks
+described below; creation, model input and interrupt are never resent by that
+recovery. A duplicate exact
 request may reuse a completed candidate after resource cleanup; a conflicting
 request or incomplete prior attempt cannot silently start another model run.
 An interrupted running attempt with a confirmed original input and no uncertain
