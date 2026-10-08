@@ -399,11 +399,17 @@ def test_steward_commission_progress_uses_exact_first_turn_and_original_app(stew
 
 
 @pytest.mark.parametrize("change", ["app", "audience"])
-def test_stream_rechecks_current_app_and_target_audience_before_edit(ordinary, change):  # noqa: F811
+@pytest.mark.parametrize("rollover", [False, True])
+def test_stream_rechecks_current_app_and_target_audience_before_edit(ordinary, change, rollover):  # noqa: F811
     store, runtime, provider, transport, row = start(ordinary)
     try:
         store.append_event(row["session_id"], row["turn_id"], kind="answer.delta", payload={"text": "private next chunk"})
         allow_update(transport, row)
+        if rollover:
+            path = transport.root / f"{row['request_ref']}.json"
+            record = _read_json(path)
+            record["stream"]["edit_attempts"] = PROGRESS_EDIT_BUDGET
+            _atomic_write_json(path, record)
         if change == "app":
             provider.profile_apps["notes-app"] = "cli_replaced_app"
         else:
@@ -429,7 +435,7 @@ def test_progress_is_bounded_and_does_not_invent_activity_or_show_reasoning():
     assert state["cursor"] == "4"
 
 
-def test_progress_edit_budget_survives_restart_and_reserves_final(ordinary):  # noqa: F811
+def test_progress_continues_after_edit_budget_across_restart_and_reserves_final(ordinary):  # noqa: F811
     store, runtime, provider, transport, row = start(ordinary)
     try:
         sid, tid = row["session_id"], row["turn_id"]
@@ -440,15 +446,74 @@ def test_progress_edit_budget_survives_restart_and_reserves_final(ordinary):  # 
             transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
                                                  runner=provider, cli_bin="lark-cli")
             transport.reconcile()
-        assert len(provider.edits) == PROGRESS_EDIT_BUDGET
+        assert len(provider.writes) == 2
+        assert "后续进展 2" in provider.writes[-1][1]
+        assert f"片段 {PROGRESS_EDIT_BUDGET + 2}。" in provider.edits[-1][2]
+        assert provider.edits[-1][1] == "om_out_1"
         record = _read_json(transport.root / f"{row['request_ref']}.json")
-        assert record["stream"]["edit_attempts"] == PROGRESS_EDIT_BUDGET
+        assert record["stream"]["edit_attempts"] == 2
+        assert record["deliveries"]["progress.0"]["verified"]
+        assert record["deliveries"]["progress.0"]["attempt"]["message_ref"] == "om_out_0"
         assert f"片段 {PROGRESS_EDIT_BUDGET + 2}。" in record["stream"]["answer"]
         runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
         runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
         assert transport.reconcile() == 1
-        assert provider.edits[-1][2] == "Steered response."
-        assert len(provider.writes) == 1
+        assert provider.edits[-1][1:] == ("om_out_1", "Steered response.")
+        assert len(provider.writes) == 2
+        transport.reconcile()
+        assert len(provider.writes) == 2
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("interruption", ["close", "create", "quota"])
+def test_continuation_recovers_exact_draft_without_resend_or_rerun(ordinary, interruption):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        path = transport.root / f"{row['request_ref']}.json"
+        record = _read_json(path)
+        # Simulate an upgrade of a long-running draft whose budget is spent.
+        record["stream"]["edit_attempts"] = PROGRESS_EDIT_BUDGET
+        _atomic_write_json(path, record)
+        store.append_event(sid, tid, kind="answer.delta", payload={"text": "晚到的进展。"})
+        allow_update(transport, row)
+        if interruption == "close":
+            provider.hide_next_edit_readback = True
+        elif interruption == "create":
+            provider.hidden_ref = "om_out_1"
+        else:
+            provider.edit_error = {"type": "api", "code": 230072}
+        transport.reconcile()
+        record = _read_json(path)
+        if interruption == "close":
+            assert len(provider.writes) == 1 and "progress.0" not in record["deliveries"]
+        elif interruption == "create":
+            assert len(provider.writes) == 2 and not record["deliveries"]["progress"]["verified"]
+        else:
+            assert len(provider.writes) == 2 and record["deliveries"]["progress.0"]["edit_limit_reached"]
+        edits = len(provider.edits)
+        provider.edit_error = None
+        store.append_event(sid, tid, kind="answer.delta", payload={"text": "恢复期间的新片段。"})
+        allow_update(transport, row)
+        replay = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                         runner=provider, cli_bin="lark-cli")
+        replay.reconcile()
+        assert len(provider.writes) == 2
+        if interruption in {"close", "create"}:
+            assert len(provider.edits) == edits  # Recover the frozen body by readback.
+        allow_update(replay, row)
+        replay.reconcile()
+        assert "恢复期间的新片段。" in _read_json(path)["stream"]["confirmed_text"]
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert replay.reconcile() == 1
+        assert provider.edits[-1][1:] == ("om_out_1", "Steered response.")
+        assert len(provider.writes) == 2
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
     finally:
         runtime.close()
 

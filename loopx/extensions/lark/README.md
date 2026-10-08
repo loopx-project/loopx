@@ -479,3 +479,27 @@ group's session. Long-running work still belongs to worker Agents. Conversation
 turns retain the existing read-only tool policy and typed preview/apply authority;
 a synchronous response is not permission to mutate arbitrary repositories or
 skip a control-plane receipt.
+
+
+### Native private Chat progress
+
+Native private project Chat and steward conversations present persisted Core
+Turn events as a mutable, source-bound Markdown reply. Answer chunks and fixed
+activity labels are coalesced at a two-second interval; reasoning, tool
+arguments and command output are excluded. The transport does not run models.
+
+The conservative edit budget applies to each draft, rather than the whole Turn.
+When it is exhausted, the transport verifies a short continuation notice on the
+old draft, then creates a numbered continuation using the existing sender and
+source placement. A definite provider edit-limit rejection also allows this
+continuation; uncertain closes or creates recover their frozen intent instead
+of blindly sending another message. Archived draft proofs survive restarts.
+The full canonical answer replaces the latest draft, with the existing oversized
+answer and provider-limit fallback. Source/App/audience checks and final
+readback still gate delivery, and only final delivery acknowledges the request.
+
+原生私聊的进度消息按两秒间隔合并更新，每条草稿分别计算编辑预算。长任务用完
+预算后，先读回旧草稿上的续接提示，再在同一来源位置发送编号的后续进度；明确的
+provider 编辑次数耗尽也允许续接。关闭或创建结果不明时，恢复原有投递意图，不盲目
+重发、不重跑任务。最终完整答案替换最新草稿，超长答案沿用既有完整发送路径；
+来源、App、接收范围和最终读回校验仍然有效。
