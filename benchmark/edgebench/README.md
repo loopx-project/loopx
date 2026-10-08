@@ -82,12 +82,6 @@ startup margin, not sustained capacity qualification: retain continuous load and
 grading-latency monitoring and stop affected trials on sustained pressure. Strict
 admission and the shared mode without this explicit option retain their defaults.
 
-Best-only notifications require both a new finite score record from valid
-admitted snapshots and selection as the task's native winner. This also supports
-`pass_rate_first` without changing native grading or final selection. A higher
-scalar score outside the native winner is retained as the score threshold but
-not announced. A native winner with a lower scalar score is likewise silent.
-
 Then run:
 
 ```sh
@@ -149,8 +143,8 @@ an evaluator-feedback-free control. Harbor is unchanged.
 | blind | None; public task files, local tests and compiler feedback remain available | Host evaluates fixed automatic samples; agent has no judge route or credentials |
 | best-only | Latest strict improvement notification and the corresponding submitted-source checkpoint; no score, delta, diagnostics or negative-result status | Fixed capture cadence; one evaluator and latest pending capture per run; agent cannot request extra evaluations |
 
-Best-only supports non-game, offline tasks with `score_first` or
-`valid_then_score` selection, including maximizing and minimizing scores. It
+Best-only supports non-game, offline tasks with `score_first`,
+`valid_then_score` or `pass_rate_first` selection, including maximizing and minimizing scores. It
 requires the explicit API-only proxy and a positive sampling interval. Unsupported
 selection policies fail with an actionable error instead of silently changing
 the task's ranking. Native grading and score selection remain unchanged. The
@@ -190,11 +184,14 @@ covers online submissions only; use the complete offline result for post-run
 qualification. Neither report by itself certifies integrity or score countability.
 No offline result is routed to the worker.
 
-The first completed valid finite score establishes a silent baseline. Only a
-strictly better valid score updates `/opt/edgebench-feedback/latest.json`; ties,
+The first completed valid finite score establishes a silent baseline. The task's
+native selection policy is the sole improvement criterion among valid scored
+snapshots. Only a strictly better native rank updates `/opt/edgebench-feedback/latest.json`; ties,
 regressions, invalid/non-finite results and errors do not update it. Multiple
 completed improvements observed together coalesce to the best one. Out-of-order
-results compete against the best observed score, never against the last result.
+results compete against the best observed native rank, never against the last result.
+For `pass_rate_first`, a higher pass rate can be an improvement even when its
+scalar score is lower; a scalar gain with a lower native rank is silent.
 Notifications describe the named **evaluated snapshot**, not the current workspace.
 The source archive is the agent's own original submission, with its SHA-256; it
 contains no judge output. The adapter never restores files automatically.
@@ -232,7 +229,7 @@ A notification looks like this (digest abbreviated for illustration):
     "snapshot_id": "auto-7",
     "source_sha256": "<SHA-256>",
     "source_archive": "/opt/edgebench-feedback/auto-7-<SHA-256>.tar.gz",
-    "message": "This evaluated snapshot strictly improved the best valid score observed so far. It may differ from your current files; keep using local validation."
+    "message": "This evaluated snapshot strictly improved the task's native ranking among valid scored snapshots. It may differ from your current files; keep using local validation."
   }
 }
 ```

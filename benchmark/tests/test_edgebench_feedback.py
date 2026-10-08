@@ -99,7 +99,7 @@ def test_silent_baseline_then_positive_only_disclosure_and_source_identity(publi
     assert publisher.notifications == 1
 
 
-def test_scalar_improvement_requires_native_winner_and_preserves_global_threshold(publisher):
+def test_native_ranking_alone_controls_improvement_notifications(publisher):
     from sforge.harness.selection import select_best
     transport = Transport()
     publisher.selection = "pass_rate_first"
@@ -113,12 +113,18 @@ def test_scalar_improvement_requires_native_winner_and_preserves_global_threshol
     assert native["best_score"] == .2
     assert entries[1]["pass_rate"] == .8
     entries.append(row(3, .3, pass_rate=.95))
+    archive(publisher, 3)
     publisher.update(history(*entries), transport, None)
-    assert not transport.files  # Native winner improved, scalar record did not.
-    entries.append(row(4, .5, pass_rate=.96))
+    assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-3"
+    # A higher native pass rate is an improvement even with a lower score.
+    entries.append(row(4, .1, pass_rate=.96))
     archive(publisher, 4)
     publisher.update(history(*entries), transport, None)
     assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-4"
+    previous = dict(transport.files)
+    entries.append(row(5, .1, pass_rate=.96))
+    publisher.update(history(*entries), transport, None)
+    assert transport.files == previous  # Equal native rank is silent.
 
 
 @pytest.mark.parametrize("patch", [

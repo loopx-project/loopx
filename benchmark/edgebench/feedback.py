@@ -21,7 +21,7 @@ FEEDBACK_MODES = ("native", "blind", "best-only")
 FEEDBACK_ROOT = PurePosixPath("/opt/edgebench-feedback")
 FEEDBACK_FILE = FEEDBACK_ROOT / "latest.json"
 _MESSAGE = (
-    "This evaluated snapshot strictly improved the best valid score observed so far. "
+    "This evaluated snapshot strictly improved the task's native ranking among valid scored snapshots. "
     "It may differ from your current files; keep using local validation."
 )
 
@@ -60,6 +60,7 @@ class BestOnlyFeedback:
         self.directory = trial / "best-only-host"
         self.directory.mkdir(exist_ok=False)
         self.score = None
+        self.incumbent = None
         self.notifications = 0
         self.errors = 0
         self.sampler = sampler
@@ -126,23 +127,17 @@ class BestOnlyFeedback:
             eligible.append(entry)
         if not eligible:
             return None
-        if self.score is None:
+        if self.incumbent is None:
             # The first observed valid result establishes a silent baseline.
+            self.incumbent = eligible[0]
             self.score = eligible[0]["score"]
             self._record()
-        best = select_best(eligible, self.direction, "score_first")
-        score = best["best_score"]
-        better = score > self.score if self.direction == "maximize" else score < self.score
-        if not better:
+        best = select_best(eligible, self.direction, self.selection)
+        candidate = next(entry for entry in eligible if entry["round"] == best["best_round"])
+        comparison = select_best([self.incumbent, candidate], self.direction, self.selection)
+        if candidate["round"] == self.incumbent["round"] or comparison["best_round"] != candidate["round"]:
             return None
-        native = select_best(eligible, self.direction, self.selection)
-        if native["best_round"] != best["best_round"]:
-            # A scalar record outside the native winner cannot be advertised as
-            # best. Retain its threshold so a later lower score cannot trigger.
-            self.score = score
-            self._record()
-            return None
-        return next(entry for entry in eligible if entry["round"] == best["best_round"])
+        return candidate
 
     def update(self, history, backend, handle):
         """Project one complete native history read; useful for real transport qualification."""
@@ -179,6 +174,7 @@ class BestOnlyFeedback:
         if self.stop_event.is_set():
             return
         self._publish_json(backend, handle, packet)
+        self.incumbent = candidate
         self.score = candidate["score"]
         self.notifications += 1
         self._record(packet)
