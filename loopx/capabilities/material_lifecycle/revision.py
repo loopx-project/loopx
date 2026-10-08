@@ -337,6 +337,22 @@ def apply_material_candidate_revision(
     previous = _candidate(provider, pid, proposal, source, timestamp)
     if previous.candidate_record_ref != proposal["expected_record_ref"]:
         raise ValueError("candidate revision previous record CAS failed")
+    previous_record = {
+        field: getattr(previous, field)
+        for field in (
+            "material_ref",
+            "source_ref",
+            "source_revision",
+            "exact_read_ref",
+            "content_digest",
+            "content_size_bytes",
+            "candidate_record_ref",
+            "content_backing_ref",
+        )
+    }
+    # The rollback snapshot must already satisfy the shared public receipt
+    # contract before the provider stages any new catalog or content.
+    _validate_candidate(previous, proposal=previous_record, authority_revision=source)
     staged = provider.stage_candidate_revision(
         store_id=store,
         proposal_ref=proposal["proposal_ref"],
@@ -400,19 +416,7 @@ def apply_material_candidate_revision(
         "before_revision": source,
         "after_revision": target,
         "item_count": count,
-        "previous_record": {
-            field: getattr(previous, field)
-            for field in (
-                "material_ref",
-                "source_ref",
-                "source_revision",
-                "exact_read_ref",
-                "content_digest",
-                "content_size_bytes",
-                "candidate_record_ref",
-                "content_backing_ref",
-            )
-        },
+        "previous_record": previous_record,
         "owner_gate_ref": gate,
         "validation_ref": validation,
         "authority_ref": compact_token(transition.authority_ref, field="authority_ref"),

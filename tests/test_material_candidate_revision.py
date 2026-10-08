@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -292,6 +293,57 @@ def test_invalid_revision_never_switches_authority(tmp_path: Path, fault: str) -
         apply(source)
     assert source.authority == "revision:old"
     assert source.switches == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("source_ref", "https://example.invalid/private-source"),
+        ("source_revision", "/private/source-revision"),
+        ("exact_read_ref", "https://example.invalid/private-read"),
+        ("content_digest", "https://example.invalid/private-digest"),
+        ("candidate_record_ref", "/private/record"),
+        ("content_backing_ref", "/private/content"),
+        ("content_size_bytes", 0),
+        ("content_size_bytes", -1),
+        ("content_size_bytes", True),
+        ("content_size_bytes", 1.25),
+        ("content_size_bytes", "13"),
+    ],
+)
+def test_invalid_previous_snapshot_is_rejected_before_any_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    unsafe_value: Any,
+) -> None:
+    source = FileSource(tmp_path)
+    original = source.load("revision:old")
+    before_files = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    read_candidate = source.read_candidate
+    stage_candidate = source.stage_candidate_revision
+    stages = 0
+
+    def unsafe_previous(**kwargs: Any) -> MaterialCandidateReadback | None:
+        value = read_candidate(**kwargs)
+        if value is not None and kwargs["authority_revision"] == "revision:old":
+            return replace(value, **{field: unsafe_value})
+        return value
+
+    def stage(**kwargs: Any) -> MaterialStagedCandidate:
+        nonlocal stages
+        stages += 1
+        return stage_candidate(**kwargs)
+
+    monkeypatch.setattr(source, "read_candidate", unsafe_previous)
+    monkeypatch.setattr(source, "stage_candidate_revision", stage)
+    with pytest.raises(ValueError):
+        apply(source)
+    assert stages == 0
+    assert source.switches == 0
+    assert source.authority == "revision:old"
+    assert source.load(source.authority) == original
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before_files
 
 
 @pytest.mark.parametrize("phase", ["before", "after_stage"])
