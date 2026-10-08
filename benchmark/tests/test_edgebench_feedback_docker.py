@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") !
                                 reason="Requires explicit isolated Linux Docker qualification")
 
 
-def wait_for(predicate, timeout=40):
+def wait_for(predicate, timeout=180):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -122,7 +122,7 @@ def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent
         os.umask(previous_umask)
 
 
-def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image):
+def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, monkeypatch):
     import docker
     import requests
     import uvicorn
@@ -155,6 +155,19 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image):
     }))
     config = SForgeConfig(tasks_dir=tasks, log_dir=tmp_path, judge_cpu_limit=1, judge_mem_limit="256m")
     app = create_app(config, slots=2, reservation={"slots": 2})
+    # Keep one real native grade nonterminal independently of host Docker
+    # cleanup latency. Grading still uses its actual backend and task parser.
+    from sforge.harness import judge_server
+    native_grade = judge_server.judge_submission
+    finish_held_grade = threading.Event()
+    def held_grade(**kwargs):
+        with tarfile.open(fileobj=io.BytesIO(kwargs["archive"])) as archive:
+            held = json.load(archive.extractfile("candidate.json")).get("held", False)
+        report = native_grade(**kwargs)
+        if held:
+            assert finish_held_grade.wait(300), "Native drain probe was not released"
+        return report
+    monkeypatch.setattr(judge_server, "judge_submission", held_grade)
     sock = socket.socket()
     sock.bind(("0.0.0.0", 0))
     port = sock.getsockname()[1]
@@ -252,8 +265,8 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image):
             "admin_secret": secret, "max_agent_submissions": 0}, timeout=5)
         assert full.status_code == 503
 
-        def online(token_value, capture_id, delay=0, value=1, epoch=None):
-            content = json.dumps({"value": value, "delay": delay}).encode()
+        def online(token_value, capture_id, held=False, value=1, epoch=None):
+            content = json.dumps({"value": value, "held": held}).encode()
             stream = io.BytesIO()
             with tarfile.open(fileobj=stream, mode="w") as bundle:
                 entry = tarfile.TarInfo("candidate.json")
@@ -263,17 +276,60 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image):
                 "admin_secret": secret, "epoch_id": epoch or sampler.epoch, "capture_id": capture_id},
                 files={"archive": ("source.tar.gz", gzip.compress(stream.getvalue(), mtime=0))}, timeout=5)
 
-        slow = online(token, "capture-100", delay=8)
+        slow = online(token, "capture-100", held=True)
         slow.raise_for_status()
         assert online(token, "capture-101").status_code == 503
         fast = online(second.json()["token"], "capture-1")
         fast.raise_for_status()
         wait_for(lambda: session.get(url + "/api/v1/result/" + fast.json()["submission_id"], timeout=5).json()["status"] == "completed")
         assert session.get(url + "/api/v1/result/" + slow.json()["submission_id"], timeout=5).json()["status"] == "running"
-        assert online(token, "capture-100", delay=8).json() == slow.json()
+        assert online(token, "capture-100", held=True).json() == slow.json()
         assert online(token, "capture-100", value=999).status_code == 409
         assert online(token, "capture-101", epoch="previous-process").status_code == 409
+        release_data = dict(run_id=name, task_id="fixture", epoch_id=sampler.epoch,
+                            admin_secret=secret)
+        release_url = url + "/api/v1/best-only/release"
+        assert session.post(release_url, data={**release_data, "admin_secret": "wrong"}).status_code == 403
+        assert session.post(release_url, data={**release_data, "epoch_id": "old"}).status_code == 409
+        assert session.post(release_url, data={**release_data, "run_id": "unknown"}).status_code == 404
+        released = session.post(release_url, data=release_data)
+        released.raise_for_status()
+        assert released.json()["state"] == "draining"
+        assert online(token, "capture-101").status_code == 410
+        assert online(token, "capture-100", held=True).json() == slow.json()
+        assert session.post(url + "/api/v1/register", json={"task_id": "fixture", "run_id": name + "-c",
+            "admin_secret": secret, "max_agent_submissions": 0}).status_code == 503
+        finish_held_grade.set()
         wait_for(lambda: session.get(url + "/api/v1/result/" + slow.json()["submission_id"], timeout=5).json()["status"] == "completed")
+        replacement = session.post(url + "/api/v1/register", json={"task_id": "fixture", "run_id": name + "-c",
+            "admin_secret": secret, "max_agent_submissions": 0})
+        replacement.raise_for_status()
+        assert replacement.json()["token"] not in (token, second.json()["token"])
+        assert session.post(release_url, data=release_data).json()["state"] == "released"
+        assert session.post(url + "/api/v1/register", json={"task_id": "fixture", "run_id": name,
+            "admin_secret": secret, "max_agent_submissions": 0}).status_code == 409
+        assert online(token, "capture-102").status_code == 410
+        admission = session.get(url + "/api/v1/best-only/admission", params={"admin_secret": secret}).json()
+        assert admission["admitted"] == 2 and admission["registrations_total"] == 3
+        history = session.get(url + "/api/v1/history", params={"token": token, "admin_secret": secret}).json()
+        assert any(row.get("submission_id") == slow.json()["submission_id"] for row in history["entries"])
+        # Registration can succeed before container creation/feedback startup.
+        failed_trial = tmp_path / "runs" / (name + "-c") / "fixture"
+        failed_trial.mkdir(parents=True)
+        failed_sampler = OnlineSampler(trial=failed_trial, task=None, interval=3600,
+            judge_url=url, secret=secret, logger=logger)
+        failed_sampler.qualify()
+        failed_publisher = BestOnlyFeedback(trial=failed_trial, run_id=name + "-c", task_id="fixture",
+            direction="maximize", judge_url=url, admin_secret=secret, logger=logger, sampler=failed_sampler)
+        failed_backend = RecordingDockerBackend(log_dir=failed_trial / "collected", logger=logger,
+                                                oauth_proxy=True, feedback=failed_publisher)
+        failed_backend.cleanup_container(None)
+        assert failed_publisher.token is None and failed_publisher.thread is None
+        assert json.loads((failed_sampler.directory / "release.json").read_text())["state"] == "released"
+        assert online(replacement.json()["token"], "capture-1").status_code == 410
+        recovered = session.post(url + "/api/v1/register", json={"task_id": "fixture", "run_id": name + "-d",
+            "admin_secret": secret, "max_agent_submissions": 0})
+        recovered.raise_for_status()
         # These direct service probes are deliberately not sampler-admitted;
         # even an extra native history row cannot alter the online incumbent.
         time.sleep(11)
@@ -323,12 +379,17 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image):
             task="fixture", run_id=name, task_sha256=hashlib.sha256((tasks / "fixture.json").read_bytes()).hexdigest())))
         from benchmark.edgebench.offline_scoring import score_captures
         from benchmark.edgebench.online_judge import cohort_lock
-        with cohort_lock():
-            scored = score_captures(trial, app.state.judge.tasks["fixture"], config, app.state.judge.backend)
+        # This synthetic native service owns its own test pool; never acquire
+        # or release the operator's active cohort lock during qualification.
+        with monkeypatch.context() as isolated:
+            isolated.setattr(Path, "home", lambda: tmp_path / "isolated-home")
+            with cohort_lock():
+                scored = score_captures(trial, app.state.judge.tasks["fixture"], config, app.state.judge.backend)
         assert scored["offline_scoring_complete"] and scored["evaluated_captures"] == 5
         assert scored["best_score"] == 10
         assert publisher.score == 3 and publisher.notifications == 1
     finally:
+        finish_held_grade.set()
         publisher.close()
         if isolation is not None:
             isolation.cleanup()
