@@ -1,13 +1,16 @@
 """Public synthetic provider/native Core journeys, never private credentials."""
 import json
 import time
+import http.client
+import threading
+from types import SimpleNamespace
 
 import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401
 
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
-from loopx.extensions.lark.conversation_identity import observe_lark_conversation_identity
+from loopx.extensions.lark.conversation_identity import identity_ref, lark_private_source, observe_lark_conversation_identity
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
@@ -17,6 +20,7 @@ class Provider:
         self.messages = {}
         self.calls = []
         self.writes = []
+        self.topic_writes = []
         self.verify_replies = True
         self.reactions = {}
         self.reaction_creates = []
@@ -34,6 +38,18 @@ class Provider:
             "sender": {"id": event["sender_id"], "sender_type": "user"}, "msg_type": kind, "content": text}
         return event
 
+    def topic(self, name, text, *, root=None, chat="oc_community", sender="ou_member", addressed=True):
+        event = self.event("notes-app", name, text)
+        event.update(chat_id=chat, chat_type="group", sender_id=sender)
+        if root:
+            event.update(root_id=root, parent_id=root, thread_id=f"omt_{root}")
+        self.messages[event["message_id"]].update(chat_id=chat,
+            sender={"id": sender, "sender_type": "user"},
+            **{key: event[key] for key in ["root_id", "parent_id", "thread_id"] if key in event})
+        if not root and addressed:
+            self.messages[event["message_id"]]["mentions"] = [{"name": "notes-app", "id": {"open_id": "ou_bot"}}]
+        return event
+
     def __call__(self, args, cwd=None, timeout=None):
         self.calls.append(list(args))
         if args[1:] == ["profile", "list"]:
@@ -45,6 +61,9 @@ class Provider:
             data = {"ok": True, "appId": f"cli_{profile.replace('-', '_')}", "identities": {
                 "bot": {"available": True, "verified": True, "appName": profile},
                 "user": {"available": True, "verified": True, "openId": f"ou_{profile.replace('-', '_')}"}}}
+        elif "+chat-list" in args:
+            data = {"ok": True, "data": {"chats": [{"chat_id": chat, "name": title}
+                for chat, title in [("oc_community", "Community trial"), ("oc_second", "Second trial")]]}}
         elif "+messages-mget" in args:
             ref = args[args.index("--message-ids") + 1]
             message = self.messages[ref]
@@ -54,13 +73,13 @@ class Provider:
         elif "+messages-edit" in args:
             ref = args[args.index("--message-id") + 1]
             content = args[args.index("--content") + 1]
-            assert self.messages[ref]["chat_id"] == f"oc_{profile.replace('-', '_')}"
+            assert self.messages[ref]["sender"]["id"] == self.profile_apps[profile]
             if "--dry-run" in args:
                 data = {"ok": True, "api": [{"body": {"content": content, "msg_type": "post"}}]}
             else:
                 self.messages[ref]["body"] = {"content": content}
                 data = {"ok": True}
-        elif "+messages-send" in args:
+        elif "+messages-send" in args or "+messages-reply" in args:
             kind = "post" if "--content" in args else "text"
             content = args[args.index("--content") + 1] if kind == "post" else json.dumps({"text": args[args.index("--text") + 1]})
             text = json.loads(content)["zh_cn"]["content"][0][0]["text"] if kind == "post" else json.loads(content)["text"]
@@ -69,9 +88,15 @@ class Provider:
             else:
                 ref = f"om_out_{len(self.writes)}"
                 self.writes.append((profile, text))
+                target = self.messages[args[args.index("--message-id") + 1]] if "+messages-reply" in args else None
                 self.messages[ref] = {"message_id": ref, "msg_type": kind, "body": {"content": content},
-                    "chat_id": args[args.index("--chat-id") + 1],
+                    "chat_id": target["chat_id"] if target else args[args.index("--chat-id") + 1],
                     "sender": {"id": self.profile_apps[profile], "sender_type": "app"}}
+                if target:
+                    assert "--reply-in-thread" in args
+                    root = target.get("root_id") or target["message_id"]
+                    self.messages[ref].update(root_id=root, parent_id=target["message_id"], thread_id=f"omt_{root}")
+                    self.topic_writes.append((target["chat_id"], root, text))
                 data = {"ok": True, "data": {"message_id": ref}}
         elif "reactions" in args:
             ref = args[args.index("--message-id") + 1]
@@ -108,6 +133,231 @@ def connect(fixture):
         bindings.configure(transport_ref=profile, project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
     return store, runtime, provider, LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
                                                              runner=provider, cli_bin="lark-cli")
+
+
+def connect_group(fixture):
+    store, runtime, provider, transport = connect(fixture)
+    runtime.codex_home = fixture[-1].parent / "isolated-native-account"
+    runtime.codex_home.mkdir()
+    fake = fixture[-2]
+    fake.write_text(fake.read_text().replace('"thread": {"id": "durable-thread"},',
+        '"thread": {"id": "durable-thread"}, '
+        '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],'))
+    binding = transport.bindings.read()["bindings"][0]
+    refs = [identity_ref(binding["provider_ref"], chat) for chat in ["oc_community", "oc_second"]]
+    transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", audience="group", group_refs=refs, available_group_refs=refs)
+    return store, runtime, provider, transport
+
+
+def finish_group_turn(runtime, transport, *, message):
+    row = next(row for row in transport.core.pending() if row["message"] == message)
+    assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+    transport.reconcile()
+    return row
+
+
+def test_group_topics_share_members_but_isolate_topics_apps_and_native_host(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("community-root", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        continuation = provider.topic("community-follow", "Compare its configuration", root=root["message_id"], sender="ou_other_member")
+        assert transport.admit("notes-app", continuation)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=continuation["content"])
+        assert second["session_id"] == first["session_id"]
+        assert transport.admit("notes-app", {**continuation, "event_id": "redelivered"})["status"] == "durably_accepted"
+        for name, chat in [("different-topic", "oc_community"), ("different-group", "oc_second")]:
+            event = provider.topic(name, name, chat=chat)
+            assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+            row = finish_group_turn(runtime, transport, message=name)
+            assert row["session_id"] != first["session_id"]
+        assert len(store.list_sessions()) == 3
+        context = store.load_session(first["session_id"])["project_context"]
+        assert context["audience"] == "bound_group" and context["filesystem_scope"] == "workspace_only"
+        assert all(row["goal_id"] is None for row in store.list_sessions())
+        assert provider.topic_writes and all(chat in {"oc_community", "oc_second"} for chat, _, _ in provider.topic_writes)
+        assert any(root_id == root["message_id"] and text == "Runtime response." for _, root_id, text in provider.topic_writes)
+        requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        starts = [r["params"] for r in requests if r["method"] == "thread/start"]
+        assert len(starts) == 3 and all(r["permissions"] == "loopx_workspace_only_read" for r in starts)
+        assert all(not r.get("dynamicTools") for r in starts)
+        assert "Fresh Core evidence" not in ordinary[4].read_text()
+        # Original private project still uses the default host and grant.
+        assert runtime.project_contexts.available()[0].get("filesystem_scope") is None
+        assert transport._binding("steward-app").get("audience") is None
+        runtime.close()
+        from loopx.chat_runtime import ChatRuntimeController
+        restarted = ChatRuntimeController(store=store, codex_bin=str(ordinary[-2]), project_contexts=runtime.project_contexts)
+        restarted.codex_home = runtime.codex_home
+        try:
+            reopened, resumed = restarted.open_session(goal_id=None, agent_id="codex", work_dir=ordinary[-1],
+                objective="continue", conversation_binding_id=context["binding_id"],
+                source_context=lark_private_source(provider_ref=context["provider_ref"], event=root),
+                mode="resume_latest")
+            assert resumed and reopened["session_id"] == first["session_id"]
+        finally:
+            restarted.close()
+    finally:
+        runtime.close()
+
+
+def test_group_model_handoff_cannot_read_or_dispatch_to_a_private_goal(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_runtime import CodexAppServerAdapter
+    store, runtime, provider, transport = connect_group(ordinary)
+    original = CodexAppServerAdapter.start_turn
+
+    def untrusted_response(adapter, *args, **kwargs):
+        return {**original(adapter, *args, **kwargs), "context_handoff": {
+            "goal_id": "private-work", "agent_id": "private-agent", "brief": "read private state"}}
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", untrusted_response)
+    monkeypatch.setattr("loopx.chat_runtime.apply_context_handoff",
+        lambda *_, **__: pytest.fail("workspace Chat must reject before any private Goal read or dispatch"))
+    try:
+        root = provider.topic("untrusted-handoff", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert turn["status"] == "failed"
+        assert "cannot hand off" in json.dumps(turn)
+        assert not (store.root.parent / "manager-context").exists()
+    finally:
+        runtime.close()
+
+
+def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        roots = [provider.topic(f"running-{i}", "wait for interrupt") for i in range(2)]
+        for root in roots:
+            assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        rows = [next(row for row in transport.core.pending() if row["source"] == lark_private_source(
+            provider_ref=transport._binding("notes-app")["provider_ref"], event=root)) for root in roots]
+        for row in rows:
+            deadline = time.monotonic() + 10
+            while store.load_turn(row["session_id"], row["turn_id"])["status"] != "running":
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+        queued = provider.topic("queued-in-first-topic", "Continue this public check", root=roots[0]["message_id"])
+        assert transport.admit("notes-app", queued)["status"] == "durably_accepted"
+        assert len(store.queued_turns(rows[0]["session_id"])) == 1
+        store.append_event(rows[0]["session_id"], rows[0]["turn_id"], kind="answer.delta", payload={"text": "Public progress"})
+        store.append_event(rows[0]["session_id"], rows[0]["turn_id"], kind="agent.phase", payload={"method": "item/reasoning/textDelta", "label": "private reasoning"})
+        transport.reconcile()
+        assert any(root == roots[0]["message_id"] and "Public progress" in text for _, root, text in provider.topic_writes)
+        assert all("private reasoning" not in text for _, _, text in provider.topic_writes)
+        stop = provider.topic("stop-first-topic", "/stop", root=roots[0]["message_id"])
+        assert transport.admit("notes-app", stop)["status"] == "command_recorded"
+        assert runtime.wait_for_turn(session_id=rows[0]["session_id"], turn_id=rows[0]["turn_id"], timeout_sec=10)["status"] == "interrupted"
+        assert store.load_turn(rows[1]["session_id"], rows[1]["turn_id"])["status"] == "running"
+        finish_group_turn(runtime, transport, message=queued["content"])
+        assert any("+messages-edit" in call for call in provider.calls)
+        assert all(root in {row["message_id"] for row in roots} for _, root, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+def test_group_provenance_and_revocation_prevent_private_or_wrong_topic_delivery(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        for event in [provider.event("notes-app", "private", "private query"),
+                      provider.topic("foreign", "foreign", chat="oc_not_selected"),
+                      provider.topic("unaddressed", "ordinary community conversation", addressed=False)]:
+            assert transport.admit("notes-app", event)["status"] in {"audience_rejected", "source_verification_failed"}
+        root = provider.topic("root", "topic one")
+        forged = provider.topic("forged", "wrong root", root=root["message_id"])
+        provider.messages[forged["message_id"]]["root_id"] = "om_other_root"
+        assert transport.admit("notes-app", forged)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = next(row for row in transport.core.pending() if row["message"] == root["content"])
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        binding = transport._binding("notes-app")
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        transport.reconcile()
+        assert provider.writes == []  # Even a completed result needs current source authority.
+        assert transport.admit("notes-app", root)["status"] == "audience_rejected"
+    finally:
+        runtime.close()
+
+
+def test_group_status_and_recipient_commands_cannot_expose_private_sessions(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("status-root", "/status")
+        assert transport.admit("notes-app", root)["status"] == "command_recorded"
+        help_event = provider.topic("help", "/help", root=root["message_id"])
+        assert transport.admit("notes-app", help_event)["status"] == "command_recorded"
+        for name, command in [("agents", "/agents"), ("agent", "/agent secret"), ("project", "/project")]:
+            assert transport.admit("notes-app", provider.topic(name, command, root=root["message_id"]))["status"] == "command_recorded"
+        transport.reconcile()
+        assert not store.list_sessions()
+        replies = "\n".join(text for _, text in provider.writes)
+        assert str(ordinary[-1]) not in replies and "此 Bot" in replies
+        assert "不能选择个人 Agent" in replies
+        assert all(root_id == root["message_id"] for _, root_id, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.extensions.lark.cli_resolution import LarkCliResolution
+    import loopx.chat_lark_api as api
+
+    store, runtime, provider, transport = connect(ordinary)
+    monkeypatch.setattr(api, "build_lark_goal_topic_runtime_snapshot", lambda **_: {"goals": []})
+    monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
+    refreshes = []
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.verbose = False
+    server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
+    server.lark_cli_resolution = LarkCliResolution(command="lark-cli", available=True, source="explicit", version="fixture", error_code=None)
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(refresh=lambda: refreshes.append(True), health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET" if body is None else "POST", path,
+                None if body is None else json.dumps(body), headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    path = "/api/chat/lark/private-conversations"
+    body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
+        "executor_endpoint_id": "codex", "audience": "group", "group_ids": ["oc_community"]}
+    try:
+        original = transport.bindings.read()
+        for bad in [{"group_ids": ["oc_not_selected"]}, {"group_ids": []},
+                    {"group_ids": ["oc_community", "oc_community"]}, {"context_kind": "steward"},
+                    {"executor_endpoint_id": "claude-code"}]:
+            assert request(path, {**body, **bad})[0] == 400
+            assert transport.bindings.read() == original and not refreshes
+        status, response = request(path, body)
+        assert status == 200, response
+        saved = next(row for row in response["connections"] if row["app_ref"] == "notes-app")
+        assert saved["audience"] == "group" and saved["group_count"] == 1
+        assert saved["agent_candidates"] == saved["agent_targets"] == []
+        assert str(ordinary[-1]) not in json.dumps(response)
+        selected = request("/api/chat/lark/chats?app_ref=notes-app")[1]["chats"]
+        assert [(row["chat_id"], row["selected"]) for row in selected] == [("oc_community", True), ("oc_second", False)]
+        assert request(path, body)[1]["revision"] == response["revision"]
+        assert refreshes == [True, True]
+        assert not store.list_sessions() and not provider.writes
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        runtime.close()
 
 
 def test_native_private_admission_queue_other_app_stop_and_verified_delivery(ordinary):  # noqa: F811

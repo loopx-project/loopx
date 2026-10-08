@@ -287,7 +287,7 @@
     },
     {
       "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.agent_observation::codec_read:load_registry#1",
-      "line": 209,
+      "line": 223,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -295,7 +295,7 @@
     },
     {
       "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.goal_scope_ids::codec_read:load_registry#1",
-      "line": 136,
+      "line": 145,
       "column": 40,
       "kind": "codec_read",
       "api": "load_registry",
@@ -455,7 +455,7 @@
     },
     {
       "site": "loopx/chat_lark_api.py::<module>.LarkChatRequestMixin._lark_connections::codec_read:load_registry#1",
-      "line": 536,
+      "line": 540,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",

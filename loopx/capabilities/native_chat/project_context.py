@@ -83,7 +83,7 @@ class ChatProjectContexts:
         saved = session.get("project_context")
         if not isinstance(saved, dict) or session.get("goal_id") is not None:
             raise ValueError("invalid ordinary project Session")
-        if saved.get("audience") == "bound_owner":
+        if saved.get("audience") in {"bound_owner", "bound_group"}:
             if self.conversation_bindings is None:
                 raise ValueError("bound project conversation authority is unavailable")
             selected = self.conversation_bindings.session_context(saved)
