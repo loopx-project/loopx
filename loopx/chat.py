@@ -76,6 +76,7 @@ def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
         + r"(?:"
         + separator
         + r"[^\s`'\"<>]*)?"
+        + r"|(?<![:/A-Za-z0-9_.\\])/(?:[^\s`'\"<>]+)"
         + "|(?i:"
         + LOCAL_PATH_SURFACE_PATTERN.pattern
         + ")"
@@ -184,69 +185,96 @@ def redact_local_paths(
     replacements = _protected_path_replacements(protected_paths)
 
     def path_parts(value: str) -> tuple[str, ...]:
-        decoded = value.replace("\\", "/")
+        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
         if re.match(r"^[A-Za-z]:/", decoded):
             decoded = decoded.casefold()
-        return tuple(part for part in decoded.split("/") if part not in {"", "."})
+        parts: list[str] = []
+        absolute = decoded.startswith("/") or bool(re.match(r"^[a-z]:/", decoded))
+        for part in decoded.split("/"):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if parts and parts[-1] != ".." and not (
+                    len(parts) == 1 and re.match(r"^[a-z]:$", parts[0])
+                ):
+                    parts.pop()
+                elif not absolute:
+                    parts.append(part)
+                continue
+            parts.append(part)
+        return tuple(parts)
 
-    def path_forms(value: str) -> set[str]:
-        separators_normalized = re.sub(
-            r"(?i)%(?:2f|5c)", "/", value
-        ).replace("\\", "/")
-        return {
-            value,
-            separators_normalized,
-            unquote(value, errors="surrogateescape").replace("\\", "/"),
-        }
+    def display_path_parts(value: str) -> tuple[str, ...]:
+        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
+        parts: list[str] = []
+        absolute = decoded.startswith("/") or bool(re.match(r"^[A-Za-z]:/", decoded))
+        for part in decoded.split("/"):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if parts and parts[-1] != ".." and not (
+                    len(parts) == 1 and re.match(r"^[A-Za-z]:$", parts[0])
+                ):
+                    parts.pop()
+                elif not absolute:
+                    parts.append(part)
+                continue
+            parts.append(part)
+        return tuple(parts)
+
+    def has_parent_segment(value: str) -> bool:
+        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
+        return ".." in decoded.split("/")
 
     private_roots = [
-        path_parts(form)
+        path_parts(raw)
         for raw, label in replacements
         if label == "[local-path]"
-        for form in path_forms(raw)
     ]
 
     def replace_absolute_path(match: re.Match[str]) -> str:
         matched = match.group(0)
         candidate = matched.rstrip(".,;:!?)]}")
         suffix = matched[len(candidate) :]
-        decoded_candidate = unquote(candidate, errors="surrogateescape").replace(
-            "\\", "/"
+        candidate_forms = (
+            re.sub(r"(?i)%(?:2f|5c)", "/", candidate).replace("\\", "/"),
+            unquote(candidate, errors="surrogateescape").replace("\\", "/"),
         )
-        normalized_candidate = re.sub(r"(?i)%(?:2f|5c)", "/", candidate).replace(
-            "\\", "/"
-        )
-        candidate_forms = (normalized_candidate, decoded_candidate)
-        for raw, label in replacements:
-            normalized_root = raw.replace("\\", "/")
-            remainder = next(
-                (
-                    value[len(normalized_root) :]
-                    for value in candidate_forms
-                    if value == normalized_root
+        if has_parent_segment(candidate):
+            for raw, label in replacements:
+                normalized_root = unquote(raw, errors="surrogateescape").replace(
+                    "\\", "/"
+                )
+                if any(
+                    value == normalized_root
                     or value.startswith(f"{normalized_root}/")
-                ),
-                None,
-            )
-            if remainder is not None and (not remainder or remainder.startswith("/")):
-                candidate_parts = {
-                    path_parts(form)
                     for value in candidate_forms
-                    for form in path_forms(value)
-                }
+                ):
+                    return f"{label}{suffix}"
+        candidate_parts = {path_parts(value) for value in candidate_forms}
+        for raw, label in replacements:
+            root_parts = path_parts(raw)
+            if any(parts[: len(root_parts)] == root_parts for parts in candidate_parts):
                 if any(
                     parts[: len(root)] == root
                     for parts in candidate_parts
                     for root in private_roots
                 ):
                     return f"[local-path]{suffix}"
-                if project_relative and label == "[project]" and candidate != raw:
-                    relative = remainder.lstrip("/")
-                    components = unquote(relative).replace("\\", "/").split("/")
-                    if ".." not in components:
-                        return f"./{relative}{suffix}"
+                if project_relative and label == "[project]":
+                    if has_parent_segment(candidate):
+                        return f"[project]{suffix}"
+                    relative_parts = display_path_parts(candidate)[len(root_parts) :]
+                    if relative_parts and ".." not in relative_parts:
+                        return f"./{'/'.join(relative_parts)}{suffix}"
                 return f"{label}{suffix}"
-        return f"[local-path]{suffix}"
+
+        # The broad absolute-path candidate lets a protected root be recognized
+        # after harmless dot-segment aliases. Preserve unrelated custom paths;
+        # the shared classifier still redacts its canonical machine-local set.
+        if LOCAL_PATH_SURFACE_PATTERN.fullmatch(candidate):
+            return f"[local-path]{suffix}"
+        return matched
 
     return _local_path_pattern(replacements).sub(replace_absolute_path, redacted)
 

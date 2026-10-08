@@ -87,6 +87,50 @@ def test_dot_segment_encoded_alias_of_private_root_is_fully_redacted(tmp_path):
     ) == "[local-path]"
 
 
+@pytest.mark.parametrize(
+    "aliased_project",
+    ["/custom-volume/./project", "/custom-volume/%2e/project"],
+)
+def test_dot_segment_alias_before_protected_root_keeps_project_file_and_hides_private_path(
+    aliased_project,
+):
+    project = "/custom-volume/project"
+    protected_paths = [project, f"{project}/runtime"]
+    safe_path = f"{aliased_project}/notes/report.md"
+    private_path = f"{aliased_project}/runtime/private/{'s' * 190}/gate.json"
+
+    assert parse_agent_response(safe_path, protected_paths=protected_paths)["message"] == (
+        "./notes/report.md"
+    )
+    assert parse_agent_response(private_path, protected_paths=protected_paths)["message"] == (
+        "[local-path]"
+    )
+    for text, expected in [
+        (safe_path + "\n", "./notes/report.md\n"),
+        (private_path + "\n", "[local-path]\n"),
+    ]:
+        for split in range(len(text) + 1):
+            stream = VisibleResponseStreamFilter(protected_paths=protected_paths)
+            actual = stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            assert actual == expected
+
+
+def test_parent_segment_alias_before_protected_root_hides_the_path():
+    project = "/custom-volume/project"
+    aliased_private = "/custom-volume/other/../project/runtime/private/gate.json"
+    assert Path(aliased_private).resolve() == Path(
+        "/custom-volume/project/runtime/private/gate.json"
+    ).resolve()
+    assert parse_agent_response(
+        aliased_private, protected_paths=[project, f"{project}/runtime"]
+    )["message"] == "[local-path]"
+
+    escaped_project = f"{project}/../other/private.txt"
+    assert parse_agent_response(escaped_project, protected_paths=[project])["message"] == (
+        "[project]"
+    )
+
+
 def test_canonical_private_path_shapes_and_public_urls():
     assert redact_local_paths("/mnt/private/a.txt") == "[local-path]"
     public = "https://example.org/tmp/file.json ./relative/file.json docs/file.json"
