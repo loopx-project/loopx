@@ -99,18 +99,26 @@ def test_silent_baseline_then_positive_only_disclosure_and_source_identity(publi
     assert publisher.notifications == 1
 
 
-def test_scalar_improvement_does_not_rewrite_native_pass_rate_winner(publisher):
+def test_scalar_improvement_requires_native_winner_and_preserves_global_threshold(publisher):
     from sforge.harness.selection import select_best
     transport = Transport()
+    publisher.selection = "pass_rate_first"
     entries = [row(1, .2, pass_rate=.9), row(2, .4, pass_rate=.8)]
     publisher.update(history(entries[0]), transport, None)
     archive(publisher, 2)
     publisher.update(history(*entries), transport, None)
-    assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-2"
+    assert not transport.files
     native = select_best(entries, "maximize", "pass_rate_first")
     assert native["best_round"] == "auto-1"
     assert native["best_score"] == .2
     assert entries[1]["pass_rate"] == .8
+    entries.append(row(3, .3, pass_rate=.95))
+    publisher.update(history(*entries), transport, None)
+    assert not transport.files  # Native winner improved, scalar record did not.
+    entries.append(row(4, .5, pass_rate=.96))
+    archive(publisher, 4)
+    publisher.update(history(*entries), transport, None)
+    assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-4"
 
 
 @pytest.mark.parametrize("patch", [

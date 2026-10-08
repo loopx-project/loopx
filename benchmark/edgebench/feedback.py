@@ -52,9 +52,10 @@ class BestOnlyFeedback:
     """
 
     def __init__(self, *, trial: Path, run_id: str, task_id: str, direction: str,
-                 judge_url: str, admin_secret: str, logger, sampler):
+                 judge_url: str, admin_secret: str, logger, sampler, selection="score_first"):
         self.trial, self.run_id, self.task_id = trial, run_id, task_id
         self.direction, self.judge_url = direction, judge_url.rstrip("/")
+        self.selection = selection
         self.admin_secret, self.logger = admin_secret, logger
         self.directory = trial / "best-only-host"
         self.directory.mkdir(exist_ok=False)
@@ -133,6 +134,13 @@ class BestOnlyFeedback:
         score = best["best_score"]
         better = score > self.score if self.direction == "maximize" else score < self.score
         if not better:
+            return None
+        native = select_best(eligible, self.direction, self.selection)
+        if native["best_round"] != best["best_round"]:
+            # A scalar record outside the native winner cannot be advertised as
+            # best. Retain its threshold so a later lower score cannot trigger.
+            self.score = score
+            self._record()
             return None
         return next(entry for entry in eligible if entry["round"] == best["best_round"])
 

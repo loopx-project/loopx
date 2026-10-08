@@ -176,6 +176,7 @@ def main(argv=None):
     feedback = (BestOnlyFeedback(
         trial=trial, run_id=args.run_id, task_id=args.task,
         direction=task.judge.score_direction,
+        selection=task.judge.selection,
         judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
         admin_secret=get_admin_secret(args.log_dir), logger=logger, sampler=sampler,
     ) if args.feedback == "best-only" else None)
