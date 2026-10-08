@@ -98,6 +98,30 @@ Ordinary one-off reading, summarization, or web research does not require this
 capability unless the project has explicitly activated a managed material
 store.
 
+## Revising An Existing Candidate
+
+When a short preview is later fully read, revise the existing candidate instead
+of adding a duplicate. `build_material_candidate_revision_proposal` binds the
+current authority revision, previous record reference, replacement record
+reference and exact-read content digest. `apply_material_candidate_revision`
+uses the existing source owner's authorization, immutable staging, readback and
+CAS; `rollback_material_candidate_revision` restores the previous authority
+only while the applied revision is still current.
+
+The source implements `MaterialCandidateRevisionProvider` beside its existing
+intake methods. Reconciliation must preserve all stable identities, record
+counts, other records, lifecycle states, rankings and previous content. A
+revision cannot reactivate an archive. Metadata changes must be bound by the
+replacement record reference; source adapters must invalidate public-field
+reviews that no longer match the revised record/content. Ranking changes still
+use a separate Decision Context-backed settlement and receipt.
+
+This extends the existing Python material source apply boundary, without a new
+authority, scheduler, ranking policy or generic CLI writer. An SDK proposal
+does not authorize a write. Product/project adapters must expose the operation,
+publish the readable queues, persist receipts and verify their readback before
+reporting the user's workflow complete. Existing intake stays append-only.
+
 ## Single-Material Reranking
 
 `plan_material_single_move(ordered_material_refs, material_ref, to_rank)`
