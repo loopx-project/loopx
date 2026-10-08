@@ -165,7 +165,19 @@ loopx-ark-turn <same-options> --cleanup-turn-key "$TURN_KEY"
 
 Inspection is local and credential-free. Cleanup retries deletion of known
 attempt-owned resources without launching a model or repeating a local tool.
-It returns success only after absence is confirmed. A lost create response
+If Session deletion returns HTTP 400, it verifies the exact Session and Agent
+binding before stopping a still-running attempt with `user.interrupt`. The
+interrupt is attempted at most once per receipt, including when its response
+is lost. It then waits with a bounded deadline and three status reads for
+idle/terminated before retrying deletion. An interrupt ACK does not prove
+stoppage or absence; an unresolved Session keeps its Agent definition intact.
+The normal successful deletion path is unchanged. This recovery applies to
+both builtin-enabled and disabled profiles.
+
+It returns success only after absence is confirmed. An accepted input whose
+ACK lacks the required root thread remains unqualified: its event ID is retained,
+its known resources are retired, and neither the input nor candidate is replayed.
+A lost create response
 leaves `unknown_creation=reconcile_required`: use the private receipt's exact
 resource label to inspect the provider account and resolve ownership manually.
 An explicit creation rejection (HTTP 400, 401, 403, 404 or 422) records only

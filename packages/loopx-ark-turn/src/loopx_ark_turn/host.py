@@ -65,7 +65,15 @@ async def cleanup(client: AsyncArk, receipt: Receipt) -> bool:
             try:
                 await resource.delete(resource_id, timeout=10)
             except Exception as exc:
-                if getattr(exc, "status_code", None) != 404:
+                if kind == "session" and getattr(exc, "status_code", None) == 400:
+                    if not await _stop_owned_session(client, receipt):
+                        raise
+                    try:
+                        await resource.delete(resource_id, timeout=10)
+                    except Exception as retry_exc:
+                        if getattr(retry_exc, "status_code", None) != 404:
+                            raise
+                elif getattr(exc, "status_code", None) != 404:
                     raise
             try:
                 await resource.retrieve(resource_id, timeout=10)
@@ -83,6 +91,40 @@ async def cleanup(client: AsyncArk, receipt: Receipt) -> bool:
         if kind == "session" and statuses[kind] != CleanupStatus.ABSENT:
             break
     return all(v == CleanupStatus.ABSENT for v in statuses.values())
+
+
+async def _stop_owned_session(client: AsyncArk, receipt: Receipt) -> bool:
+    """Bound a running-session deletion recovery; never resend task input."""
+    session_id, agent_id = receipt.data.get("session_id"), receipt.data.get("agent_id")
+    if not session_id or not agent_id:
+        return False
+
+    def owned(snapshot: dict[str, Any]) -> bool:
+        return snapshot.get("id") == session_id and (snapshot.get("agent") or {}).get("id") == agent_id
+
+    snapshot = data(await client.sessions.retrieve(session_id, timeout=10))
+    if not owned(snapshot):
+        return False
+    if snapshot.get("status") in {"idle", "terminated"}:
+        return True
+    if snapshot.get("status") != "running" or receipt.data.get("cleanup_interrupt_attempted"):
+        return False
+    # Persist before the mutating request: an uncertain ACK must not repeat it.
+    receipt.update(cleanup_interrupt_attempted=True)
+    await client.sessions.events.send(session_id, events=[{"type": "user.interrupt"}], timeout=10)
+    # Interrupt acceptance is not an idle or absence receipt. Bound both time
+    # and reads, retaining the parent definition if retirement cannot finish.
+    async with asyncio.timeout(10):
+        for _ in range(3):
+            snapshot = data(await client.sessions.retrieve(session_id, timeout=3))
+            if not owned(snapshot):
+                return False
+            if snapshot.get("status") in {"idle", "terminated"}:
+                return True
+            if snapshot.get("status") != "running":
+                return False
+            await asyncio.sleep(0.1)
+    return False
 
 
 async def _custom_tool(client: AsyncArk, receipt: Receipt, tools: Tools, event: dict[str, Any]) -> None:
@@ -240,6 +282,9 @@ async def _execute(client: AsyncArk, config: Config, request: Mapping[str, Any],
         raise AdapterError("message_receipt_cursor_missing")
     root_thread = sent.data[-1].get("session_thread_id")
     if not isinstance(root_thread, str) or not root_thread:
+        # Acceptance can already trigger cloud execution. Preserve the exact
+        # accepted event even when this profile cannot qualify its thread.
+        receipt.update(cursor=cursor, input_cursor=cursor)
         raise AdapterError("message_receipt_thread_missing")
     receipt.update(stage=Stage.RUNNING, cursor=cursor, input_cursor=cursor,
                    root_thread_id=root_thread)

@@ -90,4 +90,6 @@ class Receipt:
             "schema_version", "stage", "error", "provider_usage", "cleanup", "resource_label",
             "tool_boundary_revision", "session_boundary_digest", "creation_rejection",
         )} | {"tool_calls": len(self.data.get("tools", {})),
-              "builtin_tool_calls": len(self.data.get("builtin_tools", {})), "has_candidate": "candidate" in self.data}
+              "builtin_tool_calls": len(self.data.get("builtin_tools", {})), "has_candidate": "candidate" in self.data} | (
+                  {"cleanup_interrupt_attempted": self.data["cleanup_interrupt_attempted"]}
+                  if "cleanup_interrupt_attempted" in self.data else {})
