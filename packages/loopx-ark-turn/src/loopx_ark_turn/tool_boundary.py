@@ -13,7 +13,7 @@ from .config import AdapterError, Config, digest
 from .receipt import Receipt
 
 
-REVISION = "sandbox_tools_v1"
+REVISION = "sandbox_tools_v2"
 NETWORK = {"type": "limited", "allowed_hosts": [],
            "allow_mcp_servers": False, "allow_package_managers": False}
 

@@ -4,6 +4,7 @@ import copy
 from dataclasses import replace
 import json
 
+import httpx
 import pytest
 
 from loopx_ark_turn.config import AdapterError
@@ -26,6 +27,111 @@ def builtin_result(**changes):
 
 def state(cfg):
     return json.loads(Receipt(cfg.state_dir, request()["turn_key"]).path.read_text())
+
+
+def candidate(event_id="candidate", result_kind="validated_progress", **changes):
+    text = json.dumps({"result_kind": result_kind, "classification": "observation_reviewed",
+                       "summary": "Observed the latest tool outcome.",
+                       "next_action": "Independently validate the observation."})
+    return event(event_id, "agent.message", session_thread_id="thread-root",
+                 content=[{"type": "text", "text": text}]) | changes
+
+
+def end_turn():
+    return event("end", "session.status_idle", stop_reason={"type": "end_turn"})
+
+
+@pytest.mark.parametrize("position", ["before_call", "before_result"])
+@pytest.mark.parametrize("is_error", [False, True])
+def test_builtin_outcome_invalidates_earlier_candidate(tmp_path, position, is_error):
+    cfg = replace(config(tmp_path, tools=False), sandbox_builtins=True)
+    events = ([candidate(), builtin_use()] if position == "before_call"
+              else [builtin_use(), candidate()])
+    provider = Provider([*events, builtin_result(is_error=is_error)])
+    provider.after = [end_turn()]
+    with pytest.raises(AdapterError, match="terminal_without_candidate"):
+        asyncio.run(execute(provider, cfg))
+    row = state(cfg)
+    assert "candidate" not in row and row.get("provider_usage") is None
+    assert row["builtin_tools"]["call-public"]["is_error"] is is_error
+    assert provider.deleted == {"/sessions/sesn-fixture", "/agents/agnt-fixture"}
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_local_tool_invalidates_earlier_candidate_without_repeating_effect(tmp_path, enabled):
+    cfg = replace(config(tmp_path), sandbox_builtins=enabled)
+    provider = Provider([candidate(), tool_event()])
+    provider.after = [end_turn()]
+    with pytest.raises(AdapterError, match="terminal_without_candidate"):
+        asyncio.run(execute(provider, cfg))
+    assert "candidate" not in state(cfg)
+    assert json.loads((cfg.workspace / "observation.json").read_text())["calls"] == 1
+    before = len(provider.calls)
+    with pytest.raises(AdapterError, match="reconciliation"):
+        asyncio.run(execute(provider, cfg))
+    assert len(provider.calls) == before
+
+
+@pytest.mark.parametrize("thread", [None, "", "foreign-thread"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_candidate_requires_explicit_input_ack_thread(tmp_path, thread, enabled):
+    cfg = replace(config(tmp_path, tools=False), sandbox_builtins=enabled)
+    message = candidate(session_thread_id=thread)
+    if thread is None:
+        message.pop("session_thread_id")
+    provider = Provider([])
+    provider.after = [message, end_turn()]
+    error = "candidate_thread_missing" if not thread else "thread_switch"
+    with pytest.raises(AdapterError, match=error):
+        asyncio.run(execute(provider, cfg))
+    assert "candidate" not in state(cfg)
+    assert provider.deleted == {"/sessions/sesn-fixture", "/agents/agnt-fixture"}
+
+
+@pytest.mark.parametrize("thread", [None, ""])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_missing_input_ack_thread_cannot_be_inferred_from_later_events(tmp_path, thread, enabled):
+    cfg = replace(config(tmp_path, tools=False), sandbox_builtins=enabled)
+    provider = Provider([])
+
+    def transport(req):
+        response = provider(req)
+        if req.method == "POST" and req.url.path.endswith("/events"):
+            return httpx.Response(200, json={"data": [event("e0", "user.message", session_thread_id=thread)]})
+        return response
+
+    with pytest.raises(AdapterError, match="message_receipt_thread_missing"):
+        asyncio.run(execute(transport, cfg))
+    assert not any(method == "GET" and path.endswith("/events") for method, path, _ in provider.calls)
+    assert "candidate" not in state(cfg)
+    assert provider.deleted == {"/sessions/sesn-fixture", "/agents/agnt-fixture"}
+
+
+@pytest.mark.parametrize("checkpoint", ["running", "terminal"])
+def test_error_followed_by_fresh_repair_candidate_and_checkpoint_recovery(tmp_path, monkeypatch, checkpoint):
+    cfg = replace(config(tmp_path), sandbox_builtins=True)
+    provider = Provider([candidate("old"), builtin_use(), builtin_result(is_error=True), tool_event()])
+    provider.after = [candidate("repaired", "repair_required"), end_turn()]
+    captured = []
+    save = Receipt.save
+
+    def capture(receipt):
+        save(receipt)
+        if (receipt.data["stage"] == checkpoint
+                and receipt.data.get("tools", {}).get("e1", {}).get("stage") == "sent"
+                and not receipt.data.get("cleanup") and not receipt.data.get("candidate")):
+            captured.append(copy.deepcopy(receipt.data))
+
+    monkeypatch.setattr(Receipt, "save", capture)
+    assert asyncio.run(execute(provider, cfg))["result_kind"] == "repair_required"
+    assert captured
+    Receipt(cfg.state_dir, request()["turn_key"]).path.write_text(json.dumps(captured[0]))
+    provider.deleted.clear()
+    before = len(provider.calls)
+    assert asyncio.run(execute(provider, cfg))["result_kind"] == "repair_required"
+    assert not any(method == "POST" for method, _, _ in provider.calls[before:])
+    assert json.loads((cfg.workspace / "observation.json").read_text())["calls"] == 1
+    assert state(cfg)["builtin_tools"]["call-public"]["is_error"] is True
 
 
 def test_sandbox_bash_and_local_custom_tool_coexist_with_exact_cleanup(tmp_path):
@@ -137,12 +243,16 @@ def test_builtin_observation_limit_includes_custom_calls(tmp_path):
     assert not (cfg.workspace / "observation.json").exists()
 
 
-def test_legacy_candidate_is_inspectable_but_cannot_gain_new_qualification(tmp_path):
+@pytest.mark.parametrize("revision", [None, "sandbox_tools_v1"])
+def test_legacy_candidate_is_inspectable_but_cannot_gain_new_qualification(tmp_path, revision):
     cfg = config(tmp_path, tools=False)
     provider = Provider([])
     asyncio.run(execute(provider, cfg))
     row = state(cfg)
-    row.pop("tool_boundary_revision")
+    if revision is None:
+        row.pop("tool_boundary_revision")
+    else:
+        row["tool_boundary_revision"] = revision
     path = Receipt(cfg.state_dir, request()["turn_key"]).path
     path.write_text(json.dumps(row))
     before = len(provider.calls)

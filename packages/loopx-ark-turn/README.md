@@ -108,6 +108,12 @@ refuse the attempt and retire its known resources. The combined call limit is
 an observation ceiling for cloud tools: they may already have executed before
 the adapter sees the event. The execution deadline and cleanup still apply.
 
+The input ACK must identify the root thread, and every candidate message must
+explicitly match it. A custom tool call or a builtin call/result invalidates
+earlier candidate text. Completion requires a new candidate after the latest
+tool outcome; an error may be followed by a fresh `repair_required` candidate.
+Tool failure alone neither validates an earlier result nor forbids repair.
+
 `--doctor` reports configuration only and always leaves
 `sandbox_enforcement_verified` false. SDK wire fixtures qualify this adapter's
 requests and refusals, not live sandbox enforcement. Before enabling this mode
@@ -127,7 +133,7 @@ usage for reconciliation. Raw model thinking/events and credentials are not
 stored. Provider usage is separate from LoopX quota; unavailable usage stays
 unknown, and rejected work can still cost tokens.
 
-Receipts from before the tool-boundary revision remain inspectable and cleanable
+Receipts from before `sandbox_tools_v2` remain inspectable and cleanable
 with their original options, but their candidates cannot be replayed or their
 sessions resumed as newly qualified work. Changing builtin mode binds a different
 configuration; it cannot retarget or rerun an existing Turn key. Keep stopped

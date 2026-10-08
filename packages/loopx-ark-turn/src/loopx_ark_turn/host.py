@@ -141,6 +141,8 @@ async def _observe(client: AsyncArk, receipt: Receipt, tools: Tools) -> str:
                 started = event_id == input_cursor
                 continue
             thread = event.get("session_thread_id")
+            if kind == "agent.message" and (not isinstance(thread, str) or not thread):
+                raise AdapterError("provider_candidate_thread_missing")
             if kind in {"agent.tool_use", "agent.tool_result"} and not thread:
                 raise AdapterError("provider_builtin_thread_missing")
             if kind in {"agent.custom_tool_use", "agent.message", "session.status_idle", "agent.tool_use", "agent.tool_result"} and thread:
@@ -148,8 +150,12 @@ async def _observe(client: AsyncArk, receipt: Receipt, tools: Tools) -> str:
                     raise AdapterError("provider_thread_switch_not_qualified")
                 receipt.update(root_thread_id=thread)
             if kind == "agent.custom_tool_use":
+                last_text = ""
                 await _custom_tool(client, receipt, tools, event)
             elif kind in {"agent.tool_use", "agent.tool_result"}:
+                # A candidate must describe the latest tool outcome, including
+                # errors. A message between use and result is also stale.
+                last_text = ""
                 observe_builtin(receipt, tools.config, event)
             elif kind == "agent.message":
                 last_text = "".join(block.get("text", "") for block in event.get("content", []) if block.get("type") == "text")
@@ -210,8 +216,11 @@ async def _execute(client: AsyncArk, config: Config, request: Mapping[str, Any],
     cursor = sent.data[-1].get("id") if sent.data else None
     if not isinstance(cursor, str) or not cursor:
         raise AdapterError("message_receipt_cursor_missing")
+    root_thread = sent.data[-1].get("session_thread_id")
+    if not isinstance(root_thread, str) or not root_thread:
+        raise AdapterError("message_receipt_thread_missing")
     receipt.update(stage=Stage.RUNNING, cursor=cursor, input_cursor=cursor,
-                   root_thread_id=sent.data[-1].get("session_thread_id") or None)
+                   root_thread_id=root_thread)
     return await _finish(client, request, receipt, tools)
 
 
