@@ -16,6 +16,7 @@ from ..control_plane.effect_runtime import (
     EffectRuntimeStartupError,
     MINIMUM_NODE_VERSION_TEXT,
 )
+from ..control_plane.runtime.node_probe import node_probe_remediation
 from ._host_thread import current_host_thread_id
 
 PrintPayload = Callable[
@@ -32,11 +33,6 @@ _CAPABILITY_ROUTE_PREFIX = re.compile(
 _FINE_GRAINED_PREFIX = re.compile(r"\A--fine-grained(?P<remainder>(?:\s[\s\S]*)?)\Z")
 
 _EFFECT_RUNTIME_STARTUP_REMEDIATION_BY_CODE = {
-    "node_unavailable": (
-        f"Install or activate Node.js {MINIMUM_NODE_VERSION_TEXT} or newer "
-        "on PATH, then run `loopx doctor --deep` and retry "
-        "`loopx start-goal --guided`."
-    ),
     "startup_lock_timeout": (
         "Another LoopX TypeScript control-plane runtime may be starting. Run "
         "`loopx doctor --deep`, wait for the active startup to settle, and retry "
@@ -69,6 +65,9 @@ def _effect_runtime_startup_recommended_action(
     diagnostic_code: str,
     message: str,
 ) -> str:
+    node_action = node_probe_remediation(diagnostic_code)
+    if node_action is not None:
+        return f"{node_action} Then retry `loopx start-goal --guided`."
     if diagnostic_code == "invalid_idle_timeout":
         # The TypeScript runtime owns the idle-timeout validation rules and
         # publishes them as the typed startup message, so the projection must
