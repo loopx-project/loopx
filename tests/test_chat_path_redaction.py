@@ -31,6 +31,42 @@ def test_project_label_requires_a_complete_path_boundary():
     assert redact_local_paths(unrelated, protected_paths=[root]) == unrelated
 
 
+def test_percent_encoded_root_component_keeps_safe_paths_and_redacts_private_descendants():
+    root = "/custom-volume/project space"
+    safe_path = "/custom-volume/project%20space/notes/report.md"
+    assert redact_local_paths(safe_path, protected_paths=[root]) == "[project]"
+    expected_safe = "./notes/report.md"
+    assert (
+        parse_agent_response(safe_path, protected_paths=[root])["message"]
+        == expected_safe
+    )
+    for split in range(len(safe_path) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=[root])
+        assert (
+            stream.feed(safe_path[:split])
+            + stream.feed(safe_path[split:])
+            + stream.finish()
+            == expected_safe
+        )
+
+    private_root = f"{root}/runtime private"
+    private_path = "/custom-volume/project%20space/runtime%20private/gate.json"
+    assert (
+        parse_agent_response(private_path, protected_paths=[root, private_root])[
+            "message"
+        ]
+        == "[local-path]"
+    )
+    for split in range(len(private_path) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=[root, private_root])
+        assert (
+            stream.feed(private_path[:split])
+            + stream.feed(private_path[split:])
+            + stream.finish()
+            == "[local-path]"
+        )
+
+
 def test_canonical_private_path_shapes_and_public_urls():
     assert redact_local_paths("/mnt/private/a.txt") == "[local-path]"
     public = "https://example.org/tmp/file.json ./relative/file.json docs/file.json"
