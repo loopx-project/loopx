@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-07
+- Last revised：2026-10-08
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -52,6 +52,18 @@ Goal 保持已记录的选择。见[配置及关闭契约](../../reference/local
 有界 cohort 在安装恢复和相关执行控制通过后可开始，不代表发布默认值或正式十天
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
 或所有 Python 消失。本节替代陈旧的当前数量估算，不覆盖历史执行证据。
+
+新鲜公共边界扫描保留既有 Python 正则／Host 文件 IO owner。候选实现省去
+literal 检查的 generator，保留 Unicode 折叠、权威正则、全部扫描根、新鲜
+读取及打开前私有状态过滤。完整 File/SQLite packet 等价、178 项源码用例、
+每种新 wheel/sdist 各 185 项真实路径／反例通过；性能**尚未资格化**。相对
+固定 main `62acd670f`，匹配 1,341 文件扫描范围、每个 backend 32 组交替
+完整 quota CLI 对照，File p50/p95 为
+874.95/1117.08 → 945.14/1202.86 ms（p95 +7.68%），SQLite 为
+831.09/1003.24 → 824.57/994.60 ms（-0.86%）。保留原成本门槛及全部失败／
+中断证据；此前纯源码对照的改善不能覆盖最终源码 File 失败。晋升前继续定位
+实际消费者成本；不消除此前 frontier 切换的 File 成本 hold，也不认证发布
+默认准入、C1 writer 退役或 D2。
 
 ## Todo 事件路径退役（2026-09-25）
 
