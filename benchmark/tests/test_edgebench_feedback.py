@@ -127,6 +127,30 @@ def test_native_ranking_alone_controls_improvement_notifications(publisher):
     assert transport.files == previous  # Equal native rank is silent.
 
 
+@pytest.mark.parametrize("pass_rate", [0, None])
+def test_native_empty_winner_stays_silent_then_recovers(publisher, pass_rate):
+    publisher.selection = "pass_rate_first"
+    transport = Transport()
+    entries = [row(1, 9, pass_rate=pass_rate), row(2, 99, pass_rate=pass_rate)]
+    # Zero/missing pass rates do not select a native winner, even with higher
+    # scores. Repeated polls must not fail, touch source files, or notify.
+    for _ in range(2):
+        publisher.update(history(*entries), transport, None)
+    assert not transport.files
+    assert publisher.score == 9 and publisher.notifications == 0
+    assert publisher.errors == 0
+    entries.append(row(3, 1, pass_rate=.1))
+    archive(publisher, 3)
+    publisher.update(history(*entries), transport, None)
+    assert json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]["snapshot_id"] == "auto-3"
+    assert publisher.score == 1 and publisher.notifications == 1
+    # Below full pass rate, equal pass rate is tied regardless of scalar score.
+    previous = dict(transport.files)
+    entries.append(row(4, 999, pass_rate=.1))
+    publisher.update(history(*entries), transport, None)
+    assert transport.files == previous and publisher.notifications == 1
+
+
 @pytest.mark.parametrize("patch", [
     {"score": None}, {"score": math.nan}, {"score": math.inf}, {"score": True},
     {"score": "9"}, {"status": "running"}, {"status": "error"}, {"valid": False},

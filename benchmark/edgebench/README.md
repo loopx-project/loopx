@@ -192,6 +192,9 @@ completed improvements observed together coalesce to the best one. Out-of-order
 results compete against the best observed native rank, never against the last result.
 For `pass_rate_first`, a higher pass rate can be an improvement even when its
 scalar score is lower; a scalar gain with a lower native rank is silent.
+When that policy returns no winner (for example, all pass rates are zero),
+polling stays silent and continues normally. A later native winner can improve
+the already established baseline; no scalar fallback or evaluator change is used.
 Notifications describe the named **evaluated snapshot**, not the current workspace.
 The source archive is the agent's own original submission, with its SHA-256; it
 contains no judge output. The adapter never restores files automatically.

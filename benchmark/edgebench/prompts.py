@@ -10,9 +10,9 @@ from __future__ import annotations
 def blind_task_prompt(original_query: str, submit_paths: list[str]) -> str:
     """Retain the native optimization contract without exposing host evaluation.
 
-    Best-score selection is task policy, not access to the scorer. The agent
-    chooses its current best version from local evidence; it cannot discover
-    which version the hidden evaluator ranks highest.
+    The task owns grading and final selection. The agent chooses its current
+    best version from local evidence; it cannot discover which version the
+    hidden evaluator ranks highest.
     """
     return _local_task_prompt(original_query, submit_paths)
 

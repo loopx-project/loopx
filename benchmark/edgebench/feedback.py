@@ -133,6 +133,11 @@ class BestOnlyFeedback:
             self.score = eligible[0]["score"]
             self._record()
         best = select_best(eligible, self.direction, self.selection)
+        # Native pass-rate-first selection has no winner at zero pass rate.
+        # A scored result still establishes the silent baseline; keep waiting
+        # for a native winner rather than inventing a scalar-score fallback.
+        if not best["best_round"]:
+            return None
         candidate = next(entry for entry in eligible if entry["round"] == best["best_round"])
         comparison = select_best([self.incumbent, candidate], self.direction, self.selection)
         if candidate["round"] == self.incumbent["round"] or comparison["best_round"] != candidate["round"]:

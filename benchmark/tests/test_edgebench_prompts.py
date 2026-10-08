@@ -17,7 +17,7 @@ def test_blind_retains_optimization_contract_without_judge_or_background_signal(
     blind = blind_task_prompt(query, paths)
     # Independently specified obligations, shared with the native task wrapper.
     for obligation in [
-        "**Implement incrementally**", "**Iterate**", "**best score**",
+        "**Implement incrementally**", "**Iterate**",
         "You don't lose points for failed attempts", "experimentation is encouraged",
         "**Keep these files in a compilable/runnable state at all times.**",
         "Write changes to disk promptly", "current best solution",
@@ -30,6 +30,24 @@ def test_blind_retains_optimization_contract_without_judge_or_background_signal(
     for hidden_surface in ["sforge-submit", "judge server", "auto-eval", "background",
                            "300", "120", "Submission Limits", "(0 total)"]:
         assert hidden_surface not in wrapper
+
+
+@pytest.mark.parametrize("render", [blind_task_prompt, best_only_task_prompt])
+@pytest.mark.parametrize("policy,direction", [
+    ("score_first", "maximize"), ("score_first", "minimize"),
+    ("valid_then_score", "maximize"), ("pass_rate_first", "maximize"),
+])
+def test_restricted_wrapper_leaves_grading_and_final_selection_to_task(render, policy, direction):
+    query = (f"Task final selection: {policy}; score direction: {direction}.\n"
+             "All original acceptance criteria must be met.")
+    prompt = render(query, ["solver.py"])
+    assert prompt.endswith("---\n\n" + query + "\n")
+    wrapper = prompt.removesuffix(query + "\n")
+    assert "task's grading and final-selection rules determine your result" in wrapper
+    assert "**best score**" not in wrapper
+    assert "current best solution, judged from available local evidence" in wrapper
+    assert "local tests and validation" in wrapper
+    assert "Only the AI API is reachable" in wrapper
 
 
 @pytest.mark.parametrize("profile", [
