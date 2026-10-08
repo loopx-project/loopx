@@ -31,6 +31,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout-seconds", type=float, default=180)
     p.add_argument("--tool-timeout-seconds", type=float, default=60)
     p.add_argument("--max-tool-calls", type=int, default=32)
+    p.add_argument("--sandbox-builtins", action="store_true", help="Enable cloud sandbox tools with verified restricted networking and no injected resources.")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--doctor", action="store_true", help="Read configuration only; make no network calls.")
     mode.add_argument("--inspect-turn-key", help="Read a private host receipt without calling the provider.")
@@ -42,7 +43,7 @@ async def execute(args: argparse.Namespace) -> dict:
     if args.config:
         if (args.model or args.environment_id or args.state_dir or args.mcp_command_json or args.tool or args.mcp_env
                 or args.workspace != Path.cwd() or args.timeout_seconds != 180
-                or args.tool_timeout_seconds != 60 or args.max_tool_calls != 32):
+                or args.tool_timeout_seconds != 60 or args.max_tool_calls != 32 or args.sandbox_builtins):
             raise AdapterError("config_file_and_inline_options_are_exclusive")
         if args.config.stat().st_size > 32_000:
             raise AdapterError("config_file_exceeds_limit")
@@ -73,11 +74,14 @@ async def execute(args: argparse.Namespace) -> dict:
             mcp_command=tuple(command), tool_names=tuple(args.tool), mcp_env=tuple(args.mcp_env),
             timeout_seconds=args.timeout_seconds, tool_timeout_seconds=args.tool_timeout_seconds,
             max_tool_calls=args.max_tool_calls,
+            sandbox_builtins=args.sandbox_builtins,
         )
     if args.doctor:
         return {"ok": True, "provider": "loopx-ark-turn", "context": "fresh", "model": config.model,
                 "credential_present": bool(os.environ.get("ARK_API_KEY")), "selected_tools": list(config.tool_names),
-                "continuation_owner": "loopx_turn", "network_checked": False}
+                "continuation_owner": "loopx_turn", "network_checked": False,
+                "sandbox_builtins": config.sandbox_builtins,
+                "sandbox_enforcement_verified": False}
     receipt = None
     if args.inspect_turn_key or args.cleanup_turn_key:
         receipt = Receipt(config.state_dir, args.inspect_turn_key or args.cleanup_turn_key)

@@ -85,6 +85,36 @@ can accept the resulting artifact.
 
 ## Lifecycle and readback
 
+Cloud builtin tools are explicitly disabled by default; an omitted declaration
+does not reliably disable provider defaults. To allow bash and other sandbox
+tools, add `--sandbox-builtins` or `"sandbox_builtins": true` to the operator
+profile. This mode permits temporary sandbox computation and file writes. It
+does not classify shell commands by substring or claim that bash is read-only.
+
+Before creating a Session, the adapter checks that the selected Environment is
+cloud-hosted with no injected variables, startup script, package installation
+or configured output storage. It applies a Session-only networking override:
+`limited`, no allowed hosts, no MCP-server or package-manager exceptions, no
+resource mounts and no Vault access. The frozen Session must read back those
+restrictions before input is sent. The shared Environment is never changed.
+Missing or weaker readback refuses the attempt. Trusted local custom MCP tools
+retain their separate host permissions; this cloud policy does not isolate them.
+
+Runtime builtin calls require the selected root thread, an observed `allow`
+permission and correlated results before a candidate can be returned. Receipts
+retain tool names and input/result hashes, not raw commands or outputs. Calls
+before the input ACK, undeclared builtin calls and conflicting/orphan results
+refuse the attempt and retire its known resources. The combined call limit is
+an observation ceiling for cloud tools: they may already have executed before
+the adapter sees the event. The execution deadline and cleanup still apply.
+
+`--doctor` reports configuration only and always leaves
+`sandbox_enforcement_verified` false. SDK wire fixtures qualify this adapter's
+requests and refusals, not live sandbox enforcement. Before enabling this mode
+in production, qualify the provider's actual no-egress, no-secret/no-mount
+behavior and cleanup with an authorized disposable cloud attempt. Configuration
+readback alone cannot establish that all builtin tools have no external effect.
+
 Each attempt creates its own cloud Agent definition and session using the
 selected model and exact tool declarations, then deletes both with readback.
 The frozen session snapshot must match the model/tool selection and contain no
@@ -96,6 +126,12 @@ retain resource identities, tool-effect status, bounded candidate and provider
 usage for reconciliation. Raw model thinking/events and credentials are not
 stored. Provider usage is separate from LoopX quota; unavailable usage stays
 unknown, and rejected work can still cost tokens.
+
+Receipts from before the tool-boundary revision remain inspectable and cleanable
+with their original options, but their candidates cannot be replayed or their
+sessions resumed as newly qualified work. Changing builtin mode binds a different
+configuration; it cannot retarget or rerun an existing Turn key. Keep stopped
+attempts and their unknown usage instead of resetting them to retry input.
 
 Mutating provider requests are not automatically retried. A duplicate exact
 request may reuse a completed candidate after resource cleanup; a conflicting

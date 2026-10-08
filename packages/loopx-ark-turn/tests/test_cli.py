@@ -68,3 +68,24 @@ def test_file_profile_preserves_inline_config_and_rejects_ambiguous_overrides(tm
         "workspace": str(work), "state_dir": str(tmp_path / "receipts"), "timeout_seconds": True}))
     bad = subprocess.run([*command, "--doctor"], capture_output=True, text=True)
     assert bad.returncode == 1 and "timeouts" in bad.stderr
+
+
+def test_sandbox_flag_and_file_profile_agree_without_claiming_live_enforcement(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_BASE_URL", raising=False)
+    (tmp_path / "work").mkdir()
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"model": "public-model", "environment_id": "env-fixture",
+        "workspace": str(tmp_path / "work"), "state_dir": str(tmp_path / "receipts"), "sandbox_builtins": True}))
+    command = [sys.executable, "-m", "loopx_ark_turn.cli", "--config", str(profile)]
+    file_result = subprocess.run([*command, "--doctor"], capture_output=True, text=True, check=True)
+    inline_result = subprocess.run([*argv(tmp_path), "--sandbox-builtins", "--doctor"], capture_output=True, text=True, check=True)
+    data = json.loads(file_result.stdout)
+    assert data == json.loads(inline_result.stdout)
+    assert data["sandbox_builtins"] is True and data["sandbox_enforcement_verified"] is False
+    bad = subprocess.run([*command, "--sandbox-builtins", "--doctor"], capture_output=True, text=True)
+    assert bad.returncode == 1 and "exclusive" in bad.stderr
+    raw = json.loads(profile.read_text()) | {"sandbox_builtins": "true"}
+    profile.write_text(json.dumps(raw))
+    bad = subprocess.run([*command, "--doctor"], capture_output=True, text=True)
+    assert bad.returncode == 1 and "must_be_boolean" in bad.stderr

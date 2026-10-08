@@ -67,6 +67,10 @@ class Provider:
         self.fail_delete = False
         self.fail_create = False
         self.empty_forever = False
+        self.startup_events = []
+        self.environment_snapshot = {"id": "env-fixture", "type": "environment", "config": {"type": "cloud"}}
+        self.frozen_environment = None
+        self.session_extras = {"resources": [], "vault_ids": []}
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path.removeprefix("/api/v3")
@@ -82,15 +86,20 @@ class Provider:
         if path == "/agents" and req.method == "POST":
             if self.fail_create:
                 raise httpx.ReadTimeout("synthetic ambiguous create", request=req)
-            assert all(t["type"] == "custom" for t in body["tools"])
+            assert body["tools"][0]["type"] == "agent_toolset_20260701"
+            assert all(t["type"] == "custom" for t in body["tools"][1:])
             self.agent_snapshot = body
             return httpx.Response(200, json={"id": "agnt-fixture", "type": "agent", **body})
         if path == "/sessions" and req.method == "POST":
+            if "environment" in body and self.frozen_environment is None:
+                self.frozen_environment = {"id": "env-fixture", "config": body["environment"]["config"]}
             return httpx.Response(200, json={"id": "sesn-fixture", "type": "session", "status": "idle", "agent": {"id": "agnt-fixture"}, "environment_id": "env-fixture"})
+        if path == "/environments/env-fixture" and req.method == "GET":
+            return httpx.Response(200, json=self.environment_snapshot)
         if path == "/sessions/sesn-fixture" and req.method == "GET":
             if self.bad_capabilities:
                 self.agent_snapshot["tools"] = [{"type": "agent_toolset_20260701"}]
-            return httpx.Response(200, json={"id": "sesn-fixture", "type": "session", "status": "idle", "agent": {"id": "other" if self.bad_binding else "agnt-fixture", **self.agent_snapshot}, "environment_id": "env-fixture", "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0}})
+            return httpx.Response(200, json={"id": "sesn-fixture", "type": "session", "status": "idle", "agent": {"id": "other" if self.bad_binding else "agnt-fixture", **self.agent_snapshot}, "environment_id": "env-fixture", "environment": self.frozen_environment, **self.session_extras, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0}})
         if path.endswith("/events") and req.method == "POST":
             sent = body["events"][0]
             if sent["type"] == "user.custom_tool_result":
@@ -101,11 +110,11 @@ class Provider:
         if path.endswith("/events") and req.method == "GET":
             assert "after" not in req.url.params
             offset = int(req.url.params.get("page", "opaque-0").removeprefix("opaque-"))
-            history = [event("startup", "session.status_idle", stop_reason={"type": "end_turn"}),
+            history = [*self.startup_events, event("startup", "session.status_idle", stop_reason={"type": "end_turn"}),
                        event("e0", "user.message", session_thread_id="thread-root")]
             if not self.empty_forever:
                 history += self.before
-                if self.results or not self.before:
+                if self.results or not any(e["type"] == "agent.custom_tool_use" for e in self.before):
                     history += self.after
             page = history[offset:offset + 100]
             next_page = "opaque-" + str(offset + 100) if len(history) > offset + 100 else None
