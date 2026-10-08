@@ -354,8 +354,33 @@ Quota 观察复用既有 should-run 摘要：捕获的单 Goal 行序列化由 1
 另一项 148 秒隔离演练通过新进程为两种 provider 各追加 12 笔提交，跨越 checkpoint，
 逐轮验证原回执重放、变更意图拒绝及 projection／hash 一致性。它证明这段有界存储
 流程，**不代表** Host 执行、活跃 Goal 采用或 D2 的十天 soak 已完成。本次不改变活跃
-authority、发布默认值或旧 writer 删除决定。B 仍缺持续负载／平台／容量证据；C 仍需
-consumer／新建入口及受支持升级验收。
+authority、发布默认值或旧 writer 删除决定。C 仍需 consumer／新建入口及受支持升级验收。
+
+原封不动的 `matched-64k` capacity runner 在 `5f51559dc` 源码上完成独立的
+10k／100k 历史：macOS arm64、Node 24.21.0／SQLite 3.53.4、WAL/FULL，
+两轴使用相同且非空的 1,341 文件公共扫描根。正式 ledger 为
+**13 passed／1 failed／11 missing**，进程退出 1，`full_d2_qualified=false`。
+部分 p95 测量如下：
+
+| 测量 | 10k | 100k | 冻结预算／结果 |
+| --- | ---: | ---: | --- |
+| Warm head | 2.360 ms | 4.860 ms | 增长 2.059 倍 > 2 倍：**失败**；绝对值 < 50 ms 通过 |
+| Commit | 4.654 ms | 7.022 ms | 增长 1.509 倍、绝对值 < 100 ms 通过 |
+| Receipt | 5.043 ms | 6.952 ms | 增长 1.379 倍、绝对值 < 50 ms 通过 |
+| 新进程 CLI status | 1,133.177 ms | 1,143.820 ms | < 2,000 ms 通过 |
+| 新进程 CLI mutation | 671.668 ms | 865.628 ms | 增量 193.960 ms < 200 ms 通过 |
+
+真实 CLI 操作、head／receipt 校验和临时存储清理均完成，没有正确性断言失败。
+这两条存储轴不证明完整八 agent／四 writer 负载、稳定 RSS、大历史恢复、consumer
+lag、升级／回退、十日 soak、受支持 runtime 矩阵、promotion、1 MiB payload、
+300k 余量或 60 秒 burst；没有清空 OS 文件缓存。
+[D2 issue #4224](https://github.com/loopx-project/loopx/issues/4224) 已记录 soak 启动，
+须先与既有负责人核实完成报告及其对当前候选的适用性，再决定是否授权替代运行。
+
+下一项有界工作先区分连续性查询、proof／codec、连接与 Host 成本，再选择修复；
+根因尚未证明。保留原失败和预算，不能删历史 hole／摘要／receipt 校验、缩短负载
+或反复重跑到绿；head 绝对值通过不能抵消增长预算失败。B 保持 open，这项单源码
+结果不证明发行回归，也不改变 provider 默认值或当前 File 对照要求。
 
 ### 合同健康检查的权威归属
 

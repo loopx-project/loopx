@@ -458,8 +458,39 @@ fresh processes, crossing a checkpoint and checking original-receipt replay,
 changed-intent rejection and projection/hash parity at every step. It qualifies
 that bounded storage journey, **not** Host execution, live Goal adoption or D2's
 ten-day soak. No active authority, release default or legacy-writer deletion
-decision changes. B still needs sustained workload/platform/capacity evidence;
-C still needs consumer/onboarding and supported upgrade acceptance.
+decision changes. C still needs consumer/onboarding and supported upgrade
+acceptance.
+
+The unchanged `matched-64k` capacity runner at `5f51559dc` completed independent
+10k/100k histories on macOS arm64, Node 24.21.0 / SQLite 3.53.4, with WAL/FULL
+durability and the same non-empty 1,341-file public scan root. Its formal ledger
+is **13 passed / 1 failed / 11 missing**; the process exits 1 and
+`full_d2_qualified=false`. Selected p95 measurements are:
+
+| Measurement | 10k | 100k | Frozen budget / result |
+| --- | ---: | ---: | --- |
+| Warm head | 2.360 ms | 4.860 ms | Growth 2.059x > 2x: **failed**; absolute < 50 ms passes |
+| Commit | 4.654 ms | 7.022 ms | Growth 1.509x and absolute < 100 ms pass |
+| Receipt | 5.043 ms | 6.952 ms | Growth 1.379x and absolute < 50 ms pass |
+| Fresh CLI status | 1,133.177 ms | 1,143.820 ms | < 2,000 ms passes |
+| Fresh CLI mutation | 671.668 ms | 865.628 ms | Increment 193.960 ms < 200 ms passes |
+
+Real CLI operations, head/receipt checks and temporary-store cleanup completed;
+no correctness assertion failed. These storage axes do not qualify the complete
+eight-agent/four-writer workload, steady-state RSS, large-history recovery,
+consumer lag, upgrade/rollback, ten-day soak, supported runtime matrix, promotion,
+1 MiB payload, 300k headroom or 60-second burst. No OS cache flush was performed.
+[D2 issue #4224](https://github.com/loopx-project/loopx/issues/4224) already reports
+a soak start; completion and applicability to this candidate need verification
+with its existing owner before authorizing any replacement run.
+
+The next bounded work isolates continuity-query, proof/codec, connection and host
+costs before choosing a repair. The root cause is unproven. Keep the original
+failed result and budgets; do not remove hole/digest/receipt verification, shorten
+the workload or rerun until green. A passing absolute head budget does not cancel
+its failed growth budget. B remains open; this single-source result neither
+establishes a release regression nor changes provider defaults or File comparison
+requirements.
 
 ### Contract health follows Todo authority
 
