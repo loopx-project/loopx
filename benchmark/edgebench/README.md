@@ -92,28 +92,34 @@ Trial timeouts use **explicit `--timeout` → [task defaults](task-defaults.json
 feedback profile; other tasks retain the 18-hour fallback. These are total trial
 budgets, including planning, not per-turn limits.
 
-SForge `loopx-planned` now allows **600 seconds (10 minutes)** for the initial
-planning checkpoint, instead of 300 seconds. `--planning-timeout SECONDS` overrides
-this cap for planned heartbeat workers; the configured value is recorded in the
-runtime and worker receipts. The checkpoint still clips its allowance to the
-remaining total trial budget minus the 160-second execution/cleanup reserve.
-This does not extend the trial deadline or change shared Harbor defaults.
+SForge `loopx-planned` has **no independent planning timeout**. Planning and
+execution share the original absolute trial deadline; planning consumes that
+budget and a process resume cannot reset it. Runtime and worker receipts record
+`planning_timeout_seconds: null`. The existing 160-second startup/settlement
+reserve still controls admission of execution wakes. Shared Harbor retains its
+300-second planning default.
 
 The adapter also records the actual solver command's exit code, timeout and
 elapsed time in `execution-receipt.json`. A positive runtime alone no longer
-qualifies a completed attempt: a nonzero or unknown exit without a budget timeout
-is `runner_failed`, and does not publish `final_result.json`. Keep its captures
-and failure evidence; do not count an initial artifact's score as a solver outcome.
+qualifies completion. An expired deadline before execution entry fails; an inner
+GNU timeout after verified execution entry is a normal budget stop. Other nonzero
+or unknown exits, including an early exit with code 124, are `runner_failed` and
+do not publish `final_result.json`. Keep their captures and failure evidence;
+do not count an initial artifact's score as a solver outcome.
 
 Auto-evaluation uses **explicit `--eval-interval` → task defaults → 300 seconds**.
-Portfolio defaults to **300 seconds (5 minutes)**; Lean Analysis Proofs defaults
-to **1,800 seconds (30 minutes)** to space out expensive compilation. Other tasks
-retain the 5-minute fallback. Defaults apply equally to every worker and feedback
-profile. Explicit `--eval-interval 0` disables periodic auto-evaluation in native/blind;
+All tasks, including Portfolio and Lean Analysis Proofs, default to **300 seconds
+(5 minutes)**. Lean previously defaulted to 1,800 seconds; use an explicit
+`--eval-interval 1800` when that slower sampling is needed. Defaults apply equally
+to every worker and feedback profile. Explicit `--eval-interval 0` disables periodic auto-evaluation in native/blind;
 `best-only` requires a positive interval. The resolved
 interval is passed to SForge and recorded in each attempt's runtime receipt.
-These defaults affect new launches; editing the file does not change a running
-sampler or create historical snapshots. Sampling cadence does not set evaluator
+These are research-adapter defaults. The upstream Codex leaderboard experiment
+[configuration](https://github.com/ByteDance-Seed/EdgeBench/blob/main/examples/all-tasks-k8s/experiment-codex.yaml)
+uses 1,800 seconds for these tasks. A native-agent `official` arm does not imply
+that all leaderboard settings are reproduced. Existing attempts keep their
+recorded sampling interval; new defaults never rewrite a running attempt or
+create historical snapshots. Sampling cadence does not set evaluator
 concurrency or replace the submission cooldown, which remains 120 seconds.
 `--timeout`,
 `--eval-interval`, and `--submission-cooldown` support explicitly recorded
