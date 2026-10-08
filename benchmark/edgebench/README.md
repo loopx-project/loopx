@@ -136,6 +136,11 @@ recovery: their LoopX scheduler owns repeated wakes, error backoff and terminal
 exit. Once it exits, SForge collects the final artifacts instead of restarting
 the scheduler. This changes the heartbeat transport, not LoopX's decision to
 continue or end a lane; scheduler exit alone does not prove task success.
+The private execution receipt distinguishes wrapper startup from actual work
+entry. For LoopX workers, both inner deadline expiry and Docker's outer timeout
+must have an execution-entry marker before the runner writes a final result;
+a timeout during planning remains a failed attempt. Direct native Codex commands
+enter execution without that planning wrapper. Cancellation remains separate.
 The official profile retains native outer recovery, and single/native Goal
 behavior is unchanged. Record a new runner revision for new attempts; do not
 rewrite earlier `outer_resume` receipts. Explicit total timeouts can support diagnostics,

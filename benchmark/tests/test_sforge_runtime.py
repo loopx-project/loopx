@@ -289,6 +289,15 @@ def test_native_result_disposition_requires_successful_exit_or_budget_timeout(
                           exit_code=exit_code, timed_out=timed_out) == status
 
 
+@pytest.mark.parametrize("timed_out,exit_code", [(True, -1), (True, None), (False, 0)])
+def test_planning_without_execution_entry_never_emits_completed_result(timed_out, exit_code):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import _result_status
+    assert _result_status(interrupted=False, started=True, runtime_seconds=300,
+        exit_code=exit_code, timed_out=timed_out, execution_started=False) == "runner_failed"
+
+
 def test_native_swallowed_interrupt_is_observed_and_handler_restored():
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -632,5 +641,6 @@ def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeyp
         SimpleNamespace(exit_code=1, timed_out=False, elapsed_seconds=310,
                         output="done: successful looking text"))
     backend.exec_run_with_timeout(None, ["/bin/bash", "-c", backend.execution_command])
-    assert backend.execution_receipt == {"exit_code": 1, "timed_out": False, "elapsed_seconds": 310}
+    assert backend.execution_receipt == {"exit_code": 1, "execution_started": True,
+                                         "timed_out": False, "elapsed_seconds": 310}
     assert json.loads((tmp_path / "execution-receipt.json").read_text()) == backend.execution_receipt

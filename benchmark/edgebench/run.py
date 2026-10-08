@@ -54,12 +54,13 @@ def _observe_run(call):
         signal.signal(signal.SIGINT, previous)
 
 
-def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_out=False):
+def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_out=False,
+                   execution_started=True):
     if interrupted:
         return "cancelled"
     if not started:
         return "launch_failed"
-    if runtime_seconds <= 0 or (not timed_out and exit_code != 0):
+    if not execution_started or runtime_seconds <= 0 or (not timed_out and exit_code != 0):
         return "runner_failed"
     return "terminal"
 
@@ -233,6 +234,7 @@ def main(argv=None):
     status = _result_status(interrupted=was_interrupted,
                             started=(trial / "started_at").is_file(),
                             runtime_seconds=result.runtime_seconds,
+                            execution_started=execution.get("execution_started", False),
                             exit_code=execution.get("exit_code"),
                             timed_out=result.timed_out or execution.get("timed_out", False))
     receipt.update(status=status, controller_elapsed_seconds=elapsed,

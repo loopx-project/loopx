@@ -21,6 +21,7 @@ class RecordingDockerBackend(DockerBackend):
         self.blind_api_endpoint = blind_api_endpoint
         self.feedback = feedback
         self.execution_command = None
+        self.execution_start_marker = None
         self.execution_receipt = None
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
@@ -50,7 +51,11 @@ class RecordingDockerBackend(DockerBackend):
             if is_solver:
                 # SForge's RunResult discards the process exit code. Preserve
                 # structured transport evidence without inspecting output text.
+                marker = getattr(self, "execution_start_marker", None)
+                execution_started = marker is None or super().exec_run(
+                    handle, ["test", "-f", marker], user="root").exit_code == 0
                 self.execution_receipt = dict(exit_code=result.exit_code,
+                    execution_started=execution_started,
                     timed_out=result.timed_out, elapsed_seconds=result.elapsed_seconds)
                 target = self.log_dir.parent / "execution-receipt.json"
                 target.parent.mkdir(parents=True, exist_ok=True)

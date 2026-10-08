@@ -113,11 +113,12 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
     # Substitute only the model transport; keep the production deadline shell.
     monkeypatch.setattr("benchmark.runtime.sforge.worker_command",
                         lambda *args, **kwargs: ["/bin/sh", "/tmp/entry"])
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
+                                    logger=logging.getLogger("trial-deadline-smoke"), oauth_proxy=True)
+    worker.backend = backend
     command = worker.format_run_cmd("/tmp/task.md")
     command = command.replace(f"{_PYTHON}/bin/python3 -m benchmark.runtime.sforge_entry ", "")
     assert "benchmark.runtime.sforge_entry" not in command
-    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
-                                    logger=logging.getLogger("trial-deadline-smoke"), oauth_proxy=True)
     handle = backend.create_container(agent_image.id, "deadline-smoke-" + uuid.uuid4().hex[:10],
                                       cpu_limit=1, mem_limit="256m")
     backend.start_container(handle)
@@ -125,14 +126,17 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
     try:
         assert backend.exec_run(handle, ["sh", "-c", f"mkdir -p {control}; chmod 0777 {control}"],
                                 user="root").exit_code == 0
-        for name, seconds, prior_entry, body, expected_status in [
-            ("expired-before-entry", -1, False, "touch /tmp/solver-entered", "runner_failed"),
-            ("planning-budget-exhausted", 10, False, "sleep 30", "runner_failed"),
+        for name, seconds, prior_entry, body, expected_status, transport_timeout in [
+            ("expired-before-entry", -1, False, "touch /tmp/solver-entered", "runner_failed", 45),
+            ("planning-budget-exhausted", 10, False, "sleep 30", "runner_failed", 45),
             ("execution-budget-exhausted", 10, False,
-             f"touch {control}/execution-started; sleep 30", "terminal"),
-            ("resumed-after-deadline", -1, True, "touch /tmp/solver-entered", "terminal"),
+             f"touch {control}/execution-started; sleep 30", "terminal", 45),
+            ("resumed-after-deadline", -1, True, "touch /tmp/solver-entered", "terminal", 45),
             ("early-exit-124", 30, False,
-             f"touch {control}/execution-started; exit 124", "runner_failed"),
+             f"touch {control}/execution-started; exit 124", "runner_failed", 45),
+            ("outer-timeout-during-planning", 120, False, "sleep 30", "runner_failed", 10),
+            ("outer-timeout-after-execution", 120, False,
+             f"touch {control}/execution-started; sleep 30", "terminal", 10),
         ]:
             setup = (f"rm -f {control}/execution-started /tmp/solver-entered; "
                      f"echo $(( $(date +%s) + {seconds} )) > {control}/phase-deadline; "
@@ -140,11 +144,13 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
                      + (f"touch {control}/execution-started" if prior_entry else "true"))
             assert backend.exec_run(handle, ["sh", "-c", setup]).exit_code == 0
             backend.execution_command = command
-            observed = backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", command], timeout=45)
-            assert not observed.timed_out  # This must be the inner trial clock.
+            observed = backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", command],
+                                                    timeout=transport_timeout)
+            assert observed.timed_out is (transport_timeout < seconds)
             receipt = backend.execution_receipt
             status = _result_status(interrupted=False, started=True, runtime_seconds=observed.elapsed_seconds,
-                                    exit_code=receipt["exit_code"], timed_out=receipt["timed_out"])
+                                    exit_code=receipt["exit_code"], timed_out=receipt["timed_out"],
+                                    execution_started=receipt["execution_started"])
             assert status == expected_status, (name, receipt, observed.output)
             if seconds < 0:
                 assert backend.exec_run(handle, ["test", "-f", "/tmp/solver-entered"]).exit_code != 0

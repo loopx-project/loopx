@@ -286,12 +286,14 @@ class SForgeWorker(CodexAgent):
             + (f"touch {started}; " if self.task_entry != "loopx-planned" else "")
             + f"set +e; timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}; "
             f"phase_rc=$?; if test $phase_rc -eq 124 && test -f {started} "
-            '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc'
+            '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc',
+            execution_start_marker=started,
         )
 
-    def _execution_command(self, command):
+    def _execution_command(self, command, *, execution_start_marker=None):
         if getattr(self, "backend", None) is not None:
             self.backend.execution_command = command
+            self.backend.execution_start_marker = execution_start_marker
         if self.feedback == "best-only":
             self.backend.start_feedback(self.handle)
         return command
