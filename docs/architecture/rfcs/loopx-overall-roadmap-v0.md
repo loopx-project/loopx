@@ -881,6 +881,17 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 - **Exit:** use shared-authority Section 7.2's separate decisions for a bounded change, reversible opt-in cohort and released default. Each requires affected real CLI/backend and independent baseline/negative/recovery evidence at its own scope. Formal D2 retains applicable volume and at least ten-day evidence; a cohort need not wait for that certificate. D3 retains explicit cutover authority. This plan runs no soak or provider promotion.
 - **Rollback:** reviewed fenced export/import and schema-aware downgrade; replacing a binary cannot restore old write authority.
 
+Cold-source inventory is now an explicit read-only CLI prerequisite through the
+same TS source/lease owners. It includes unreferenced archives and retained
+leases, with full text and source-byte witnesses, before any shadow opt-in.
+Expired or orphan `active` leases still require settlement; canonical selectors
+and fences prevent treating display Markdown as an old authority source.
+This observation creates no capture or import receipt and never reports import
+readiness. R5/D1 and T4/C1 still need the Goal storage frontend, stopped
+writer/Host proof, original outbox disposition, backup-bound reviewed target,
+confirmation and same-operation import/recovery. Keep the cold-import work open;
+neither this prerequisite nor archive export qualifies writer cutoff or defaults.
+
 Existing canonical File/SQLite cutover now has a packaged settings journey using
 the existing typed migration/archive owner: immutable preview, explicit apply,
 original-plan recovery and independent current-source readback. Active capture

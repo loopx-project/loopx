@@ -12,6 +12,45 @@ fencing and receipt proof; Python only loads the file and transports the request
 
 ## Preview and execute
 
+### Inspect a cold old source
+
+An unpromoted Markdown Goal can be inventoried before enabling capture:
+
+```bash
+loopx --format json coordination-shadow inspect-source \
+  --goal-id example-goal > old-source-inventory.json
+```
+
+This read-only command includes all supported active and archived Todo records,
+not just archives needed by the current dependency graph. It preserves full
+archived text and supported metadata through the existing record codec. The
+source witness binds the registered Goal, state bytes, registry and every lease
+file; TS revalidates it under the existing source/maintenance locks. Retained
+leases are returned separately from current graph edges. Every `active` lease
+requires settlement, including expired leases and leases for removed Todos:
+expiry is not proof that the Host stopped. Missing archive roles, duplicate
+identities, invalid historical leases and stale sources reject the inspection.
+An existing canonical selector/document or writer fence rejects using Markdown
+as a cold import source, including when the selected provider is unavailable.
+
+Read `source_inventory.active_todo_count`, `archived_todo_count`,
+`retained_leases` and `leases_requiring_settlement`. `import_ready`,
+`writer_stop_verified` and `outbox_reconciliation_verified` remain **false**.
+There is no `--execute` switch, writer fence, bootstrap, provider initialization,
+lease grant or capture receipt. This is an operator CLI prerequisite, not the
+complete import journey or a dashboard/Lark operation. The Goal storage owner
+still needs the shared frontend inventory, explicit Host/writer stop, original
+outbox reconciliation, backup, reviewed target, confirmation and same-operation
+import recovery. Existing shadow qualification below retains its original gates.
+
+Keep the JSON private: it contains full Todo text, identities and local source
+paths. It is an observation, not a complete historical backup. Preserve the
+original source and supported receipts through [configuration backup](configuration-backup.md).
+No capability setting is enabled; stopping this inspection needs no rollback.
+Delete the operator-owned JSON when it is no longer needed.
+
+### Qualified shadow promotion
+
 Use an explicitly enabled, bootstrapped and qualified runtime shadow. Its
 qualification must cover real mutations and required event classes; an empty
 shadow or a saved JSON file cannot substitute for that evidence. Fresh CLI

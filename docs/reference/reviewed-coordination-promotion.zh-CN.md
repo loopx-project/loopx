@@ -8,6 +8,36 @@ fence 与 receipt 证明由 TypeScript 协调边界负责；Python 只读文件�
 
 ## 操作
 
+### 盘点冷旧源
+
+未晋升的 Markdown Goal 可以先盘点，不需要启用 shadow 或让旧 writer 制造捕获历史：
+
+```bash
+loopx --format json coordination-shadow inspect-source \
+  --goal-id example-goal > old-source-inventory.json
+```
+
+读取 `source_inventory` 中的 active/archive Todo 数量、完整支持格式的记录、
+`retained_leases` 和 `leases_requiring_settlement`。全部归档均进入这次盘点，
+不只包含当前图需要的归档依赖；长正文和已支持 metadata 不按注意力摘要截断。
+原源字节、registry 和全部 lease 文件绑定到同一次来源见证，TS 在既有锁下复核。
+历史 lease 单独返回，不变成当前执行 grant。仍标记 `active` 的租约均需结算，
+即使已过期或所属 Todo 已删除；过期不能证明 Host 已停止。
+缺少归档角色、重复身份、非法历史 lease 和源变化会拒绝；已有 canonical selector、
+文档或 writer fence 时拒绝把 Markdown 投影当作冷旧导入源，provider 不可用也不回退。
+
+`import_ready`、`writer_stop_verified`、`outbox_reconciliation_verified` 始终为 false。
+此命令没有 `--execute`，不启用配置、创建 shadow/provider/fence、授予 lease 或制造捕获回执。
+它只交付操作员 CLI 盘点前置；Goal storage owner 仍须完成共享 frontend 盘点、明确停
+writer/Host、原 outbox 对账、备份、审核目标、确认和同操作导入恢复。下方 shadow
+晋升仍遵守原资格，不因盘点通过而放宽。
+
+JSON 含完整正文、身份与本机路径，应留在操作员私有存储。它是观察结果，不是完整
+历史备份；原始来源和受支持回执仍按[配置备份](configuration-backup.md)保留。
+没有能力设置被启用，停止盘点无需回退；不再需要时删除本人的输出文件即可。
+
+### 合格 shadow 的晋升
+
 先显式启用并 bootstrap runtime shadow，让它捕获真实变更并通过资格校验。
 新 CLI 预览默认 `preserve`，只切换存储权威、保留当前所有权策略；显式
 `--handoff-mode-migration hard_lease` 才审核策略升级及现有 claim/lease。
