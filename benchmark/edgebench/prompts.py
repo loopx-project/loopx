@@ -45,7 +45,7 @@ def _local_task_prompt(original_query, submit_paths, *, intro=(
         "- **Read local test feedback carefully**: Failed local checks help identify issues\n"
         "- **Iterate**: Fix failures based on local validation, then test again\n\n"
         "### Scoring\n\n"
-        "- Your **best score** across solution versions is your final score\n"
+        "- The task's grading and final-selection rules determine your result\n"
         "- You don't lose points for failed attempts — experimentation is encouraged\n\n"
         "---\n\n"
         f"{original_query}\n"

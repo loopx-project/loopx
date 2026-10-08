@@ -82,6 +82,12 @@ startup margin, not sustained capacity qualification: retain continuous load and
 grading-latency monitoring and stop affected trials on sustained pressure. Strict
 admission and the shared mode without this explicit option retain their defaults.
 
+Best-only notifications compare finite scores from valid admitted snapshots,
+even when the task's native final selection uses `pass_rate_first`. Notification
+best means the highest valid scalar score so far (lowest for minimization); it
+does not assert a native multi-metric winner. Native grading and final selection
+remain unchanged. Keep both meanings distinct in outcome analysis.
+
 Then run:
 
 ```sh

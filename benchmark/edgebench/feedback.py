@@ -35,8 +35,8 @@ def prepare_feedback_root(backend, handle):
 
 
 def validate_best_only(task, interval):
-    if task.judge.selection not in {"score_first", "valid_then_score"}:
-        raise ValueError("best-only requires score_first or valid_then_score selection; use native or blind")
+    if task.judge.selection not in {"score_first", "valid_then_score", "pass_rate_first"}:
+        raise ValueError("best-only requires a supported native selection policy; use native or blind")
     if task.judge.score_direction not in {"maximize", "minimize"}:
         raise ValueError("best-only requires a known score direction")
     if interval <= 0:
