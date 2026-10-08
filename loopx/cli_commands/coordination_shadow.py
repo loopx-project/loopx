@@ -50,6 +50,7 @@ def register_coordination_shadow_command(
     )
     for name, help_text in (
         ("inspect", "Compare the current legacy projection with the file shadow."),
+        ("inspect-source", "Inventory complete old Markdown Todos and retained leases without enabling a shadow or importing."),
         (
             "qualify",
             "Validate bounded parity and transaction coverage for the active outbox lineage.",
@@ -155,6 +156,18 @@ def _render(payload: dict[str, object]) -> str:
     configuration = payload.get("configuration")
     if isinstance(configuration, dict):
         lines.append(f"- configuration: `{configuration.get('reason_code')}`")
+    inventory = payload.get("source_inventory")
+    if isinstance(inventory, dict):
+        lines.extend([
+            f"- source_inventory: `{inventory.get('status')}`",
+            f"- active_todos: `{inventory.get('active_todo_count')}`",
+            f"- archived_todos: `{inventory.get('archived_todo_count')}`",
+            f"- retained_lease_files: `{inventory.get('lease_file_count')}`",
+            f"- leases_requiring_settlement: `{inventory.get('leases_requiring_settlement')}`",
+            "- import_ready: `false` — writer/Host stop and outbox reconciliation remain unverified.",
+        ])
+        if inventory.get("reason"):
+            lines.append(f"- reason: {inventory['reason']}")
     inspection = payload.get("inspection")
     if isinstance(inspection, dict):
         lines.extend(
@@ -240,6 +253,26 @@ def handle_coordination_shadow_command(
                 "executed": promotion.get("executed") is True, "promotion": promotion,
                 "decision_read_from_shadow": False,
             }
+            print_payload(payload, output_format(args), _render)
+            return 0 if payload["ok"] else 1
+        if args.coordination_shadow_command == "inspect-source":
+            from ..control_plane.coordination.local_authority_shadow_projection import source_effect_runtime_result
+
+            _, _, state_path = resolve_goal_state(registry=registry, goal_id=args.goal_id,
+                project_override=args.project, state_file_override=args.state_file)
+            projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal,
+                runtime_root=runtime_root, state_path=state_path, registry_path=registry_path,
+                include_all_archived_todos=True)
+            inventory = source_effect_runtime_result("coordination.source.inspect", {
+                "schema_version": "loopx_cold_source_inspection_request_v0",
+                "runtime_root": str(runtime_root.expanduser().absolute()), "goal_id": args.goal_id,
+                "projection": projection, "source_snapshot": snapshot,
+            })
+            payload = {"ok": inventory.get("status") == "inspected",
+                "schema_version": "loopx_coordination_shadow_admin_v0",
+                "action": "inspect-source", "goal_id": args.goal_id,
+                "executed": False, "source_inventory": inventory,
+                "decision_read_from_shadow": False}
             print_payload(payload, output_format(args), _render)
             return 0 if payload["ok"] else 1
         if reviewed_plan is not None and (
