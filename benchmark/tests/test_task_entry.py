@@ -487,6 +487,7 @@ def test_sforge_planning_entry_runs_inside_native_process_and_reuses_receipt(pla
                              sys.executable, "-c", target], env=env | {"HTTPS_PROXY": proxy},
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+    assert Path(env["LOOPX_PLANNING_RESULT"]).with_name("execution-started").exists()
     assert json.loads(marker.read_text()) == {"HTTPS_PROXY": proxy,
         "LOOPX_PHASE_DEADLINE_EPOCH": env["LOOPX_PHASE_DEADLINE_EPOCH"],
         "LOOPX_TASK_STAGE": "execute"}
@@ -503,6 +504,45 @@ def test_sforge_planning_entry_runs_inside_native_process_and_reuses_receipt(pla
         prepare_entry(env)
 
 
+def test_sforge_planner_uses_trial_deadline_instead_of_a_stage_cap(planning_env, monkeypatch):
+    from benchmark.runtime.sforge_entry import prepare_entry
+
+    communicate = subprocess.Popen.communicate
+    observed = []
+
+    def capture(process, *args, **kwargs):
+        if process.args[0] == planning_env["CODEX_BIN"]:
+            observed.append(kwargs["timeout"])
+        return communicate(process, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", capture)
+    # Even an inherited shared-worker cap cannot shorten native SForge planning.
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 1200)}
+    assert prepare_entry(env)
+    assert len(observed) == 1 and 1100 < observed[0] <= 1200
+    assert Path(env["LOOPX_PLANNING_RESULT"]).exists()
+
+
+def test_shared_harbor_planning_default_remains_bounded(tmp_path):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture")
+    assert agent.planning_timeout == 300
+
+
+def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):
+    from benchmark.runtime import sforge_entry
+
+    monkeypatch.setattr(sforge_entry, "prepare_entry", lambda env: True)
+    monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", str(time.time() + 150))
+    monkeypatch.setenv("LOOPX_PLANNING_RESULT", str(tmp_path / "planning.json"))
+    monkeypatch.setattr(sys, "argv", ["sforge-entry", "execution-must-not-start"])
+    monkeypatch.setattr(os, "execvpe", lambda *args: pytest.fail("Execution after exhausted planning"))
+    assert sforge_entry.main() == 1
+    assert not (tmp_path / "execution-started").exists()
+
+
 def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
     from benchmark.runtime.sforge_entry import prepare_entry
     env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 150)}
@@ -514,6 +554,7 @@ def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
         env=env, capture_output=True, text=True)
     assert result.returncode == 1
     assert "execution must not start" not in result.stderr
+    assert not Path(env["LOOPX_PLANNING_RESULT"]).with_name("execution-started").exists()
 
 
 def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):

@@ -19,8 +19,7 @@ def prepare_entry(env: dict[str, str]) -> bool:
     if env.get("LOOPX_TASK_ENTRY") != "loopx-planned":
         raise ValueError("SForge planning entry requires loopx-planned")
     remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
-    limit = float(env["LOOPX_PLANNING_TIMEOUT_SEC"])
-    if not math.isfinite(remaining) or not math.isfinite(limit) or limit <= 0:
+    if not math.isfinite(remaining):
         raise ValueError("Invalid planning budget")
     if remaining <= 160:
         return False
@@ -45,10 +44,11 @@ def prepare_entry(env: dict[str, str]) -> bool:
         # Original Todos may now be completed. Do not replan on every native
         # process resume or treat this historical receipt as new admission.
         return True
-    receipt = run_once(env | {
-        "LOOPX_TASK_STAGE": "plan",
-        "LOOPX_PLANNING_TIMEOUT_SEC": str(min(limit, remaining - 160)),
-    })
+    planning_env = env | {"LOOPX_TASK_STAGE": "plan"}
+    # Native SForge owns one absolute trial deadline for planning and execution.
+    # Do not inherit a separate planning cap from the shared worker environment.
+    planning_env.pop("LOOPX_PLANNING_TIMEOUT_SEC", None)
+    receipt = run_once(planning_env)
     if receipt.get("ok") is not True:
         raise RuntimeError("Planning failed; execution was not started")
     entry = receipt.get("planning") or {}
@@ -69,9 +69,13 @@ def main() -> int:
         # A blocked or exhausted planning checkpoint never ran the solver.
         # Native process completion must not qualify it as a finished trial.
         return 1
+    # A successful plan may itself consume the remaining execution allowance.
+    if float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time() <= 160:
+        return 1
     # Native SForge owns environment filtering and the outer phase deadline;
     # retain its proxy/isolation inputs rather than launching from setup hooks.
     env["LOOPX_TASK_STAGE"] = "execute"
+    Path(env["LOOPX_PLANNING_RESULT"]).with_name("execution-started").touch()
     os.execvpe(sys.argv[1], sys.argv[1:], env)
     return 0
 

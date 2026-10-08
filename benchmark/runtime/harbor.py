@@ -72,8 +72,8 @@ class BenchmarkCodex(CodexOffline):
             task_entry,
             turn_envelope,
         )
-        self.planning_timeout = float(planning_timeout_sec)
-        if not 0 < self.planning_timeout < float("inf"):
+        self.planning_timeout = None if planning_timeout_sec is None else float(planning_timeout_sec)
+        if self.planning_timeout is not None and not 0 < self.planning_timeout < float("inf"):
             raise ValueError("planning timeout must be finite and positive")
         self.scheduler_timeout = int(scheduler_timeout_sec)
         if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
@@ -645,7 +645,9 @@ class BenchmarkCodex(CodexOffline):
             env = self._worker_env(cwd=cwd)
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
-                planning_timeout = min(self.planning_timeout, deadline - time.monotonic() - 30)
+                planning_timeout = deadline - time.monotonic() - 30
+                if self.planning_timeout is not None:
+                    planning_timeout = min(self.planning_timeout, planning_timeout)
                 if planning_timeout <= 0:
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(

@@ -21,7 +21,7 @@ from sforge.harness.task_spec import make_task_spec
 
 from benchmark.runtime.codex import TASK_ENTRIES
 from benchmark.runtime.sforge import (
-    DEFAULT_TIMEOUT_SECONDS, DEFAULT_PLANNING_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
+    DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
 )
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
@@ -106,8 +106,6 @@ def main(argv=None):
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
                         help="Heartbeat default: loopx-planned; seeded-todo is an explicit ablation")
-    parser.add_argument("--planning-timeout", type=int,
-                        help="Initial loopx-planned seconds (default 600), within the total trial budget")
     cadence = parser.add_mutually_exclusive_group()
     cadence.add_argument("--replan-after-turns", type=int, choices=range(1, 6),
                          help="Heartbeat default: 3 settled effective work Turns")
@@ -123,9 +121,6 @@ def main(argv=None):
     args.eval_interval = _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300)
     if args.task_entry == "loopx-planned" and not args.worker.startswith("heartbeat-"):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
-    if args.planning_timeout is not None and (args.planning_timeout <= 0 or
-            not args.worker.startswith("heartbeat-") or args.task_entry == "seeded-todo"):
-        parser.error("--planning-timeout requires loopx-planned and a positive integer")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
@@ -170,9 +165,6 @@ def main(argv=None):
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          task_entry=args.task_entry,
-                         planning_timeout_seconds=(args.planning_timeout
-                                                   if args.planning_timeout is not None
-                                                   else DEFAULT_PLANNING_TIMEOUT_SECONDS),
                          turn_envelope=args.turn_envelope,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos)
@@ -200,7 +192,7 @@ def main(argv=None):
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
         "task_entry": agent.task_entry,
-        **({"planning_timeout_seconds": agent.planning_timeout_seconds}
+        **({"planning_timeout_seconds": None}
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
