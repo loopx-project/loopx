@@ -105,6 +105,9 @@ class BestOnlyFeedback:
         self.session.close()
         self.sampler.close()
 
+    def release_registration(self):
+        return self.sampler.release_registration(run_id=self.run_id, task_id=self.task_id)
+
     def _candidate(self, history):
         if history.get("run_id") != self.run_id or not isinstance(history.get("entries"), list):
             raise ValueError("Feedback history does not match this trial")

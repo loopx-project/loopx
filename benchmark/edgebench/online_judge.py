@@ -14,6 +14,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
+from enum import StrEnum
 from pathlib import Path
 
 from fastapi import File, Form, HTTPException, Query, UploadFile
@@ -22,7 +23,13 @@ from sforge.harness.judge_server import (
     RegisterRequest, create_app as native_app,
 )
 
-POLICY = "edgebench_online_cohort_v1"
+POLICY = "edgebench_online_cohort_v2"
+
+
+class RegistrationState(StrEnum):
+    ACTIVE = "active"
+    DRAINING = "draining"
+    RELEASED = "released"
 
 
 def resource_preflight(client, slots, *, worker_cpu=4, judge_cpu=4,
@@ -73,7 +80,7 @@ def resource_preflight(client, slots, *, worker_cpu=4, judge_cpu=4,
 
 
 def create_app(config, *, slots, reservation):
-    """Isolated online-only native service; registrations consume finite slots.
+    """Isolated online-only native service with explicitly released run slots.
 
     Restart requires a new cohort. Tokens and epoch are process-scoped, so a
     client must fail closed on restart instead of replaying a possibly graded
@@ -89,7 +96,7 @@ def create_app(config, *, slots, reservation):
     state = app.state.judge
     epoch = uuid.uuid4().hex
     lock = threading.Lock()
-    runs, tokens, submissions, active = {}, set(), {}, {}
+    runs, registrations, submissions, active = {}, {}, {}, {}
     # Replace only admission. Native history/result/grading/lifespan are reused.
     # Drop game routes so the dedicated pool cannot be occupied by another lane.
     app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") not in {
@@ -99,11 +106,27 @@ def create_app(config, *, slots, reservation):
         if secret != state.admin_secret:
             raise HTTPException(403, "Host authorization required")
 
+    def running(token):
+        identifier = active.get(token)
+        if identifier is None:
+            return False
+        result = state.get_result(identifier)
+        # Missing native evidence cannot release reserved evaluator capacity.
+        return result is None or result["status"] not in ("completed", "error")
+
+    def occupied_slots():
+        for token, status in registrations.items():
+            if status == RegistrationState.DRAINING and not running(token):
+                registrations[token] = RegistrationState.RELEASED
+        return sum(status != RegistrationState.RELEASED for status in registrations.values())
+
     @app.get("/api/v1/best-only/admission")
     def admission(admin_secret: str = Query("")):
         authorize(admin_secret)
-        return dict(policy=POLICY, epoch=epoch, slots=slots, admitted=len(runs),
-                    max_running_per_run=1, resource_reservation=reservation)
+        with lock:
+            return dict(policy=POLICY, epoch=epoch, slots=slots, admitted=occupied_slots(),
+                        registrations_total=len(runs), max_running_per_run=1,
+                        resource_reservation=reservation)
 
     @app.post("/api/v1/register")
     def register(req: RegisterRequest):
@@ -119,14 +142,30 @@ def create_app(config, *, slots, reservation):
         with lock:
             if key in runs:
                 raise HTTPException(409, "Run already registered; use its original token")
-            if len(runs) >= slots:
+            if occupied_slots() >= slots:
                 raise HTTPException(503, "Online cohort full; defer solver admission")
             token = state.register_session(req.task_id, req.run_id,
                 judge_cpu_limit=config.judge_cpu_limit, judge_mem_limit=config.judge_mem_limit,
                 max_agent_submissions=0, submission_cooldown=req.submission_cooldown)
             runs[key] = token
-            tokens.add(token)
+            registrations[token] = RegistrationState.ACTIVE
         return {"token": token}
+
+    @app.post("/api/v1/best-only/release")
+    def release(run_id: str = Form(...), task_id: str = Form(...),
+                epoch_id: str = Form(...), admin_secret: str = Form("")):
+        authorize(admin_secret)
+        if epoch_id != epoch:
+            raise HTTPException(409, "Online judge restarted; reconcile the original registration")
+        with lock:
+            token = runs.get((run_id, task_id))
+            if token is None:
+                raise HTTPException(404, "Unknown online registration")
+            if registrations[token] == RegistrationState.ACTIVE:
+                registrations[token] = RegistrationState.DRAINING
+            occupied_slots()
+            return dict(epoch=epoch, run_id=run_id, task_id=task_id,
+                        state=registrations[token])
 
     @app.post("/api/v1/submit")
     def deny_shared_submission():
@@ -145,15 +184,16 @@ def create_app(config, *, slots, reservation):
         digest = hashlib.sha256(data).hexdigest()
         key = (token, capture_id)
         with lock:
-            if token not in tokens:
+            if token not in registrations:
                 raise HTTPException(401, "Unknown online registration")
             if key in submissions:
                 receipt = submissions[key]
                 if receipt["source_sha256"] != digest:
                     raise HTTPException(409, "Capture identity reused for different source")
                 return receipt
-            running = active.get(token)
-            if running and state.get_result(running)["status"] in ("queued", "running"):
+            if registrations[token] != RegistrationState.ACTIVE:
+                raise HTTPException(410, "Online registration closed; new captures are disabled")
+            if running(token):
                 raise HTTPException(503, "This run already has one evaluation in flight")
             try:
                 identifier, round_id, _ = state.submit_for_token(token, data, "auto")
