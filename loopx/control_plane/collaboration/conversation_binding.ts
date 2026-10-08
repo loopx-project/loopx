@@ -255,7 +255,12 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
       : JSON.stringify(saved) === JSON.stringify(context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
   }
-  return {binding: row, context, channel_id: row.context_kind === "steward"
+  // This is an audience proof, not a host-tool grant. Only the independently
+  // verified owner in this private source may inherit an explicit machine
+  // owner grant. Portfolio scope and project write grants do not imply it.
+  return {binding: row, context, owner_manager_audience: row.context_kind === "steward"
+      && projects[0].filesystem_scope !== "workspace_only",
+    channel_id: row.context_kind === "steward"
     ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`};
 }
 

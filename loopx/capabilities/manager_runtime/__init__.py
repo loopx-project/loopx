@@ -3,6 +3,7 @@
 from .machine_profile import (
     MANAGER_RUNTIME_PROFILE_SCHEMA,
     effective_manager_runtime_profile,
+    load_bound_manager_runtime_profile,
     load_effective_manager_runtime_profile,
     manager_runtime_capability_projection,
     manager_runtime_machine_configuration_namespace,
@@ -13,6 +14,7 @@ from .machine_profile import (
 __all__ = [
     "MANAGER_RUNTIME_PROFILE_SCHEMA",
     "effective_manager_runtime_profile",
+    "load_bound_manager_runtime_profile",
     "load_effective_manager_runtime_profile",
     "manager_runtime_capability_projection",
     "manager_runtime_machine_configuration_namespace",

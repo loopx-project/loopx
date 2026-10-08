@@ -22,7 +22,7 @@ from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VE
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
-    load_effective_manager_runtime_profile, manager_runtime_session_fields,
+    load_bound_manager_runtime_profile, manager_runtime_session_fields,
 )
 from .capabilities.manager_context.team_plan import (
     TeamPlanProjector,
@@ -341,11 +341,12 @@ class ChatRuntimeController:
         self.team_plan_projector: TeamPlanProjector | None = None
 
     def manager_runtime_profile(
-        self, channel_id: str = "manager"
+        self, channel_id: str = "manager", *,
+        steward_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return load_effective_manager_runtime_profile(
-            self.store.root.parent,
-            channel_id=channel_id,
+        return load_bound_manager_runtime_profile(
+            self.store.root.parent, channel_id=channel_id,
+            bindings=self.project_contexts.conversation_bindings, steward_context=steward_context,
         )
 
     def steward_executor_defaults(self) -> dict[str, Any]:
@@ -606,7 +607,7 @@ class ChatRuntimeController:
         if project_context is not None:
             project_context_policy.validate_project_executor_scope(agent_id, project_context, self.capabilities, capability)
         manager_runtime = (
-            self.manager_runtime_profile(selected_channel)
+            self.manager_runtime_profile(selected_channel, steward_context=steward_context)
             if is_manager_channel(selected_channel)
             else None
         )
@@ -755,7 +756,8 @@ class ChatRuntimeController:
             project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
             work_dir, objective = context["project"], context["objective"]
         manager_runtime = (
-            self.manager_runtime_profile(str(session.get("channel_id") or "manager"))
+            self.manager_runtime_profile(str(session.get("channel_id") or "manager"),
+                                         steward_context=session.get("steward_context"))
             if is_manager_channel(session.get("channel_id"))
             else None
         )

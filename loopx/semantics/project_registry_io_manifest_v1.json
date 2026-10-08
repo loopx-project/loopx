@@ -287,7 +287,7 @@
     },
     {
       "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.agent_observation::codec_read:load_registry#1",
-      "line": 202,
+      "line": 209,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
