@@ -71,6 +71,38 @@ def bootstrap(runtime, goal, projection, snapshot):
     )
 
 
+@pytest.mark.parametrize("kind", ["unsupported_name", "file_symlink", "directory_symlink", "parent_symlink", "non_file"])
+def test_real_cli_rejects_unsafe_lease_source_before_bootstrap(tmp_path: Path, kind):
+    ws = cli_workspace(tmp_path / "workspace", bootstrap=False)
+    directory = ws.runtime / "goals" / ws.goal / "task-leases"
+    directory.mkdir(parents=True)
+    outside = tmp_path / "retained-source"
+    outside.mkdir()
+    original = json.dumps({"goal_id": ws.goal, "todo_id": "todo_retained", "status": "released", "version": 4, "lease_epoch": 2})
+    retained = outside / "todo_retained.json"
+    retained.write_text(original)
+    if kind == "unsupported_name":
+        (directory / "unexpected lease.json").write_text(original)
+    elif kind == "file_symlink":
+        (directory / retained.name).symlink_to(retained)
+    elif kind == "non_file":
+        (directory / retained.name).mkdir()
+    elif kind == "directory_symlink":
+        directory.rmdir()
+        directory.symlink_to(outside, target_is_directory=True)
+    else:
+        directory.rmdir()
+        directory.parent.rmdir()
+        directory.parent.symlink_to(outside, target_is_directory=True)
+    result = ws.cli("coordination-shadow", "bootstrap", "--execute", success=False)
+    assert result["ok"] is False, result
+    assert "source_lease_inventory_invalid" in result["error"]
+    assert not (ws.runtime / "authority-shadow" / "file-v0").exists()
+    assert not (ws.runtime / "authority-transition").exists()
+    assert retained.read_text() == original
+    assert list(outside.iterdir()) == [retained]
+
+
 @pytest.mark.parametrize("extension", [
     {}, {"future_extension": None}, {"future_extension": False},
     {"future_extension": {"missing_value": None, "flag": False}},
