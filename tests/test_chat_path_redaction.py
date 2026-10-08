@@ -51,11 +51,60 @@ def test_response_link_repair_preserves_code_and_does_not_rewrite_status_json():
     link = "[label](/custom-volume/project/report.md)"
     code = f"`{link}`\n```md\n{link}\n```\n"
     assert redact_response_markdown(code, protected_paths=["/custom-volume/project"]) == code.replace(
-        "/custom-volume/project/report.md", "[project]")
+        "/custom-volume/project/report.md", "./report.md")
     assert json.loads(redact_local_paths(json.dumps({"message": link}), protected_paths=["/custom-volume/project"])) == {
         "message": "[label]([project])"}
     raw = '<loopx-review-json>' + json.dumps({"message": link}) + '</loopx-review-json>'
     assert parse_agent_response(raw, protected_paths=["/custom-volume/project"])["message"] == "label"
+
+
+@pytest.mark.parametrize("root,child", [
+    ("/custom-volume/project", "/notes/report.md:12"),
+    ("/custom-volume/project space", "/notes/report.md"),
+    (r"Q:\project", r"\notes\report.md"),
+])
+def test_response_and_split_stream_retain_the_project_filename(root, child):
+    text = f"Read back `{root}{child}`.\n"
+    expected = "Read back `./" + child.lstrip("/\\").replace("\\", "/") + "`.\n"
+    assert redact_response_markdown(text, protected_paths=[root]) == expected
+    assert parse_agent_response(text, protected_paths=[root])["message"] == expected.strip()
+    for split in range(len(text) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=[root])
+        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+
+
+def test_answer_path_presentation_does_not_relax_nested_private_roots_or_structured_fields():
+    root = "/custom-volume/project"
+    secret_root = root + "/runtime"
+    paths = [root, secret_root]
+    text = f"`{root}/notes/report.md`; `{secret_root}/private/gate.json`; `/home/other/private.txt`."
+    assert parse_agent_response(text, protected_paths=paths)["message"] == (
+        "`./notes/report.md`; `[local-path]`; `[local-path]`."
+    )
+    raw = '<loopx-review-json>' + json.dumps({
+        "message": text,
+        "proposals": [{"kind": "todo", "text": f"Read {root}/notes/report.md", "rationale": f"See {secret_root}/private/gate.json"}],
+    }) + '</loopx-review-json>'
+    parsed = parse_agent_response(raw, protected_paths=paths)
+    assert parsed["message"].startswith("`./notes/report.md`")
+    assert parsed["proposals"][0]["text"] == "Read [project]"
+    assert parsed["proposals"][0]["rationale"] == "See [local-path]"
+
+
+@pytest.mark.parametrize("suffix", ["/../other/private.txt", "/notes/../../private.txt", "/%2e%2e/private.txt"])
+def test_answer_paths_do_not_present_traversal_as_project_files(suffix):
+    text = "/custom-volume/project" + suffix
+    assert parse_agent_response(text, protected_paths=["/custom-volume/project"])["message"] == "[project]"
+
+
+def test_stream_holds_a_long_project_filename_until_its_boundary():
+    root = "/custom-volume/" + "r" * 190
+    relative = "notes/" + "s" * 190 + "/report.md"
+    path = root + "/" + relative
+    stream = VisibleResponseStreamFilter(protected_paths=[root])
+    assert stream.feed(path[:170]) == ""
+    assert stream.feed(path[170:300]) == ""
+    assert stream.feed(path[300:] + "\n") + stream.finish() == "./" + relative + "\n"
 
 
 @pytest.mark.parametrize("root", [
