@@ -890,6 +890,16 @@ provider. This is a bounded App companion, not full old-source/Host upgrade or
 D2/release-default qualification. Continue those original acceptance frontiers
 and retire each last caller separately.
 
+The qualified shadow→canonical archive→isolated File/SQLite restore path retains
+committed dependency archives, terminal lease facts and later canonical writes.
+It does not preserve every unreferenced old-source archive or raw historical
+receipt. R5/T4 full-source import must retain and independently recover those
+original bytes before deleting caller chains that still own their recovery;
+source hashes and canonical archive verification cannot substitute for that
+acceptance. Supported backup-format and original-receipt recovery retain their
+separate upgrade boundary. See the
+[archive scope](../../reference/authority-archive.md).
+
 New-Goal App recovery is a separate bounded R5/T4 gap: after Goal/Todo commit,
 Host startup or a lost response must resume the frozen original operation,
 without regenerating a creator or duplicating its Todo/Session/Turn. Reuse the
