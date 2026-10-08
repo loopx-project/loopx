@@ -294,6 +294,27 @@ new operation family; existing complete/supersede receipt identities remain vali
 
 ## Migration boundary
 
+Two unused internal Python policy queries are retired:
+`contract.resolve_todo_continuation_policy` and
+`mutation_authority.todo_lifecycle_authority_for_goal`. Neither has a production
+caller, dynamic registration or persisted operation identity. The current
+work-graph course is a teaching consumer; its examples and reading route now
+follow the active TS owners rather than the removed queries. Completion policy
+selection stays in `completion_policy.ts`; lifecycle grant admission stays in
+`todo_lifecycle_decision.ts`. The active Python source adapters retain metadata
+normalization, registry fact projection and grant validation. The continuation
+enum and persisted values remain readable. Only those two private imports stop
+working; package rollback restores them without converting state or rewriting
+receipts. This deletion changes no CLI, provider, ownership or upgrade default.
+
+退役两个没有生产调用方、动态注册或持久化操作身份的内部 Python 查询：
+`resolve_todo_continuation_policy` 与 `todo_lifecycle_authority_for_goal`。
+当前工作图课程仍是教学消费者，本批同步将示例和领读路线迁到活跃 TS owner。
+完成策略和生命周期 grant 准入继续由
+既有 TS owner 决定；仍活跃的 Python metadata、registry facts 和 grant 校验保留，
+continuation 枚举与历史值继续可读。只有这两个私有导入退出支持；回滚代码包即可恢复，
+无需转换状态或重写原回执，不改变 CLI、provider、ownership 或升级默认值。
+
 Unpromoted Goals retain their existing Python Markdown adapters. The
 shared host validation executor and failure projection replace duplicated
 transport plumbing; the TS edit decoder/materializer is no longer owned only
