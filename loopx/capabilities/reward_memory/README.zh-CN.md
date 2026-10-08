@@ -512,6 +512,14 @@ actor 身份。
 
 ## Stage 4 评估与发布门禁
 
+PR-review caller 还通过只读内置来源 adapter 消费
+[Git 持有的评审经验](../pr_review_queue/experiences/README.zh-CN.md)。
+须有资格化的 Agent enablement、自动 recall 和明确的
+`pull_request_review.review` surface；其他模块的 route 不会启用它。
+现有 corpus/experience 资格化与 TypeScript decision owner 把上下文投递绑定到
+当前 exact head。这为该 opt-in caller 增加仓库建议，不写 provider、不新增设置、
+不声明语义采用或 utility 分数；公共 #5944 案例分别保留不同口径和未解决的结果。
+
 Stage 4 只在现有共享核心之上增加一套受限 contract suite，不新增另一套 evaluator、
 store、provider、scheduler 或 semantic router：
 

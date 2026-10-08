@@ -49,6 +49,7 @@ MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+RUNTIME_LOCATOR_PERMISSION_RETRIES = 3
 RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
@@ -462,17 +463,27 @@ def _start_lock_holder_pid(path: Path) -> int | None:
 
 
 def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except PermissionError as exc:
-        # On Windows, opening a directory as a file reports access denied.
-        # Defer that occupied-locator case to the managed server, which can
-        # publish the shared filesystem diagnostic through its startup envelope.
-        # Keep symlinks and genuinely unreadable metadata on the host-permission path.
-        if path.is_dir() and not path.is_symlink():
+    for attempt in range(RUNTIME_LOCATOR_PERMISSION_RETRIES + 1):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            break
+        except PermissionError as exc:
+            # On Windows, opening a directory as a file reports access denied.
+            # Defer that occupied-locator case to the managed server, which can
+            # publish the shared filesystem diagnostic through its startup envelope.
+            # A short-lived denial can also overlap locator publication/retirement.
+            if path.is_dir() and not path.is_symlink():
+                return None
+            if attempt == RUNTIME_LOCATOR_PERMISSION_RETRIES:
+                # Keep symlinks and persistently unreadable metadata on the
+                # host-permission path after the bounded retry window.
+                raise EffectRuntimeHostPermissionError() from exc
+            time.sleep(STARTUP_POLL_SECONDS)
+        except (FileNotFoundError, OSError):
             return None
-        raise EffectRuntimeHostPermissionError() from exc
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
         return None
     if not isinstance(payload, dict):
         return None

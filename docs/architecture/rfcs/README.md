@@ -116,6 +116,14 @@ failure leaves the generated files untouched.
 
 ## Control-Plane Kernel, State, And Migration
 
+- [Complete State Recovery and Controlled Reactivation v0](complete-state-recovery-v0.md)
+  ([中文版](complete-state-recovery-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; backup creation and configuration-only
+    isolated recovery exist, but complete-state verification and reactivation do not.
+  - **Current boundary:** M1 is read-only archive verification, safe extraction
+    into a new inert workspace and an isolated audit with
+    `execution_authority_granted=false`; no activation or live-state mutation.
+
 - [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md)
   ([中文版](composable-state-machines-recovery-verification-v0.zh-CN.md))
   - **Delivery on `main`:** Design only; existing local conformance is not full composition qualification.

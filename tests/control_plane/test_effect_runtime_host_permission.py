@@ -212,7 +212,7 @@ def test_real_locator_denial_never_launches_or_dispatches_and_recovers(
     with pytest.raises(effect_runtime.EffectRuntimeHostPermissionError) as raised:
         effect_runtime.effect_runtime_request("runtime.ping", {}, retry_safe=retry_safe)
     assert raised.value.__cause__ is denial
-    assert len(reads) == 1
+    assert len(reads) == effect_runtime.RUNTIME_LOCATOR_PERMISSION_RETRIES + 1
     reads.clear()
     assert main(["--format", "json", "--registry", str(registry), "--runtime-root",
                  str(tmp_path), "quota", "status", "--goal-id", identity["goal_id"],
@@ -221,7 +221,8 @@ def test_real_locator_denial_never_launches_or_dispatches_and_recovers(
     assert payload["error_code"] == "quota_runtime_permission_denied"
     assert "host-approved" in payload["health_items"][0]["recommended_action"]
     assert "private locator details" not in json.dumps(payload)
-    assert len(reads) == 1 and not launches and not dispatches
+    assert len(reads) == effect_runtime.RUNTIME_LOCATOR_PERMISSION_RETRIES + 1
+    assert not launches and not dispatches
     assert registry.read_text() == "{}" and not locator.exists()
     denied = False
     try:

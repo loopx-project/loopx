@@ -14,6 +14,10 @@ import test from "node:test";
 
 import { settlementIdentity } from "../../loopx/control_plane/effect_program.ts";
 import {
+  createEffectRuntimeHandlers,
+  dispatchEffectRuntimeMethod,
+} from "../../loopx/control_plane/effect_runtime_handlers.ts";
+import {
   acquireFileMutationLock,
   releaseFileMutationLock,
 } from "../../loopx/control_plane/effect_runtime_io.ts";
@@ -1661,3 +1665,79 @@ test("effective cadence scopes settlement and ACKs to its admitted Goal instance
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("effective cadence skips settlement read without a matching should-run receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({guard: false});
+  await appendFile(
+    join(root, "goals", goalId, "runs", "index.jsonl"),
+    "not-json\n",
+  );
+  const request = {
+    schema_version: "replan_history_request_v0",
+    operation: "periodic",
+    agent_id: agentId,
+    monitor_agent_id: agentId,
+    neutral_classifications: [],
+    stall_threshold: 2,
+    periodic_threshold: 1,
+    monitor_threshold: 6,
+    streak_threshold: 5,
+    monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId},
+    runs: [{
+      agent_id: agentId,
+      public_agent_id: agentId,
+      monitor_agent_id: agentId,
+      classification: "progress",
+      generated_at: "2026-09-24T10:00:00Z",
+      observed_at: 1,
+      turn_id: "turn-history-only",
+      accepted_ack: false,
+      progress: null,
+      monitor: {},
+    }],
+  };
+  try {
+    const result = await projectSettledReplanHistory(request);
+    assert.equal(result.trigger, null);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test(
+  "replan history RPC rejects a relative runtime root before empty-receipt early return",
+  async () => {
+    const handlers = createEffectRuntimeHandlers({
+      fingerprint: "replan-history-runtime-root-test",
+      requestShutdown() {},
+    });
+    const request = {
+      schema_version: "replan_history_request_v0",
+      operation: "periodic",
+      agent_id: agentId,
+      monitor_agent_id: agentId,
+      neutral_classifications: [],
+      stall_threshold: 2,
+      periodic_threshold: 1,
+      monitor_threshold: 6,
+      streak_threshold: 5,
+      monitor_schema: "dead_monitor_repeat_v0",
+      todos: {monitors: [], advancements: [], resume: null},
+      settlement_source: {runtime_root: "relative", goal_id: goalId},
+      runs: [],
+    };
+
+    await assert.rejects(
+      dispatchEffectRuntimeMethod(
+        handlers,
+        "work_item.replan_history.project",
+        request,
+      ),
+      /runtime_root must be absolute/,
+    );
+  },
+);

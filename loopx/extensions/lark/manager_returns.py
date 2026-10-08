@@ -13,6 +13,7 @@ from .manager_routing import authorized_manager_goal_ids
 from .event_inbox import load_lark_event_inbox_config, _load_processed
 from .inbox_reply import CommandRunner, _bot_identity_verified, _default_runner, _verified_reply_result, reply_lark_event_inbox, verify_lark_inbox_reply
 from .return_files import uploaded_result_files, verify_result_files
+from .outbound import present_lark_conversation_text
 from ...capabilities.manager_context import authority
 from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
 
@@ -138,6 +139,7 @@ def send_return(
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     private_transport: Any = None,
 ) -> dict[str, Any]:
+    text = present_lark_conversation_text(text)
     def resolve() -> tuple[Path, Path, Callable[[], bool] | None, object, str]:
         return _return_inbox(
             root=root,
@@ -223,6 +225,7 @@ def verify_return(
     cancelled: Callable[[], bool] = lambda: False,
     private_transport: Any = None,
 ) -> dict[str, Any]:
+    text = present_lark_conversation_text(text)
     project, config_path, source_verifier, _destination, message_id = _return_inbox(
         root=root,
         registry=registry,

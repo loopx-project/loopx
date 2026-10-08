@@ -2,8 +2,8 @@
 
 - 状态：已接受
 - 替代 / 关闭：无
-- 范围基线：架构审计使用 2026-09-16 的 `0aa6179de`；RFC inventory 更新至
-  2026-09-28 的 `6643f3670`；管家故障复现基线单独保留在第 8 节。
+- 范围基线：架构审计使用 2026-09-16 的 `0aa6179de`；RFC inventory 依据
+  `82d1b8374` 更新至 2026-10-08；管家故障复现基线单独保留在第 8 节。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
@@ -82,7 +82,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | [Goal Vision/replan](../../reference/protocols/goal-vision-replan-contract-v0.md)、[work graph](../../reference/protocols/task-graph-projection-v0.md)、[peer runtime](../../reference/protocols/peer-agent-runtime-v1.md)、[监督](../../reference/protocols/peer-supervisor-v0.md) | S2/S3 | 将跨工作依赖、重规划、验收与 handoff 放进同一个真实案例；aggregate closeout 必须消费验收事实 |
 | [quota](../../quota-allocation.md)、[cadence](../../operations/long-task-cadence-policy.md)、[attention](../../operations/attention-queue.md) | S5/S7 | 预算耗尽/延期/被阻塞时有明确下一次触发及用户回读；百 Agent 不靠高频全文轮询 |
 | [材料生命周期](../../reference/protocols/material-lifecycle-architecture-v0.zh-CN.md)、[材料 frontier](../../reference/protocols/agent-material-frontier-v0.md)、[authority 注册](../../operations/authority-source-registration.md) | S6 | 路线/RFC 更新能由 Agent 按 revision 发现并登记阅读；read receipt 不表示同意或获得权限；归档不丢原始来源 |
-| [Decision Context](../../../loopx/capabilities/decision_context/README.md)、[Reward Memory](../../../loopx/capabilities/reward_memory/README.md)、[Semantic Preference](../../../loopx/capabilities/semantic_preference/README.md)、[Turn Recall](../../../loopx/capabilities/agent_turn_recall/README.md) | S6/S11 | 区分事实、偏好、建议、归因和权威；同一 scope 的回忆/失效/结果反馈负例先行 |
+| [Decision Context](../../../loopx/capabilities/decision_context/README.md)、[Reward Memory](../../../loopx/capabilities/reward_memory/README.md)、[Semantic Preference](../../../loopx/capabilities/semantic_preference/README.md)、[Turn Recall](../../../loopx/capabilities/agent_turn_recall/README.md) | S6/S11 | 区分事实、偏好、建议、归因和权威；同一 scope 的回忆/失效/结果反馈负例先行。以 [#5944 的 Git 经验](../../../loopx/capabilities/pr_review_queue/experiences/README.zh-CN.md)起步：保留机器与维护者指引下的口径，将合格建议投递到明确 opt-in 的 review Agent，再验证当前 head 的采用与有用评审结果。投递不关闭质量/utility gate；held-out 误阻断、成本和注意力对照遵循[现有 utility RFC](post-outcome-memory-utility-attribution-v0.zh-CN.md#91-评审学习试点先沉淀仓库经验再证明效用) |
 | [Issue Fix](../../../loopx/capabilities/issue_fix/README.md)、[PR Review](../../../loopx/capabilities/pr_review_queue/README.md)、[Change Quality](../../../loopx/capabilities/change_quality/README.md)、[Integration Branch](../../../loopx/capabilities/integration_branch/README.md)、[Change Window](../../../loopx/capabilities/repository_change_window/README.md) | S8/S12 | 作为工程团队的端到端 caller：问题→实现→独立 review→验证→批准范围内交付；head 漂移不复用旧证据 |
 | [Explore](../../../loopx/capabilities/explore/README.md)、[Benchmark Toolkit](../../../loopx/capabilities/benchmark_toolkit/README.md)、[auto-research](../../product/use-cases/auto-research/README.md) | S8/S11 | 作为第二类协作旅程：问题/假设→并行实验→独立解释→后继；无提升/失败也形成有效结果 |
 | [Content Operations](../../../loopx/capabilities/content_ops/README.md)、[Periodic Report](../../../loopx/capabilities/periodic_report/README.md)、[office operations](../../product/use-cases/office-operations/README.md)、[domain packs](../../product/domain-capability-packs.md) | S5/S8 | 公共投影驱动显示；草稿、review、发布权限与结果分离；不将 generic sink 绑定项目私有文档 |
@@ -246,6 +246,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 
 | RFC | 工作流 | 当前边界 | 下一切片 / 验收要求 |
 | --- | --- | --- | --- |
+| [完整状态恢复与受控重新激活 v0](complete-state-recovery-v0.zh-CN.md) | S2/S10 | 已接受设计；备份创建与仅配置的隔离恢复已存在，完整状态验证／重新激活尚不存在 | M1：在 Settings/Capability Center 提供可读 inert audit，显示 owner／next action 且无 live authority；M3：恢复一个 packaged local 文件／SQLite Goal、继续未完成工作，并记录找回／丢失工作、人工成本、hold、owner 复用及零受保护重复 operation |
 | [可组合状态机与恢复验证 v0](composable-state-machines-recovery-verification-v0.zh-CN.md) | S2/S3/S10 | 仅设计；复用局部 conformance 证据 | P1：一条 typed 边界，再验 ownership/writeback/settlement 故障序列与有条件推进；真实入口及后端证据 |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | S2 | Accepted；核心已实现，继续采用 | P0：复用 effect/recovery，先补 R1 部分提交反例，保持 replan ACK domain-local |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.zh-CN.md) | S2 | Accepted；整笔事务迁移中 | P0/P1：R1–R4 热事务优先；T0–T4 caller/删除/成本证据；不是百 Agent 前全量重写 |

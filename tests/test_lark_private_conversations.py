@@ -289,7 +289,7 @@ def test_private_answer_keeps_preexisting_attempt_text_on_recovery(ordinary, mon
         # Reproduce the pre-change facade: it journals Core text unchanged;
         # the existing Inbox owner independently normalizes the provider wire.
         with monkeypatch.context() as legacy:
-            legacy.setattr(private_conversations, "normalize_lark_outbound_text", lambda text, **_: text)
+            legacy.setattr(private_conversations, "_presentation_text", lambda text: text)
             assert transport.reconcile() == 0
         saved = json.loads(next(transport.root.glob("*.json")).read_text())
         assert saved["deliveries"]["terminal"]["text"] == answer

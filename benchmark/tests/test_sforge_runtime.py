@@ -416,9 +416,9 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 300),
     ("portfolio_risk_calibration", [], 43200, 300),
-    ("lean_analysis_proofs", [], 86400, 1800),
+    ("lean_analysis_proofs", [], 43200, 1800),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
-    ("lean_analysis_proofs", ["--eval-interval", "0"], 86400, 0)])
+    ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
 def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -488,7 +488,8 @@ def test_effective_turn_cadence_rejects_ambiguous_units(tmp_path):
 
 @pytest.mark.parametrize("task,explicit,expected", [
     ("portfolio_risk_calibration", None, 43200),
-    ("lean_analysis_proofs", None, 86400),
+    ("lean_analysis_proofs", None, 43200),
+    ("lean_analysis_proofs", 86400, 86400),
     ("unknown-future-task", None, 64800),
     ("portfolio_risk_calibration", 1800, 1800),
     ("portfolio_risk_calibration", 64800, 64800),

@@ -91,6 +91,37 @@ def test_read_info_distinguishes_directory_from_unreadable_runtime_metadata(
             effect_runtime._read_info(info_path, fingerprint="fixture")
 
 
+def test_read_info_retries_transient_runtime_locator_permission_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    info_path = tmp_path / "runtime-info"
+    payload = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+        "fingerprint": "fixture",
+        "host": "127.0.0.1",
+        "port": 1234,
+        "token": "runtime-token",
+        "pid": os.getpid(),
+    }
+    info_path.write_text(json.dumps(payload), encoding="utf-8")
+    original_read_text = Path.read_text
+    attempts = 0
+
+    def deny_once(path: Path, *args, **kwargs):
+        nonlocal attempts
+        if path == info_path:
+            attempts += 1
+            if attempts == 1:
+                raise PermissionError("synthetic transient locator read denial")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_once)
+
+    assert effect_runtime._read_info(info_path, fingerprint="fixture") == payload
+    assert attempts == 2
+
+
 def _raw_runtime_response(
     info: dict[str, object],
     payload: bytes,

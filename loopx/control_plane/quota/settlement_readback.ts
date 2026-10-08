@@ -125,6 +125,14 @@ function settlementScope(
   return {runtimeRoot, goalId};
 }
 
+/** Validate the canonical scope before callers perform optional receipt IO. */
+export function validateQuotaSettlementScope(
+  runtimeRootValue: unknown,
+  goalIdValue: unknown,
+): { runtimeRoot: string; goalId: string } {
+  return settlementScope(runtimeRootValue, goalIdValue);
+}
+
 /** Receipt verification owns progress; a durable debit alone is not settlement. */
 function settlementProgress(
   identity: SettlementResult, writeback: SettlementResult, spend: SettlementResult,

@@ -119,7 +119,10 @@ export const typedActionsScenario = {
             context: {kind: "goal", goal_id: "product-release"},
             expected_state_fingerprint: "creation-basis", permission_classification: "durable_write",
             validation_evidence: ["Workspace validated before storage initialization."], available_transitions: ["apply", "cancel"],
-            checkpoint: {steps: {workspace_validated: {outcome: "workspace_validated"}}},
+            checkpoint: {steps: {workspace_validated: {
+              outcome: "workspace_validated",
+              workspace_digest: "a".repeat(64),
+            }}},
             failure: {error_code: "canonical_action_failed"}, receipt: null, stale: null,
             created_at: "2026-09-14T01:00:00Z", updated_at: "2026-09-14T01:00:01Z",
           },

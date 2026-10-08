@@ -1275,3 +1275,21 @@ its existing values, and a new namespace uses capability defaults.
 审阅优先级），部分修改保留既有目标值，新覆盖使用 capability 默认值。关闭时不
 查询、轮询或等待 CI；本地必需验证、当前提交评审、评论及权限检查仍然适用。
 GitHub `BLOCKED` 只提示另需管理员授权，不授予合并权限。
+
+## Repository experience for opted-in review Agents
+
+The existing Reward Memory experiment can deliver Git-versioned procedural
+advice in actionable review packets. Enable the registered Agent, automatic
+recall and the explicit `pull_request_review.review` surface in its existing
+configuration. See [operation, readback and disable](experiences/README.md).
+The [#5944 comparison](experiences/pr-5944-review-frame.md) is the first stored
+case. Historical verdicts are outside retrieval; packet delivery proves neither
+adoption nor utility. Base/off paths, queue selection and review authority retain
+their existing contracts; the native file reader writes no provider.
+
+已开启的 review Agent 可通过现有 Reward Memory 实验，在可执行 review packet 中
+收到 Git 版本化的过程经验。须启用已注册 Agent、自动 recall，并在原配置中明确指定
+`pull_request_review.review` surface，参见[操作、回读与关闭](experiences/README.zh-CN.md)。
+[#5944 判断对照](experiences/pr-5944-review-frame.md)是第一条案例。
+历史 verdict 不进入检索，packet 投递不证明采用或效用。关闭路径、选工和评审权限
+仍遵循现有合同；内置文件 reader 不写 provider。
