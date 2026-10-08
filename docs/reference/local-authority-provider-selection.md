@@ -304,6 +304,11 @@ typed coordination owner and Goal storage settings, shared by CLI and App:
   Todos, metadata, identities, ownership facts, captures and original receipts.
   Reject unsupported or ambiguous source content explicitly; never omit it or
   equate an empty target with successful import.
+- Source lease JSON inventory is fail-closed: unsupported record names,
+  non-regular files and linked source subtrees refuse observation/revalidation.
+  Exact byte witnesses include retained orphan records; those records do not
+  become live leases. Non-record host lock files remain outside that inventory.
+  This existing source-admission repair does not qualify the complete importer.
 - Stop source writers and affected Hosts, settle active leases and reconcile
   prepared/committed outbox entries against source bytes and original receipts.
   Preserve history without converting old leases or receipts into new grants.

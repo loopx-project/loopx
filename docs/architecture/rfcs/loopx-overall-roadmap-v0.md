@@ -890,6 +890,21 @@ provider. This is a bounded App companion, not full old-source/Host upgrade or
 D2/release-default qualification. Continue those original acceptance frontiers
 and retire each last caller separately.
 
+Reviewed source admission now rejects unsupported lease JSON filenames,
+non-regular records and linked source subtrees instead of silently omitting or
+following them. The existing typed coordination owner verifies exact source
+bytes under shared locks; Python retains filesystem transport. Regular retained
+lease history remains witnessed without granting a live lease. This closes a
+bounded source-inventory gap; complete cold-source import, original-operation
+recovery, packaged App adoption and the reversible developer trial remain on
+the [existing migration/release path](../../reference/local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence).
+
+审核源准入拒绝不支持的租约 JSON 文件名、非普通文件和链接子目录，不再静默漏读
+或跟随链接。既有 TS coordination owner 在共享锁内核对原始字节；Python 保留
+文件系统传输。普通租约历史仍参与源见证，不产生新执行授权。这仅关闭有界源盘点
+缺口；完整冷源导入、原操作恢复、打包 App 采用和可逆开发者试用继续沿既有迁移
+与发布路径验收。
+
 New-Goal App recovery is a separate bounded R5/T4 gap: after Goal/Todo commit,
 Host startup or a lost response must resume the frozen original operation,
 without regenerating a creator or duplicating its Todo/Session/Turn. Reuse the
