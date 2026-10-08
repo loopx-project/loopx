@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -11,9 +12,11 @@ import pytest
 from loopx.cli import main as cli_main
 from loopx.cli_commands import turn as turn_command
 from loopx.cli_commands import turn_decision
+from loopx.cli_commands import turn_inspection
 from loopx.cli_commands import turn_rendering, turn_run_once, turn_todo_writeback
 from loopx.control_plane.turn_driver import executor
 from loopx.control_plane.turn_driver import turn_journal_runtime
+from loopx.file_lock import exclusive_file_lock
 
 
 TURN_KEY = "sha256:" + "a" * 64
@@ -253,6 +256,185 @@ def test_inspection_returns_versioned_allowlisted_projection_without_mutation(
     assert journal_path.read_bytes() == before_bytes
     assert after_entries == before_entries
     assert "do-not-expose" not in json.dumps(result)
+
+
+def test_inspect_journal_watch_emits_only_changed_safe_progress_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
+
+    snapshots = iter([
+        {
+            "ok": True,
+            "journal_status": "in_progress",
+            "completed_phases": list(TRANSACTION_PHASES[:2]),
+            "effects": [],
+            "host_result": {"private": "must-not-leak"},
+        },
+        {
+            "ok": True,
+            "journal_status": "in_progress",
+            "completed_phases": list(TRANSACTION_PHASES[:2]),
+            "effects": [],
+        },
+        {
+            "ok": True,
+            "journal_status": "in_progress",
+            "completed_phases": list(TRANSACTION_PHASES[:3]),
+            "effects": [],
+        },
+        {
+            "ok": True,
+            "journal_status": "committed",
+            "completed_phases": list(TRANSACTION_PHASES),
+            "effects": [],
+        },
+    ])
+    monkeypatch.setattr(
+        executor,
+        "inspect_loopx_turn_journal",
+        lambda *args, **kwargs: next(snapshots),
+    )
+    monkeypatch.setattr(
+        "loopx.control_plane.turn_driver.inspect_loopx_turn_journal",
+        lambda *args, **kwargs: next(snapshots),
+    )
+    monkeypatch.setattr(turn_inspection.time, "sleep", lambda _seconds: None)
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(tmp_path / "registry.json"),
+            "--runtime-root", str(tmp_path),
+            "turn", "inspect-journal",
+            "--goal-id", "fixture-goal",
+            "--agent-id", "fixture-agent",
+            "--turn-key", TURN_KEY,
+            "--watch",
+            "--watch-interval", "0.01",
+            "--format", "json",
+        ])
+
+    lines = output.getvalue().splitlines()
+    events = [json.loads(line) for line in lines]
+    assert exit_code == 0
+    assert len(events) == 3
+    assert [event["journal_status"] for event in events] == [
+        "in_progress", "in_progress", "committed",
+    ]
+    assert events[0]["completed_phases"] == list(TRANSACTION_PHASES[:2])
+    assert events[1]["completed_phases"] == list(TRANSACTION_PHASES[:3])
+    assert events[2]["completed_phases"] == list(TRANSACTION_PHASES)
+    assert all(event["effects"] == [] for event in events)
+    assert "must-not-leak" not in output.getvalue()
+
+
+def test_inspect_journal_watch_rejects_non_positive_interval_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_read(*args: object, **kwargs: object) -> None:
+        raise AssertionError("invalid watch interval must fail before journal access")
+
+    monkeypatch.setattr(executor, "inspect_loopx_turn_journal", unexpected_read)
+    monkeypatch.setattr(
+        "loopx.control_plane.turn_driver.inspect_loopx_turn_journal",
+        unexpected_read,
+    )
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(tmp_path / "registry.json"),
+            "--runtime-root", str(tmp_path),
+            "turn", "inspect-journal",
+            "--goal-id", "fixture-goal",
+            "--agent-id", "fixture-agent",
+            "--turn-key", TURN_KEY,
+            "--watch",
+            "--watch-interval", "0",
+            "--format", "json",
+        ])
+
+    assert exit_code == 1
+    assert "watch interval must be a finite positive number" in output.getvalue()
+
+
+def test_inspect_journal_watch_observes_checkpoints_from_concurrent_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
+
+    journal = _journal(status="in_progress")
+    journal["completed_phases"] = list(TRANSACTION_PHASES[:1])
+    journal_path = _write_journal(tmp_path, journal)
+    updates = [
+        (list(TRANSACTION_PHASES[:2]), "in_progress"),
+        (list(TRANSACTION_PHASES[:3]), "in_progress"),
+        (list(TRANSACTION_PHASES), "committed"),
+    ]
+    requested = threading.Event()
+    updated = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def write_checkpoints() -> None:
+        try:
+            for phases, status in updates:
+                assert requested.wait(timeout=5)
+                requested.clear()
+                with exclusive_file_lock(journal_path):
+                    current = json.loads(journal_path.read_text(encoding="utf-8"))
+                    current["completed_phases"] = phases
+                    current["status"] = status
+                    journal_path.write_text(
+                        json.dumps(current, indent=2) + "\n", encoding="utf-8",
+                    )
+                updated.set()
+        except BaseException as exc:  # surfaced in the command thread below
+            writer_errors.append(exc)
+            updated.set()
+
+    writer = threading.Thread(target=write_checkpoints, daemon=True)
+    writer.start()
+
+    def wait_for_checkpoint(_seconds: float) -> None:
+        requested.set()
+        assert updated.wait(timeout=5)
+        updated.clear()
+        if writer_errors:
+            raise writer_errors[0]
+
+    monkeypatch.setattr(turn_inspection.time, "sleep", wait_for_checkpoint)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(tmp_path / "registry.json"),
+            "--runtime-root", str(tmp_path),
+            "turn", "inspect-journal",
+            "--goal-id", "fixture-goal",
+            "--agent-id", "fixture-agent",
+            "--turn-key", TURN_KEY,
+            "--watch",
+            "--watch-interval", "0.01",
+            "--format", "json",
+        ])
+    writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not writer_errors
+    assert exit_code == 0
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [event["completed_phases"] for event in events] == [
+        list(TRANSACTION_PHASES[:1]),
+        list(TRANSACTION_PHASES[:2]),
+        list(TRANSACTION_PHASES[:3]),
+        list(TRANSACTION_PHASES),
+    ]
+    assert [event["journal_status"] for event in events] == [
+        "in_progress", "in_progress", "in_progress", "committed",
+    ]
+    assert all(event["effects"] == [] for event in events)
 
 
 def test_inspection_reports_blocked_journal_as_successful_read(tmp_path: Path) -> None:
