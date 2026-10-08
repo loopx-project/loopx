@@ -28,6 +28,17 @@ function assertIncludes(html, value, message) {
   if (!html.includes(value)) throw new Error(message);
 }
 
+function hasAnchorToHref(html, href, sourceHref) {
+  const expectedUrl = new URL(href, sourceHref).href;
+  return [...html.matchAll(/<a\b[^>]*\bhref="([^"]+)"[^>]*>/g)].some(([, linkHref]) => {
+    try {
+      return new URL(linkHref, sourceHref).href === expectedUrl;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function sectionIds(html) {
   return [...html.matchAll(/<section\s+id="([^"]+)"/g)].map((match) => match[1]);
 }
@@ -99,7 +110,9 @@ export async function validateBilingualBlog(blogDir) {
       assertIncludes(articleHtml, `<html lang="${locale.language}">`, `Blog article language drifted: ${slug}`);
       assertIncludes(articleHtml, "<h1>", `Blog article must contain a visible title: ${slug}`);
       assertIncludes(articleHtml, `rel="canonical" href="${locale.canonicalHref(slug)}"`, `Blog canonical URL drifted: ${slug}`);
-      assertIncludes(articleHtml, `href="${locale.counterpartHref(slug)}"`, `Blog article must link its paired edition: ${slug}`);
+      if (!hasAnchorToHref(articleHtml, locale.counterpartHref(slug), locale.canonicalHref(slug))) {
+        throw new Error(`Blog article must link its paired edition: ${slug}`);
+      }
       for (const hreflang of ["en", "zh-CN", "x-default"]) {
         assertIncludes(articleHtml, `hreflang="${hreflang}"`, `Blog article is missing ${hreflang}: ${slug}`);
       }
@@ -177,6 +190,18 @@ if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
   const dates = ["2026-09", "", "2026-09-15", "2026-10-02", "2026-09-26"];
   deepStrictEqual(dates.sort(comparePublicationDates), ["2026-10-02", "2026-09-26", "2026-09-15", "2026-09", ""]);
   deepStrictEqual(comparePublicationDates("2026-10-02", "2026-10-02"), 0);
+  const englishArticle = "https://loopx-project.github.io/loopx/blog/example/";
+  const relativeChineseArticle = '<a href="../zh/example/" lang="zh-CN">中文</a>';
+  deepStrictEqual(
+    hasAnchorToHref(relativeChineseArticle, "../../blog/zh/example/", englishArticle),
+    true,
+    "Equivalent relative paths must resolve to the paired edition",
+  );
+  deepStrictEqual(
+    hasAnchorToHref('<a href="../zh/another/">中文</a>', "../../blog/zh/example/", englishArticle),
+    false,
+    "A link to a different article must not satisfy the paired-edition check",
+  );
   // A module response that arrives after keyboard navigation started must not
   // move an already ordered catalog or drop the focused article link.
   const ordered = fakeBlogIndex(
