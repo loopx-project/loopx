@@ -2090,6 +2090,14 @@ daemon command. CLI and App surfaces consume the same lifecycle projection
 (`running`, `stopped`, or `unavailable`) and stable diagnostic code. Raw stderr,
 tokens, local paths, and private runtime metadata are not projected.
 
+Node launch observation remains in the existing Python transport adapter; it is
+not a second control-plane decision owner. Startup and doctor share its bounded
+probe and distinguish unknown compatibility after a timeout or launch failure
+from a parsed unsupported version. The
+[host diagnostic contract](../../reference/protocols/host-integration-surface-v0.md#managed-node-startup-diagnostics)
+defines the budgets, stable codes and recovery. This repairs readiness diagnosis;
+sustained runtime and whole-task performance require separate evidence.
+
 The runtime fingerprint includes every executed TS module and contract. An
 upgrade starts a runtime for the new fingerprint; an old process can finish
 in-flight work and exits on idle. Requests carry stable effect identities, so a
