@@ -52,7 +52,10 @@ from .extensions.lark.private_conversation_api import PrivateConversationRequest
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
 from .chat_loopx_mode import handle_loopx_request
-from .capabilities.manager_context.roundtrip import project_chat_session_snapshot
+from .capabilities.manager_context.roundtrip import (
+    ReturnService,
+    project_chat_session_snapshot,
+)
 from .control_plane.goals.active_state_metadata import active_state_section_text
 from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .control_plane.status.ssh_host_catalog import (
@@ -420,6 +423,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
     action_store: ChatActionStore
     action_service: ChatActionService
     runtime_controller: ChatRuntimeController
+    manager_return_service: ReturnService
     lark_runner: CommandRunner
     lark_cli_resolution: LarkCliResolution
     lark_app_setup_manager: LarkAppSetupManager
