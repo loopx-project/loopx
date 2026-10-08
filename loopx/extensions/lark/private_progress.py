@@ -10,6 +10,7 @@ from typing import Any
 
 ANSWER_WINDOW = 6000
 UPDATE_INTERVAL_SEC = 2.0
+ACTIVITY_UPDATE_INTERVAL_SEC = 10.0
 
 
 def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str | None:

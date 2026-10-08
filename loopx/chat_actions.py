@@ -31,6 +31,7 @@ from .history import load_registry
 from .host_loop_activation import build_host_loop_activation_packet
 from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
 from .paths import resolve_runtime_root
+from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
 from .registry import registry_goals
 from .todos import add_goal_todo, update_goal_todo
@@ -52,7 +53,6 @@ SUPPORTED_ACTION_KINDS = {
     "operation.execute",
     "team.plan",
 }
-_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 # Runtime Endpoint ids and durable Goal agent ids are chosen independently, so
 # a family token collapses both onto the host that produced them: Endpoint
 # `codex` has to resolve to a registered `codex-main-control`. Every host that

@@ -504,10 +504,12 @@ export async function previewTypedAction(request: TypedActionPreviewRequest) {
   return typedActionEnvelopeSchema.parse(payload).proposal;
 }
 
-export async function loadTypedAction(proposalId: string) {
-  return typedActionEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions/${encodeURIComponent(proposalId)}`),
+export async function loadTypedAction(proposalId: string, signal?: AbortSignal) {
+  const proposal = typedActionEnvelopeSchema.parse(
+    await requestJson<unknown>(`/api/actions/${encodeURIComponent(proposalId)}`, { signal }),
   ).proposal;
+  if (proposal.proposal_id !== proposalId) throw new Error("Proposal readback identity mismatch");
+  return proposal;
 }
 
 const typedActionListEnvelopeSchema = z.object({

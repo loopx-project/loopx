@@ -24,20 +24,13 @@ from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_arg
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
-from .outbound import LarkOutboundTextError, normalize_lark_outbound_text, safe_lark_plain_text_fallback
+from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_progress import UPDATE_INTERVAL_SEC, project_progress
+from .private_progress import ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, project_progress
 
 # Conservative transport budget, not a claim about the provider's maximum.
-# Reserve edits for a canonical final or the oversized-final closing notice.
+# Reserve edits for a final/closing notice; continue long Turns on a new draft.
 PROGRESS_EDIT_BUDGET = 12
-
-
-def _presentation_text(text: str) -> str:
-    try:
-        return normalize_lark_outbound_text(text, limit=None, preserve_format=True)
-    except LarkOutboundTextError:
-        return safe_lark_plain_text_fallback(text)
 
 
 class LarkPrivateConversations:
@@ -446,6 +439,36 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
         return True
 
+    def _continue_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
+        """Retire a verified draft before creating the next source-bound one.
+
+        Only a verified closing edit or a definite provider edit-limit rejection
+        permits rollover. An uncertain close/create keeps its frozen intent on
+        replay; continuation never submits or restarts the Core Turn.
+        """
+        progress = record["deliveries"].get("progress") or {}
+        if not progress.get("verified"):
+            return False
+        stream = record["stream"]
+        if not stream.get("edit_limit_reached"):
+            closed = self._edit_progress(path, record, "仍在处理，后续进展见下一条消息。",
+                                         inbox=inbox, finalizing=True)
+            if not closed and not stream.get("edit_limit_reached"):
+                return False
+        segment = int(stream.get("segment") or 0)
+        record["deliveries"][f"progress.{segment}"] = {
+            **progress, "text": stream.get("confirmed_text") or progress["text"],
+            "attempt": stream.get("confirmed_attempt") or progress["attempt"],
+            "edit_attempts": int(stream.get("edit_attempts") or 0),
+            "edit_limit_reached": bool(stream.get("edit_limit_reached")),
+        }
+        record["deliveries"].pop("progress")
+        for key in ("confirmed_text", "confirmed_attempt", "edit_attempts", "edit_limit_reached", "blocker", "closed"):
+            stream.pop(key, None)
+        stream["segment"] = segment + 1
+        _atomic_write_json(path, record)
+        return True
+
     def _progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path],
                   session_id: str | None = None, turn_id: str | None = None) -> None:
         stream = record.setdefault("stream", {})
@@ -456,17 +479,29 @@ class LarkPrivateConversations:
             # Journal the exact presentation the sender freezes, not the raw
             # Core text. The same conversion also recovers older draft proofs.
             text = _presentation_text(text)
+        view = text
+        if text and stream.get("segment"):
+            text = f"**后续进展 {int(stream['segment']) + 1}**\n\n" + text
         _atomic_write_json(path, record)
         if not text or text == stream.get("confirmed_text"):
             return
         now = time.time()
-        if now - float(stream.get("last_attempt_at") or 0) < UPDATE_INTERVAL_SEC:
+        answer_digest = hashlib.sha256(str(stream.get("answer") or "").encode("utf-8")).hexdigest()
+        interval = (ACTIVITY_UPDATE_INTERVAL_SEC if answer_digest == stream.get("confirmed_answer_digest")
+                    else UPDATE_INTERVAL_SEC)
+        if now - float(stream.get("last_attempt_at") or 0) < interval:
             return
         stream["last_attempt_at"] = now
         _atomic_write_json(path, record)
         # A failed creation must resume its frozen intent rather than trying a
         # new body on an uncertain message. New chunks remain in the view.
         progress = record["deliveries"].get("progress") or {}
+        if progress.get("verified") and (stream.get("edit_limit_reached")
+                or int(stream.get("edit_attempts") or 0) >= PROGRESS_EDIT_BUDGET):
+            if not self._continue_progress(path, record, inbox=inbox):
+                return
+            text = f"**后续进展 {int(stream['segment']) + 1}**\n\n{view}"
+            progress = {}
         if not progress.get("verified"):
             initial = str(progress.get("text") or text)
             if self._deliver(path, record, "progress", initial, inbox=inbox):
@@ -474,6 +509,9 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, record)
         else:
             self._edit_progress(path, record, text, inbox=inbox)
+        if stream.get("confirmed_text") == text:
+            stream["confirmed_answer_digest"] = answer_digest
+            _atomic_write_json(path, record)
 
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""

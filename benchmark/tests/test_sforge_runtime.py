@@ -109,6 +109,42 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
         SForgeWorker(config, profile="single", cwd="/task")
 
 
+@pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monkeypatch, profile, unreadable):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex, CodexOffline
+    credential = tmp_path / "synthetic-auth.json"
+    credential.write_text("{}")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(credential))
+    async def installed(self, environment):
+        pass  # Exercise the native installation seam without installing a model.
+    monkeypatch.setattr(CodexOffline, "install", installed)
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    monkeypatch.setattr(CodexAgent, "install_stop_hook", lambda *args: None)
+    ordinary_reads = []
+    def command(handle, cmd, **kwargs):
+        if kwargs.get("user") == "agent" and isinstance(cmd, list) and "read_bytes" in cmd[-1]:
+            ordinary_reads.append(cmd)
+            return SimpleNamespace(exit_code=int(unreadable), output="")
+        return SimpleNamespace(exit_code=0, output="")
+    backend = SimpleNamespace(exec_run=command, copy_to_container=lambda *args: None)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd="/task", feedback="best-only", feedback_prompt="Synthetic local task")
+    if unreadable:
+        with pytest.raises(RuntimeError, match="unreadable by worker"):
+            worker.install_stop_hook(backend, None, tmp_path, None)
+        assert not (tmp_path / "worker-profile.json").exists()
+    else:
+        worker.install_stop_hook(backend, None, tmp_path, None)
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback_delivery"] == "codex_hooks"
+    assert len(ordinary_reads) == 1
+
+
 @pytest.mark.parametrize("profile,total,expected", [
     ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
     ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),
@@ -159,6 +195,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
     backend.log_dir = tmp_path / "artifacts"
+    backend.feedback = None
     copied, cleaned = [], []
     def archive(handle, remote):
         copied.append(str(remote))
@@ -416,9 +453,9 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 300),
     ("portfolio_risk_calibration", [], 43200, 300),
-    ("lean_analysis_proofs", [], 86400, 1800),
+    ("lean_analysis_proofs", [], 43200, 1800),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
-    ("lean_analysis_proofs", ["--eval-interval", "0"], 86400, 0)])
+    ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
 def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -445,7 +482,7 @@ def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path
     monkeypatch.setattr(run, "run_agent", stop_before_solver)
     args = ["--task", task, "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "receipt", "--worker", "heartbeat-resume", "--model", "fixture",
-            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
+            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback", "native"]
     if entry:
         args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
@@ -488,7 +525,8 @@ def test_effective_turn_cadence_rejects_ambiguous_units(tmp_path):
 
 @pytest.mark.parametrize("task,explicit,expected", [
     ("portfolio_risk_calibration", None, 43200),
-    ("lean_analysis_proofs", None, 86400),
+    ("lean_analysis_proofs", None, 43200),
+    ("lean_analysis_proofs", 86400, 86400),
     ("unknown-future-task", None, 64800),
     ("portfolio_risk_calibration", 1800, 1800),
     ("portfolio_risk_calibration", 64800, 64800),

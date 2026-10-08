@@ -312,6 +312,14 @@ PUBLIC_SAFE_REFERENCE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$"
 )
 COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+# One definition for "a compact, path-safe opaque identifier". Four contracts each
+# compiled this body under their own name -- the Chat action surface, the Chat
+# action store, a Goal reference validator and the BotMux runtime -- and a fifth
+# waits in the goal-deletion service, so a bound fix had five places to land. Each
+# consumer keeps its own field names and error text; this states syntax only, and
+# a value this shape accepts is not yet a claim that the destination may publish
+# it.
+OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
     r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$"
 )

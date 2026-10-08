@@ -108,7 +108,7 @@ def test_real_result_link_read_and_replay(tmp_path):
     assert audit["findings"][0]["status"] == "refuted"
 
 
-def test_todo_additive_owner_preserves_other_links_and_rejects_overflow(tmp_path):
+def test_todo_additive_owner_preserves_all_links_and_rejects_conflicting_intents(tmp_path):
     args = fixture(tmp_path)
     keys = {
         key: args[key] for key in ("registry_path", "goal_id", "todo_id", "agent_id")
@@ -120,10 +120,11 @@ def test_todo_additive_owner_preserves_other_links_and_rejects_overflow(tmp_path
         "todos"
     ]
     assert rows[0]["explore_result_node_refs"] == ["prior", "prefix-bound"]
-    with pytest.raises(ValueError):
-        update_goal_todo(
-            **keys, append_explore_result_node_refs=[f"node{i}" for i in range(8)]
-        )
+    additions = [f"node{i}" for i in range(12)]
+    update_goal_todo(**keys, append_explore_result_node_refs=additions)
+    exact = list_goal_todos(registry_path=args["registry_path"], goal_id="research",
+                            todo_id=args["todo_id"])["todo"]
+    assert exact["explore_result_node_refs"] == ["prior", "prefix-bound", *additions]
     with pytest.raises(ValueError):
         update_goal_todo(
             **keys,

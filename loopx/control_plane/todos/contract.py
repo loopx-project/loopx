@@ -43,7 +43,6 @@ TODO_CAPABILITY_BINDING_REF_PATTERN = re.compile(
 )
 TODO_REPLAN_OBLIGATION_ID_PATTERN = re.compile(r"^replan-[a-f0-9]{16}$")
 TODO_EXPLORE_RESULT_NODE_REF_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,95}$")
-TODO_EXPLORE_RESULT_NODE_REF_LIMIT = 8
 TODO_DECISION_SCOPE_KEY_PATTERN = re.compile(r"^(?:\*|[a-z0-9][a-z0-9_.:@*/-]{0,95})$")
 TODO_WRITE_SCOPE_MAX_CHARS = 160
 TODO_MONITOR_METADATA_FIELDS = (
@@ -478,14 +477,14 @@ def normalize_explore_result_node_refs(value: Any) -> list[str]:
     else:
         raw_values = re.split(r"[,;|]", str(value or ""))
     refs: list[str] = []
+    seen: set[str] = set()
     for raw in raw_values:
         ref = compact_todo_text(raw)
         if not ref or not TODO_EXPLORE_RESULT_NODE_REF_PATTERN.match(ref):
             continue
-        if ref not in refs:
+        if ref not in seen:
+            seen.add(ref)
             refs.append(ref)
-        if len(refs) >= TODO_EXPLORE_RESULT_NODE_REF_LIMIT:
-            break
     return refs
 
 

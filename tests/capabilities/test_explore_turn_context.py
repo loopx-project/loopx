@@ -555,3 +555,25 @@ def test_turn_context_rejects_negative_evidence_count(kind):
         })
     assert rejected.value.error_kind == "request_rejected"
     assert rejected.value.diagnostic_code == "invalid_request"
+
+
+def test_many_durable_refs_keep_bounded_audit_and_full_cold_read(tmp_path):
+    path = registry(tmp_path, planning=True)
+    refs = [f"unknown-{i}" for i in range(40)]
+    add_goal_todo(registry_path=path, goal_id="research", role="agent",
+                  text="Inspect unresolved evidence", claimed_by="worker",
+                  explore_result_node_refs=refs)
+    packet = explore_turn_context(registry_path=path, runtime_root=tmp_path / "runtime",
+                                  goal_id="research", agent_id="worker")
+    audit = packet["harness"]["selected_branches"][0]["typed_evidence_audit"]
+    for field in ("requested_node_refs", "unknown_node_refs"):
+        assert audit[field] == refs[:8]
+        assert audit[f"omitted_{field}"] == 32
+    assert "unknown_result_node_ref" in audit["hazards"]
+    # Follow the actual full-audit command carried by the compact packet.
+    command = packet["harness"]["plan_command"]
+    result = subprocess.run([sys.executable, "-m", "loopx.cli", *command[1:]],
+                            capture_output=True, text=True, check=True)
+    full = json.loads(result.stdout)["selected_branches"][0]["typed_evidence_audit"]
+    assert full["requested_node_refs"] == full["unknown_node_refs"] == refs
+    assert full["score_delta"] == 0

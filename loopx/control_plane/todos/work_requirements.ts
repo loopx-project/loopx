@@ -106,8 +106,10 @@ export function normalizeTodoWorkRequirements(intent: JsonObject): JsonObject {
       result[field] = normalized;
     } else if (field === "explore_result_node_refs") {
       const refs = [...new Set(requireStringArray(value, field).map(compactPythonWhitespace))];
-      if (refs.length > 8 || refs.some(ref => !/^[A-Za-z][A-Za-z0-9_.:-]{0,95}$/.test(ref))) {
-        throw new EffectRuntimeRequestError("explore_result_node_refs requires at most eight valid Explore node ids");
+      // Durable associations are not a context-page budget. The Explore read
+      // model bounds disclosure without dropping persisted identities.
+      if (refs.some(ref => !/^[A-Za-z][A-Za-z0-9_.:-]{0,95}$/.test(ref))) {
+        throw new EffectRuntimeRequestError("explore_result_node_refs requires valid Explore node ids");
       }
       result[field] = refs;
     } else {

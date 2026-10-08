@@ -248,8 +248,16 @@ A graph/link delivery failure leaves the primary writeback committed and returns
 `explore_result_delivery.retryable=true`. Replay the **same** refresh command to
 complete delivery; conflicting attachment changes cannot rewrite the original
 Turn. Graph events are idempotent and Todo references merge against the owner's
-locked snapshot. Capacity remains eight references per Todo; it is never silently
-truncated. Successful replay needs no second graph event or Todo mutation.
+locked snapshot. Durable Todo links no longer have an eight-reference ceiling;
+all valid distinct node IDs survive append and exact Todo readback. The compact
+turn view shows at most eight requested/unknown reference IDs per branch, with
+explicit omission counts. Its `plan_command` now calls `todo-branch-plan` to
+expand the same Todo audit (instead of grouping worker lanes),
+and revision-bound result pages retain access to all scoped findings. Display
+budgets do not remove links, exclude negative evidence from hazard classification,
+or block valid writeback. Successful replay needs no second graph event or Todo
+mutation. This changes enabled evidence capture and explicit Todo-link edits;
+ordinary work and feature-off hooks retain their existing behavior.
 
 Use `tentative` for inconclusive observations or prerequisite failures. Neither
 compilation failure nor a score alone supplies a scientific interpretation.

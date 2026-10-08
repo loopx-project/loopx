@@ -1438,6 +1438,11 @@ def render_pr_review_markdown(payload: dict[str, Any]) -> str:
             ]
         )
         applicability = _as_dict(review_plan.get("applicability"))
+        memory = _as_dict(pr.get("repository_experience"))
+        if memory:
+            lines.extend(["", "### Repository experience (advisory)", "",
+                          "Compare this experience with the current review frame; context delivery does not establish adoption or utility.",
+                          "", "```json", json.dumps(memory, ensure_ascii=False, indent=2), "```", ""])
         if review_plan:
             lines.append(
                 "- review plan: "

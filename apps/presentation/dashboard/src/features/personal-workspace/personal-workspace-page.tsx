@@ -35,7 +35,7 @@ import {
   type ManagerRuntimeSessionReadback,
   type TypedActionProposal,
 } from "../../data/chat";
-import { useTypedActionReadback } from "../../data/use-typed-action-readback";
+import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
@@ -1142,6 +1142,20 @@ export function PersonalWorkspacePage({
     return currentRun ? { item: currentRun.run, kind: "run" } : selection;
   }, [items, selection, proposals, workspaceGoals, model.attentionHistory, model.userTodos]);
 
+  const creationProposalId = drawerSelection?.kind === "proposal"
+    && drawerSelection.item.actionKind === "goal.create"
+    && !drawerSelection.item.previewId.startsWith("workspace-choice-")
+      ? drawerSelection.item.previewId : null;
+  const proposalReadback = useTypedActionProposalReadback(readOnly, creationProposalId);
+  useEffect(() => {
+    if (readOnly || !proposalReadback.isSuccess || !proposalReadback.data) return;
+    const canonical = proposalReadback.data;
+    // Readback updates an existing card only; it never discovers foreign cards
+    // or changes the conversation that originally offered this operation.
+    setProposals(current => current[canonical.proposal_id]
+      ? { ...current, [canonical.proposal_id]: workspaceProposal(canonical, t) } : current);
+  }, [readOnly, proposalReadback.data, proposalReadback.dataUpdatedAt, proposalReadback.isSuccess, t]);
+
   useEffect(() => {
     if (readOnly) {
       setGoalContexts({});
@@ -1921,9 +1935,11 @@ export function PersonalWorkspacePage({
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && (drawerSelection.item.detailMode === "request_only" || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
-        proposalReadbackUnavailable={actionReadback.isError || !actionReadback.data
-          || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
-        proposalReadbackFetching={actionReadback.isFetching} onRetryProposalReadback={() => void actionReadback.refetch()} onClose={() => {
+        proposalReadbackUnavailable={creationProposalId ? proposalReadback.isError || !proposalReadback.data
+          : actionReadback.isError || !actionReadback.data
+            || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
+        proposalReadbackFetching={creationProposalId ? proposalReadback.isFetching : actionReadback.isFetching}
+        onRetryProposalReadback={() => void (creationProposalId ? proposalReadback.refetch() : actionReadback.refetch())} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
           && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {

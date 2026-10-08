@@ -122,7 +122,13 @@ loopx explore graph \
 `explore_result_delivery.retryable=true` 为准，重放**同一条** refresh 命令完成交付，
 不要通过更改附件重写原 Turn。用 `loopx explore turn-context --goal-id <id>
 --agent-id <agent>` 与 `loopx explore summary --goal-id <id>` 读回；读到证据不证明
-模型已经采纳。完整附件与作用域规则见[英文契约](README.md#results-from-ordinary-work-writeback)。
+模型已经采纳。Todo 持久关联不再受八条上限约束，增量写入与精确读取保留全部
+有效且去重的节点 ID。每轮紧凑视图对每个分支只展示最多八条请求/未知 ID，
+并给出明确省略数；`plan_command` 现在调用 `todo-branch-plan` 展开同一 Todo
+审计，不再跳到不同的 worker 分组计划。带版本的结果分页
+可读取全部作用域结论。展示预算不删除关联、不漏算负面证据风险，也不阻塞
+合法写回。变化只涉及启用后的证据捕获及显式 Todo 关联编辑；普通工作与
+能力关闭时的 hook 行为保持不变。完整附件与作用域规则见[英文契约](README.md#results-from-ordinary-work-writeback)。
 
 ## 可选 Todo 分支规划
 

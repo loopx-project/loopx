@@ -142,9 +142,28 @@ def _stable_digest(payload: dict[str, Any], *, length: int = 24) -> str:
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()[:length]
 
 
-def redact_local_paths(text: str, *, protected_paths: Iterable[Path | str] = ()) -> str:
+def redact_local_paths(
+    text: str,
+    *,
+    protected_paths: Iterable[Path | str] = (),
+    project_relative: bool = False,
+) -> str:
+    """Hide local roots; visible answers may retain a project-relative filename.
+
+    Structured status, proposals and gates keep the default full redaction.
+    Additional protected roots always hide their descendants, even when nested
+    inside the project. This is text presentation, not filesystem admission.
+    """
     redacted = str(text or "")
     replacements = _protected_path_replacements(protected_paths)
+
+    def path_parts(value: str) -> tuple[str, ...]:
+        decoded = unquote(value).replace("\\", "/")
+        if re.match(r"^[A-Za-z]:/", decoded):
+            decoded = decoded.casefold()
+        return tuple(part for part in decoded.split("/") if part not in {"", "."})
+
+    private_roots = [path_parts(raw) for raw, label in replacements if label == "[local-path]"]
 
     def replace_absolute_path(match: re.Match[str]) -> str:
         matched = match.group(0)
@@ -152,6 +171,16 @@ def redact_local_paths(text: str, *, protected_paths: Iterable[Path | str] = ())
         suffix = matched[len(candidate) :]
         for raw, label in replacements:
             if candidate == raw or candidate.startswith(f"{raw}/") or candidate.startswith(f"{raw}\\"):
+                if project_relative and label == "[project]" and candidate != raw:
+                    relative = re.sub(r"\\+", "/", candidate[len(raw):]).lstrip("/")
+                    components = unquote(relative).replace("\\", "/").split("/")
+                    if ".." not in components:
+                        # Equivalent spellings must not bypass a nested private
+                        # root when opting into project-relative presentation.
+                        candidate_parts = path_parts(candidate)
+                        if any(candidate_parts[:len(root)] == root for root in private_roots):
+                            return f"[local-path]{suffix}"
+                        return f"./{relative}{suffix}"
                 return f"{label}{suffix}"
         return f"[local-path]{suffix}"
 
@@ -233,7 +262,7 @@ def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str]
             cursor = end
         chunks.append(line[cursor:])
         lines.append("".join(chunks))
-    return redact_local_paths("".join(lines), protected_paths=protected)
+    return redact_local_paths("".join(lines), protected_paths=protected, project_relative=True)
 
 
 class VisibleResponseStreamFilter:
@@ -298,7 +327,7 @@ class VisibleResponseStreamFilter:
         if final:
             ready = self.visible_pending
             self.visible_pending = ""
-            return redact_local_paths(ready, protected_paths=self.protected_paths)
+            return redact_local_paths(ready, protected_paths=self.protected_paths, project_relative=True)
         # One chunk can hold several safe boundaries. Keep cutting until none
         # is left, so an early sentence never holds back a long tail that the
         # length fallback would otherwise release.
@@ -309,7 +338,7 @@ class VisibleResponseStreamFilter:
             return ""
         ready = self.visible_pending[:ready_length]
         self.visible_pending = self.visible_pending[ready_length:]
-        return redact_local_paths(ready, protected_paths=self.protected_paths)
+        return redact_local_paths(ready, protected_paths=self.protected_paths, project_relative=True)
 
     def feed(self, chunk: str) -> str:
         if self.envelope_started:

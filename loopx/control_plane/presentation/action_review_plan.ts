@@ -1,4 +1,5 @@
 import type {DecisionOutcome, ResumeState} from "../todos/user_completion_types.js";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 export type ActionReviewIdentity = {
   schemaVersion: "action_review_plan_v0";
@@ -111,7 +112,7 @@ function goalCreationProgress(proposal: Record<string, unknown>): GoalCreationPr
   const workspace = objectValue(steps?.workspace_validated);
   const digest = textValue(workspace?.workspace_digest);
   const goalId = textValue(parameters?.goal_id);
-  if (!goalId || workspace?.outcome !== "workspace_validated" || !digest || !/^[a-f0-9]{64}$/.test(digest)) return undefined;
+  if (!goalId || workspace?.outcome !== "workspace_validated" || !digest || !BARE_SHA256_PATTERN.test(digest)) return undefined;
   const progress: GoalCreationProgress = {workspaceDigest: digest};
   const goal = objectValue(steps?.goal_bootstrapped);
   const agent = objectValue(steps?.agent_bound);

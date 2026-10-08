@@ -3350,6 +3350,16 @@ conflicting identities and provider refusal through installed CLI/HTTP and the
 packaged App. This bounded recovery closes no real-model first-Turn, L8/D3 or
 formal D2 acceptance and retires no historical recovery reader.
 
+**L9 original-proposal readback.** A global creation proposed inside an existing
+Goal retains its manager context. The opened drawer reads the exact original
+proposal independently of that Goal's discovery list; unrelated manager cards
+stay outside the Goal. Identity mismatch, missing records and transport failure
+remain explicit errors, and mutation responses cancel superseded reads before
+publishing receipts. Packaged interaction and installed File/SQLite recovery
+qualify this projection repair separately from real-model first-Turn, L8/D3,
+sustained D2 and release-default activation. No provider, policy or old-Goal
+migration default changes here.
+
 **Earlier 2026-09-24 implementation context.** Display refresh advances
 projection recovery/client closure without claiming every consumer qualified. SQLite #4910 added the larger measurement axes; #4224 records
 failed 1 MiB receipt/scan budgets and still-missing recovery/soak evidence.
