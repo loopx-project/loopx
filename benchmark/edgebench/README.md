@@ -92,6 +92,19 @@ Trial timeouts use **explicit `--timeout` → [task defaults](task-defaults.json
 feedback profile; other tasks retain the 18-hour fallback. These are total trial
 budgets, including planning, not per-turn limits.
 
+SForge `loopx-planned` now allows **600 seconds (10 minutes)** for the initial
+planning checkpoint, instead of 300 seconds. `--planning-timeout SECONDS` overrides
+this cap for planned heartbeat workers; the configured value is recorded in the
+runtime and worker receipts. The checkpoint still clips its allowance to the
+remaining total trial budget minus the 160-second execution/cleanup reserve.
+This does not extend the trial deadline or change shared Harbor defaults.
+
+The adapter also records the actual solver command's exit code, timeout and
+elapsed time in `execution-receipt.json`. A positive runtime alone no longer
+qualifies a completed attempt: a nonzero or unknown exit without a budget timeout
+is `runner_failed`, and does not publish `final_result.json`. Keep its captures
+and failure evidence; do not count an initial artifact's score as a solver outcome.
+
 Auto-evaluation uses **explicit `--eval-interval` → task defaults → 300 seconds**.
 Portfolio defaults to **300 seconds (5 minutes)**; Lean Analysis Proofs defaults
 to **1,800 seconds (30 minutes)** to space out expensive compilation. Other tasks
