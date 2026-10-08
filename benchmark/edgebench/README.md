@@ -60,9 +60,13 @@ The preflight counts existing Docker container limits and retains 2 CPUs/4 GiB
 of host headroom. Unlimited containers or insufficient capacity block admission.
 Run this in an operator-controlled Docker pool: the host lock coordinates this
 adapter's online/offline processes, not arbitrary outside Docker launches. Keep
-that reserved capacity available for the cohort. Slots are finite registrations,
-not recycled when a solver finishes; start a new cohort after draining/stopping
-the previous server. Native/blind use ordinary `sforge serve` instead.
+that reserved capacity available for the cohort. Online policy v2 releases a
+run's slot after verified worker removal. An evaluation still in flight keeps
+that slot until its native result is terminal; stopping a solver alone does not
+free evaluator capacity. Native histories, archives and original registration
+identities remain readable, and released registrations reject new captures.
+Native/blind use ordinary `sforge serve` instead. Existing v1 cohorts remain
+frozen: this does not upgrade or reclaim slots in an already-running server.
 
 An operator may explicitly pass `--allow-resource-overcommit` for a monitored
 shared Docker pool. Container CPU/memory ceilings then remain enforced, but are
@@ -158,6 +162,13 @@ The publisher accepts only that sampler's admitted submission/round identities
 and verifies the original source digest. Offline/history-only results cannot
 establish the baseline or change the online incumbent. The solver command's exit
 pauses capture/delivery; official outer resume reuses the same publisher and lane.
+After native worker cleanup, the host sends an epoch-bound release for the exact
+run/task, including failures before feedback startup. The private
+`online-captures/release.json` records acknowledgement without credentials.
+Release is idempotent and does not cancel an evaluation or erase native history.
+If cleanup or release acknowledgement fails, treat release as unconfirmed and
+reconcile the exact registration before replacement admission; do not restart
+the live judge.
 
 After the entire online cohort ends, stop its judge and backfill all captures:
 
