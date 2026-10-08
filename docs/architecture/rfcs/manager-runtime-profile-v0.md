@@ -35,9 +35,12 @@ read-only.
   not change.
 - Codex is currently the only endpoint that enforces `trusted_owner`. Other endpoints fail with
   an actionable typed error instead of pretending to provide the selected profile.
-- `trusted_owner` currently applies only to the private owner-manager conversation. An external
-  audience, including a Lark group, is a separate trust boundary and resolves the same machine
-  choice to `restricted` until an existing audience/resource grant can be verified.
+- `trusted_owner` applies to the local private owner-manager and a native private steward
+  binding freshly verified by the existing Core conversation owner. That owner checks the
+  App, owner principal, private source, current resource grant and frozen Session identity.
+  The audience proof alone grants no tools: the same persistent machine grant is also required.
+  Other external audiences, including Lark groups and workspace-only resources, remain
+  `restricted`. Project assistants retain their separate workspace grant.
 
 Configuration reuses the existing capability workbench and its
 `preview -> apply -> readback` transaction. There is no second configuration source. Missing
@@ -55,18 +58,23 @@ without an unnecessary restart.
 
 Dashboard shows both machine configuration and current Session readback. CLI/managed Turn,
 Dashboard, and Lark all use the same manager runtime controller. Lark remains an entry point and
-projection of that Session; it does not own a separate profile or permission state, but an external
-audience currently degrades visibly to `restricted`. Future Lark host-tool access must reuse an
-existing audience/resource authority instead of adding a manager-specific ACL here.
+projection of that Session; it does not own a separate profile or permission state. Native
+owner-private bindings reuse Core's fresh audience/resource verification before starting or
+reusing a host; no channel-name inference, persisted proof or manager-specific ACL replaces it.
+A revoked binding or changed App/owner stops admission.
 
 This slice implements only the private-owner M1 journey in
 [capable-manager-semantic-handoff-v0](capable-manager-semantic-handoff-v0.md), targeting A1–A3/A12.
 It does not implement the M2 collaboration request, the M3 outbox, or treat manager Session fields
 as work, request, or delivery authority.
 
-### Implementation and successor (2026-09-16)
+### Implementation and successor
 
-`43d362532` contains the machine profile, controller integration and focused tests; passing them here is not deployment or full M1 qualification. The `restricted` default, Codex-only private `trusted_owner` and external-audience downgrade remain. Selecting DSH does not inherit that capable profile. Follow [roadmap](loopx-overall-roadmap-v0.md) R2 for actual tool/session/continued-execution and settings readback, without a second machine configuration.
+`43d362532` introduced the machine profile. Native private steward bindings now carry a fresh
+Core owner-audience proof into that existing profile at open, resume and authorization-scope
+refresh. The installation default stays `restricted`; selecting DSH does not inherit the capable
+profile. Source/RPC tests do not certify installed live-model work or desktop notification
+delivery. Follow [roadmap](loopx-overall-roadmap-v0.md) R2 for those remaining qualifications.
 
 ### Acceptance
 
@@ -83,3 +91,6 @@ as work, request, or delivery authority.
    fallback state.
 8. An external audience without an existing scoped grant remains `read-only` and exposes the
    effective downgrade accurately.
+9. A verified native private steward uses the explicit machine grant, preserves its Session
+   and history across profile changes/restarts, and rechecks binding/provider identity before
+   healthy-host reuse. Other Apps, groups and workspace-only resources do not inherit it.
