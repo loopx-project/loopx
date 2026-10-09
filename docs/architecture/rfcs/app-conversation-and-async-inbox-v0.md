@@ -81,6 +81,14 @@ the allowlist at configuration time. This is an audience option on the existing
 binding, not a new Goal Channel, listener, queue or model runner. One App retains
 one binding owner. Existing private bindings keep their audience and host grants.
 
+New group bindings verify the selected Bot's App identity; they do not require
+a personal user login in that App profile. The group principal is App-scoped and
+never supplies private-owner authority. Private project/steward connections still
+require both the verified App and its independently verified user. Existing group
+bindings that used a user principal retain that exact identity and native home;
+an explicit disconnect/reconnect selects the new App principal and requires a new
+isolated home/login. Polling or a user's login/logout never migrates a binding.
+
 A human starts a topic by mentioning the Bot. Admission reads the exact provider
 message and, for a continuation, its original root; event text cannot substitute
 the root or mention. Members in that topic share its Session and FIFO; different

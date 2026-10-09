@@ -60,6 +60,11 @@ extension，typed binding owner 继续保持 provider-neutral。
 listener、队列或模型 runner。一个 App 仍只有一个 binding owner，已有私聊绑定保留
 原受众及宿主权限。
 
+新群绑定只核验选定 Bot 的 App 身份，不要求同一 profile 登录个人用户。群 principal
+限定于 App，不提供本人私聊权限；个人项目和管家私聊仍同时要求独立核验 App 与用户。
+旧群绑定若使用用户 principal，继续保留确切身份和原生 home；明确解绑再连接才选择
+新的 App principal，并需要新的隔离 home/登录。轮询或用户登录、退出不会迁移绑定。
+
 成员 @Bot 开始话题。受理时读取 provider 原消息，续聊还读取原话题根；事件文字不能
 替换根消息或提及证据。同一话题的成员共享 Session 与 FIFO，不同话题、群和 App
 使用独立 Session。status、stop、new 只作用于当前话题。受理反馈、流式消息、最终
