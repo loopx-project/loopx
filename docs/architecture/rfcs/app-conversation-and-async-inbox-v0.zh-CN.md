@@ -53,6 +53,30 @@ extension，typed binding owner 继续保持 provider-neutral。
 ![窄屏私聊设置](../../assets/personal-workspace/private-project-conversations-narrow.png)
 ![工作区撤权读回](../../assets/personal-workspace/private-project-workspace-revoked.png)
 
+## 指定群话题：隔离的普通项目 Chat
+
+设置 → Lark 可将项目 App 接到明确选定的群。群列表来自当前 App 的 provider 成员
+观测，Core 在配置时核验白名单；这是现有 binding 的受众选项，不新增 Goal Channel、
+listener、队列或模型 runner。一个 App 仍只有一个 binding owner，已有私聊绑定保留
+原受众及宿主权限。
+
+成员 @Bot 开始话题。受理时读取 provider 原消息，续聊还读取原话题根；事件文字不能
+替换根消息或提及证据。同一话题的成员共享 Session 与 FIFO，不同话题、群和 App
+使用独立 Session。status、stop、new 只作用于当前话题。受理反馈、流式消息、最终
+编辑和回执恢复复用现有投递路径，使用 `source_thread` 落点。解绑或原消息不可读后，
+即使执行完成，也不得继续发送结果。
+
+群上下文强制使用 `workspace_only`，不受本人私聊 `host_default` 影响。只保留选定
+工作区的读写 grant，不提供个人 portfolio、直连 Agent 选择、全局 skills、MCP、
+shell profile 或继承的账号环境。原生宿主必须确认确切 permissions profile 和工作区
+根；独立存储需另行登录，不能复制个人凭据或历史。`/status` 只显示项目标题，不展示
+宿主绝对工作区路径。
+
+Core、HTTP、provider 读回及原生协议 fixture 验证上述边界，属于合成传输/模型证据。
+[社区黄金查询](../../product/use-cases/community/golden-queries.md) 仍需独立登录的公开
+工作区和真实调试群旅程通过后，才能接入两个正式开发群。公开来源读取另需完成其
+限定范围工具的验收；本改动不启用无限制网络或个人浏览器。
+
 ## 普通工作区读写：默认值与撤权检查点
 
 普通项目 Chat 对宿主声明的工作区默认使用 `workspace_write`。Core context owner
