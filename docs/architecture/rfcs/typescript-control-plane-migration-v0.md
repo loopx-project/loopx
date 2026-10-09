@@ -2093,7 +2093,9 @@ tokens, local paths, and private runtime metadata are not projected.
 Node launch observation remains in the existing Python transport adapter; it is
 not a second control-plane decision owner. Startup and doctor share its bounded
 probe and distinguish unknown compatibility after a timeout or launch failure
-from a parsed unsupported version. The
+from a parsed unsupported version. A later cold-start failure during deep doctor
+must retain the same diagnosis and recovery, even after its initial probe
+succeeded; recovery is verified by retrying the actual request. The
 [host diagnostic contract](../../reference/protocols/host-integration-surface-v0.md#managed-node-startup-diagnostics)
 defines the budgets, stable codes and recovery. This repairs readiness diagnosis;
 sustained runtime and whole-task performance require separate evidence.

@@ -220,6 +220,11 @@ the current launcher independently, so replacing PATH is visible immediately.
 
 Startup, doctor and guided start-goal share the same probe diagnosis:
 
+A successful initial doctor check does not guarantee a later cold-start probe
+will succeed. Deep doctor preserves the later probe's diagnostic and recovery
+below, with host-permission recovery taking precedence. Other runtime startup
+failures retain their existing recovery advice.
+
 | Diagnostic code | Observation | Recovery |
 | --- | --- | --- |
 | `node_unavailable` | Node missing or a parsed version below the floor | Install or activate a qualified Node on PATH |
