@@ -1,5 +1,7 @@
 """Loopback setup companion for native, owner-only external project Chat."""
 from __future__ import annotations
+from collections.abc import Mapping
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +10,26 @@ PRIVATE_CONVERSATIONS_PATH = "/api/chat/lark/private-conversations"
 
 class PrivateConversationRequestMixin:
     server: Any
+
+    def _private_listener_status(self, transport_ref: str, lark_health: Mapping[str, Any]) -> str:
+        """Project observations from the exact provider, never infer liveness."""
+        composed = getattr(self.server, "conversation_transports", None)
+        provider = composed.transports.get(transport_ref) if composed is not None else None
+        if provider is not None:
+            snapshot = getattr(provider, "health_snapshot", None)
+            try:
+                health = snapshot() if callable(snapshot) else None
+            except Exception as exc:
+                # Provider exceptions may include credentials. A failed read
+                # must not borrow another listener's possibly stale status.
+                logging.getLogger(__name__).warning("Conversation listener health unavailable: %s", type(exc).__name__)
+                health = None
+        else:
+            health = lark_health.get(transport_ref)
+        status = health.get("status") if isinstance(health, Mapping) else None
+        # Reuse the existing listener presentation vocabulary; project no
+        # other provider fields. The UI already labels unknown as unconfirmed.
+        return status if isinstance(status, str) and status in ("starting", "listening", "retrying", "stopped", "standby", "inactive") else "unknown"
 
     def _private_conversations(self) -> None:
         bindings = self.server.runtime_controller.project_contexts.conversation_bindings
@@ -26,7 +48,7 @@ class PrivateConversationRequestMixin:
              "agent_candidates": [{key: item.get(key) for key in ["session_id", "goal_id", "agent_id", "executor_endpoint_id"]}
                 for item in bindings.agent_candidates(row["binding_id"])],
              "agent_targets": row.get("agent_targets", []),
-             "listener_status": health.get(row["transport_ref"], {}).get("status", "starting"),
+             "listener_status": self._private_listener_status(row["transport_ref"], health),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]]})
 

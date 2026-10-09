@@ -69,6 +69,18 @@ without private bindings do not add provider authentication; configured aliases
 reuse one request-scoped verified identity observation. Lark HTTP composition
 resides in the extension, while the typed binding owner remains provider-neutral.
 
+The same Settings read model includes Core bindings for locally installed
+conversation transports. Listener status comes from the exact host-composed
+provider's optional `health_snapshot()` returning a content-free `status`, or
+from the existing Lark listener observation for default profiles. This local
+hook must return cached observations without network calls. Only existing
+listener labels (`starting`, `listening`, `retrying`, `stopped`, `standby`,
+`inactive`) are projected; missing, malformed or failed observations become
+`unknown`, rendered as connection unconfirmed. Raw provider fields and exception
+messages are excluded. Listening is neither a delivery receipt nor task
+acceptance. Native binding/composition/HTTP regressions qualify the source read
+model, while each provider's installed liveness and result return remain separate.
+
 Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).

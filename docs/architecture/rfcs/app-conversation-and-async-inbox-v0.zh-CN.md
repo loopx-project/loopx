@@ -49,6 +49,14 @@ provider 读回确认回复；发生没有 receipt 的不确定写入时不盲�
 时，同一请求内的别名检查与连接共用一次已验证身份观测。飞书 HTTP 组合位于
 extension，typed binding owner 继续保持 provider-neutral。
 
+同一设置读模型也展示本机已安装 transport 的 Core binding。监听状态取确切宿主组合
+provider 的可选 `health_snapshot()`，返回仅含状态的观测；默认 profile 使用已有
+Lark listener 观测。该本地 hook 只读取缓存，不发起网络请求。仅投影已有监听标签
+`starting`、`listening`、`retrying`、`stopped`、`standby`、`inactive`；缺失、格式
+错误或读取失败均为 `unknown`，界面显示“连接尚未确认”。不返回 provider 其它字段或
+异常原文。监听就绪不等于送达回执或任务验收。原生 binding、宿主组合和 HTTP 回归
+验证源码读模型；各 provider 的安装态监听及结果回传仍分别验收。
+
 ![合成私聊工作区设置](../../assets/personal-workspace/private-project-conversations.png)
 ![窄屏私聊设置](../../assets/personal-workspace/private-project-conversations-narrow.png)
 ![工作区撤权读回](../../assets/personal-workspace/private-project-workspace-revoked.png)
