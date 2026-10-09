@@ -103,6 +103,15 @@ Trial timeouts use **explicit `--timeout` → [task defaults](task-defaults.json
 feedback profile; other tasks retain the 18-hour fallback. These are total trial
 budgets, including planning, not per-turn limits.
 
+New trials disable LoopX's background usage sender with `LOOPX_USAGE_PING=0`.
+The shared runtime sets it for installation/control commands and explicitly in
+Codex's shell environment policy for every worker profile. Install and worker
+receipts record `loopx_usage_ping_enabled: false`; this records the configured
+policy, not a claim of measured model adoption or throughput. This research
+setting avoids an unnecessary detached statistics process per CLI invocation.
+It does not change product defaults, scoring or feedback, and does not replace
+container-provider orphan reaping. Existing trials retain their pinned settings.
+
 SForge `loopx-planned` has **no independent planning timeout**. Planning and
 execution share the original absolute trial deadline; planning consumes that
 budget and a process resume cannot reset it. Runtime and worker receipts record

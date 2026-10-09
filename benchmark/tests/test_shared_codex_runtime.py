@@ -71,6 +71,16 @@ def test_trial_home_preserves_sessions_and_fixes_nonconversation_inputs(tmp_path
         prepare_codex_home(**(args | {"effort": "medium"}))
 
 
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat", "turn", "loopx-goal"])
+def test_trial_shell_tools_disable_usage_ping_for_every_execution_mode(tmp_path, mode):
+    execution = Execution(mode=mode, **({"validation_command": ("true",)} if mode == "turn" else {}))
+    args = settings(tmp_path, execution=execution,
+                    **({"skills": None} if not execution.uses_loopx else {}))
+    prepare_codex_home(**args)
+    config = tomllib.loads((args["home"] / "config.toml").read_text())
+    assert config["shell_environment_policy"]["set"]["LOOPX_USAGE_PING"] == "0"
+
+
 def test_baseline_isolated_from_loopx_skills(tmp_path):
     args = settings(tmp_path, execution=Execution(mode="native-goal"), skills=None)
     prepare_codex_home(**args)
@@ -479,6 +489,7 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled)
     commands = []
+    command_envs = {}
     async def no_op(*args, **kwargs):
         return None
     async def stage(*args, **kwargs):
@@ -486,6 +497,7 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
         return "fixture"
     async def execute(*args, **kwargs):
         commands.append(kwargs.get("command", ""))
+        command_envs[kwargs.get("command", "")] = kwargs.get("env", {})
         return SimpleNamespace(stdout='{"ok": true}', stderr="", return_code=0)
     for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
         monkeypatch.setenv(key, str(tmp_path))
@@ -504,6 +516,11 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
     assert "/task/toolchain" in agent._shell_path_restore()
     command = next(c for c in commands if "> /logs/agent/loopx-install.json" in c)
     receipt = json.loads(shlex.split(command)[2])
+    assert receipt["loopx_usage_ping_enabled"] is False
+    for command in commands:
+        if "install-local.sh" in command or " doctor " in command:
+            assert command_envs[command]["LOOPX_USAGE_PING"] == "0"
+    assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
     assert ("turn_envelope" in receipt) is enabled
     if enabled:
         assert receipt["turn_envelope"] is True

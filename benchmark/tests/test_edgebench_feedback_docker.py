@@ -524,6 +524,7 @@ def test_codex_hook_enters_next_model_request_and_resume(tmp_path, agent_image):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import docker
     from benchmark.edgebench import feedback_hook
+    from benchmark.runtime.codex import Execution, prepare_codex_home
 
     payload = Path(os.environ['LOOPX_TEST_CODEX_DIR']).resolve()
     requests = []
@@ -556,7 +557,8 @@ def test_codex_hook_enters_next_model_request_and_resume(tmp_path, agent_image):
             if index == 1:
                 notify(2)  # Arrives after startup, before the tool finishes.
                 item = {'type': 'function_call', 'id': 'fc_test', 'call_id': 'call_test',
-                        'name': 'exec_command', 'arguments': json.dumps({'cmd': 'printf LOCAL_TOOL_OK'})}
+                        'name': 'exec_command', 'arguments': json.dumps({'cmd':
+                            'printf LOCAL_TOOL_OK; printf "__LOOPX_USAGE_PING__=%s" "$LOOPX_USAGE_PING"'})}
             else:
                 item = {'id': f'msg_{index}', 'type': 'message', 'role': 'assistant', 'status': 'completed',
                         'content': [{'type': 'output_text', 'text': 'Done.', 'annotations': []}]}
@@ -587,16 +589,14 @@ def test_codex_hook_enters_next_model_request_and_resume(tmp_path, agent_image):
             f'python3 {root}/hook.py --install'], user='root').exit_code == 0
         assert worker.exec_run(['python3', '-c', 'from pathlib import Path; '
             f'Path("{root}/hook.py").read_bytes();Path("/etc/codex/hooks.json").read_bytes()']).exit_code == 0
-        write('/tmp/codex-home/config.toml', f'''model = "gpt-5.4"
-model_provider = "fixture"
-[model_providers.fixture]
-name = "fixture"
-base_url = "http://{gateway}:{server.server_port}/v1"
-wire_api = "responses"
-env_key = "FIXTURE_API_KEY"
-''')
+        home = tmp_path / 'codex-home'
+        prepare_codex_home(home, execution=Execution(mode='plain'), workspace=Path('/tmp'),
+            model='gpt-5.4', effort='high', base_url=f'http://{gateway}:{server.server_port}/v1',
+            api_key='synthetic', wire_api='responses', skills=None)
+        write('/tmp/codex-home/config.toml', (home / 'config.toml').read_text())
         assert worker.exec_run(['chown', '-R', 'agent:agent', '/tmp/codex-home'], user='root').exit_code == 0
-        env = {'CODEX_HOME': '/tmp/codex-home', 'FIXTURE_API_KEY': 'synthetic',
+        env = {'CODEX_HOME': '/tmp/codex-home', 'OPENAI_API_KEY': 'synthetic',
+               'LOOPX_USAGE_PING': '1',  # The configured tool policy must override inheritance.
                'PATH': '/opt/codex-bin:/usr/local/bin:/usr/bin:/bin'}
         command = ['/opt/codex-bin/codex', 'exec', '--skip-git-repo-check',
                    '--dangerously-bypass-approvals-and-sandbox', '--json', '-c', 'features.code_mode=false']
@@ -607,6 +607,7 @@ env_key = "FIXTURE_API_KEY"
         assert 'EdgeBench new-best feedback' not in first
         assert 'EdgeBench new-best feedback' in second and 'auto-2' in second
         assert 'LOCAL_TOOL_OK' in second  # Informational hook preserves tool result.
+        assert '__LOOPX_USAGE_PING__=0' in second
         notify(3)
         result = worker.exec_run(command[:2] + ['resume', '--last'] + command[2:] + ['Continue.'],
                                  environment=env, workdir='/tmp')
