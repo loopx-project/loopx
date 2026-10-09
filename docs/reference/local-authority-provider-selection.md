@@ -406,10 +406,16 @@ the existing Goal path resolver; its File/SQLite import and original-receipt
 recovery run with `todos.py`, `bootstrap.py`, `runtime_shadow_writer_adapter.py`
 and `local_authority_shadow_outbox.py` physically absent in a disposable package.
 This proves that command's independence, not that other commands or supported
-writers can lose those files. Retained prose-write guards have live callers and
-must move to their owning boundary before their adapter is removed.
-The packaged App uses the real File/SQLite backend; App loading with those old
-modules absent remains a separate acceptance. This stage does not qualify
+writers can lose those files. The retained prose-write guard now belongs to the
+existing source/fence boundary and shares the source partition projector with
+capture. Its old import remains compatible. Configuration and the guard load
+with both capture modules absent; real File/SQLite HTTP import, process restart,
+later writes and canonical prose checks also run with the writer adapter absent.
+The outbox remains present in that HTTP qualification: live canonical callers
+still obtain runtime-root routing from its orchestration adapter. Move that pure
+routing and its actual callers before qualifying App loading without both
+capture modules. Keep the existing source identity, maintenance, Todo/handoff,
+JSON type and failed-write protections. This stage does not qualify
 supported old-writer retirement,
 release default or historical support cutoff.
 

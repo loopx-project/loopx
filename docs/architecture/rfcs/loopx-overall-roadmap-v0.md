@@ -955,8 +955,15 @@ Goal path resolver; real File/SQLite import and original-receipt recovery pass
 with the four old normal producer modules physically absent in a disposable
 package. This qualifies that command's loading boundary, not every other CLI
 caller or removal of those modules. Keep T4 retirement on actual callers: the
-retained Python prose-write guard still serves live callers and its obligation
-must survive adapter removal. This partial stage does not retire the supported
+retained prose-write guard now belongs to the existing source/fence boundary;
+the source partition projector has one shared owner, with compatible old
+imports. Configuration and direct guard checks run without both capture modules.
+Real File/SQLite App HTTP import, process restart, later canonical writes and
+prose checks run without the writer adapter, while the outbox remains present.
+The remaining runtime-root helper still couples live canonical callers to
+outbox orchestration: move its pure routing and actual imports, then repeat the
+same HTTP oracle with both modules absent. Preserve source/maintenance identity,
+Todo/handoff invariance, JSON types and failed-write behavior. This partial stage does not retire the supported
 old writer or qualify a released default.
 Cold-import preservation checkpoint (R5/D1, T4/C1): full-state backups now
 witness each saved regular member's bytes in their existing manifests, including

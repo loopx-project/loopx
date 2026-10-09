@@ -621,6 +621,15 @@ owned Host 进程、未晋升源的原生租约和 File/SQLite 验证：进程�
 完整 Goal 历史与备份恢复继续开放；协调源备份验证不结算完整恢复。详见
 [冷源导入与支持边界](../../reference/local-authority-provider-selection.md)。
 
+仍有调用方的 prose 写入保护现归属于既有 source/fence 边界，source partition
+projector 共用同一 owner，并保留旧导入兼容。配置和直接 guard 可在两个 capture
+模块物理缺席时运行；真实 File/SQLite App HTTP 导入、进程重启、后续 canonical
+写入与 prose 保护通过 writer adapter 缺席验证，但该 HTTP 路径仍保留 outbox。
+纯 runtime-root helper 仍让 canonical 调用方加载 outbox 编排；下一切片迁移其归属
+和实际 imports，再以相同 HTTP oracle 验证两模块同时缺席。保留 source/maintenance
+身份、Todo/handoff 不变、JSON 类型与失败不写；不据此删除受支持旧 writer 或结算
+完整 App/恢复与发布默认资格。
+
 冷旧源保留检查点：本项目全量备份现盘点注册的自定义状态与来源 registry 路由。
 真实 CLI 备份和独立静态解包保留完整 Markdown 字节、未引用的归档 Todo 与 runtime
 原始历史，包含 SQLite snapshot。这只修复路由遗漏，不代表审核式冷导入或完整状态
