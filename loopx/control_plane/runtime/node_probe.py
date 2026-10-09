@@ -20,7 +20,7 @@ HOST_PERMISSION_RECOMMENDATION = (
     "local runtime access; do not enable optional capabilities, replace "
     "authority or spend until the guard succeeds"
 )
-_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(.*?))?(?:\+.*)?$")
 
 
 class NodeProbeOutcome(StrEnum):
@@ -125,6 +125,13 @@ def probe_node(*, timeout: float = STARTUP_READY_TIMEOUT_SECONDS) -> NodeProbe:
     match = _VERSION_RE.fullmatch(completed.stdout.strip())
     if match is None:
         return NodeProbe(NodeProbeOutcome.INVALID_VERSION, executable)
-    version = tuple(int(part) for part in match.groups())
-    outcome = NodeProbeOutcome.UNSUPPORTED if version < MINIMUM_NODE_VERSION else NodeProbeOutcome.READY
-    return NodeProbe(outcome, executable, ".".join(str(part) for part in version))
+    version = tuple(int(part) for part in match.groups()[:3])
+    prerelease = match.group(4)
+    below_minimum = version < MINIMUM_NODE_VERSION or (
+        version == MINIMUM_NODE_VERSION and prerelease is not None
+    )
+    outcome = NodeProbeOutcome.UNSUPPORTED if below_minimum else NodeProbeOutcome.READY
+    version_text = ".".join(str(part) for part in version)
+    if prerelease is not None:
+        version_text += f"-{prerelease}"
+    return NodeProbe(outcome, executable, version_text)

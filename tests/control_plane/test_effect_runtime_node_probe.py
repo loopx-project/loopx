@@ -111,6 +111,28 @@ def test_node_probe_uses_the_existing_bounded_startup_budget(monkeypatch):
     assert observed == [effect_runtime.STARTUP_READY_TIMEOUT_SECONDS]
 
 
+@pytest.mark.parametrize(
+    ("reported_version", "expected_outcome", "expected_version"),
+    [
+        ("v22.22.3-rc.1", node_probe.NodeProbeOutcome.UNSUPPORTED, "22.22.3-rc.1"),
+        ("v22.22.4-rc.1", node_probe.NodeProbeOutcome.READY, "22.22.4-rc.1"),
+        ("v22.22.3+build.1", node_probe.NodeProbeOutcome.READY, "22.22.3"),
+    ],
+)
+def test_node_probe_uses_prerelease_precedence_at_minimum_version(
+    monkeypatch, reported_version, expected_outcome, expected_version,
+):
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _: "node")
+    monkeypatch.setattr(node_probe.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout=f"{reported_version}\n",
+    ))
+
+    probe = node_probe.probe_node()
+
+    assert probe.outcome is expected_outcome
+    assert probe.version == expected_version
+
+
 @pytest.mark.parametrize("failure", [
     subprocess.TimeoutExpired("node", 15),
     SimpleNamespace(returncode=1, stdout=""),
