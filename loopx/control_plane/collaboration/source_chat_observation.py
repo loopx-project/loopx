@@ -11,15 +11,25 @@ from ...chat_store import (
 )
 
 
-def observe_source_chat(coordination_root, route):
+def _source_chat_root(coordination_root, route):
     locator = route.get("source_chat_runtime_root", str(Path(coordination_root).resolve()))
     if not isinstance(locator, str) or not locator or not Path(locator).is_absolute():
         raise ValueError("original source Chat store provenance is invalid")
+    return Path(locator).resolve()
+
+
+def is_source_chat_host(coordination_root, route, store):
+    """Match frozen provenance before a host admits or mutates a shared return."""
+    return _source_chat_root(coordination_root, route) == store.root.parent.resolve()
+
+
+def observe_source_chat(coordination_root, route):
+    source_root = _source_chat_root(coordination_root, route)
     session_id = _opaque_id(route.get("session_id"), field="session_id")
     client_turn_id = _opaque_id(route.get("client_turn_id"), field="client_turn_id")
     if session_id in {".", ".."}:
         raise ValueError("original source Chat session identity is invalid")
-    session_dir = Path(locator) / "chat" / "sessions" / session_id
+    session_dir = source_root / "chat" / "sessions" / session_id
     session = _read_json(session_dir / "session.json")
     turns = [value for path in sorted((session_dir / "turns").glob("*.json"))
              if not path.name.endswith(".events.json")
