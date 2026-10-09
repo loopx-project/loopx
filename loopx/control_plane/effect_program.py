@@ -614,6 +614,7 @@ class SettlementStep:
     command_template: str | None = None
     conditional: bool = False
     command_condition: str | None = None
+    vision_authoring: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         step: dict[str, Any] = {
@@ -629,6 +630,8 @@ class SettlementStep:
             step["conditional"] = True
         if self.command_condition:
             step["command_condition"] = self.command_condition
+        if self.vision_authoring is not None:
+            step["vision_authoring"] = dict(self.vision_authoring)
         return step
 
 

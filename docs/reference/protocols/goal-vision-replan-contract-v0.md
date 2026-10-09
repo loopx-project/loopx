@@ -518,14 +518,32 @@ For the same `agent_id`, a newer satisfied checkpoint with `patched` or
 `unchanged_with_reason` supersedes older
 `missing_required` checkpoints; `not_required` does not.
 
-The ordinary CLI settlement plan now puts a compact material-closeout reminder
-in its existing writeback step, before the first write. The shared authoring
-example includes the acceptance claim, continuation path and evidence reference;
-replace its illustrative claims and reference with observed facts. Explicit
-`in_flight_continuation` plans retain their existing short writeback precondition.
-This changes guidance in CLI/TurnEnvelope and the shared MCP/replan authoring
-projection, not validation, admission or receipt authority. It does not establish
-lower model token cost or eliminate all replanning; those require live measurement.
+The ordinary Todo-bound CLI settlement plan carries `vision_authoring` in its
+existing durable-writeback step, including in-flight plans. It reuses the same
+TypeScript example and field limits as MCP and replan; it is authoring guidance,
+not a requirement to patch vision on every in-flight step. Replace example claims
+and references with observed facts and pass the packet via `--agent-vision-json`.
+`checkpoint-context` is recovery **after** the original committed Turn writeback,
+not a first-write preparation command. MCP removes the manual CLI settlement plan
+and retains its own authoring projection; autonomous replan retains its existing
+writeback contract. TurnEnvelope preserves the ordinary plan's guidance.
+
+Shared `todo plan` and guided-start authoring steps also provide a routed exact
+readback command for each authored or reused Todo id. Inventory text is a bounded
+excerpt. Verify `todo_detail_projection.source_complete=true`, compare `.todo.text`
+with the intended requirements and check current status/claim before handoff;
+missing, ambiguous or changed work requires reinspection. Readback does not replace
+quota admission or lease authority. Lists remain compact and exact bodies lossless.
+
+These default guidance changes preserve validation, admission, original-Turn
+recovery and receipt authority. A larger self-contained packet can avoid discovery
+calls, but lower model cost or better outcomes still require live measurement.
+
+普通 Todo 结算包在写回步骤直接携带既有的 vision 示例和字段限制；示例须替换为实际
+事实与证据，不要求每个 in-flight 步骤都修改 vision。`checkpoint-context` 仅用于原
+Turn 写回后的恢复。规划与接续指引提供逐条精确读回命令，用完整 `.todo.text` 核对
+需求和当前状态，不能拿列表摘要判断正文丢失。读取不授予执行权限；准入、租约、
+恢复和单次记账规则保持不变。包体增量与模型效率、效果收益须分别测量。
 
 A satisfied checkpoint is protocol-complete, but a material closeout also has
 to qualify its relationship to the final outcome. A patched checkpoint must

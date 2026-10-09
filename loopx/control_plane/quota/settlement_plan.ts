@@ -4,7 +4,7 @@ import {
   settlementIdentity, type JsonObject, type SettlementIdentityInput,
   type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
-import {VISION_MATERIAL_CLOSEOUT_HINT} from "../goals/vision_checkpoint.ts";
+import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
@@ -56,6 +56,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "outcome_gap: blocked + blocker/evidence IDs; continuation checks.",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
+      // Autonomous replan already carries this owner in its writeback contract.
+      ...(identity.binding_kind === "todo" ? {vision_authoring: visionAuthoringContract()} : {}),
     },
     {
       kind: "quota_spend", owner: "agent",
