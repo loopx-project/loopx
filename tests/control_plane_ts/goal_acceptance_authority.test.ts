@@ -247,6 +247,51 @@ for (const provider of providers) {
     assert.deepEqual((current.head.goal_acceptance as JsonObject).owner_goal_ref, goalA);
     assert.equal((await inspectGoalAcceptance(store, goal, undefined, goalA)).status, "loaded");
   });
+  test(`${provider}: historical recreation migration keeps legacy acceptance with the retired instance`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store))).status, "applied");
+    assert.equal((await lifecycleTransition(store, {
+      kind: "reconcile_recreated",
+      retired_goal_ref: goalA,
+      goal_ref: goalB,
+    })).status, "applied");
+    const migrated = await head(store);
+    assert.deepEqual(migrated.head.goal_acceptance_lifecycle, {
+      schema_version: "loopx_goal_acceptance_lifecycle_v0",
+      state: "active",
+      goal_ref: goalB,
+    });
+    assert.deepEqual((migrated.head.goal_acceptance as JsonObject).owner_goal_ref, goalA);
+    assert.deepEqual(projectGoalAcceptance(migrated.head, goal), {
+      enabled: false,
+      lifecycle_state: "active",
+      goal_ref: goalB,
+    });
+    assert.equal(acceptanceWorkGuard(migrated.head, goal, "todo_first"), null);
+  });
+  test(`${provider}: historical recreation replay does not reactivate a retiring successor`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    assert.equal((await lifecycleTransition(store, {
+      kind: "reconcile_recreated",
+      retired_goal_ref: goalA,
+      goal_ref: goalB,
+    })).status, "applied");
+    assert.equal((await lifecycleTransition(store, {
+      kind: "retire",
+      goal_ref: goalB,
+    })).status, "applied");
+    const replay = await lifecycleTransition(store, {
+      kind: "reconcile_recreated",
+      retired_goal_ref: goalA,
+      goal_ref: goalB,
+    });
+    assert.equal(replay.status, "no_change");
+    assert.deepEqual(replay.goal_acceptance_lifecycle, {
+      schema_version: "loopx_goal_acceptance_lifecycle_v0",
+      state: "retiring",
+      goal_ref: goalB,
+    });
+  });
   test(`${provider}: exact lifecycle migration fences retirement and same-alias replacement`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const legacyConfigure = await configureRequest(store);

@@ -7,7 +7,6 @@ these tests do not claim that shadow bootstrap can promote a canonical provider.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
@@ -409,23 +408,34 @@ def test_goal_recreation_waits_for_an_admitted_canonical_update(
         authority_reason=None,
     )
     writer = start(node_command("update_paused", request))
-    publish_started = threading.Event()
+    fence_started = threading.Event()
     recreation_finished = threading.Event()
     recreated: list[dict] = []
     recreation_errors: list[BaseException] = []
-    actual_lock = source_session_recreation.exclusive_cross_runtime_file_lock
+    actual_transition = (
+        source_session_recreation.transition_goal_acceptance_lifecycle
+    )
 
-    @contextmanager
-    def observed_lock(path: Path, **options: object):
-        if options.get("operation") == "source_session_goal_lifetime_publish":
-            publish_started.set()
-        with actual_lock(path, **options):
-            yield
+    def observed_transition(
+        *,
+        runtime_root: Path,
+        goal_id: str,
+        transition: dict[str, object],
+        operation_id: str,
+    ) -> dict[str, object] | None:
+        if transition.get("kind") == "bind_existing":
+            fence_started.set()
+        return actual_transition(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            transition=transition,
+            operation_id=operation_id,
+        )
 
     monkeypatch.setattr(
         source_session_recreation,
-        "exclusive_cross_runtime_file_lock",
-        observed_lock,
+        "transition_goal_acceptance_lifecycle",
+        observed_transition,
     )
 
     def recreate() -> None:
@@ -447,7 +457,9 @@ def test_goal_recreation_waits_for_an_admitted_canonical_update(
     try:
         expect_barrier(writer, "commit")
         thread.start()
-        assert publish_started.wait(timeout=5), "Goal recreation did not reach publication"
+        assert fence_started.wait(timeout=5), (
+            "Goal recreation did not reach acceptance fencing"
+        )
         assert not recreation_finished.wait(timeout=0.2), (
             "Goal B published while Goal A's admitted canonical update was paused "
             "before provider commit"

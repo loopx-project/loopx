@@ -1446,7 +1446,7 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/control_plane/goals/source_session_recreation.py::<module>._canonical_writer_guard_path::codec_read:load_project_registry#1",
+      "site": "loopx/control_plane/goals/source_session_recreation.py::<module>._canonical_runtime_root::codec_read:load_project_registry#1",
       "line": 67,
       "column": 16,
       "kind": "codec_read",
@@ -1455,7 +1455,7 @@
     },
     {
       "site": "loopx/control_plane/goals/source_session_recreation.py::<module>.recreate_goal_instance::codec_transaction:source_session_registry_transaction#1",
-      "line": 307,
+      "line": 361,
       "column": 14,
       "kind": "codec_transaction",
       "api": "source_session_registry_transaction",
@@ -1463,8 +1463,8 @@
     },
     {
       "site": "loopx/control_plane/goals/source_session_recreation.py::<module>.recreate_goal_instance::codec_transaction:source_session_registry_transaction#2",
-      "line": 402,
-      "column": 14,
+      "line": 465,
+      "column": 18,
       "kind": "codec_transaction",
       "api": "source_session_registry_transaction",
       "classification": "codec_api"

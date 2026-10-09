@@ -310,6 +310,20 @@ function planLifecycleTransition(
         reason: "A retiring Goal instance cannot be rebound as active."};
   }
   if (current === null) {
+    if (transition.kind === "reconcile_recreated") {
+      const acceptance = readGoalAcceptance(head, goalId);
+      return {
+        kind: "commit",
+        lifecycle: {
+          schema_version: GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA,
+          state: "active",
+          goal_ref: transition.goal_ref,
+        },
+        acceptance: acceptance === null
+          ? null
+          : bindGoalAcceptanceStateOwner(acceptance, transition.retired_goal_ref),
+      };
+    }
     return {kind: "failure", reason_code: "goal_acceptance_lifecycle_unbound",
       reason: "Bind the existing Goal instance before changing its acceptance lifecycle."};
   }
@@ -322,6 +336,10 @@ function planLifecycleTransition(
       ? {kind: "no_change", lifecycle: current}
       : {kind: "commit", lifecycle: {...current, state: "retiring"},
         acceptance: readGoalAcceptance(head, goalId)};
+  }
+  if (transition.kind === "reconcile_recreated"
+      && sameExactGoalRef(current.goal_ref, transition.goal_ref)) {
+    return {kind: "no_change", lifecycle: current};
   }
   if (current.state !== "retiring"
       || !sameExactGoalRef(current.goal_ref, transition.retired_goal_ref)) {

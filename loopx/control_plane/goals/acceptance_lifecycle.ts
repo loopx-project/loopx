@@ -19,7 +19,7 @@ export type GoalAcceptanceLifecycleTransition =
   | Readonly<{kind: "bind_existing"; goal_ref: WireExactGoalRef}>
   | Readonly<{kind: "retire"; goal_ref: WireExactGoalRef}>
   | Readonly<{
-      kind: "activate_successor";
+      kind: "activate_successor" | "reconcile_recreated";
       retired_goal_ref: WireExactGoalRef;
       goal_ref: WireExactGoalRef;
     }>;
@@ -72,7 +72,7 @@ export function parseGoalAcceptanceLifecycleTransition(value: unknown): GoalAcce
       "goal acceptance lifecycle transition fields are missing or unsupported");
     return {kind: raw.kind, goal_ref: parseWireExactGoalRef(raw.goal_ref, "transition goal_ref")};
   }
-  requireLifecycle(raw.kind === "activate_successor",
+  requireLifecycle(raw.kind === "activate_successor" || raw.kind === "reconcile_recreated",
     "unsupported goal acceptance lifecycle transition");
   requireLifecycle(Object.keys(raw).length === 3
     && Object.hasOwn(raw, "retired_goal_ref") && Object.hasOwn(raw, "goal_ref"),
@@ -83,5 +83,5 @@ export function parseGoalAcceptanceLifecycleTransition(value: unknown): GoalAcce
     "goal acceptance successor must preserve the Goal alias");
   requireLifecycle(!sameExactGoalRef(retiredGoalRef, goalRef),
     "goal acceptance successor must use a new Goal instance");
-  return {kind: "activate_successor", retired_goal_ref: retiredGoalRef, goal_ref: goalRef};
+  return {kind: raw.kind, retired_goal_ref: retiredGoalRef, goal_ref: goalRef};
 }
