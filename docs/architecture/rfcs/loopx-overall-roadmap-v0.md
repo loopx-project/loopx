@@ -889,6 +889,11 @@ operation files, outbox bytes and Goal-bound rollback archives through the
 existing typed owners; present history is validated without replay or drain.
 Compact readback never replaces the witnessed historical files or proves Host
 stop. Invalid history and missing completed rollback archives refuse inspection.
+Active original outbox inspection reuses the native drain proof owner to show
+pending records and receipt-proven residue per partition without any effects.
+An unavailable disposition retains raw witnesses; inactive/interrupted capture
+still needs its original management recovery. This preview never settles the
+outbox, updates a cursor or grants cleanup/import authority.
 Expired or orphan `active` leases still require settlement; canonical selectors
 and fences prevent treating display Markdown as an old authority source.
 This observation creates no capture or import receipt and never reports import

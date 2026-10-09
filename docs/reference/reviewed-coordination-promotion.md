@@ -42,6 +42,19 @@ of all receipts: preserve the original witnessed files. Missing or altered
 completed rollback archives, invalid history and unsafe file layouts refuse
 inspection. Interrupted management remains an unfinished original operation.
 
+For an active original capture, `capture.outbox_review` uses the existing native
+drain verifier to distinguish pending entries from residue with exact original
+receipts, independently for Todos and leases. Its partition plans include the
+original entry identities and proposed cursor/reclamation readback. `planned`
+is a read-only preview: `executed` and `execution_authority_granted` are false.
+Only a fresh drain through the original capture owner can act on those facts;
+the inventory cannot authorize deletion, replay or a new import receipt.
+Malformed files, foreign lineage, unproved markers, changed receipt bytes or
+unanchored cursors make this review `failed` with the owning reason code; raw
+file witnesses remain available and unchanged. An inactive or interrupted
+capture returns no outbox review: recover its original management operation
+first. Neither case establishes outbox reconciliation or Host stop.
+
 In the App, open **Goal settings → Task ownership → Goal data storage** to read
 the same verified inventory. It shows task/archive and unsettled-lease counts
 and retained capture/outbox presence, without exposing source text, local paths

@@ -32,6 +32,15 @@ loopx --format json coordination-shadow inspect-source \
 历史，紧凑读回不包含全部原回执，必须保留所指原文件。已完成 rollback 的归档缺失
 或变化、历史非法及不安全文件布局均拒绝；中断的 management 仍是未完成的原操作。
 
+对原活跃 capture，`capture.outbox_review` 复用现有原生 drain 的证明规则，分别列出
+Todo 和 lease 分区中待处理的原记录及有精确原回执的残留。分区计划带原 entry 身份与
+拟议 cursor／回收读回；`planned` 仅为只读预览，`executed` 和
+`execution_authority_granted` 均为 false。只有原 capture owner 下的新一次 drain 才能
+据当前事实执行，盘点不授权删除、replay 或制造导入回执。损坏文件、外来 lineage、
+无证明 marker、回执字节变化及无锚 cursor 使该预览 `failed`，保留原 reason code 和
+未改动的原文件见证。inactive／中断 capture 不生成该预览，应先恢复原 management
+操作；这些结果均不证明 outbox 已处置或 Host 已停。
+
 App 中打开 **Goal 设置 → 任务所有权 → Goal 数据存储**，读取同一 TS owner 核验的
 盘点。页面只显示当前／归档任务及未结算 lease 数量、原 capture/outbox 文件是否存在，
 不暴露源正文、本机路径或执行密钥。“读回当前存储”重新观察，失败时清除旧数量。
