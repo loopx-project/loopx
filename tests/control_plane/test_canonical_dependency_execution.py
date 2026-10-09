@@ -24,6 +24,8 @@ def canonical_dependency(request, tmp_path, monkeypatch):
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "repo": str(tmp_path), "state_file": state.name,
         "coordination": {"registered_agents": ["agent-a", "agent-b"]},
+        "spawn_policy": {"spawn_allowed": True, "max_children": 4,
+                         "explore_harness": {"enabled": True}},
     }]}))
     todos = [{
         "schema_version": "todo_item_v0", "todo_id": todo_id, "role": "agent",
@@ -148,3 +150,56 @@ def test_wait_rejects_atomic_claim_without_changing_assignment(canonical_depende
     assert readback["claimed_by"] == "agent-a" and readback["resume_ready"] is False
     inspected = cli(["task-lease", "inspect"], WAITING)
     assert inspected["lease"]["status"] == "released" and inspected["lease"]["version"] == 1
+
+
+def test_explore_plans_follow_dependency_through_handoff_and_completion(canonical_dependency):
+    cli = canonical_dependency
+    first = _acquire(cli, WAITING, "agent-a", "waiting-original")
+    _arm_wait(cli, first["lease"]["version"])
+    rejected = cli(["task-lease", "transfer"], WAITING, "--owner", "agent-a",
+        "--idempotency-key", "waiting-original", "--expected-version", "1",
+        "--new-owner", "agent-b", "--new-idempotency-key", "waiting-receiver",
+        "--ttl-seconds", "600", "--transfer-claim", expected_exit=1)
+    assert rejected["error_code"] == "todo_dependency_pending"
+    assert cli(["todo", "list"], WAITING)["todo"]["claimed_by"] == "agent-a"
+    cli(["task-lease", "release"], WAITING, "--owner", "agent-a",
+        "--idempotency-key", "waiting-original", "--expected-version", "1")
+
+    def assert_plans(*, ready):
+        before = cli(["todo", "list"], WAITING)["todo"]
+        for command, selected_key, rejected_key in [
+            ("todo-branch-plan", "selected_branches", "rejected_candidates"),
+            ("worker-branch-plan", "selected_worker_branches", "rejected_worker_branches"),
+        ]:
+            plan = cli(["explore", command], None, "--agent-id", "agent-a", "--scheduler-load", "0")
+            selected = {todo_id for row in plan[selected_key]
+                        for todo_id in row.get("todo_ids", [row["todo_id"]])}
+            assert (WAITING in selected) is ready
+            assert FALLBACK in selected
+            if not ready:
+                waiting = next(row for row in plan[rejected_key] if row["todo_id"] == WAITING)
+                assert waiting["resume_ready"] is False
+                assert waiting["resume_when"] == f"todo_done:{PREREQUISITE}"
+                assert not waiting.get("suggested_commands")
+        context = cli(["explore", "turn-context"], None, "--agent-id", "agent-a")["harness"]
+        assert (WAITING in {row["todo_id"] for row in context["selected_branches"]}) is ready
+        if not ready:
+            waiting = next(row for row in context["rejected_candidates"] if row["todo_id"] == WAITING)
+            assert waiting["resume_ready"] is False
+            assert waiting["resume_when"] == f"todo_done:{PREREQUISITE}"
+        assert cli(["todo", "list"], WAITING)["todo"] == before
+
+    assert_plans(ready=False)
+    prerequisite = _acquire(cli, PREREQUISITE, "agent-b", "prerequisite-original")
+    transferred = cli(["task-lease", "transfer"], PREREQUISITE, "--owner", "agent-b",
+        "--idempotency-key", "prerequisite-original", "--expected-version", str(prerequisite["lease"]["version"]),
+        "--new-owner", "agent-a", "--new-idempotency-key", "prerequisite-receiver",
+        "--ttl-seconds", "600", "--transfer-claim")
+    assert transferred["transferred"]
+    assert_plans(ready=False)
+    assert not _acquire(cli, WAITING, "agent-a", "waiting-next", version=1, expected_exit=1)["ok"]
+    assert _complete(cli, PREREQUISITE, "agent-a", "prerequisite-receiver", transferred["lease"]["version"])["completed"]
+    assert_plans(ready=True)
+    resumed = _acquire(cli, WAITING, "agent-a", "waiting-next", version=1)
+    assert resumed["acquired"]
+    assert _complete(cli, WAITING, "agent-a", "waiting-next", resumed["lease"]["version"])["completed"]

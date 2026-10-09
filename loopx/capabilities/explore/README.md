@@ -398,6 +398,20 @@ packet with:
 - the safety boundary that keeps the packet advisory rather than an
   replacement for `quota should-run`.
 
+Both planners apply the existing Todo readiness rule before scheduling or
+bundling current work. An open Todo with `resume_when` is selectable only when
+its projected `resume_ready` is true. Unready Todos remain in rejected-candidate
+diagnostics with their condition, but consume no verification width or resource
+slot and carry no claim/lease suggestions. The bounded turn context preserves
+these diagnostics and reports omitted candidates; read the full plan for detail.
+If no branch is actionable, the plan asks the caller to inspect the conditions
+and replan instead of suggesting execution.
+
+For `B.resume_when=todo_done:A`, handing A to another Agent does not release B;
+completing A does. Successor lineage alone is not a completion dependency. Future
+work remains visible for planning, and fresh quota, claim and lease checks still
+govern execution after any plan, handoff or readiness change.
+
 An advancement todo may opt into typed result diagnostics by attaching one or
 more explicit Explore node ids:
 

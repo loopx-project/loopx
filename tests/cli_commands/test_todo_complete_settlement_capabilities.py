@@ -49,20 +49,7 @@ def _write_stage_state(project: Path) -> None:
     )
 
 
-def _dispatched_next_action_source(captured: dict[str, object]) -> str:
-    intents = captured["post_writeback_hooks"]["intents"]
-    assert isinstance(intents, list) and len(intents) == 1
-    items = intents[0]["payload"]["project_progress"]["items"]
-    matched = [
-        item["source_ref"]
-        for item in items
-        if item.get("content_kind") == "next_action"
-    ]
-    assert len(matched) == 1
-    return matched[0]
-
-
-def test_todo_complete_dispatch_selects_gated_successor_with_settlement_evidence(
+def test_todo_complete_does_not_replay_superseded_successor_milestone(
     tmp_path: Path,
 ) -> None:
     captured, _registry, _runtime = complete_todo_via_cli(
@@ -72,10 +59,11 @@ def test_todo_complete_dispatch_selects_gated_successor_with_settlement_evidence
     )
 
     assert captured["available_capabilities"] == ["network"]
-    assert _dispatched_next_action_source(captured) == f"todo:{GATED_TODO}"
+    assert captured["post_writeback_hooks"]["intent_count"] == 0
+    assert captured["post_writeback_hooks"]["intents"] == []
 
 
-def test_todo_complete_dispatch_fails_closed_without_capability_evidence(
+def test_todo_complete_without_capabilities_does_not_replay_milestone(
     tmp_path: Path,
 ) -> None:
     captured, _registry, _runtime = complete_todo_via_cli(
@@ -85,7 +73,8 @@ def test_todo_complete_dispatch_fails_closed_without_capability_evidence(
     )
 
     assert "available_capabilities" not in captured
-    assert _dispatched_next_action_source(captured) == f"todo:{PLAIN_TODO}"
+    assert captured["post_writeback_hooks"]["intent_count"] == 0
+    assert captured["post_writeback_hooks"]["intents"] == []
 
 
 def _write_source_registry(path: Path, runtime: Path) -> None:
@@ -185,7 +174,7 @@ def test_todo_complete_isolates_lifetime_lock_timeout_and_recovers_on_replay(
     assert replay["changed"] is False
     assert replay["completion_receipt_id"] == completion_receipt_id
     assert Path(str(replay["state_file"])).read_bytes() == committed_state
-    assert replay["post_writeback_hooks"]["intent_count"] == 1
+    assert replay["post_writeback_hooks"]["intent_count"] == 0
 
 
 def test_todo_complete_isolates_admission_codec_failure_and_recovers_on_replay(
@@ -241,7 +230,7 @@ def test_todo_complete_isolates_admission_codec_failure_and_recovers_on_replay(
     assert replay["changed"] is False
     assert replay["completion_receipt_id"] == completion_receipt_id
     assert Path(str(replay["state_file"])).read_bytes() == committed_state
-    assert replay["post_writeback_hooks"]["intent_count"] == 1
+    assert replay["post_writeback_hooks"]["intent_count"] == 0
 
 
 def test_todo_complete_isolates_lifetime_transport_failure(

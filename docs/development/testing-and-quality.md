@@ -526,6 +526,28 @@ Canary 使用启动 LoopX 的 `sys.executable` 执行 Python 检查，显示的 
 目标 worktree。已有兼容虚拟环境也可用 `python -m pip install -e ".[test]"` 安装源码，
 随后直接使用该环境的命令。
 
+Canary is a repository development tool even when its CLI comes from a wheel.
+Run `premerge`, `run` and `smoke-suite` inside the intended source checkout
+(a subdirectory is also supported):
+the catalog, discovered examples, subprocess cwd and tracked-write guard share
+that checkout root. `canary premerge --catalog PATH` overrides the catalog only;
+it does not change the execution root or authorize commands outside its examples.
+Standalone read-only catalog commands retain their default catalog resolution;
+use their existing `--catalog PATH` when invoking an installed CLI.
+The wheel does not bundle the repository's docs/examples. Missing development
+inputs fail with a checkout/catalog recovery instruction, rather than an empty
+successful validation. `--no-execute` still previews; required CQR verification
+and merge authority remain separate gates.
+
+即使用 wheel 的 CLI，Canary 仍是仓库开发工具。`premerge`、`run`、`smoke-suite`
+在目标完整源码 checkout
+（也支持子目录）后运行；catalog、example 发现、子进程 cwd 与 tracked 写入保护
+共用该仓库根。`canary premerge --catalog PATH` 仅指定 catalog，不切执行根，也不
+授权执行 examples 之外的命令。独立的只读 catalog 命令保留既有默认解析，安装态
+可用其现有 `--catalog PATH` 指定输入。wheel 不携带仓库 docs/examples；缺少输入时明确
+提示补齐 checkout/catalog，不会以空检查冒充成功。`--no-execute` 仍是预览，
+required CQR 校验与合并权限继续分别判断。
+
 The repository does not currently track `.python-version` or `uv.lock`. `uv`
 creates a local lockfile during resolution; keep that generated file out of
 unrelated PRs. Introducing a shared lock or interpreter pin is a separate
@@ -555,6 +577,9 @@ Lint, type checks, and the CLI budget run separately. The required `pytest`
 check rejects failed/skipped shards and missing coverage artifacts, then uses
 `coverage combine` to enforce the existing 19.6% floor on the union, not on
 individual shards. Relative coverage paths make reports portable across runners.
+Each shard has a 60-minute job ceiling for setup, the full partition and report
+upload; individual test deadlines stay unchanged. Verbose progress names failed
+cases before the suite finishes, so an interrupted run retains their identities.
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
@@ -565,11 +590,13 @@ Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker�
 按完整 collection 分片；没有历史耗时时，等权测试交替分配。lint、类型检查和 CLI
 预算独立执行。必需的 `pytest` 汇总检查会拒绝失败／跳过的分片和缺失的 coverage，
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
+每个分片的作业上限为 60 分钟，覆盖环境准备、完整分片和报告上传；单项测试超时
+保持不变。详细进度在套件结束前就记录失败用例名称，运行中断后仍可定位这些用例。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
 
-Reproduce one shard locally with `uv run --extra test python -m pytest -q -n 2 --splits 4 --group 1
+Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
 --splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to
 run the complete suite locally. 全量本地测试仍省略分片参数即可。
 

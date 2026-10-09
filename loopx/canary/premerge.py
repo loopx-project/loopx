@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..contract import scan_public_boundary
-from .planner import REPO_ROOT
+from .planner import REPO_ROOT, resolve_canary_catalog_path
 from .runner import build_canary_smoke_suite_run
 
 
@@ -172,8 +172,8 @@ def _public_boundary_changed_files_run(
         except ValueError:
             display_paths.append(str(path))
     display_argv = ["loopx", "check"]
-    for path in display_paths:
-        display_argv.extend(["--scan-path", path])
+    for display_path in display_paths:
+        display_argv.extend(["--scan-path", display_path])
     check: dict[str, Any] = {
         "source": "premerge_public_boundary",
         "tier": "default",
@@ -621,11 +621,8 @@ def _gate_status(
 
 
 def _check_command(check: dict[str, Any]) -> str:
-    normalized = (
-        check.get("normalized")
-        if isinstance(check.get("normalized"), dict)
-        else {}
-    )
+    normalized_value = check.get('normalized')
+    normalized = normalized_value if isinstance(normalized_value, dict) else {}
     display_argv = normalized.get("display_argv")
     if isinstance(display_argv, list) and display_argv:
         return " ".join(str(part) for part in display_argv)
@@ -717,12 +714,10 @@ def apply_change_quality_verification(
         verification.get("enforcement_applied")
         and verification.get("ok") is False
     )
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
-    summary = (
-        payload.get("validation_summary")
-        if isinstance(payload.get("validation_summary"), dict)
-        else {}
-    )
+    gate_value = payload.get('gate')
+    gate = gate_value if isinstance(gate_value, dict) else {}
+    summary_value = payload.get('validation_summary')
+    summary = summary_value if isinstance(summary_value, dict) else {}
     gate["quality_receipt_failure_count"] = 1 if enforced_failure else 0
     summary["policy_failure_count"] = 1 if enforced_failure else 0
     if enforced_failure:
@@ -830,9 +825,12 @@ def build_premerge_validation_gate(
     include_deep_checks: bool | None = None,
     progress_callback: ProgressCallback | None = None,
     repo_root: Path | None = None,
+    catalog_path: Path | None = None,
 ) -> dict[str, Any]:
     target_repo_root = (repo_root or REPO_ROOT).resolve()
     files = _dedupe(list(changed_files or []))
+    if files:
+        catalog_path = resolve_canary_catalog_path(catalog_path, repo_root=target_repo_root)
     classification = classify_premerge_surfaces(files, repo_root=target_repo_root)
     limits = _tier_limits(tier)
     include_deep = bool(limits["deep"] if include_deep_checks is None else include_deep_checks)
@@ -874,6 +872,7 @@ def build_premerge_validation_gate(
     if module_colocation is not None:
         direct_checks.append(module_colocation)
 
+    catalog_run: dict[str, Any]
     if files:
         catalog_progress = _section_progress_callback(
             progress_callback,
@@ -886,6 +885,8 @@ def build_premerge_validation_gate(
         )
         catalog_run = build_canary_smoke_suite_run(
             suite="catalog-plan",
+            repo_root=target_repo_root,
+            catalog_path=catalog_path,
             changed_files=files,
             include_deep_checks=include_deep,
             max_checks_per_family=3,
@@ -905,10 +906,12 @@ def build_premerge_validation_gate(
             executed_check_count=catalog_run.get("executed_check_count"),
             failure_count=catalog_run.get("failure_count"),
         )
-        catalog_run = downgrade_inherited_baseline_failures(
+        adjusted_catalog_run = downgrade_inherited_baseline_failures(
             catalog_run,
             changed_files=files,
         )
+        assert adjusted_catalog_run is not None  # A dictionary input retains a result.
+        catalog_run = adjusted_catalog_run
     else:
         catalog_run = _empty_smoke_suite_run(
             suite="catalog-plan",
@@ -940,6 +943,8 @@ def build_premerge_validation_gate(
         )
         risk_profile_run = build_canary_smoke_suite_run(
             suite="default-public",
+            repo_root=target_repo_root,
+            catalog_path=catalog_path,
             profiles=risk_profiles,
             include_deep_checks=include_deep,
             limit=profile_limit,
@@ -1094,12 +1099,10 @@ def _emit_section_progress(
 
 
 def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
-    classification = (
-        payload.get("classification")
-        if isinstance(payload.get("classification"), dict)
-        else {}
-    )
+    gate_value = payload.get('gate')
+    gate = gate_value if isinstance(gate_value, dict) else {}
+    classification_value = payload.get('classification')
+    classification = classification_value if isinstance(classification_value, dict) else {}
     lines = [
         "# Pre-Merge Validation Gate",
         "",
@@ -1152,11 +1155,8 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
         for check in run.get("selected_checks", [])[:12]:
             if not isinstance(check, dict):
                 continue
-            normalized = (
-                check.get("normalized")
-                if isinstance(check.get("normalized"), dict)
-                else {}
-            )
+            normalized_value = check.get('normalized')
+            normalized = normalized_value if isinstance(normalized_value, dict) else {}
             command = " ".join(str(part) for part in normalized.get("display_argv") or [])
             lines.append(f"- `{check.get('status') or 'ready'}` {command or check.get('command')}")
             if check.get("advisory_reason"):
@@ -1172,11 +1172,8 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
         else None
     )
     if quality is not None:
-        evidence = (
-            quality.get("pr_evidence")
-            if isinstance(quality.get("pr_evidence"), dict)
-            else {}
-        )
+        evidence_value = quality.get('pr_evidence')
+        evidence = evidence_value if isinstance(evidence_value, dict) else {}
         lines.extend(
             [
                 "",

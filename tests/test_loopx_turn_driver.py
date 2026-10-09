@@ -21,6 +21,7 @@ from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
+from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
@@ -2278,6 +2279,98 @@ def run_dsh_turn(**kwargs):
     assert session_ids[2].startswith("dsh-lineage-v1-")
     assert session_ids[2] == session_ids[3]
     assert state_path.read_text(encoding="utf-8") == before_state
+
+
+@pytest.mark.parametrize("malformed_packet", [False, True], ids=["material-replan", "invalid-json-array"])
+def test_turn_run_once_cli_dsh_preserves_material_path_delta(
+    tmp_path: Path, malformed_packet: bool,
+) -> None:
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, todo_metadata_extra="no_followup=true"
+    )
+    state_path = project / ".codex/goals/loopx-turn-fixture/ACTIVE_GOAL_STATE.md"
+    parsed = parse_active_state_todos(state_path.read_text(encoding="utf-8"), item_limit=None)
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="loopx-turn-fixture", handoff_mode="soft_claim",
+        todos=parsed["agent_todos"]["items"],
+    )
+    initialize_canonical_authority(
+        runtime, "loopx-turn-fixture", projection, state_path=state_path
+    )
+    host_project = project / "isolated-dsh-workspace"
+    host_project.mkdir()
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {
+            "vision_summary": "Continue the next bounded fixture check.",
+            "acceptance_summary": "Validate the next fixture outcome independently.",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": "replan",
+            "prior_assumption": "The prior fixture stage remained open.",
+            "observed_reality": "The prior stage passed its local validation.",
+            "evidence_refs": ["fixture:validated-closed-stage"],
+            "changed": ["Advance the next bounded fixture check."],
+        },
+    }
+    candidate = {
+        "result_kind": "replan_required",
+        "classification": "fixture_replan_successor",
+        "summary": "The prior stage closed and an active successor was authored.",
+        "recommended_action": "Continue the validated successor stage.",
+        "next_action": "Validate the next bounded fixture check.",
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": "[]" if malformed_packet else json.dumps(vision),
+    }
+    runner = tmp_path / "material_replan_dsh_runner.py"
+    runner.write_text(
+        "import json\nfrom pathlib import Path\n"
+        f"candidate = {candidate!r}\n"
+        "def run_dsh_turn(**kwargs):\n"
+        "    counter = Path(kwargs['workspace']) / 'host-count.txt'\n"
+        "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
+        "    Path(kwargs['workspace'], 'validated-artifact.txt').write_text('validated')\n"
+        "    return json.dumps(candidate)\n",
+        encoding="utf-8",
+    )
+    validator = (
+        "import pathlib; raise SystemExit(0 if "
+        "pathlib.Path('validated-artifact.txt').read_text() == 'validated' else 7)"
+    )
+    args = [
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "turn", "run-once", "--goal-id",
+        "loopx-turn-fixture", "--agent-id", "codex-fixture", "--host", "dsh",
+        "--project", str(host_project), "--dsh-runner", str(runner),
+        "--validation-command-json", json.dumps([sys.executable, "-c", validator]),
+        "--execution-mode", "isolated-headless", "--scan-root", str(project),
+        "--no-global-sync", "--execute",
+    ]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(args)
+    payload = json.loads(output.getvalue())
+    assert (host_project / "host-count.txt").read_text(encoding="utf-8") == "1"
+    if malformed_packet:
+        assert exit_code == 1, payload
+        assert payload["effects"]["host_invoked"] is True
+        assert payload["effects"]["state_written"] is False
+        assert payload["effects"]["quota_spent"] is False
+        assert "agent_vision_json" in json.dumps(payload)
+        assert state_path.read_text(encoding="utf-8").find("successor") == -1
+    else:
+        assert exit_code == 0, payload
+        assert payload["status"] == "committed"
+        assert payload["result_kind"] == "replan_required"
+        assert payload["effects"]["state_written"] is True
+        assert payload["effects"]["quota_spent"] is True
+        rows_path = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+        rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
+        durable = next(row for row in rows if row.get("classification") == "fixture_replan_successor")
+        recorded = json.loads(Path(durable["json_path"]).read_text(encoding="utf-8"))
+        assert recorded["agent_vision"]["path_delta"]["outcome"] == "replan"
 
 
 @pytest.mark.parametrize(

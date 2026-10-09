@@ -657,6 +657,32 @@ Every attempted tick returns one result kind:
 | `validation_failed` | Host output exists but task validation failed or is inconclusive. | Preserve failure evidence and route to repair/replan. |
 | `writeback_failed` | Validated work could not be durably recorded. | Do not spend; retry idempotent writeback before more delivery. |
 
+Managed host adapters carry the existing path-delta fields through the typed
+result unchanged: `path_delta_mode`, `agent_vision_json`, and
+`vision_unchanged_reason`. A material path change uses
+`path_delta_mode: "material_replan"`, `result_kind: "replan_required"`, and a
+JSON-encoded `goal_vision_replan_contract_v0` packet whose
+`goal_path_delta_v0.outcome` is `replan`; it must not also claim an unchanged
+reason. An unchanged path uses `path_delta_mode: "unchanged"`, no vision
+packet, and a bounded `vision_unchanged_reason`. The Turn executor remains the
+owner of packet parsing, bounds, and semantic validation. These declarations do
+not grant write or Goal authority, and legacy hosts that omit both path-delta
+fields retain their prior compatibility behavior. For material results, an
+explicit null or other non-string value for either path-delta field is invalid;
+omitting the field remains distinct from supplying null. Stop results
+(`wait`, `user_action_required`, and `iteration_failed`) do not declare a path
+delta. Managed dsh and optional-cloud prompts may omit both fields; the Codex
+CLI output schema requires both strings, so empty strings express the same
+no-declaration result. The executor accepts those empty strings and rejects
+non-empty stop-result declarations. The shared material validation applies to
+generic CLI, Codex CLI, dsh, and optional-cloud host results.
+
+The existing TypeScript Vision normalizer owns packet interpretation and emits
+the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility
+behavior does not verify the submitted packet's top-level `schema_version`;
+the nested `path_delta.schema_version` remains optional, and when present the
+existing owner requires `goal_path_delta_v0`.
+
 ### Settlement identity decoding / 结算身份解码
 
 Executable settlement decodes exactly one Todo or autonomous-replan binding in

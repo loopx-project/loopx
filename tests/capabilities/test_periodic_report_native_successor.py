@@ -41,7 +41,7 @@ def _native_successor(
         "--delivery-workspace-path", str(project),
         "--agent-id", AGENT_ID, "--delivery-batch-scale", "implementation",
         "--delivery-outcome", "outcome_progress", "--no-global-sync",
-        "--suppress-external-sinks",
+        "--suppress-external-sinks", "--available-capability", "network",
     ]
     closed = _run_cli([
         *base, "--classification", "fixture_stage_closed",
@@ -141,6 +141,7 @@ def test_native_successor_produces_only_an_enabled_bounded_intent(
     assert intent["requested_write_scope"] == []
     assert intent["payload"]["generation_authorized"] is False
     assert intent["payload"]["external_delivery_authorized"] is False
+    assert intent["payload"]["available_capabilities"] == ["network"]
     stage = intent["payload"]["stage_completion"]
     assert stage["transition"] == "successor_frontier_settled"
     assert stage["acceptance"] == "validated"

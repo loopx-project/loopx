@@ -543,6 +543,34 @@ def test_turn_context_audit_count_compatibility(counts, omitted):
     assert len(result["findings"]) == 3
 
 
+def test_turn_context_preserves_wait_conditions_and_total_omissions():
+    from loopx.capabilities.explore.todo_branch_plan import build_explore_todo_branch_plan
+
+    plan = build_explore_todo_branch_plan(
+        goal_id="research", agent_id="worker", width=3,
+        orchestration={"explore_harness": {"enabled": True}},
+        todos=[{
+            "todo_id": f"todo_waiting_{index}", "text": "Use the prepared artifact",
+            "status": "open", "task_class": "advancement_task", "priority": "P0",
+            "resume_when": "todo_done:todo_prepare", "resume_ready": False,
+        } for index in range(12)],
+    )
+    packet = effect_runtime_result("explore.turn_context", {
+        "goal_id": "research", "agent_id": "worker", "route": ["loopx"],
+        "harness_gate": {"enabled": True}, "graph_enabled": False,
+        "projection": {}, "plan": plan,
+    })
+    context = packet["harness"]
+    assert context["selected_branches"] == []
+    assert len(context["rejected_candidates"]) == 3
+    assert context["omitted_rejected_candidates"] == 9
+    for row in context["rejected_candidates"]:
+        assert row["actionable_open"] is False
+        assert row["resume_ready"] is False
+        assert row["resume_when"] == "todo_done:todo_prepare"
+    assert "todo-branch-plan" in context["plan_command"]
+
+
 @pytest.mark.parametrize("kind", ["findings", "edges"])
 def test_turn_context_rejects_negative_evidence_count(kind):
     with pytest.raises(EffectRuntimeRejected, match=f"Explore {kind} count must be nonnegative") as rejected:

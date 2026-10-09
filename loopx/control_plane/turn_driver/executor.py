@@ -240,10 +240,20 @@ def _normalize_host_path_delta(
     unchanged_reason: str,
     errors: list[str],
 ) -> tuple[str, dict[str, Any] | None]:
-    path_delta_mode = str(result.get("path_delta_mode") or "").strip()
+    raw_path_delta_mode = result.get("path_delta_mode")
+    path_delta_mode = ""
+    if raw_path_delta_mode is None and "path_delta_mode" in result:
+        errors.append("path_delta_mode must be a string")
+    elif raw_path_delta_mode is not None and not isinstance(raw_path_delta_mode, str):
+        path_delta_mode = ""
+        errors.append("path_delta_mode must be a string")
+    else:
+        path_delta_mode = str(raw_path_delta_mode or "").strip()
     raw_agent_vision = result.get("agent_vision_json")
     if raw_agent_vision is None:
         agent_vision_json = ""
+        if "agent_vision_json" in result:
+            errors.append("agent_vision_json must be a JSON string")
     elif isinstance(raw_agent_vision, str):
         agent_vision_json = raw_agent_vision.strip()
     else:
@@ -279,7 +289,7 @@ def _normalize_host_path_delta(
                     goal_id=str(envelope.get("goal_id") or ""),
                     agent_id=str(envelope.get("agent_id") or "") or None,
                 )
-            except (json.JSONDecodeError, ValueError) as exc:
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 errors.append(f"invalid agent_vision_json: {exc}")
 
     if path_delta_mode == "material_replan":
@@ -420,7 +430,7 @@ def validate_loopx_turn_host_result(
         or str(result.get("agent_vision_json") or "").strip()
     ):
         errors.append(
-            "wait and user_action_required results cannot declare a path delta"
+            "non-material host results cannot declare path_delta_mode or agent_vision_json"
         )
     if subagent.subagent_execution_topology(plan) is not None:
         subagent.observe_subagent_host_result(plan, result, normalized, errors)

@@ -423,7 +423,10 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # All four shards were still progressing at 83-94% when the 45m job
+    # deadline cancelled run 37916979857. Reserve setup/reporting headroom
+    # without changing test-level deadlines, collection or worker count.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -472,7 +475,7 @@ jobs:
         # Without timing history least_duration alternates equal-weight tests.
         # Each runner retains the measured two-worker pool.
         run: >-
-          python -m pytest -q -n 2 -m "not stage2c_e2e"
+          python -m pytest -v -n 2 -m "not stage2c_e2e"
           --splits 4 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1

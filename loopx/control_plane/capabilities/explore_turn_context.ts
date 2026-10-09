@@ -27,7 +27,8 @@ function evidenceCount(audit: JsonObject, kind: string, detailCount: number): nu
   return Math.max(detailCount, total);
 }
 function branchContext(row: JsonObject): JsonObject {
-  const result = compact(row, ["todo_id", "text", "branch_role", "score", "confidence"]);
+  const result = compact(row, ["todo_id", "text", "branch_role", "score", "confidence",
+    "selection_status", "status", "actionable_open", "resume_when", "resume_ready"]);
   if (row.typed_evidence_audit == null) return result;
   const audit = requireJsonObject(row.typed_evidence_audit, "Explore evidence audit");
   const nodes = rows(audit.nodes), findings = rows(audit.findings), edges = rows(audit.relevant_edges);
@@ -64,6 +65,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     String(b.last_updated_at ?? "").localeCompare(String(a.last_updated_at ?? "")));
   const findings = rows(projection.findings);
   const branches = rows(plan.selected_branches);
+  const rejected = rows(plan.rejected_candidates);
   const frontier = rows(projection.frontier);
   const selectedRefs = new Set(harness ? branches.slice(0, 3).flatMap(branch => {
     if (branch.typed_evidence_audit == null) return [];
@@ -155,6 +157,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       candidate_count: plan.candidate_count ?? 0,
       selected_branches: branches.slice(0, 3).map(branchContext),
       omitted_selected_branches: Math.max(0, branches.length - 3),
+      rejected_candidates: rejected.slice(0, 3).map(branchContext),
+      omitted_rejected_candidates: Math.max(0,
+        requireInteger(plan.rejected_candidate_count ?? rejected.length, "rejected_candidate_count") - 3),
       frontier: frontier.slice(0, 3).map(node => compact(node, ["node_id", "title", "status", "summary"])),
       omitted_frontier: Math.max(0, frontier.length - 3),
       // Expand the same Todo audit shown above, not a different worker-lane plan.

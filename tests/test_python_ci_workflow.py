@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -380,6 +381,55 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
     assert re.search(r"shard: \[1, 2, 3, 4\]", WORKFLOW)
     assert "include-hidden-files: true" in WORKFLOW
     assert "--cov-fail-under" not in template
+
+
+def test_shard_names_failed_cases_before_the_remaining_tests_finish(tmp_path: Path) -> None:
+    # Drive the real shard command: one worker fails while the other waits.
+    # A runner deadline must not leave only an anonymous F in the progress log.
+    step = WORKFLOW.split("name: Run test shard", 1)[1]
+    template = step.split("run: >-", 1)[1].split("      - name:", 1)[0]
+    args = shlex.split(template.replace("${{ matrix.shard }}", "1"))
+    args[0] = sys.executable
+    args[args.index("--cov=loopx")] = "--cov=ci_subject"
+    (tmp_path / "ci_subject.py").write_text("def value(case):\n    return case\n")
+    (tmp_path / "test_subject.py").write_text(
+        "from pathlib import Path\nimport time\nimport pytest\n"
+        "from ci_subject import value\n"
+        "@pytest.mark.parametrize('case', range(8))\n"
+        "def test_outcome(case):\n"
+        "    if case < 4:\n        assert value(case) < 0, 'synthetic failure'\n"
+        "    Path('waiting').touch()\n"
+        "    while not Path('release').exists():\n        time.sleep(0.01)\n"
+        "    assert value(case) >= 4\n",
+    )
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))}
+    log = tmp_path / "progress.log"
+    with log.open("w") as output:
+        process = subprocess.Popen(args, cwd=tmp_path, env=env, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                progress = log.read_text()
+                if (tmp_path / "waiting").exists() and re.search(
+                    r"FAILED test_subject.py::test_outcome\[\d+\]", progress,
+                ):
+                    break
+                time.sleep(0.05)
+            assert process.poll() is None, log.read_text()
+            assert (tmp_path / "waiting").exists(), log.read_text()
+            assert re.search(r"FAILED test_subject.py::test_outcome\[\d+\]", log.read_text())
+        finally:
+            (tmp_path / "release").touch()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+    assert process.returncode == 1, log.read_text()
+    cases = ET.parse(tmp_path / "junit.xml").findall(".//testcase")
+    assert len(cases) == 2
+    assert len([case for case in cases if case.find("failure") is not None]) == 1
 
 
 def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:

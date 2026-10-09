@@ -631,7 +631,7 @@
     },
     {
       "site": "loopx/cli_commands/canary.py::<module>.handle_canary_command::codec_read:load_registry#1",
-      "line": 681,
+      "line": 694,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
