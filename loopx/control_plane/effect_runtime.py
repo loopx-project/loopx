@@ -3,9 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import secrets
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -22,6 +20,14 @@ from typing import IO, Any
 
 from ..file_lock import process_is_alive
 from .runtime.file_reads import iter_binary_file_reads
+from .runtime.node_probe import (
+    HOST_PERMISSION_RECOMMENDATION,
+    MINIMUM_NODE_VERSION as MINIMUM_NODE_VERSION,
+    MINIMUM_NODE_VERSION_TEXT as MINIMUM_NODE_VERSION_TEXT,
+    STARTUP_READY_TIMEOUT_SECONDS as STARTUP_READY_TIMEOUT_SECONDS,
+    node_probe_remediation,
+    probe_node as _probe_node,
+)
 from .content_digest import BARE_SHA256_PATTERN
 
 EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION = "loopx_effect_runtime_request_v0"
@@ -31,8 +37,6 @@ EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
     "loopx_effect_runtime_startup_error_v0"
 )
-MINIMUM_NODE_VERSION = (22, 22, 3)
-MINIMUM_NODE_VERSION_TEXT = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -47,7 +51,6 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
-STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
 RUNTIME_LOCATOR_PERMISSION_RETRIES = 3
 RUNTIME_RETRY_SETTLE_SECONDS = 0.25
@@ -58,7 +61,6 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # turns an in-flight write into an avoidable ambiguous response.
 CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
-_NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 
@@ -227,11 +229,7 @@ class EffectRuntimeStartupError(RuntimeError):
 class EffectRuntimeHostPermissionError(EffectRuntimeStartupError):
     """The host denied local runtime access before any request was dispatched."""
 
-    recommended_action = (
-        "retry the same registry, Goal, Agent and Turn through host-approved "
-        "local runtime access; do not enable optional capabilities, replace "
-        "authority or spend until the guard succeeds"
-    )
+    recommended_action = HOST_PERMISSION_RECOMMENDATION
 
     def __init__(self) -> None:
         super().__init__(
@@ -239,6 +237,10 @@ class EffectRuntimeHostPermissionError(EffectRuntimeStartupError):
             "before request dispatch; no capability operation was executed",
             diagnostic_code="runtime_host_permission_denied",
         )
+
+
+class EffectRuntimeNodeProbeError(EffectRuntimeStartupError):
+    """A pre-dispatch toolchain observation requires caller recovery."""
 
 
 class EffectRuntimeResponseAmbiguous(EffectRuntimeStartupError):
@@ -397,38 +399,16 @@ def _runtime_server_path() -> Path:
 
 
 def _node_executable() -> str:
-    status, executable, _version = _probe_node()
-    if status != "ready" or executable is None:
-        raise EffectRuntimeStartupError(
-            f"LoopX Effect runtime requires Node.js {MINIMUM_NODE_VERSION_TEXT} "
-            "or newer",
-            diagnostic_code="node_unavailable",
+    probe = _probe_node(timeout=STARTUP_READY_TIMEOUT_SECONDS)
+    if not probe.ready:
+        if probe.diagnostic_code == "runtime_host_permission_denied":
+            raise EffectRuntimeHostPermissionError()
+        raise EffectRuntimeNodeProbeError(
+            probe.failure_message,
+            diagnostic_code=str(probe.diagnostic_code),
         )
-    return executable
-
-
-def _probe_node() -> tuple[str, str | None, str | None]:
-    executable = shutil.which("node")
-    if executable is None:
-        return "missing", None, None
-    try:
-        completed = subprocess.run(
-            [executable, "--version"],
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=2,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return "probe_failed", executable, None
-    match = _NODE_VERSION_RE.fullmatch(completed.stdout.strip())
-    version = tuple(int(part) for part in match.groups()) if match else None
-    if completed.returncode != 0 or version is None:
-        return "probe_failed", executable, None
-    version_text = ".".join(str(part) for part in version)
-    if version < MINIMUM_NODE_VERSION:
-        return "unsupported", executable, version_text
-    return "ready", executable, version_text
+    assert probe.executable is not None
+    return probe.executable
 
 
 def _pid_is_alive(value: object) -> bool:
@@ -1044,6 +1024,7 @@ def effect_runtime_request(
             EffectRuntimeRemoteError,
             EffectRuntimeResponseAmbiguous,
             EffectRuntimeHostPermissionError,
+            EffectRuntimeNodeProbeError,
         ):
             raise
         except EffectRuntimeStartupError as exc:
@@ -1137,10 +1118,11 @@ def _sqlite_restart_recommendation(identity: Mapping[str, Any] | None) -> str | 
 def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]:
     """Report whether the managed TS Effect runtime can serve control-plane work."""
 
-    status, _executable, version = _probe_node()
-    ready = status == "ready"
+    probe = _probe_node(timeout=STARTUP_READY_TIMEOUT_SECONDS)
+    status, version = probe.status, probe.version
+    ready = probe.ready
     runtime_state = "unavailable"
-    runtime_diagnostic_code: str | None = None
+    runtime_diagnostic_code: str | None = probe.diagnostic_code
     runtime_identity: dict[str, Any] | None = None
     host_permission_error: EffectRuntimeHostPermissionError | None = None
     if ready:
@@ -1190,12 +1172,8 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             if host_permission_error is not None
             else None
             if ready
-            else (
-                f"Install Node.js {MINIMUM_NODE_VERSION_TEXT} or newer, then "
-                "rerun `loopx doctor --deep`."
-                if status in {"missing", "unsupported"}
-                else "Repair Node.js on PATH, then rerun `loopx doctor --deep`."
-            )
+            else probe.recommended_action
+            or "Repair the packaged LoopX runtime, then rerun `loopx doctor --deep`."
         ),
     }
     if ready:
@@ -1231,7 +1209,8 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             "recommended_action": (
                 exc.recommended_action
                 if isinstance(exc, EffectRuntimeHostPermissionError)
-                else "Run `loopx doctor --deep` again after any concurrent startup "
+                else node_probe_remediation(diagnostic_code)
+                or "Run `loopx doctor --deep` again after any concurrent startup "
                 "finishes. If the same diagnostic code remains, reinstall LoopX "
                 "and verify Node.js before retrying."
             ),

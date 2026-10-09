@@ -128,6 +128,7 @@ def _discover_targets(
     include_automations: bool,
     include_skills: bool,
     include_registry_projects: bool,
+    configuration_source_registry: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], dict[str, Any]]:
     targets: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -159,6 +160,12 @@ def _discover_targets(
     add("project_local_goals", project / ".local" / "goals", "project/.local/goals")
 
     global_registry = runtime_root / "registry.global.json"
+    # Current-project scope still owns its registered routes, including files
+    # outside the conventional Goal directories. Keep cross-project discovery
+    # on the global registry; configuration capture uses the same source below.
+    discovery_registry = (
+        global_registry if include_registry_projects else configuration_source_registry
+    )
     registry_goal_count = 0
     registry_project_roots: set[str] = set()
     reachable_project_roots: set[str] = set()
@@ -166,12 +173,18 @@ def _discover_targets(
     registry_active_state_included_count = 0
     registry_source_registry_count = 0
     registry_source_registry_included_count = 0
-    if include_registry_projects:
+    if include_registry_projects or discovery_registry.exists():
         try:
-            goals = _registry_goals(global_registry)
+            goals = _registry_goals(discovery_registry)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             goals = []
-            warnings.append(f"could not discover global registry projects from {global_registry}: {exc}")
+            warnings.append(f"could not discover registry projects from {discovery_registry}: {exc}")
+        if not include_registry_projects:
+            goals = [
+                goal for goal in goals
+                if not str(goal.get("repo") or "").strip()
+                or _resolved(Path(str(goal["repo"]).strip())) == project
+            ]
         registry_goal_count = len(goals)
         for goal in goals:
             goal_id = str(goal.get("id") or "").strip()
@@ -379,6 +392,10 @@ def build_state_backup_plan(
     resolved_backup_id = backup_id or _utc_timestamp()
     archive_path = resolved_output_dir / f"loopx-state-{resolved_backup_id}.tar.gz"
     manifest_path = resolved_output_dir / f"loopx-state-{resolved_backup_id}.manifest.json"
+    configuration_source_registry = registry_path or (
+        resolved_runtime_root / "registry.global.json" if include_registry_projects
+        else resolved_project / ".loopx/registry.json"
+    )
     targets, missing, warnings, registry_discovery = _discover_targets(
         project=resolved_project,
         runtime_root=resolved_runtime_root,
@@ -386,6 +403,7 @@ def build_state_backup_plan(
         include_automations=include_automations,
         include_skills=include_skills,
         include_registry_projects=include_registry_projects,
+        configuration_source_registry=configuration_source_registry,
     )
     total_stats = _sum_target_stats(targets)
     logical_source_bytes = total_stats["bytes"]
@@ -399,9 +417,7 @@ def build_state_backup_plan(
         "backup_id": resolved_backup_id,
         "project": str(resolved_project),
         "runtime_root": str(resolved_runtime_root),
-        "configuration_source_registry": str(registry_path or (
-            resolved_runtime_root / "registry.global.json" if include_registry_projects
-            else resolved_project / ".loopx/registry.json")),
+        "configuration_source_registry": str(configuration_source_registry),
         "registry_discovery": registry_discovery,
         "codex_home": str(_codex_home()),
         "output_dir": str(resolved_output_dir),

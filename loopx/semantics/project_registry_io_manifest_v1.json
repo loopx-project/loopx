@@ -287,7 +287,7 @@
     },
     {
       "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.agent_observation::codec_read:load_registry#1",
-      "line": 209,
+      "line": 240,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -295,7 +295,7 @@
     },
     {
       "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.goal_scope_ids::codec_read:load_registry#1",
-      "line": 136,
+      "line": 162,
       "column": 40,
       "kind": "codec_read",
       "api": "load_registry",
@@ -455,7 +455,7 @@
     },
     {
       "site": "loopx/chat_lark_api.py::<module>.LarkChatRequestMixin._lark_connections::codec_read:load_registry#1",
-      "line": 536,
+      "line": 540,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -519,7 +519,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.serve_chat._wake_goal_context::codec_read:load_registry#1",
-      "line": 1695,
+      "line": 1697,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1111,7 +1111,7 @@
     },
     {
       "site": "loopx/control_plane/coordination/runtime_shadow.py::<module>.build_runtime_shadow_source_snapshot::codec_read:load_project_registry#1",
-      "line": 276,
+      "line": 278,
       "column": 20,
       "kind": "codec_read",
       "api": "load_project_registry",

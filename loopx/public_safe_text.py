@@ -179,6 +179,37 @@ LABELED_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
     re.I,
 )
 
+# A credential label reached inside a field name rather than as a free-standing
+# word: ``db_password = 'S3cret!value'``, ``password_hash=Qwerty1234567890``,
+# ``client_secret: abcdef123456``. Every label arm above anchors the label with
+# ``\\b``, and ``_`` is a word character, so a label glued to a field-name prefix
+# or suffix is invisible to all of them -- the two capability faces caught that
+# spelling with a substring rule of their own (Refs #5136, direction 1).
+#
+# The value carries no test, which is what the free-standing assignment arm above
+# already does: an operator beside a credential label states an assignment, so a
+# short or quoted value such as ``client_secret="hunter"`` cannot be released by a
+# digit or word-length accident (Refs #5136, direction 2; those rows are the
+# direction-4 counterexamples the migrated callers still lacked). The residual
+# runs the other way: the field-name suffix also absorbs prose that ends on the
+# label's plural before an operator, ``secrets:`` included, which the
+# free-standing arm's ``\\b`` does not reach. That is why this arm stays an
+# opt-in rather than a member of the ``credential`` category.
+_COMPOUND_LABEL_SOURCE = "pass" + r"word|sec" + r"ret|api" + r"[_-]?key"
+COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN = re.compile(
+    r"[A-Za-z0-9_]*(?:" + _COMPOUND_LABEL_SOURCE + r")[A-Za-z0-9_]*[\"']?\s*[:=]",
+    re.IGNORECASE,
+)
+# The credential half of the rule, on its own, named so the two capability faces
+# that ask it share one definition instead of each restating a category pair. Both
+# categories are listed rather than subtracted from `ALL_CATEGORIES`:
+# `credential_word` is one of the two, and a policy written as a difference would
+# drop it -- loosening a face that never asked to be loosened -- the next time a
+# category is added.
+CREDENTIAL_CATEGORIES: frozenset[str] = frozenset(
+    {CATEGORY_CREDENTIAL, CATEGORY_CREDENTIAL_WORD}
+)
+
 # Refs #5136: relocated here from control_plane/runtime/public_safety.py so a
 # single owner defines each shape. public_safety re-exports these names, so its
 # ~8 direct importers and 30+ recursive-validation callers are unchanged. This
@@ -524,6 +555,7 @@ def classify_private_text(
     *,
     categories: frozenset[str] = ALL_CATEGORIES,
     include_path_gaps: bool = False,
+    include_compound_field_assignment: bool = False,
 ) -> PrivateTextMatch | None:
     """Return the first recognized private-text match within ``categories``.
 
@@ -537,6 +569,12 @@ def classify_private_text(
     home-relative (``~/``) and ``path:``-prefixed local references. It defaults
     to False so this consolidation does not silently tighten any surface that
     has not chosen the wider policy.
+
+    ``include_compound_field_assignment`` opts a surface into
+    ``COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN``. It is an opt-in rather than
+    a ``credential`` category member for the reason stated on that constant: a
+    category addition would widen the four migrated text owners and the
+    publication tier by absence, which is a per-face decision nobody has made.
     """
 
     if not value:
@@ -553,6 +591,16 @@ def classify_private_text(
                 return PrivateTextMatch(
                     CATEGORY_LOCAL_PATH, "local path behind a relative/prefixed form", pattern
                 )
+    if (
+        include_compound_field_assignment
+        and CATEGORY_CREDENTIAL in categories
+        and COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN.search(value)
+    ):
+        return PrivateTextMatch(
+            CATEGORY_CREDENTIAL,
+            "credential field name behind an assignment operator",
+            COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN,
+        )
     return None
 
 
@@ -561,12 +609,16 @@ def matches_private_text_policy(
     *,
     categories: frozenset[str] = ALL_CATEGORIES,
     include_path_gaps: bool = False,
+    include_compound_field_assignment: bool = False,
 ) -> bool:
     """True when ``value`` is recognized within the named policy's categories."""
 
     return (
         classify_private_text(
-            value, categories=categories, include_path_gaps=include_path_gaps
+            value,
+            categories=categories,
+            include_path_gaps=include_path_gaps,
+            include_compound_field_assignment=include_compound_field_assignment,
         )
         is not None
     )

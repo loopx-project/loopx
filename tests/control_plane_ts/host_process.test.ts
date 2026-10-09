@@ -79,13 +79,15 @@ async function delegatedCompletionWaitFixture(t: test.TestContext, ttlSeconds: n
   const first = await executeCoordinationTodoClaim(store, {...claimRequest, now: new Date()});
   assert.equal(first.status, "applied", JSON.stringify(first));
   const requestPath = join(root, "claim.json");
-  await writeFile(requestPath, JSON.stringify({...claimRequest, prerequisite_id: fixture.acquisition.conflict_todo_id}));
+  const renewalResultPath = join(root, "renewal-result.json");
+  await writeFile(requestPath, JSON.stringify({...claimRequest, prerequisite_id: fixture.acquisition.conflict_todo_id,
+    renewal_result_path: renewalResultPath}));
   const scriptPath = join(root, "lease-cli.mjs");
   const claimUrl = new URL("../../loopx/control_plane/coordination/todo_claim.ts", import.meta.url).href;
   const lifecycleUrl = new URL("../../loopx/control_plane/coordination/task_lease_lifecycle.ts", import.meta.url).href;
   const storeUrl = new URL("../../loopx/control_plane/coordination/file_authority_store.ts", import.meta.url).href;
   const projectionUrl = new URL("../../loopx/control_plane/coordination/coordination_projection.ts", import.meta.url).href;
-  await writeFile(scriptPath, `import {readFileSync} from "node:fs";
+  await writeFile(scriptPath, `import {readFileSync, writeFileSync} from "node:fs";
 import {FileAuthorityStore} from ${JSON.stringify(storeUrl)};
 import {executeCoordinationTodoClaim} from ${JSON.stringify(claimUrl)};
 import {executeCanonicalTaskLeaseLifecycle} from ${JSON.stringify(lifecycleUrl)};
@@ -107,6 +109,8 @@ if (mode === "renew") {
   const result = await executeCanonicalTaskLeaseLifecycle(store, {operation: "renew", goal_id: request.goal_id,
     todo_id: request.todo_id, owner: request.claimed_by, idempotency_key: request.lease_request.idempotency_key,
     expected_version: version, ttl_seconds: ttl, registered_agents: request.registered_agents, now: new Date()});
+  if (result.status !== "applied") writeFileSync(request.renewal_result_path,
+    JSON.stringify({status: result.status, reason_code: result.reason_code}));
   process.stdout.write(JSON.stringify({ok: result.status === "applied", lease: result.lease, reason_code: result.reason_code}));
 } else {
   const result = await executeCoordinationTodoClaim(store, {...request, prerequisite_id: undefined,
@@ -128,7 +132,7 @@ if (mode === "renew") {
       projection: head.head, mutations: [{kind: "todo_upsert", todo: {...todo,
         resume_when: `todo_done:${fixture.acquisition.conflict_todo_id}`}}]}))).status, "applied");
   };
-  return {root, store, lease, addWait};
+  return {root, store, lease, addWait, renewalResultPath};
 }
 
 test("pending canonical completion wait rejects delegated Host before spawn", async t => {
@@ -145,17 +149,32 @@ test("pending canonical completion wait rejects delegated Host before spawn", as
 });
 
 test("completion wait appearing during renewal cancels delegated Host", async t => {
-  const {root, store, lease} = await delegatedCompletionWaitFixture(t, 4);
+  const {root, store, lease, renewalResultPath} = await delegatedCompletionWaitFixture(t, 12);
+  const leaseExpiryMs = Date.parse(lease.lease.expires_at);
   const marker = join(root, "host-heartbeat");
   let spawned = 0;
+  let hostPid: number | null = null;
+  const owner = new AbortController();
+  t.after(() => owner.abort());
   const running = runLeasedHostProcess(request(`const fs=require('fs');let n=0;
-    setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(++n)),20)`, {timeout_ms: 8000}),
-    lease, async () => {}, new AbortController().signal, async () => {spawned++;});
-  await delay(3500);
-  const stoppedHeartbeat = await readFile(marker, "utf8");
-  await delay(150);
-  assert.equal(await readFile(marker, "utf8"), stoppedHeartbeat,
-    "Host kept executing after renewal rejected the new wait");
+    setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(++n)),20)`, {timeout_ms: 16_000}),
+    lease, async () => {}, owner.signal, async item => {spawned++; hostPid = item.pid;});
+  const startDeadline = Date.now() + 2_000;
+  while (!existsSync(marker) && Date.now() < startDeadline) await delay(10);
+  assert.equal(existsSync(marker), true, "delegated Host did not start its heartbeat");
+  const renewalDeadline = Math.min(Date.now() + 9_000, leaseExpiryMs - 500);
+  while (!existsSync(renewalResultPath) && Date.now() < renewalDeadline) await delay(10);
+  assert.equal(existsSync(renewalResultPath), true, "renewal rejection was not observed");
+  const stopDeadline = Math.min(Date.now() + 4_000, leaseExpiryMs - 500);
+  const hostIsRunning = (pid: number) => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if ((error as {code?: string}).code === "ESRCH") return false; throw error; }
+  };
+  while (hostPid !== null && hostIsRunning(hostPid) && Date.now() < stopDeadline) await delay(10);
+  assert.ok(hostPid !== null && !hostIsRunning(hostPid),
+    "Host did not stop promptly after renewal rejection, before the lease deadline");
+  assert.ok(Date.now() < leaseExpiryMs,
+    "Host stopped at the lease deadline instead of after renewal rejection");
   const result = await running;
   assert.equal(spawned, 1);
   assert.equal(result.outcome, "cancelled");

@@ -193,6 +193,7 @@ class SForgeWorker(CodexAgent):
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
                 turn_timeout_sec=self.turn_timeout,
                 scheduler_timeout_sec=self.timeout_seconds,
+                planning_timeout_sec=None,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
@@ -221,6 +222,8 @@ class SForgeWorker(CodexAgent):
             "profile": self.profile, "model": self._config.agent_model,
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
+            **({"planning_timeout_seconds": None}
+               if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
             **({"turn_envelope": True} if self.turn_envelope else {}),
             "outer_resume": self.resume_cmd is not None,
@@ -243,7 +246,7 @@ class SForgeWorker(CodexAgent):
             (self.log_dir / "agent_prompt.md").write_text(self.feedback_prompt)
             self.prompt_installed = True
         if self.profile in {"official", "single"}:
-            return self._feedback_command(super().format_run_cmd(prompt_path, model=model, cwd=cwd,
+            return self._execution_command(super().format_run_cmd(prompt_path, model=model, cwd=cwd,
                                           internet=internet, resume=resume))
         if self.runtime is None:
             raise RuntimeError("Run the native SForge installation hook before execution")
@@ -268,23 +271,29 @@ class SForgeWorker(CodexAgent):
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                                  state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
         if self.task_entry == "loopx-planned":
-            env["LOOPX_PLANNING_TIMEOUT_SEC"] = str(self.runtime.planning_timeout)
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
         # Persist the phase deadline for repeated command preparation. Reusing
         # an entry command must never grant another full trial budget.
         deadline = "/opt/loopx-benchmark/control/phase-deadline"
+        started = "/opt/loopx-benchmark/control/execution-started"
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
-        return self._feedback_command(
+        return self._execution_command(
             f"set -eu; test -f {deadline} || echo $(( $(date +%s) + {self.timeout_seconds} )) > {deadline}; "
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
-            'test "$remaining" -gt 0 || exit 0; '
-            f"exec timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}"
+            f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '
+            + (f"touch {started}; " if self.task_entry != "loopx-planned" else "")
+            + f"set +e; timeout --signal=TERM --kill-after=30 ${{remaining}}s env {exports} {shlex.join(command)}; "
+            f"phase_rc=$?; if test $phase_rc -eq 124 && test -f {started} "
+            '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc',
+            execution_start_marker=started,
         )
 
-    def _feedback_command(self, command):
+    def _execution_command(self, command, *, execution_start_marker=None):
+        if getattr(self, "backend", None) is not None:
+            self.backend.execution_command = command
+            self.backend.execution_start_marker = execution_start_marker
         if self.feedback == "best-only":
-            self.backend.feedback_command = command
             self.backend.start_feedback(self.handle)
         return command

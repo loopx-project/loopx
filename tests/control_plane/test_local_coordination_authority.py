@@ -51,6 +51,7 @@ from loopx.control_plane.todos.completion_validation_store import (
 from loopx.control_plane.todos.provider_update import (
     update_canonical_todo_if_promoted,
 )
+from loopx.control_plane.todos.summary_item import todo_text_content_revision
 from loopx.control_plane.todos.contract import format_todo_metadata_line
 from loopx.todos import (
     add_goal_todo,
@@ -2441,14 +2442,21 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     assert not state_file.exists()
     after_edit = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
     edited_by_id = {item["todo_id"]: item for item in after_edit["todos"]}
+    edited_text = "[P0] Edit provider-owned work"
+    edited_content_revision = todo_text_content_revision(edited_text)
+    assert edited_content_revision is not None
     assert edited_by_id["todo_claimable"] == {
         **claimed_item,
-        "text": "[P0] Edit provider-owned work",
+        "text": edited_text,
         "title": "Edit provider-owned work",
         "note": "compatibility edit",
+        "content_revision": edited_content_revision,
         "last_actor_agent_id": "agent-a",
         "updated_at": edited_by_id["todo_claimable"]["updated_at"],
     }
+    assert edited_by_id["todo_claimable"]["content_revision"] != claimed_item[
+        "content_revision"
+    ]
     assert edited_by_id["todo_claimable"]["updated_at"] != claimed_item["updated_at"]
     assert edited_by_id["todo_complex"] == by_id["todo_complex"]
     assert edited_by_id["todo_successor"] == by_id["todo_successor"]

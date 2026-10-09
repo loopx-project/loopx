@@ -2,10 +2,11 @@
 // Fast source-level contract test for the bilingual static Blog catalog.
 
 import { existsSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, rejects } from "node:assert/strict";
+import { tmpdir } from "node:os";
 import {
   comparePublicationDates,
   sortBlogIndex,
@@ -26,6 +27,30 @@ async function collectArticleSlugs(localeDir, { exclude = [] } = {}) {
 
 function assertIncludes(html, value, message) {
   if (!html.includes(value)) throw new Error(message);
+}
+
+function hasAnchorToHref(html, href, sourceHref) {
+  const expectedUrl = new URL(href, sourceHref).href;
+  const anchors = html.matchAll(/<a(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)>/gi);
+  for (const [, attributes] of anchors) {
+    const parsedAttributes = attributes.matchAll(
+      /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
+    );
+    let linkHref = null;
+    for (const [, name, doubleQuoted, singleQuoted, unquoted] of parsedAttributes) {
+      if (name.toLowerCase() === "href") {
+        linkHref = doubleQuoted ?? singleQuoted ?? unquoted ?? null;
+        break;
+      }
+    }
+    if (linkHref === null) continue;
+    try {
+      if (new URL(linkHref, sourceHref).href === expectedUrl) return true;
+    } catch {
+      // Invalid URLs cannot satisfy the paired-edition navigation requirement.
+    }
+  }
+  return false;
 }
 
 function sectionIds(html) {
@@ -99,7 +124,9 @@ export async function validateBilingualBlog(blogDir) {
       assertIncludes(articleHtml, `<html lang="${locale.language}">`, `Blog article language drifted: ${slug}`);
       assertIncludes(articleHtml, "<h1>", `Blog article must contain a visible title: ${slug}`);
       assertIncludes(articleHtml, `rel="canonical" href="${locale.canonicalHref(slug)}"`, `Blog canonical URL drifted: ${slug}`);
-      assertIncludes(articleHtml, `href="${locale.counterpartHref(slug)}"`, `Blog article must link its paired edition: ${slug}`);
+      if (!hasAnchorToHref(articleHtml, locale.counterpartHref(slug), locale.canonicalHref(slug))) {
+        throw new Error(`Blog article must link its paired edition: ${slug}`);
+      }
       for (const hreflang of ["en", "zh-CN", "x-default"]) {
         assertIncludes(articleHtml, `hreflang="${hreflang}"`, `Blog article is missing ${hreflang}: ${slug}`);
       }
@@ -171,12 +198,46 @@ function fakeBlogIndex(order, { focusedSlug = null } = {}) {
   return index;
 }
 
+async function assertPairedLinkRejected(blogDir, slug, anchor, message) {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "loopx-blog-paired-link-"));
+  const fixtureBlog = join(temporaryRoot, "blog");
+  try {
+    await cp(blogDir, fixtureBlog, { recursive: true });
+    const articlePath = resolve(fixtureBlog, slug, "index.html");
+    const html = await readFile(articlePath, "utf8");
+    const pairedAnchor = `<a href="../zh/${slug}/" lang="zh-CN">`;
+    if (!html.includes(pairedAnchor)) {
+      throw new Error(`Could not locate the paired anchor in ${slug}`);
+    }
+    await writeFile(articlePath, html.replace(pairedAnchor, anchor));
+    await rejects(
+      () => validateBilingualBlog(fixtureBlog),
+      /Blog article must link its paired edition/,
+      message,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 const modulePath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
   // Independent expectations for unsorted input, partial dates, ties and undated posts.
   const dates = ["2026-09", "", "2026-09-15", "2026-10-02", "2026-09-26"];
   deepStrictEqual(dates.sort(comparePublicationDates), ["2026-10-02", "2026-09-26", "2026-09-15", "2026-09", ""]);
   deepStrictEqual(comparePublicationDates("2026-10-02", "2026-10-02"), 0);
+  const englishArticle = "https://loopx-project.github.io/loopx/blog/example/";
+  const relativeChineseArticle = '<a href="../zh/example/" lang="zh-CN">中文</a>';
+  deepStrictEqual(
+    hasAnchorToHref(relativeChineseArticle, "../../blog/zh/example/", englishArticle),
+    true,
+    "Equivalent relative paths must resolve to the paired edition",
+  );
+  deepStrictEqual(
+    hasAnchorToHref('<a href="../zh/another/">中文</a>', "../../blog/zh/example/", englishArticle),
+    false,
+    "A link to a different article must not satisfy the paired-edition check",
+  );
   // A module response that arrives after keyboard navigation started must not
   // move an already ordered catalog or drop the focused article link.
   const ordered = fakeBlogIndex(
@@ -204,5 +265,18 @@ if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
   const repoRoot = resolve(dirname(modulePath), "..");
   const blogDir = resolve(repoRoot, "apps/presentation/site/public/blog");
   const { articleSlugs } = await validateBilingualBlog(blogDir);
+  const pairedSlug = "edgebench-feedback-and-memory";
+  await assertPairedLinkRejected(
+    blogDir,
+    pairedSlug,
+    `<a data-href="../zh/${pairedSlug}/" lang="zh-CN">中文</a>`,
+    "A data-href attribute must not substitute for a navigable paired link",
+  );
+  await assertPairedLinkRejected(
+    blogDir,
+    pairedSlug,
+    `<a href="../zh/another/" data-href="../zh/${pairedSlug}/" lang="zh-CN">中文</a>`,
+    "A correct data-href must not hide an incorrect navigable href",
+  );
   console.log(`blog-bilingual-index-smoke: ok (${articleSlugs.length} paired articles)`);
 }

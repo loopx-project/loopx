@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
+import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -288,6 +290,49 @@ def build_runtime_shadow_source_snapshot(
     return projection, snapshot
 
 
+def _source_lease_paths(runtime_root: Path, goal_id: str) -> list[Path]:
+    """Keep unsafe filesystem sources out of the transport; TS rechecks admission."""
+    from .shadow_management import ShadowManagementError
+
+    directory = runtime_root
+    for segment in ("goals", goal_id, "task-leases"):
+        directory /= segment
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            return []
+        if not stat.S_ISDIR(info.st_mode):
+            raise ShadowManagementError("source_lease_inventory_invalid")
+    paths = sorted(path for path in directory.iterdir() if path.name.endswith(".json"))
+    for path in paths:
+        if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
+            raise ShadowManagementError("source_lease_inventory_invalid")
+    return paths
+
+
+def _source_lease_bytes(path: Path) -> bytes:
+    from .shadow_management import ShadowManagementError
+
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ShadowManagementError("source_lease_inventory_invalid")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ShadowManagementError("source_changed_retry")
+        data = stream.read()
+        after = os.fstat(stream.fileno())
+        current = path.lstat()
+        if ((current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(current.st_mode) or before.st_size != len(data)
+                or after.st_size != len(data) or current.st_size != len(data)
+                or before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns
+                or after.st_mtime_ns != current.st_mtime_ns or after.st_ctime_ns != current.st_ctime_ns):
+            raise ShadowManagementError("source_changed_retry")
+    return data
+
+
 def _build_runtime_shadow_source_snapshot(
     *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
     registry_path: Path, registry: dict[str, Any],
@@ -363,16 +408,8 @@ def _build_runtime_shadow_source_snapshot(
         todos = capture_todo_archive_dependencies(todos, state_text)
     leases: list[dict[str, Any]] = []
     inventory: list[dict[str, object]] = []
-    for path in sorted((runtime_root / "goals" / goal_id / "task-leases").glob("*.json")):
-        if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
-            if include_all_archived_todos:
-                raise ShadowManagementError("cold_source_lease_file_unsupported",
-                    "Cold source lease inventory cannot omit an unsupported filename")
-            continue
-        if include_all_archived_todos and (path.is_symlink() or not path.is_file()):
-            raise ShadowManagementError("cold_source_lease_file_unsupported",
-                "Cold source leases must be regular files, not links or directories")
-        data = path.read_bytes()
+    for path in _source_lease_paths(runtime_root, goal_id):
+        data = _source_lease_bytes(path)
         leases.append(compact_lease(json.loads(data), goal_id=goal_id, file_stem=path.stem))
         inventory.append({"name": path.name, "bytes_sha256": "sha256:" + hashlib.sha256(data).hexdigest()})
     projection = build_todo_runtime_shadow_projection(goal_id=goal_id, todos=todos, leases=leases,

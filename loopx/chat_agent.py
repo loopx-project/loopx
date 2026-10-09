@@ -548,6 +548,7 @@ class CodexChatAgentSession:
     _message_dispatch_lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False
     )
+    _host_model_auth: Any = field(default=None, repr=False)
 
     @classmethod
     def start(
@@ -716,6 +717,20 @@ class CodexChatAgentSession:
                 request_id=1,
             )
             session._notify("initialized", {})
+            if permissions_profile:
+                from .capabilities.native_chat.codex_auth import for_isolated_process
+                try:
+                    session._host_model_auth = for_isolated_process(base_home, runtime_home, resolved)
+                    if session._host_model_auth is not None:
+                        credentials = session._host_model_auth.read()
+                        login = session._request("account/login/start", {
+                            "type": "chatgptAuthTokens", **credentials}, request_id=4)
+                        if login.get("type") != "chatgptAuthTokens":
+                            raise ValueError("unexpected native model authentication mode")
+                except Exception:
+                    raise session._runtime_error(
+                        "Trusted-host Codex model authentication is unavailable. "
+                        "Restore the host account and retry this same Session.") from None
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
@@ -815,6 +830,8 @@ class CodexChatAgentSession:
             # for autonomous execution; enabling it here causes conversational messages
             # to be treated as continuation ticks instead of the current user task.
             session.next_request_id = 4 if read_project_defaults or permissions_profile else 3
+            if session._host_model_auth is not None:
+                session.next_request_id = 5
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
@@ -913,6 +930,20 @@ class CodexChatAgentSession:
                 return message
 
     def _check_server_gate(self, message: dict[str, Any]) -> bool:
+        if message.get("id") is not None and message.get("method") == "account/chatgptAuthTokens/refresh" and self._host_model_auth is not None:
+            try:
+                params = message.get("params") or {}
+                if not isinstance(params, dict) or params.get("reason") != "unauthorized":
+                    raise ValueError("invalid native refresh request")
+                previous = params.get("previousAccountId")
+                if not isinstance(previous, str) or not previous:
+                    raise ValueError("missing native account identity")
+                result = self._host_model_auth.read(refresh=True, previous_account_id=previous)
+                self._write({"id": message["id"], "result": result})
+            except Exception:
+                self._write({"id": message["id"], "error": {
+                    "code": -32000, "message": "Trusted-host model authentication unavailable."}})
+            return True
         if (
             message.get("id") is not None
             and message.get("method") == "item/tool/call"

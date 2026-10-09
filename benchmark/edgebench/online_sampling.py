@@ -15,7 +15,7 @@ from pathlib import Path
 
 import requests
 from sforge.harness.run_agent import _extract_archive_from_container
-from .online_judge import POLICY
+from .online_judge import POLICY, RegistrationState
 
 
 class CaptureStatus(StrEnum):
@@ -168,3 +168,25 @@ class OnlineSampler:
         final = self.trial / "final_archive.tar.gz"
         if final.is_file() and not any(r["status"] == CaptureStatus.FINAL for r in self.records):
             self.capture(final.read_bytes(), final=True)
+
+    def release_registration(self, *, run_id, task_id):
+        """Call only after verified worker removal; retain ambiguous releases for retry."""
+        if not self.stop.is_set():
+            raise RuntimeError("Stop online sampling before releasing its registration")
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.post(self.url + "/api/v1/best-only/release", data={
+                "run_id": run_id, "task_id": task_id, "epoch_id": self.epoch,
+                "admin_secret": self.secret}, timeout=(3, 10))
+            response.raise_for_status()
+            receipt = response.json()
+        if (receipt.get("epoch") != self.epoch or receipt.get("run_id") != run_id
+                or receipt.get("task_id") != task_id
+                or receipt.get("state") not in (RegistrationState.DRAINING, RegistrationState.RELEASED)):
+            raise ValueError("Online release receipt does not match the original registration")
+        target = self.directory / "release.json"
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(json.dumps({key: receipt[key] for key in
+            ("epoch", "run_id", "task_id", "state")}))
+        temporary.replace(target)
+        return receipt

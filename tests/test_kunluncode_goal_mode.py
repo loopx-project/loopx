@@ -97,10 +97,10 @@ def test_goal_cli_mock_preserves_real_node_probe(mock_goal_cli):
         return subprocess.CompletedProcess(command, 0, "not-json", "")
 
     mock_goal_cli(fake_cli)
-    status, executable, version = effect_runtime._probe_node()
-    assert status == "ready"
-    assert executable is not None
-    assert version is not None
+    probe = effect_runtime._probe_node()
+    assert probe.ready
+    assert probe.executable is not None
+    assert probe.version is not None
 
 
 def test_claude_and_kunluncode_bind_distinct_agents(tmp_path: Path) -> None:

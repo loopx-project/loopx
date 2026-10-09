@@ -26,11 +26,12 @@ def close_transports(transports: Sequence[Any]) -> None:
 
 
 def install_conversation_transports(server: Any, *, observe_default: Callable[[str], dict[str, Any]],
-                                    factories: Sequence[Callable[[Any], Any]]) -> None:
+                                    factories: Sequence[Callable[[Any], Any]],
+                                    observe_group: Callable[[str], dict[str, Any]] | None = None) -> None:
     if not factories:
         server.runtime_controller.project_contexts.conversation_bindings = ChatConversationBindings(
             root=server.chat_store.root, project_contexts=server.runtime_controller.project_contexts,
-            observe=observe_default)
+            observe=observe_default, observe_group=observe_group)
         return
     transports = []
     try:
@@ -39,7 +40,8 @@ def install_conversation_transports(server: Any, *, observe_default: Callable[[s
         server.conversation_transports = ChatConversationTransports(
             observe_default=observe_default, transports=transports)
         bindings = ChatConversationBindings(root=server.chat_store.root,
-            project_contexts=server.runtime_controller.project_contexts, observe=server.conversation_transports.observe)
+            project_contexts=server.runtime_controller.project_contexts, observe=server.conversation_transports.observe,
+            observe_group=observe_group)
         server.runtime_controller.project_contexts.conversation_bindings = bindings
         server.conversation_transports.bindings = bindings
     except Exception:

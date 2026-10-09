@@ -612,6 +612,12 @@ L3 检查点：独立领取/接管、原子 claim 准入与维护共用 typed le
 - **退出：** 按 shared-authority 7.2 分别决定有界改动、可回退自愿 cohort、发布默认值，各自在适用范围具备真实 CLI/backend、独立基线、负例和恢复证据。正式 D2 保留适用容量及至少十日证据，cohort 不必等该证书。D3 保留明确切换权限。本计划没有启动 soak 或晋升 provider。
 - **回滚：** 按已审阅的 fenced export/import 和 schema-aware downgrade，不能靠替换二进制恢复旧写权威。
 
+冷旧源保留检查点：本项目全量备份现盘点注册的自定义状态与来源 registry 路由。
+真实 CLI 备份和独立静态解包保留完整 Markdown 字节、未引用的归档 Todo 与 runtime
+原始历史，包含 SQLite snapshot。这只修复路由遗漏，不代表审核式冷导入或完整状态
+重新激活已完成。继续既有 R5/T4 的导入 plan/确认、writer/Host/outbox fence 和 packaged
+App 验收，通过后才退役受影响旧 writer；D2 与发布默认值继续开放。
+
 [Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
 为 R2/R3 retirement 和迟到结果安全提供有界 R5 依赖。Codec 和 source-session lifetime
 transaction 已存在；attached Chat、handoff、Turn journal 的 fence 已分别资格化，

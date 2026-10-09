@@ -913,6 +913,14 @@ the backup-bound reviewed target and its Goal storage frontend,
 confirmation and same-operation import/recovery. Keep the cold-import work open;
 neither this prerequisite nor archive export qualifies writer cutoff or defaults.
 
+Cold-source retention checkpoint: current-project full backup discovers its
+registered custom state and source-registry routes. Real CLI backups and inert
+independent extraction preserve complete Markdown bytes, unreferenced archived
+Todos and raw runtime history, including SQLite snapshots. This closes a routing
+omission, not reviewed cold import or complete-state reactivation. Continue the
+existing R5/T4 import plan/confirmation, writer/Host/outbox fence and packaged App
+acceptance before retiring affected old writers; D2 and release defaults stay open.
+
 Existing canonical File/SQLite cutover now has a packaged settings journey using
 the existing typed migration/archive owner: immutable preview, explicit apply,
 original-plan recovery and independent current-source readback. Active capture
@@ -921,6 +929,21 @@ writes→File must use the current head; historical completion never selects the
 provider. This is a bounded App companion, not full old-source/Host upgrade or
 D2/release-default qualification. Continue those original acceptance frontiers
 and retire each last caller separately.
+
+Reviewed source admission now rejects unsupported lease JSON filenames,
+non-regular records and linked source subtrees instead of silently omitting or
+following them. The existing typed coordination owner verifies exact source
+bytes under shared locks; Python retains filesystem transport. Regular retained
+lease history remains witnessed without granting a live lease. This closes a
+bounded source-inventory gap; complete cold-source import, original-operation
+recovery, packaged App adoption and the reversible developer trial remain on
+the [existing migration/release path](../../reference/local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence).
+
+审核源准入拒绝不支持的租约 JSON 文件名、非普通文件和链接子目录，不再静默漏读
+或跟随链接。既有 TS coordination owner 在共享锁内核对原始字节；Python 保留
+文件系统传输。普通租约历史仍参与源见证，不产生新执行授权。这仅关闭有界源盘点
+缺口；完整冷源导入、原操作恢复、打包 App 采用和可逆开发者试用继续沿既有迁移
+与发布路径验收。
 
 New-Goal App recovery is a separate bounded R5/T4 gap: after Goal/Todo commit,
 Host startup or a lost response must resume the frozen original operation,

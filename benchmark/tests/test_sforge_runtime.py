@@ -268,18 +268,34 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
         backend.create_network_isolation(None, [alias, api], None)
 
 
-@pytest.mark.parametrize("interrupted,started,runtime,status", [
-    (True, True, 0, "cancelled"),
-    (True, False, 0, "cancelled"),
-    (False, False, 0, "launch_failed"),
-    (False, True, 0, "runner_failed"),
-    (False, True, 1, "terminal"),
+@pytest.mark.parametrize("interrupted,started,runtime,exit_code,timed_out,status", [
+    (True, True, 0, None, False, "cancelled"),
+    (True, False, 0, None, False, "cancelled"),
+    (False, False, 0, None, False, "launch_failed"),
+    (False, True, 0, 0, False, "runner_failed"),
+    (False, True, 1, 0, False, "terminal"),
+    (False, True, 310, 1, False, "runner_failed"),
+    (False, True, 310, None, False, "runner_failed"),
+    (False, True, 43200, -1, True, "terminal"),
+    (True, True, 43200, -1, True, "cancelled"),
 ])
-def test_native_result_disposition_uses_signal_and_start_evidence(interrupted, started, runtime, status):
+def test_native_result_disposition_requires_successful_exit_or_budget_timeout(
+    interrupted, started, runtime, exit_code, timed_out, status,
+):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import _result_status
-    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime) == status
+    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime,
+                          exit_code=exit_code, timed_out=timed_out) == status
+
+
+@pytest.mark.parametrize("timed_out,exit_code", [(True, -1), (True, None), (False, 0)])
+def test_planning_without_execution_entry_never_emits_completed_result(timed_out, exit_code):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import _result_status
+    assert _result_status(interrupted=False, started=True, runtime_seconds=300,
+        exit_code=exit_code, timed_out=timed_out, execution_started=False) == "runner_failed"
 
 
 def test_native_swallowed_interrupt_is_observed_and_handler_restored():
@@ -374,7 +390,7 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first == resumed
     assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
-    assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("exec timeout")
+    assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
 @pytest.mark.parametrize('enabled', [False, True])
@@ -453,7 +469,7 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 300),
     ("portfolio_risk_calibration", [], 43200, 300),
-    ("lean_analysis_proofs", [], 43200, 1800),
+    ("lean_analysis_proofs", [], 43200, 300),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
 def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
@@ -541,13 +557,13 @@ def test_edgebench_task_timeout_precedence(task, explicit, expected):
 
 @pytest.mark.parametrize("task,explicit,expected", [
     ("portfolio_risk_calibration", None, 300),
-    ("lean_analysis_proofs", None, 1800),
+    ("lean_analysis_proofs", None, 300),
     ("unknown-future-task", None, 300),
     ("lean_analysis_proofs", 60, 60),
     ("portfolio_risk_calibration", 1800, 1800),
     ("lean_analysis_proofs", 0, 0),
 ])
-def test_edgebench_task_eval_interval_precedence(task, explicit, expected):
+def test_edgebench_five_minute_sampling_default_and_explicit_override(task, explicit, expected):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import _task_default
@@ -584,3 +600,47 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt
+
+
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+def test_sforge_planning_has_no_independent_cap_or_extra_trial_budget(tmp_path, monkeypatch, profile):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd="/task", timeout_seconds=1800)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.runtime.planning_timeout is None
+    assert worker.runtime.scheduler_timeout == 1800
+    assert worker.turn_timeout == 1640
+    receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert receipt["planning_timeout_seconds"] is None
+    assert receipt["timeout_seconds"] == 1800
+    worker.prepared = True
+    command = worker.format_run_cmd("/task.md")
+    assert "LOOPX_PLANNING_TIMEOUT_SEC" not in command
+    assert " + 1800 " in command
+
+
+def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.log_dir = tmp_path / "collected"
+    backend.blind_api_endpoint = None
+    backend.feedback = None
+    backend.execution_command = "synthetic solver"
+    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k:
+        SimpleNamespace(exit_code=1, timed_out=False, elapsed_seconds=310,
+                        output="done: successful looking text"))
+    backend.exec_run_with_timeout(None, ["/bin/bash", "-c", backend.execution_command])
+    assert backend.execution_receipt == {"exit_code": 1, "execution_started": True,
+                                         "timed_out": False, "elapsed_seconds": 310}
+    assert json.loads((tmp_path / "execution-receipt.json").read_text()) == backend.execution_receipt

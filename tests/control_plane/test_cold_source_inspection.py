@@ -347,4 +347,6 @@ def test_unsafe_lease_inventory_is_not_silently_omitted(tmp_path, kind):
         (directory / "todo_removed.json").symlink_to(target)
     result = fixture.cli("coordination-shadow", "inspect-source", success=False)
     assert result["ok"] is False
-    assert "regular files" in result.get("error", "") or "unsupported filename" in result.get("error", "")
+    assert result["error"] == "source_lease_inventory_invalid"
+    assert not (fixture.runtime / "authority").exists()
+    assert not (fixture.runtime / "authority-shadow").exists()

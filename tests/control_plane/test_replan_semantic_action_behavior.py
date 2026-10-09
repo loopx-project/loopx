@@ -89,13 +89,38 @@ def _exhausted_action(
     )
 
 
-def _explore_context_action(
+def _inline_explore_context_action(
     request: Mapping[str, object],
 ) -> ScriptedExecToolAction:
-    read = _latest_quota_packet(request)["required_reads"][0]
-    assert read["kind"] == "explore_turn_context"
-    assert read["ordering"] == "before_work"
-    return ScriptedExecToolAction(command=read["command"])
+    packet = _latest_quota_packet(request)
+    interaction = packet["interaction_contract"]
+    assert isinstance(interaction, Mapping)
+    channel = interaction["agent_channel"]
+    assert isinstance(channel, Mapping)
+    work_context = channel["work_context"]
+    assert isinstance(work_context, Mapping)
+    sources = work_context["sources"]
+    assert isinstance(sources, list)
+    explore_sources = [
+        source for source in sources
+        if isinstance(source, Mapping)
+        and source.get("kind") == "explore_turn_context"
+    ]
+    assert len(explore_sources) == 1
+    source = explore_sources[0]
+    content = source.get("content")
+    assert isinstance(content, Mapping)
+    assert content.get("goal_id") == "replan-semantic-action-fixture"
+    assert content.get("agent_id") == "codex-replan-semantic-action"
+    boundary = content.get("boundary")
+    assert isinstance(boundary, Mapping)
+    assert boundary.get("read_only") is True
+    assert isinstance(source.get("command"), str) and source["command"]
+    assert not any(
+        isinstance(read, Mapping) and read.get("kind") == "explore_turn_context"
+        for read in channel.get("required_reads", [])
+    )
+    return ScriptedExecToolAction(command="cat replan-frontier.json")
 
 
 def _composition_successor_action(
@@ -435,8 +460,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     transport = ScriptedDoubaoExecTransport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
-            _explore_context_action,
-            ScriptedExecToolAction(command="cat replan-frontier.json"),
+            _inline_explore_context_action,
             ScriptedExecToolAction(command="cat fixture/permission-config.json"),
             _composition_successor_action,
         ]
@@ -453,7 +477,6 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     assert receipt["qualification_passed"] is True, receipt
     assert receipt["observed_tool_sequence"] == [
         "quota_should_run",
-        "explore_turn_context",
         "workspace_read",
         "workspace_read",
         "replan_successor_create",
@@ -479,38 +502,28 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     ] == selected_gap["experiment_node_ref"]
 
 
-@pytest.mark.parametrize("attempt", ["omit", "repeat", "wrong_scope"])
-def test_composition_read_obligation_cannot_be_skipped_replayed_or_retargeted(
-    tmp_path: Path, attempt: str,
-) -> None:
-    fixture = _build_fixture(tmp_path / "oracle", composition_frontier=True)
-    actions = [ScriptedExecToolAction(command=fixture.quota_guard_command)]
-    if attempt == "omit":
-        actions.append(ScriptedExecToolAction(command="cat replan-frontier.json"))
-    elif attempt == "repeat":
-        actions.extend([_explore_context_action, _explore_context_action])
-    else:
-        def wrong_scope(request: Mapping[str, object]) -> ScriptedExecToolAction:
-            action = _explore_context_action(request)
-            return ScriptedExecToolAction(
-                command=action.command.replace(
-                    "--goal-id replan-semantic-action-fixture", "--goal-id another-goal"
-                )
-            )
-        actions.append(wrong_scope)
-    receipt = DoubaoReplanSemanticActionBehaviorActor(
-        api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport(actions),
-    ).qualify(
-        qualification_id=f"composition-read-{attempt}",
-        fixture_root=tmp_path / "actor", composition_frontier=True,
+def test_required_explore_read_uses_nested_interaction_contract() -> None:
+    command = (
+        "loopx --format json explore turn-context --goal-id "
+        "replan-semantic-action-fixture --agent-id codex-replan-semantic-action"
     )
-    assert receipt["qualification_passed"] is False
-    assert receipt["failure_code"] == (
-        "repeated_explore_turn_context"
-        if attempt == "repeat" else "required_explore_turn_context_missing"
-    )
-    assert receipt["semantic_action_accepted"] is False
-    assert "replan_successor_create" not in receipt["observed_tool_sequence"]
+    packet = {
+        "interaction_contract": {
+            "agent_channel": {
+                "required_reads": [
+                    {"kind": "goal_state", "command": "cat goal-state.md"},
+                    {
+                        "kind": "explore_turn_context",
+                        "source": "turn_start_capability_hook",
+                        "ordering": "before_work",
+                        "command": command,
+                    },
+                ],
+            },
+        },
+    }
+
+    assert replan_behavior._required_explore_read_command(packet) == command
 
 
 def test_action_outside_observed_frontier_is_rejected(tmp_path: Path) -> None:

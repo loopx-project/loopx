@@ -35,6 +35,17 @@ select several. Full `backup-state` captures its global discovery registry by
 default, or the selected project registry with `--current-project-only`. The private
 archive manifest reports configuration verification and presence separately.
 
+With `--current-project-only`, physical discovery also includes the selected
+project's registered `state_file` and `source_registry` routes, including custom
+paths outside conventional Goal directories. Relative routes resolve against
+the registered repository. The selected project's `.loopx/registry.json` owns
+this scope, even when `--registry` names another project. Other projects are not
+followed; default host-wide discovery continues to use the global registry.
+Inspect `included`, `missing` and `warnings`: successful publication alone does
+not prove every registered source was reachable. Full-state copies retain raw
+Markdown history and runtime files; inert extraction does not import their
+leases, pending effects or historical receipts as new execution authority.
+
 Settings → Capability Center → **Configuration backup and recovery** offers
 download, file verification and isolated recovery through the same typed owner.
 Device scope includes all invoked Goals and machine settings; Goal scope

@@ -20,6 +20,7 @@ class PrivateConversationRequestMixin:
             {"binding_id": row["binding_id"], "app_ref": row["transport_ref"], "context_kind": row["context_kind"],
              "project_ref": row["project_ref"], "context_available": row["project_ref"] in titles, "project_title": titles.get(row["project_ref"], "Unavailable workspace"),
              "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
+             "audience": row.get("audience", "owner"), "group_count": len(row.get("group_refs", [])),
              "goal_count": len(bindings.goal_scope_ids(row)),
              "goal_scope": row.get("goal_scope", "selected") if row["context_kind"] == "steward" else None,
              "agent_candidates": [{key: item.get(key) for key in ["session_id", "goal_id", "agent_id", "executor_endpoint_id"]}
@@ -34,13 +35,28 @@ class PrivateConversationRequestMixin:
         from ...chat_lark_api import build_lark_goal_topic_runtime_snapshot
         try:
             body = self._read_json()
-            if set(body) - {"context_kind", "project_grant", "goal_scope"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
+            if set(body) - {"context_kind", "project_grant", "goal_scope", "audience", "group_ids"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
                 raise ValueError("select an App, authorized workspace and executor")
             profile = str(body["app_ref"])
             existing = _active_profile_configs(build_lark_goal_topic_runtime_snapshot(
                 registry_path=self.server.registry_path, runtime_root_override=self.server.runtime_root_override))
             from .conversation_identity import identity_ref
-            observed = self.server.runtime_controller.project_contexts.conversation_bindings.observe(profile)
+            observed = self.server.runtime_controller.project_contexts.conversation_bindings.observe(
+                profile, audience=body.get("audience") or "owner")
+            group_refs, available_group_refs = None, None
+            if body.get("audience") == "group":
+                from .goal_topic_connections import list_lark_group_chats, LarkGroupChatLookupError
+                requested = body.get("group_ids")
+                if not isinstance(requested, list) or not requested or len(requested) > 16 or any(not isinstance(item, str) for item in requested):
+                    raise ValueError("select one to sixteen groups visible to this App")
+                try:
+                    chats = list_lark_group_chats(app_ref=profile, runner=self._lark_runner(), cli_bin=self._require_lark_cli())
+                except LarkGroupChatLookupError as exc:
+                    raise ValueError("the App's group membership could not be verified") from exc
+                available_group_refs = [identity_ref(observed["provider_ref"], item["chat_id"]) for item in chats]
+                group_refs = [identity_ref(observed["provider_ref"], chat) for chat in requested]
+            elif "group_ids" in body or "audience" in body:
+                raise ValueError("unsupported conversation audience")
             from ...chat_lark_api import _app_identity_for_private_guard
             group_apps = [str(config.get("bot_app_id") or _app_identity_for_private_guard(
                 other_profile, self._lark_runner(), self._require_lark_cli()))
@@ -54,7 +70,8 @@ class PrivateConversationRequestMixin:
                 transport_ref=profile, project_ref=str(body["project_ref"]), executor_endpoint_id=endpoint,
                 context_kind=str(body.get("context_kind", "project")),
                 project_grant=str(body["project_grant"]) if "project_grant" in body else None,
-                goal_scope=str(body["goal_scope"]) if "goal_scope" in body else None)
+                goal_scope=str(body["goal_scope"]) if "goal_scope" in body else None,
+                audience=body.get("audience"), group_refs=group_refs, available_group_refs=available_group_refs)
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)

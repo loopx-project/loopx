@@ -1,3 +1,5 @@
+import pytest
+
 import loopx.chat_manager_details as details
 from loopx.chat_manager import manager_workspace
 
@@ -58,7 +60,18 @@ def test_priority_context_keeps_conditions_and_scoped_decision(monkeypatch, tmp_
            'required_decision_scopes': [{'kind': 'direction', 'granularity': 'action',
                                          'scope_key': 'publish_report'}],
            'note': 'Context. ' * 60 + 'Keep this a draft; do not publish.'}
-    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': [row]})
+    selectors = []
+
+    def read(**kwargs):
+        assert kwargs['goal_id'] == 'alpha'
+        selector = kwargs.get('todo_id')
+        selectors.append(selector)
+        if selector is None:
+            return {'ok': True, 'todos': [row]}
+        assert selector == row['todo_id']
+        return {'ok': True, 'todo': row}
+
+    monkeypatch.setattr(details, 'list_goal_todos', read)
     result = details.read_manager_goal_details(tmp_path/'r', tmp_path, 'alpha', owner_scope=True)
     overview = result['todos'][0]
     assert overview['resume_when'] == row['resume_when']
@@ -70,6 +83,30 @@ def test_priority_context_keeps_conditions_and_scoped_decision(monkeypatch, tmp_
                                              owner_scope=True, todo_id='todo_work')
     assert exact['todos'][0]['continuation'].endswith('Keep this a draft; do not publish.')
     assert exact['todos'][0]['content_truncated'] is False
+    assert exact['todos'][0]['resume_when'] == row['resume_when']
+    assert exact['todos'][0]['required_decision_scopes'] == row['required_decision_scopes']
+    assert selectors == [None, 'todo_work']
+
+
+@pytest.mark.parametrize('available', [True, False])
+def test_exact_read_distinguishes_missing_from_unavailable(monkeypatch, tmp_path, available):
+    def read(**kwargs):
+        assert kwargs['goal_id'] == 'alpha' and kwargs['todo_id'] == 'todo_missing'
+        if available:
+            return {'ok': True, 'todo': None, 'not_found': True}
+        return {'ok': False, 'error': 'private failure body'}
+
+    monkeypatch.setattr(details, 'list_goal_todos', read)
+    result = details.read_manager_goal_details(
+        tmp_path/'r', tmp_path, 'alpha', owner_scope=True, todo_id='todo_missing',
+    )
+    assert result['status'] == ('read' if available else 'unavailable')
+    assert result['todos'] == []
+    assert result['coverage'] == (
+        {'active': 0, 'included': 0, 'omitted': 0} if available else
+        {'active': None, 'included': 0, 'omitted': None}
+    )
+    assert 'private failure body' not in str(result)
 
 
 def test_manager_receives_default_operating_instructions_without_overwriting_custom(tmp_path):

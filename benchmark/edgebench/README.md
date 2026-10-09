@@ -60,9 +60,13 @@ The preflight counts existing Docker container limits and retains 2 CPUs/4 GiB
 of host headroom. Unlimited containers or insufficient capacity block admission.
 Run this in an operator-controlled Docker pool: the host lock coordinates this
 adapter's online/offline processes, not arbitrary outside Docker launches. Keep
-that reserved capacity available for the cohort. Slots are finite registrations,
-not recycled when a solver finishes; start a new cohort after draining/stopping
-the previous server. Native/blind use ordinary `sforge serve` instead.
+that reserved capacity available for the cohort. Online policy v2 releases a
+run's slot after verified worker removal. An evaluation still in flight keeps
+that slot until its native result is terminal; stopping a solver alone does not
+free evaluator capacity. Native histories, archives and original registration
+identities remain readable, and released registrations reject new captures.
+Native/blind use ordinary `sforge serve` instead. Existing v1 cohorts remain
+frozen: this does not upgrade or reclaim slots in an already-running server.
 
 An operator may explicitly pass `--allow-resource-overcommit` for a monitored
 shared Docker pool. Container CPU/memory ceilings then remain enforced, but are
@@ -73,7 +77,14 @@ zero exclusive reservation and the monitoring requirement. Monitor actual memory
 CPU pressure and grading latency throughout the cohort and stop affected trials
 if sustained pressure makes operation unreliable. This mode preserves per-run
 evaluation lanes but does not guarantee dedicated compute or equal latency;
-record shared-pool contention when comparing experiments.
+record shared-pool contention when comparing experiments. For a larger explicitly
+shared cohort, `--shared-startup-memory-gib 16` may replace the per-slot startup
+estimate. It requires `--allow-resource-overcommit`, cannot be below one evaluator,
+one worker startup allowance and host headroom (16 GiB with current limits), and
+still fails on insufficient available memory or unbounded containers. This is a
+startup margin, not sustained capacity qualification: retain continuous load and
+grading-latency monitoring and stop affected trials on sustained pressure. Strict
+admission and the shared mode without this explicit option retain their defaults.
 
 Then run:
 
@@ -92,15 +103,34 @@ Trial timeouts use **explicit `--timeout` → [task defaults](task-defaults.json
 feedback profile; other tasks retain the 18-hour fallback. These are total trial
 budgets, including planning, not per-turn limits.
 
+SForge `loopx-planned` has **no independent planning timeout**. Planning and
+execution share the original absolute trial deadline; planning consumes that
+budget and a process resume cannot reset it. Runtime and worker receipts record
+`planning_timeout_seconds: null`. The existing 160-second startup/settlement
+reserve still controls admission of execution wakes. Shared Harbor retains its
+300-second planning default.
+
+The adapter also records the actual solver command's exit code, timeout and
+elapsed time in `execution-receipt.json`. A positive runtime alone no longer
+qualifies completion. An expired deadline before execution entry fails; an inner
+GNU timeout after verified execution entry is a normal budget stop. Other nonzero
+or unknown exits, including an early exit with code 124, are `runner_failed` and
+do not publish `final_result.json`. Keep their captures and failure evidence;
+do not count an initial artifact's score as a solver outcome.
+
 Auto-evaluation uses **explicit `--eval-interval` → task defaults → 300 seconds**.
-Portfolio defaults to **300 seconds (5 minutes)**; Lean Analysis Proofs defaults
-to **1,800 seconds (30 minutes)** to space out expensive compilation. Other tasks
-retain the 5-minute fallback. Defaults apply equally to every worker and feedback
-profile. Explicit `--eval-interval 0` disables periodic auto-evaluation in native/blind;
+All tasks, including Portfolio and Lean Analysis Proofs, default to **300 seconds
+(5 minutes)**. Lean previously defaulted to 1,800 seconds; use an explicit
+`--eval-interval 1800` when that slower sampling is needed. Defaults apply equally
+to every worker and feedback profile. Explicit `--eval-interval 0` disables periodic auto-evaluation in native/blind;
 `best-only` requires a positive interval. The resolved
 interval is passed to SForge and recorded in each attempt's runtime receipt.
-These defaults affect new launches; editing the file does not change a running
-sampler or create historical snapshots. Sampling cadence does not set evaluator
+These are research-adapter defaults. The upstream Codex leaderboard experiment
+[configuration](https://github.com/ByteDance-Seed/EdgeBench/blob/main/examples/all-tasks-k8s/experiment-codex.yaml)
+uses 1,800 seconds for these tasks. A native-agent `official` arm does not imply
+that all leaderboard settings are reproduced. Existing attempts keep their
+recorded sampling interval; new defaults never rewrite a running attempt or
+create historical snapshots. Sampling cadence does not set evaluator
 concurrency or replace the submission cooldown, which remains 120 seconds.
 `--timeout`,
 `--eval-interval`, and `--submission-cooldown` support explicitly recorded
@@ -117,6 +147,11 @@ recovery: their LoopX scheduler owns repeated wakes, error backoff and terminal
 exit. Once it exits, SForge collects the final artifacts instead of restarting
 the scheduler. This changes the heartbeat transport, not LoopX's decision to
 continue or end a lane; scheduler exit alone does not prove task success.
+The private execution receipt distinguishes wrapper startup from actual work
+entry. For LoopX workers, both inner deadline expiry and Docker's outer timeout
+must have an execution-entry marker before the runner writes a final result;
+a timeout during planning remains a failed attempt. Direct native Codex commands
+enter execution without that planning wrapper. Cancellation remains separate.
 The official profile retains native outer recovery, and single/native Goal
 behavior is unchanged. Record a new runner revision for new attempts; do not
 rewrite earlier `outer_resume` receipts. Explicit total timeouts can support diagnostics,
@@ -136,8 +171,8 @@ an evaluator-feedback-free control. Harbor is unchanged.
 | blind | None; public task files, local tests and compiler feedback remain available | Host evaluates fixed automatic samples; agent has no judge route or credentials |
 | best-only | Latest strict improvement notification and the corresponding submitted-source checkpoint; no score, delta, diagnostics or negative-result status | Fixed capture cadence; one evaluator and latest pending capture per run; agent cannot request extra evaluations |
 
-Best-only supports non-game, offline tasks with `score_first` or
-`valid_then_score` selection, including maximizing and minimizing scores. It
+Best-only supports non-game, offline tasks with `score_first`,
+`valid_then_score` or `pass_rate_first` selection, including maximizing and minimizing scores. It
 requires the explicit API-only proxy and a positive sampling interval. Unsupported
 selection policies fail with an actionable error instead of silently changing
 the task's ranking. Native grading and score selection remain unchanged. The
@@ -158,6 +193,13 @@ The publisher accepts only that sampler's admitted submission/round identities
 and verifies the original source digest. Offline/history-only results cannot
 establish the baseline or change the online incumbent. The solver command's exit
 pauses capture/delivery; official outer resume reuses the same publisher and lane.
+After native worker cleanup, the host sends an epoch-bound release for the exact
+run/task, including failures before feedback startup. The private
+`online-captures/release.json` records acknowledgement without credentials.
+Release is idempotent and does not cancel an evaluation or erase native history.
+If cleanup or release acknowledgement fails, treat release as unconfirmed and
+reconcile the exact registration before replacement admission; do not restart
+the live judge.
 
 After the entire online cohort ends, stop its judge and backfill all captures:
 
@@ -177,11 +219,17 @@ covers online submissions only; use the complete offline result for post-run
 qualification. Neither report by itself certifies integrity or score countability.
 No offline result is routed to the worker.
 
-The first completed valid finite score establishes a silent baseline. Only a
-strictly better valid score updates `/opt/edgebench-feedback/latest.json`; ties,
+The first completed valid finite score establishes a silent baseline. The task's
+native selection policy is the sole improvement criterion among valid scored
+snapshots. Only a strictly better native rank updates `/opt/edgebench-feedback/latest.json`; ties,
 regressions, invalid/non-finite results and errors do not update it. Multiple
 completed improvements observed together coalesce to the best one. Out-of-order
-results compete against the best observed score, never against the last result.
+results compete against the best observed native rank, never against the last result.
+For `pass_rate_first`, a higher pass rate can be an improvement even when its
+scalar score is lower; a scalar gain with a lower native rank is silent.
+When that policy returns no winner (for example, all pass rates are zero),
+polling stays silent and continues normally. A later native winner can improve
+the already established baseline; no scalar fallback or evaluator change is used.
 Notifications describe the named **evaluated snapshot**, not the current workspace.
 The source archive is the agent's own original submission, with its SHA-256; it
 contains no judge output. The adapter never restores files automatically.
@@ -219,7 +267,7 @@ A notification looks like this (digest abbreviated for illustration):
     "snapshot_id": "auto-7",
     "source_sha256": "<SHA-256>",
     "source_archive": "/opt/edgebench-feedback/auto-7-<SHA-256>.tar.gz",
-    "message": "This evaluated snapshot strictly improved the best valid score observed so far. It may differ from your current files; keep using local validation."
+    "message": "This evaluated snapshot strictly improved the task's native ranking among valid scored snapshots. It may differ from your current files; keep using local validation."
   }
 }
 ```

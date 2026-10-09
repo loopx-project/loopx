@@ -20,7 +20,9 @@ from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
 from benchmark.runtime.codex import TASK_ENTRIES
-from benchmark.runtime.sforge import DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker
+from benchmark.runtime.sforge import (
+    DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
+)
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
 from benchmark.edgebench.prompts import blind_task_prompt, best_only_task_prompt
@@ -52,12 +54,15 @@ def _observe_run(call):
         signal.signal(signal.SIGINT, previous)
 
 
-def _result_status(*, interrupted, started, runtime_seconds):
+def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_out=False,
+                   execution_started=True):
     if interrupted:
         return "cancelled"
     if not started:
         return "launch_failed"
-    return "terminal" if runtime_seconds > 0 else "runner_failed"
+    if not execution_started or runtime_seconds <= 0 or (not timed_out and exit_code != 0):
+        return "runner_failed"
+    return "terminal"
 
 
 def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort, feedback="native"):
@@ -176,6 +181,7 @@ def main(argv=None):
     feedback = (BestOnlyFeedback(
         trial=trial, run_id=args.run_id, task_id=args.task,
         direction=task.judge.score_direction,
+        selection=task.judge.selection,
         judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
         admin_secret=get_admin_secret(args.log_dir), logger=logger, sampler=sampler,
     ) if args.feedback == "best-only" else None)
@@ -188,6 +194,8 @@ def main(argv=None):
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
         "task_entry": agent.task_entry,
+        **({"planning_timeout_seconds": None}
+           if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
         **({"turn_envelope": True} if args.turn_envelope else {}),
@@ -223,12 +231,17 @@ def main(argv=None):
             feedback.close()
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
+    execution = backend.execution_receipt or {}
     status = _result_status(interrupted=was_interrupted,
                             started=(trial / "started_at").is_file(),
-                            runtime_seconds=result.runtime_seconds)
+                            runtime_seconds=result.runtime_seconds,
+                            execution_started=execution.get("execution_started", False),
+                            exit_code=execution.get("exit_code"),
+                            timed_out=result.timed_out or execution.get("timed_out", False))
     receipt.update(status=status, controller_elapsed_seconds=elapsed,
                    timed_out=result.timed_out, runtime_seconds=result.runtime_seconds,
                    best_score=result.best_score, total_rounds=result.total_rounds)
+    receipt["execution"] = execution
     _write_native_final_result(trial, result, status=status, agent=agent.name,
                                task=task.task_id, run_id=args.run_id,
                                model=args.model, effort=args.effort, feedback=args.feedback)
