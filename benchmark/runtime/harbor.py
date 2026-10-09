@@ -165,6 +165,9 @@ class BenchmarkCodex(CodexOffline):
             "LOOPX_INSTALL_OPENCODE": "0",
             "LOOPX_INSTALL_CLAUDE": "0",
             "LOOPX_SKILL_DEDUPE_OTHER_ROOT": "0",
+            # Research trials do not send background usage statistics. Keep
+            # setup and control commands under the same trial policy as tools.
+            "LOOPX_USAGE_PING": "0",
             # Codex tool calls use `bash -lc`, whose login profile may replace
             # PATH. BASH_ENV restores staged tools and the task image toolchain.
             "BASH_ENV": _BASH_ENV,
@@ -271,6 +274,7 @@ class BenchmarkCodex(CodexOffline):
             "task_entry": self.execution.task_entry,
             **({"turn_envelope": True} if self.execution.turn_envelope else {}),
             "home_scope": "trial",
+            "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
             "scheduler_terminal_packet_compatibility": True,
             **self._replan_receipt(),

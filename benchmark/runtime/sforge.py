@@ -222,6 +222,7 @@ class SForgeWorker(CodexAgent):
             "profile": self.profile, "model": self._config.agent_model,
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
+            "loopx_usage_ping_enabled": False,
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
