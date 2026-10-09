@@ -29,6 +29,12 @@ read-only.
   `read-only`.
 - `trusted_owner` lets the Codex manager use normal host filesystem, shell, Git, web, and
   configured-connector tools. Its Codex sandbox is `danger-full-access`.
+  Ordinary authorized requests now execute in the current conversation using the relevant
+  project's instructions and skills, with actual result verification. A similar registered
+  responsibility alone no longer forces an inbox handoff. Explicitly assigned owners,
+  established Goal work and tasks needing another Agent's context or execution grant still
+  use delegation. An absent worker binding neither grants worker launch nor removes the
+  manager's own host grant. Completed local work creates no replacement Goal or Todo.
 - `trusted_owner` is not ambient authority. The current request and existing standing grants
   still bound the work. Protected merge, release, deploy, delete, and payment operations retain
   their typed contracts. Provider permission, audience, and durable LoopX state ownership do

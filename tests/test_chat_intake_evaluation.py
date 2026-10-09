@@ -67,6 +67,37 @@ def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
     assert CONVERSATION_INTENT_RESOLUTION_INSTRUCTION not in _turn_prompt("Execute.", execution_mode=True)
 
 
+def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
+    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat_manager import manager_agent_objective
+
+    prompt = _turn_prompt("Save the supplied source using this project's rules.", runtime_profile="trusted_owner")
+    objective = manager_agent_objective("trusted_owner")
+    for text in [prompt, objective]:
+        assert TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION in text
+        assert "ordinary work or a correction belonging to a qualified existing responsible Agent is a request to pass context" not in text
+        assert "A missing worker execution binding does not revoke your own current host grant" in text
+        assert "do not impersonate another Agent, bypass its Todo/lease authority" in text
+    assert "Use context_handoff for a uniquely relevant" not in prompt
+    assert "A protected_action is only an untrusted proposal" in prompt
+
+
+@pytest.mark.parametrize("mode", ["restricted", "project", "execution"])
+def test_direct_manager_work_does_not_widen_other_conversations(mode):
+    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat_manager import manager_agent_objective
+
+    kwargs = {"runtime_profile": "restricted"}
+    if mode != "restricted":
+        kwargs = {"project_work" if mode == "project" else "execution_mode": True}
+    prompt = _turn_prompt("Save this source.", **kwargs)
+    assert TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION not in prompt
+    if mode == "restricted":
+        assert "Do not edit files" in prompt
+        assert "Use context_handoff for a uniquely relevant" in prompt
+        assert TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION not in manager_agent_objective()
+
+
 @pytest.mark.parametrize("message", [None, "", " \n\t", 7, ["Answer"]])
 def test_an_ordinary_answer_needs_visible_text(message):
     row = evaluation.score({"id": "ordinary", "expected": "answer"}, {"message": message})

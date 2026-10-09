@@ -46,6 +46,7 @@ from .capabilities.steward_executor import (
 )
 from .chat_agent import (
     CONVERSATION_INTENT_RESOLUTION_INSTRUCTION,
+    TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION,
     CodexChatAgentError,
 )
 from .chat_store import (
@@ -58,6 +59,12 @@ MANAGER_AGENT_GOAL_ID = "loopx-manager"
 # The owner-facing manager channel. External audiences keep their own channel id
 # and their own transcript, so they are never measured by this contract.
 MANAGER_CHANNEL_ID = "manager"
+_ORDINARY_WORK_HANDOFF_INSTRUCTION = (
+    "After checking whether useful work remains, ordinary work or a correction belonging to a qualified existing responsible Agent is a request to pass context, objectives or constraints to that Agent; use context_handoff "
+)
+_DELEGATE_ORDINARY_WORK_INSTRUCTION = (
+    "Delegate ordinary requested work to the responsible worker with the original intent and constraints; "
+)
 MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer the current user message in Chinese unless the user requests another language. "
     + manager_answer_contract_instruction() + " "
@@ -102,7 +109,7 @@ MANAGER_AGENT_OBJECTIVE = (
     "Before choosing a worker or claiming none exists, use loopx_manager_read view=agents, search responsibilities and paginate the permitted registry; inspect relevant declared remote sources too. "
     "The context_delegation targets are delivery grants, not the full Agent inventory. A discovered worker with not_granted needs the exact existing sender/recipient scope repaired; do not substitute an unrelated worker. "
     "Distinguish registration, declared responsibility, delivery permission and unchecked execution readiness. Unknown presence is not offline. "
-    "After checking whether useful work remains, ordinary work or a correction belonging to a qualified existing responsible Agent is a request to pass context, objectives or constraints to that Agent; use context_handoff "
+    + _ORDINARY_WORK_HANDOFF_INSTRUCTION +
     "with the exact goal_id and agent_id from the supplied context_delegation catalog and a collaboration_brief_v0 brief preserving the relevant conversation, corrections, rejected approaches, constraints, inputs, acceptance and return requirement. Do not reduce a multi-message request to the last sentence. This is already authorized "
     "context delivery, not a Todo proposal: do not ask for another confirmation, set priority, change a plan, "
     "or interrupt the receiver. The receiving Agent owns relevance, replanning, and reporting its decision. "
@@ -115,7 +122,7 @@ MANAGER_AGENT_OBJECTIVE = (
     "For remote/SSH reports, discover sources and read the chosen source_id's portfolio, Todos and deliveries. Local tasks mentioning SSH are not remote evidence. "
     "the initial directory is not a completed investigation. Choose and paginate reads autonomously. "
     "Do not inspect arbitrary repositories, modify files, run shell commands, or mutate LoopX state in this Chat Turn. "
-    "Delegate ordinary requested work to the responsible worker with the original intent and constraints; "
+    + _DELEGATE_ORDINARY_WORK_INSTRUCTION +
     "do not require the owner to approve your translation into task edits. Only clarify missing targets, "
     "necessary facts, or authority beyond the existing delegation. Existing protected operations keep "
     "their specific authority requirements. Never claim that a durable change happened "
@@ -141,7 +148,13 @@ def manager_agent_objective(runtime_profile: str = "restricted") -> str:
         raise ValueError("unknown manager runtime profile")
     return MANAGER_AGENT_OBJECTIVE.replace(
         _RESTRICTED_HOST_INSTRUCTION,
-        _TRUSTED_OWNER_HOST_INSTRUCTION,
+        _TRUSTED_OWNER_HOST_INSTRUCTION + TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION,
+    ).replace(
+        _ORDINARY_WORK_HANDOFF_INSTRUCTION,
+        "When delegation is necessary under the current owner/work rules, use context_handoff ",
+    ).replace(
+        _DELEGATE_ORDINARY_WORK_INSTRUCTION,
+        "When another worker is needed, preserve the original intent and constraints; ",
     )
 
 
