@@ -82,6 +82,8 @@ def _run_inspection_cli(
     goal_id: str = "fixture-goal",
     agent_id: str = "fixture-agent",
     turn_key: str = TURN_KEY,
+    watch: bool = False,
+    watch_interval: float = 0.01,
 ) -> tuple[int, str]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -99,6 +101,11 @@ def _run_inspection_cli(
                 agent_id,
                 "--turn-key",
                 turn_key,
+                *(
+                    ["--watch", "--watch-interval", str(watch_interval)]
+                    if watch
+                    else []
+                ),
                 "--format",
                 output_format,
             ]
@@ -267,6 +274,7 @@ def test_inspect_journal_watch_emits_only_changed_safe_progress_events(
     snapshots = iter([
         {
             "ok": True,
+            "journal_consistent": True,
             "journal_status": "in_progress",
             "completed_phases": list(TRANSACTION_PHASES[:2]),
             "effects": [],
@@ -274,18 +282,21 @@ def test_inspect_journal_watch_emits_only_changed_safe_progress_events(
         },
         {
             "ok": True,
+            "journal_consistent": True,
             "journal_status": "in_progress",
             "completed_phases": list(TRANSACTION_PHASES[:2]),
             "effects": [],
         },
         {
             "ok": True,
+            "journal_consistent": True,
             "journal_status": "in_progress",
             "completed_phases": list(TRANSACTION_PHASES[:3]),
             "effects": [],
         },
         {
             "ok": True,
+            "journal_consistent": True,
             "journal_status": "committed",
             "completed_phases": list(TRANSACTION_PHASES),
             "effects": [],
@@ -328,6 +339,71 @@ def test_inspect_journal_watch_emits_only_changed_safe_progress_events(
     assert events[2]["completed_phases"] == list(TRANSACTION_PHASES)
     assert all(event["effects"] == [] for event in events)
     assert "must-not-leak" not in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "completed_phases", "expected_violation"),
+    [
+        ("other-agent", COMPLETED_PHASES, "owner_mismatch"),
+        ("fixture-agent", ["host_execute", "not-a-transaction-phase"],
+         "completed_phases_not_ordered_prefix"),
+    ],
+)
+def test_inspect_journal_watch_rejects_inconsistent_real_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    completed_phases: list[str],
+    expected_violation: str,
+) -> None:
+    journal = _journal()
+    journal["completed_phases"] = completed_phases
+    path = _write_journal(tmp_path, journal)
+    before = path.read_bytes()
+    monkeypatch.setattr(turn_inspection.time, "sleep", lambda _seconds: None)
+
+    exit_code, raw_output = _run_inspection_cli(
+        tmp_path, output_format="json", agent_id=agent_id, watch=True,
+    )
+
+    assert exit_code == 1
+    diagnostic = json.loads(raw_output)
+    assert diagnostic["schema_version"] == "loopx_turn_journal_inspection_v1"
+    assert diagnostic["journal_consistent"] is False
+    assert expected_violation in diagnostic["violations"]
+    assert diagnostic["schema_version"] != turn_inspection.TURN_PROGRESS_EVENT_SCHEMA_VERSION
+    assert path.read_bytes() == before
+    assert "do-not-expose" not in raw_output
+
+
+def test_inspect_journal_watch_keeps_consistent_in_progress_observable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
+
+    journal = _journal(status="in_progress")
+    journal["completed_phases"] = list(TRANSACTION_PHASES[:2])
+    path = _write_journal(tmp_path, journal)
+
+    def finish_committed_turn(_seconds: float) -> None:
+        committed = _journal()
+        path.write_text(json.dumps(committed, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(turn_inspection.time, "sleep", finish_committed_turn)
+
+    exit_code, raw_output = _run_inspection_cli(
+        tmp_path, output_format="json", watch=True,
+    )
+
+    events = [json.loads(line) for line in raw_output.splitlines()]
+    assert exit_code == 0
+    assert len(events) == 2
+    assert events[0]["schema_version"] == turn_inspection.TURN_PROGRESS_EVENT_SCHEMA_VERSION
+    assert events[0]["journal_status"] == "in_progress"
+    assert events[0]["completed_phases"] == list(TRANSACTION_PHASES[:2])
+    assert events[1]["journal_status"] == "committed"
+    assert events[1]["completed_phases"] == list(TRANSACTION_PHASES)
 
 
 def test_inspect_journal_watch_rejects_non_positive_interval_before_read(

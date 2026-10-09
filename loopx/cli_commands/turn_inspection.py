@@ -91,6 +91,14 @@ def handle_turn_journal_inspection(
                         )
                         return 1
 
+                    if payload.get("journal_consistent") is not True:
+                        print_payload(
+                            payload,
+                            fmt,
+                            render_loopx_turn_journal_inspection_markdown,
+                        )
+                        return 1
+
                     status = str(payload.get("journal_status") or "")
                     phases = payload.get("completed_phases")
                     completed_phases = (
