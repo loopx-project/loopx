@@ -122,10 +122,30 @@ class _OwnedSpace:
         if self.executable is not None and self.executable != config.executable:
             raise ValueError("reader executable changed")
         if self.space is None:
-            # A lost creation receipt is ambiguous: don't create another space
-            # on the next tool call. An operator must inspect/restart the host.
+            # Creation may have succeeded before its receipt was lost. Discover
+            # this process's exact nonce without creating or claiming a space.
             if self.creation_attempted:
-                raise ValueError("reader space creation outcome unknown")
+                script = (
+                    f"const matches=(await listTaskSpaces()).filter(s=>s.name==={json.dumps(self.name)});"
+                    f"console.log({json.dumps(SPACE_MARKER)}+JSON.stringify({{matches:matches.map(s=>"
+                    "({id:s.id,createdBy:s.createdBy,ownership:s.ownership}))}));"
+                )
+                result = _run(config.executable, script, deadline=deadline)
+                values = [line[len(SPACE_MARKER):] for line in (result.stdout + "\n" + result.stderr).splitlines()
+                          if line.startswith(SPACE_MARKER)]
+                if result.returncode or len(values) != 1:
+                    raise ValueError("reader space recovery outcome unknown")
+                value = json.loads(values[0])
+                matches = value.get("matches") if isinstance(value, dict) else None
+                if not isinstance(matches, list) or len(matches) != 1:
+                    raise ValueError("reader space recovery is ambiguous")
+                match = matches[0]
+                if (not isinstance(match, dict) or type(match.get("id")) is not int
+                        or match["id"] <= 0 or match.get("createdBy") != "agent"
+                        or match.get("ownership") != "agent"):
+                    raise ValueError("reader space is not agent-owned")
+                self.space = match["id"]
+                return replace(config, task_space=self.space)
             self.creation_attempted = True
             self.executable = config.executable
             script = (f"const t=await taskSpace({json.dumps(self.name)});"
@@ -185,6 +205,12 @@ def _navigation(config: ReaderConfig, url: str, *, image: bool = False) -> str:
         f"const origins={json.dumps(sorted(config.origins - {'*'}))}.map(o=>new URL(o).origin);"
         "if(!allowAllOrigins&&!origins.includes(target.origin))"
         "throw new Error('source_origin_not_authorized');"
+        # Ownership on a TaskSpace handle is a snapshot. Observe live control
+        # before resolving the Page; never take over or replace a user's space.
+        f"const live=(await listTaskSpaces()).find(s=>s.id==={config.task_space});"
+        "if(live&&live.ownership!=='agent'){"
+        f"console.log({json.dumps(MARKER)}+JSON.stringify({{error:'source_reader_not_agent_owned'}}));"
+        "throw new Error('source_reader_not_agent_owned');}"
         f"let t;try{{t=await taskSpace({config.task_space});}}catch(e){{"
         "if(/task space not found/i.test(String(e?.message)))"
         f"console.log({json.dumps(SPACE_MARKER)}+JSON.stringify({{closed:true}}));throw e;}}"
@@ -269,7 +295,7 @@ def _result(stdout: str, stderr: str, url: str) -> dict[str, object]:
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") in {"source_url_changed", "source_content_not_ready"}:
+        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_reader_not_agent_owned"}:
             return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
         text, title = value["text"], value["title"]
@@ -356,7 +382,7 @@ def _image_result(stdout: str, stderr: str, url: str, index: int, path: str) -> 
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_image_unavailable",
+        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_reader_not_agent_owned", "source_image_unavailable",
                                    "source_image_bounds_unsupported"}:
             return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
@@ -411,6 +437,9 @@ def _read(url: str, image_index: int | None = None, screenshot_path: str = "") -
                 continue
             break
         if result.returncode:
+            stopped = _result(result.stdout, result.stderr, canonical)
+            if stopped.get("error") == "source_reader_not_agent_owned":
+                return stopped
             return {"ok": False, "error": "browser_read_failed",
                     "exit_code": result.returncode}
         if image_index is not None:
@@ -431,6 +460,8 @@ def read_public_url(url: str) -> dict[str, object]:
 
     Images are metadata only here. Use read_public_image for actual pixels.
     A verification wall or truncation is not a complete source read.
+    If source_reader_not_agent_owned, preserve the Page and resume this tool
+    once browser control returns. No extra chat confirmation is required.
     """
     return _read(url)
 

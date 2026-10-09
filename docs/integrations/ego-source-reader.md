@@ -64,8 +64,25 @@ In `auto` mode, URL/configuration/origin validation runs before creation.
 The process reuses its space for text and image calls, and replaces it once only
 when Ego explicitly reports `task space not found`. Other browser errors,
 verification walls and user-control stops do not create replacements. An
-ambiguous creation receipt fails closed until the operator inspects/restarts the
-host. On normal MCP shutdown or SIGTERM, it finishes only its own created,
+ambiguous creation receipt never triggers another creation attempt.
+
+If a creation receipt is lost, the next tool call first looks up the process's
+exact unique space name. One Agent-created, currently Agent-owned match restores
+that original space automatically. Zero matches, duplicate names, unknown
+ownership or a user-controlled match preserve the uncertainty without creating,
+claiming or taking over another space. This bounded lookup shares the existing
+30-second call budget and returns no unrelated space metadata.
+
+Before navigation, the reader checks live ownership rather than trusting an old
+TaskSpace handle. `source_reader_not_agent_owned` preserves the Page without
+navigating or capturing it. Once Ego returns Agent control, the next call uses
+the same space automatically; no extra chat confirmation is needed. This tool
+does not force control, poll in the background or grant approval for protected
+actions. Browser failures and rendering timeouts alone are not requests for
+human handoff. A source's actual login or verification requirement remains a
+separate boundary; follow the installed Ego skill and continue independent work.
+
+On normal MCP shutdown or SIGTERM, it finishes only its own created,
 still-agent-owned space. SIGTERM cleanup can complete while the stdio server
 still waits for its host to close stdin; callers should also close the pipe when
 stopping the process. Configured numeric spaces are never finished by the
