@@ -618,14 +618,18 @@ owned Host 进程、未晋升源的原生租约和 File/SQLite 验证：进程�
 过期 active 租约仍拒绝导入；原生释放后保留历史身份，切换后旧 grant 在 Host 启动前
 拒绝。这是合成工作对既有 supervisor/lease 边界的验证，不是自动发现/停止 Host
 或 live 模型验收。pending outbox 逐项处置、旧正常 writer 物理缺席的 App 加载、
-完整 Goal 历史与备份恢复继续开放；协调源备份验证不结算完整恢复。详见
+完整状态重新激活继续开放；协调源备份验证不结算完整恢复。详见
 [冷源导入与支持边界](../../reference/local-authority-provider-selection.md)。
 
 冷旧源保留检查点：本项目全量备份现盘点注册的自定义状态与来源 registry 路由。
-真实 CLI 备份和独立静态解包保留完整 Markdown 字节、未引用的归档 Todo 与 runtime
-原始历史，包含 SQLite snapshot。这只修复路由遗漏，不代表审核式冷导入或完整状态
-重新激活已完成。继续既有 R5/T4 的导入 plan/确认、writer/Host/outbox fence 和 packaged
-App 验收，通过后才退役受影响旧 writer；D2 与发布默认值继续开放。
+真实 CLI 冷导入→新增 canonical 写入→全量备份→独立静态解包现已串联验证
+File/SQLite 完整 head、全部 committed journal、未引用的归档要求、存储配置和原始
+capture/rollback/已释放 lease 字节。回读前让原项目与 runtime 不可访问；选定 provider
+存储缺失时明确失败，不新建替代库或回退 File。导入前备份另行保留投影前的原始
+Markdown。这资格化独立数据与历史回读，不代表身份采用、pending effect 处置或
+Host 重新激活。继续既有 R5/T4 的这些边界和 packaged App 恢复旅程，通过后才退役
+受影响旧 writer；D2 与发布默认值继续开放。详见
+[全量状态恢复边界](../../reference/configuration-backup.md#full-state-recovery-after-cold-import)。
 
 [Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
 为 R2/R3 retirement 和迟到结果安全提供有界 R5 依赖。Codec 和 source-session lifetime

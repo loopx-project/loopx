@@ -107,6 +107,29 @@ and Host quiescence, lease/outbox disposition, immutable source/target binding,
 explicit confirmation and original-operation recovery. Neither this manifest
 nor configuration verification authorizes an import or a new execution grant.
 
+## Full-state recovery after cold import
+
+Keep the reviewed pre-import backup as well as a new full-state backup after
+canonical writes. The latter saves the current provider head and committed
+journal together with the original capture, rollback and released-lease files;
+it does not replace the former's original Markdown bytes with their later display
+projection. Inspect registered-source discovery and verify every saved member
+before using an independently extracted copy.
+
+File/SQLite qualification now composes the real CLI cold import, a later Todo
+write, full-state backup, inert extraction into an empty directory and fresh
+provider/history readback. The original project and runtime are made unreachable
+before readback, so stale absolute paths cannot make the check read the original
+store. The restored committed journal is compared in full through the existing
+`authority-archive audit` owner; missing selected-provider storage rejects
+without creating a replacement or falling back to File.
+
+This qualifies retained bytes and independent historical reads, not live recovery.
+The copy retains historical identities and released lease facts as data. Do not
+register it as a second live Goal or start a Host using an old grant. Explicit
+identity/path adoption, pending-effect disposition and authorized reactivation,
+including their App journey, remain separate acceptance work.
+
 ## Privacy, consistency and limits
 
 Backups are **private by default**. Full Goal rows can contain private paths,

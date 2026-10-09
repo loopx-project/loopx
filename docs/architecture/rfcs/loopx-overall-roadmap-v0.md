@@ -949,7 +949,7 @@ release remain separate, expired active leases refuse import, and the old grant
 cannot launch a Host after cutover. This proves the existing supervisor/lease
 boundary with synthetic work, not automatic Host discovery or live model use.
 Continue pending outbox disposition, App loading with the old normal writer
-absent and independent full-backup recovery in R5. The
+absent and authorized full-state reactivation in R5. The
 installed cold-import CLI uses the existing selected dispatcher and
 Goal path resolver; real File/SQLite import and original-receipt recovery pass
 with the four old normal producer modules physically absent in a disposable
@@ -962,20 +962,26 @@ Cold-import preservation checkpoint (R5/D1, T4/C1): full-state backups now
 witness each saved regular member's bytes in their existing manifests, including
 raw Markdown history, lease/receipt files, SQLite snapshots and stored
 configuration. Hashing the copied stream avoids binding a reviewed backup to a
-later source reread; failed reads retain the previous backup. This is the backup
-binding prerequisite, not cold-import qualification. Continue the same reviewed
-source import through inventory/quiescence, lease/outbox disposition, immutable
-preview, explicit confirm, writer fence, File/SQLite import/readback and original
-operation recovery on the installed CLI and packaged App. Do not retire the last
+later source reread; failed reads retain the previous backup. Real CLI cold
+import→later canonical write→full-state backup→inert independent recovery now
+retains the complete File/SQLite head and committed journal, unreferenced archived
+requirements, stored configuration and original capture/rollback/released-lease
+bytes. Readback runs with the original project/runtime unreachable; missing
+selected-provider storage fails without replacement or File fallback. The
+pre-import backup separately retains original Markdown before later projection.
+This qualifies independent data/history recovery, not identity adoption, pending
+effect disposition or live Host reactivation. Continue those boundaries and the
+packaged App recovery journey through the existing owners. Do not retire the last
 normal Markdown writer or claim the released SQLite default from this checkpoint.
 
 The qualified shadow→canonical archive→isolated File/SQLite restore path retains
 committed dependency archives, terminal lease facts and later canonical writes.
 It does not preserve every unreferenced old-source archive or raw historical
-receipt. R5/T4 full-source import must retain and independently recover those
-original bytes before deleting caller chains that still own their recovery;
-source hashes and canonical archive verification cannot substitute for that
-acceptance. Supported backup-format and original-receipt recovery retain their
+receipt. R5/T4 now qualifies those original bytes through full-state backup and
+inert independent readback; it still must qualify their authorized adoption
+before deleting caller chains that own live recovery. Source hashes and canonical
+archive verification alone cannot substitute for that acceptance. Supported
+backup-format and original-receipt recovery retain their
 separate upgrade boundary. See the
 [archive scope](../../reference/authority-archive.md).
 
