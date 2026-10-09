@@ -9,6 +9,7 @@ from pathlib import Path
 from ...control_plane.goals.goal_vision_policy import (
     DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
     normalize_completed_todo_replan_threshold,
+    normalize_effective_turn_replan_threshold,
 )
 from ..machine_configuration.contract import (
     MACHINE_CONFIGURATION_SCHEMA,
@@ -45,8 +46,8 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
     count = raw["count"]
     if unit is ReplanCadenceUnit.COMPLETED_TODOS:
         count = normalize_completed_todo_replan_threshold(count)
-    elif type(count) is not int or not 1 <= count <= 5:
-        raise ValueError("effective Turn count must be an integer from 1 to 5")
+    else:
+        count = normalize_effective_turn_replan_threshold(count)
     return {"count_unit": unit.value, "count": count}
 
 
@@ -107,7 +108,7 @@ def todo_replan_cadence_machine_configuration_namespace() -> (
         title="Goal review cadence",
         description=(
             "Live review threshold for Goals without an explicit cadence override. "
-            "Defaults to five settled work Turns; completed Todos remain an explicit option. "
+            "Defaults to six settled work Turns; completed Todos remain an explicit option. "
             "It does not create "
             "turns, spend quota, or grant authority."
         ),

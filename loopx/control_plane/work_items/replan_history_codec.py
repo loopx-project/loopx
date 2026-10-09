@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import parse_timestamp
+from ..goals.goal_vision_policy import normalize_effective_turn_replan_threshold
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_id_list
 from ..todos.resume_planning import build_todo_resume_planning_request
 
@@ -36,12 +37,7 @@ def effective_turn_cadence_context(
     threshold = profile.get("replan_after_effective_turns")
     if threshold is None:
         return None
-    if (
-        isinstance(threshold, bool)
-        or not isinstance(threshold, int)
-        or not 1 <= threshold <= 5
-    ):
-        raise ValueError("replan_after_effective_turns must be an integer from 1 to 5")
+    threshold = normalize_effective_turn_replan_threshold(threshold)
     if runtime_root is None or not goal.get("id"):
         raise ValueError("effective Turn cadence requires the Goal settlement runtime")
     if goal_ref is None and goal.get("goal_instance_id"):

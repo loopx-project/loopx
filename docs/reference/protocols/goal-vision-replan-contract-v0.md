@@ -29,9 +29,10 @@ budgeting, dreaming, or product-specific replan logic.
 
 ## Default review cadence
 
-Goals without an explicit Goal or device cadence use five settled effective work
-Turns per Agent. This replaces the implicit five-completed-Todo default; existing
-explicit Todo values keep their unit. Benchmark runners pin three effective Turns.
+Goals without an explicit Goal or device cadence use six settled effective work
+Turns per Agent, matching the benchmark runner default. The previous defaults
+were five and three Turns respectively. Existing explicit Turn and Todo values
+keep their unit and count; upgrading does not rewrite these overrides.
 The existing TypeScript replan history owner counts verified settlement receipts;
 no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
 configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)

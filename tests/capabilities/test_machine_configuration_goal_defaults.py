@@ -287,7 +287,7 @@ def test_v1_cadence_rejects_ambiguous_units(configuration) -> None:
 
 
 @pytest.mark.parametrize("mode", ["standard", "fine"])
-def test_product_default_and_namespace_removal_use_five_settled_turns(tmp_path, mode):
+def test_product_default_and_namespace_removal_use_six_settled_turns(tmp_path, mode):
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
     from loopx.control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 
@@ -306,17 +306,17 @@ def test_product_default_and_namespace_removal_use_five_settled_turns(tmp_path, 
     raw = json.loads(registry_path.read_text())["goals"][0]
     assert "replan_after_effective_turns" not in raw["execution_profile"]
     projected = _history_goal(registry_path, runtime_root)
-    assert projected["execution_profile"]["replan_after_effective_turns"] == 5
+    assert projected["execution_profile"]["replan_after_effective_turns"] == 6
     assert effective_turn_cadence_context(
         resolve_todo_replan_cadence_goal(raw, runtime_root), runtime_root,
-    )["threshold"] == 5
+    )["threshold"] == 6
     inspected = inspect_goal_capabilities(registry_path=registry_path,
         runtime_root=runtime_root, goal_id=GOAL_ID)["configuration"]
     cadence = next(c for c in inspected["capability_catalog"]["capabilities"]
                    if c["capability_id"] == "todo_replan_cadence")
     assert cadence["effective_configuration"]["source"] == "capability_default"
     assert cadence["effective_configuration"]["configuration"]["count_unit"] == "effective_turns"
-    assert cadence["effective_configuration"]["configuration"]["count"] == 5
+    assert cadence["effective_configuration"]["configuration"]["count"] == 6
 
     # Even the old default is an explicit, sticky override; compacting must
     # never silently switch it back to the new Turn unit.
@@ -328,4 +328,4 @@ def test_product_default_and_namespace_removal_use_five_settled_turns(tmp_path, 
     assert effective_turn_cadence_context(raw, runtime_root) is None
     configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
         clear_execution_replan_after_todos=True, execute=True)
-    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 5
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 6

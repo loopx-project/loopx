@@ -6,6 +6,7 @@ from typing import Any
 from .control_plane.goals.goal_vision_policy import (
     completed_todo_replan_threshold,
     normalize_completed_todo_replan_threshold,
+    normalize_effective_turn_replan_threshold,
 )
 from .control_plane.work_items.delivery_outcome import DeliveryOutcome
 
@@ -156,10 +157,9 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if "replan_after_effective_turns" in value and "replan_after_completed_todos" in value:
         raise ValueError("choose one review cadence unit")
     if "replan_after_effective_turns" in value:
-        effective = value["replan_after_effective_turns"]
-        if isinstance(effective, bool) or not isinstance(effective, int) or not 1 <= effective <= 5:
-            raise ValueError("replan_after_effective_turns must be an integer from 1 to 5")
-        profile["replan_after_effective_turns"] = effective
+        profile["replan_after_effective_turns"] = normalize_effective_turn_replan_threshold(
+            value["replan_after_effective_turns"]
+        )
 
     if "replan_after_completed_todos" in value:
         # Retain explicit legacy-unit overrides, including five. Omitting one

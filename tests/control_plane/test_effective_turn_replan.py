@@ -29,7 +29,7 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 
 
 @pytest.mark.parametrize("threshold_override,device_count,threshold", [
-    (None, None, 5), (2, 3, 2), (None, 3, 3),
+    (None, None, 6), (2, 3, 2), (None, 3, 3), (5, 6, 5), (None, 5, 5), (6, None, 6), (None, 6, 6),
 ])
 def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     tmp_path: Path, threshold_override: int | None, device_count: int | None,
@@ -285,15 +285,15 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
                 json.loads(registry.read_text())["goals"][0], runtime,
             ), runtime,
         )["threshold"]
-        == (device_count or 5)
+        == (device_count or 6)
     )
 
 
-@pytest.mark.parametrize("invalid", [0, 6, True, 2.5, "2"])
+@pytest.mark.parametrize("invalid", [0, 7, True, 2.5, "2"])
 def test_effective_cadence_rejects_invalid_units(invalid):
     from loopx.execution_profile import compact_execution_profile
 
-    with pytest.raises(ValueError, match="integer from 1 to 5"):
+    with pytest.raises(ValueError, match="integer from 1 to 6"):
         compact_execution_profile({"replan_after_effective_turns": invalid})
 
 

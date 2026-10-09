@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
+from ..control_plane.goals.goal_vision_policy import MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
 
 from .progress_review.policy import (
     PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
@@ -110,8 +111,9 @@ def capability_configuration_editor(
                 _field("count_unit", "Count between reviews", "select",
                        options=["completed_todos", "effective_turns"], required=True,
                        description="Existing completed-Todo values keep their units until explicitly changed."),
-                _field("count", "Review interval", "number", minimum=1, maximum=5, required=True,
-                       description="Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
+                _field("count", "Review interval", "number", minimum=1,
+                       maximum=MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD, required=True,
+                       description="Effective Turns: 1–6; completed Todos: 1–5. Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
             ],
         },
         "periodic_report": {

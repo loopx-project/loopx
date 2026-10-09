@@ -359,12 +359,12 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert env["LOOPX_EXECUTION_MODE"] == mode
         assert env["LOOPX_PROJECT"] == "/workspace"
         assert env["MODEL_NAME"] == "fixture"
-        assert agent.replan_after_turns == (3 if agent.execution.uses_loopx else None)
+        assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
 
 
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("settings,field,value", [
-    ({}, "replan_after_effective_turns", 3),
+    ({}, "replan_after_effective_turns", 6),
     ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
     ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
 ])

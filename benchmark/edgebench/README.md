@@ -368,9 +368,10 @@ and credentials belong outside the public repository.
 
 ## Default replan cadence
 
-New `heartbeat-resume` and `heartbeat-explore` trials replan after **3 settled
+New `heartbeat-resume` and `heartbeat-explore` trials replan after **6 settled
 effective work Turns** by default. Use `--replan-after-turns N` to set a different
-count (1–5), or `--replan-after-todos 3` for the previous completed-Todo cadence
+count (1–6); `--replan-after-turns 3` retains the previous benchmark default.
+Use `--replan-after-todos 3` for the previous completed-Todo cadence
 as an explicit ablation. The two options are mutually exclusive and require a
 heartbeat profile. This default is independent of `--task-entry`, feedback mode,
 and `--turn-envelope`. Official, single and native-goal profiles are unchanged.

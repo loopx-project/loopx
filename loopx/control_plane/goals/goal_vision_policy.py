@@ -14,11 +14,22 @@ GOAL_VISION_ADVANCEMENT_POLICY_CHOICES = tuple(
 )
 
 # Default review cadence counts settled work Turns, not Todo size.
-DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD = 5
+DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD = 6
+MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD = 6
 
 # Explicit completed-Todo cadence remains bounded by the retained evidence
 # window. This is a legacy-unit limit, not the product default.
 COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD = 5
+
+
+def normalize_effective_turn_replan_threshold(value: Any) -> int:
+    # Effective Turns use settlement receipts rather than the five-Todo window.
+    if type(value) is not int or not 1 <= value <= MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD:
+        raise ValueError(
+            "effective Turn count must be an integer from 1 to "
+            f"{MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD}"
+        )
+    return value
 
 
 def normalize_completed_todo_replan_threshold(value: Any) -> int:

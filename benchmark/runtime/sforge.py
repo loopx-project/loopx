@@ -118,8 +118,8 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("replan_after_todos requires a heartbeat profile")
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
-                    not 1 <= replan_after_turns <= 5):
-                raise ValueError("replan_after_turns must be an integer between 1 and 5")
+                    not 1 <= replan_after_turns <= 6):
+                raise ValueError("replan_after_turns must be an integer between 1 and 6")
             if not profile.startswith("heartbeat-"):
                 raise ValueError("replan_after_turns requires a heartbeat profile")
         if (replan_after_turns is None and replan_after_todos is None

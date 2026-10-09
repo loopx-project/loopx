@@ -112,6 +112,12 @@ for (const reviewKind of ["long_todo_chain", "periodic_review_due"]) {
     assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
       agent_vision: vision}).accepted, true);
+    // Reusing applicable work evidence can keep the route without inventing
+    // another probe or Todo; a current evidence-linked decision is still needed.
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+      agent_vision: {...vision, path_delta: {...vision.path_delta, outcome: "no_change"}},
+      observation_delta: {delta_kinds: [], evidence_novel: false}}).accepted, true);
+    assert.match(String((projection.writeback_contract as JsonObject).rule), /First reuse observed evidence valid for current source\/acceptance/);
     for (const outcome of ["new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor"]) {
       assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
         observation_delta: {delta_kinds: [outcome]}}).accepted, true);

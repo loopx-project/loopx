@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# Benchmarks deliberately review earlier than the product default of five.
-DEFAULT_REPLAN_AFTER_TURNS = 3
+# New benchmark runs and the product both default to six settled work Turns.
+DEFAULT_REPLAN_AFTER_TURNS = 6
 
 
 MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")

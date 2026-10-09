@@ -174,7 +174,7 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
     env = worker.runtime._worker_env(cwd="/task")
     assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == expected
     assert worker.runtime.scheduler_timeout == total
-    expected_cadence = ({"replan_after_effective_turns": turns or 3}
+    expected_cadence = ({"replan_after_effective_turns": turns or 6}
                         if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
     assert worker.runtime._replan_receipt() == expected_cadence
@@ -396,7 +396,7 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert json.loads((tmp_path / "worker-profile.json").read_text())["task_entry"] == entry
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
 @pytest.mark.parametrize('enabled', [False, True])
-@pytest.mark.parametrize('cadence', [None, 2])
+@pytest.mark.parametrize('cadence', [None, 2, 6])
 def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
@@ -413,7 +413,7 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
     env = worker.runtime._worker_env(cwd='/task')
     assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
     assert worker.runtime.execution.turn_envelope is enabled
-    assert worker.runtime.replan_after_turns == (cadence or 3)
+    assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
     assert receipt.get('turn_envelope') is (True if enabled else None)
@@ -462,7 +462,7 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
 
 
 @pytest.mark.parametrize("cadence_args,field,count", [
-    ([], "replan_after_effective_turns", 3),
+    ([], "replan_after_effective_turns", 6),
     (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
     (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
 ])
@@ -519,7 +519,7 @@ def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path
     assert receipt["status"] == "runner_failed"
 
 
-@pytest.mark.parametrize("value", [0, 6, True, 2.5, "3"])
+@pytest.mark.parametrize("value", [0, 7, True, 2.5, "3"])
 def test_effective_turn_cadence_rejects_invalid_values_before_install(tmp_path, monkeypatch, value):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")

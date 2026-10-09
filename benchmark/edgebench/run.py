@@ -109,8 +109,8 @@ def main(argv=None):
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
                         help="Heartbeat default: loopx-planned; seeded-todo is an explicit ablation")
     cadence = parser.add_mutually_exclusive_group()
-    cadence.add_argument("--replan-after-turns", type=int, choices=range(1, 6),
-                         help="Heartbeat default: 3 settled effective work Turns")
+    cadence.add_argument("--replan-after-turns", type=int, choices=range(1, 7),
+                         help="Heartbeat default: 6 settled effective work Turns")
     cadence.add_argument("--replan-after-todos", type=int, choices=range(1, 6),
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--eval-interval", type=int,

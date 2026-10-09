@@ -30,7 +30,7 @@ agents:
       codex_sandbox: danger-full-access
       turn_timeout_sec: null
       scheduler_timeout_sec: 5080
-      replan_after_turns: 3
+      replan_after_turns: 6
 ```
 
 For an explicitly selected **heartbeat-only** context experiment, add
@@ -266,20 +266,25 @@ by selecting this option for a new run.
 ### Default effective-Turn cadence
 
 Harbor LoopX modes (`heartbeat`, `turn`, `loopx-goal`) default to
-`replan_after_turns: 3`; native EdgeBench `heartbeat-resume` and
-`heartbeat-explore` default to `--replan-after-turns 3`. This passes the existing Goal option
+`replan_after_turns: 6`; native EdgeBench `heartbeat-resume` and
+`heartbeat-explore` default to `--replan-after-turns 6`. This passes the existing Goal option
 `--execution-replan-after-turns` and verifies the persisted
 `replan_after_effective_turns` value before execution. The shared TypeScript
 control plane still owns which settled work Turns count; adapters do not count
 records or completed Todos themselves.
 
-Omitting both cadence options now selects three effective work Turns instead
-of three completed Todos. Idle wakes, tool calls and the planning checkpoint do
+Omitting both cadence options selects six effective work Turns, matching the
+product default. The previous benchmark default was three effective work Turns;
+the previous product default was five. Explicit settings retain their values.
+Idle wakes, tool calls and the planning checkpoint do
 not count as effective work Turns; this is a deterministic threshold rather than
 a per-wake probability, and other replan triggers can act sooner.
-To retain the old cadence in a new trial, pass `replan_after_todos: 3` in Harbor
-or `--replan-after-todos 3` in EdgeBench. Explicit Turn/Todo settings are mutually
-exclusive and accept counts from one through five. Resolved runtime and worker
+To retain the previous benchmark default in a new trial, pass
+`replan_after_turns: 3` in Harbor or `--replan-after-turns 3` in EdgeBench.
+For completed-Todo cadence, use `replan_after_todos` / `--replan-after-todos`.
+Explicit Turn/Todo settings are mutually
+exclusive; effective-Turn counts accept one through six and completed-Todo counts
+accept one through five. Resolved runtime and worker
 receipts name the selected unit even when no flag was supplied. Non-LoopX
 profiles retain their existing behavior. No active attempt, task, scoring, feedback,
 spawn permission, or total-budget change is implied.

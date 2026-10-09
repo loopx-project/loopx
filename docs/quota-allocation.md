@@ -90,10 +90,10 @@ depending on the executor:
 
 ## Goal Review Cadence
 
-The product defaults to review after **5 settled effective work Turns** in both
-standard and fine-grained modes. This replaces the previous default of five
-completed Todos, so review can occur while a long Todo remains open. Benchmark
-runners deliberately use **3** effective Turns for earlier experimental review.
+The product and benchmark runners default to review after **6 settled effective
+work Turns** in both standard and fine-grained modes. This changes the previous
+product threshold of five Turns and benchmark threshold of three Turns. Review
+can occur while a long Todo remains open; it does not count completed Todos.
 TurnEnvelope is not required. These are deterministic thresholds, not random
 averages or counts of model messages, tool calls, or heartbeat wakeups.
 
@@ -104,12 +104,16 @@ writebacks and missing settlement receipts cannot. At the threshold, the next
 quota evaluation creates `periodic_review_due` through the existing replan path.
 An evidence-linked review may retain the current approach; it does not require
 inventing a new plan, completing the open Todo, or declaring the Goal achieved.
+Review evidence from settled work for current source and acceptance applicability
+before running another probe. Reuse applicable evidence; missing, stale or
+insufficient evidence needs targeted verification. Do not repeat unchanged checks
+only to produce another review artifact. Explicit validation gates still apply.
 The cadence does not interrupt a host, schedule a Turn, spend quota or grant
 authority. The executor must settle work and re-enter quota before starting the
 next work Turn for the review obligation to take effect.
 
 ```bash
-# Preview, apply, and read back an explicit Goal threshold (supported: 1–5).
+# Preview, apply, and read back an explicit Goal threshold (supported: 1–6).
 loopx configure-goal --goal-id example --execution-replan-after-turns 5
 loopx configure-goal --goal-id example --execution-replan-after-turns 5 --execute
 loopx configure-goal --goal-id example
@@ -127,10 +131,11 @@ writeback validation use the same effective configuration.
 
 Precedence is **explicit Goal override → live device setting → product default**.
 A Goal override is a complete unit/count value, not a field merge. Device writes
-are revision-locked; removing the namespace restores five effective Turns.
-Existing v0 device records and explicit Goal values retain their completed-Todo
-meaning, including an explicit value of five. Reading or upgrading does not
-rewrite them. Clearing the Goal override restores inheritance. Goals without
+are revision-locked; removing the namespace restores six effective Turns.
+Existing explicit Goal and device values retain their unit and count, including
+five effective Turns and legacy completed-Todo settings. To retain the previous
+product cadence, set `--execution-replan-after-turns 5` explicitly. Reading or
+upgrading does not rewrite overrides. Clearing the Goal override restores inheritance. Goals without
 any override adopt the new default on their next evaluation after upgrade;
 this is a disclosed default behavior change, not a migration of historical data.
 Already running benchmark attempts retain their frozen code and settings.
@@ -162,10 +167,11 @@ long-open-Todo chains and Monitor-specific thresholds. The former
 20-material-run periodic fallback remains on the explicit completed-Todo path;
 the effective-Turn path uses verified settlements instead.
 
-产品默认从完成 5 个 Todo 改为 5 个已结算有效工作 Turn；benchmark 默认 3 个。
+产品与 benchmark 默认统一为 6 个已结算有效工作 Turn，此前分别为 5 个与 3 个。
 长 Todo 未结束也能触发方向复核，不依赖 TurnEnvelope，不按工具调用或空轮询计数。
-Goal 显式设置优先，其次是设备设置；清除两层覆盖才恢复产品默认。旧的 Todo
-配置保留原单位，升级不改写；没有覆盖的 Goal 则采用新默认。复核仍可有证据地
+Goal 显式设置优先，其次是设备设置；清除两层覆盖才恢复产品默认。显式 Turn 与
+旧 Todo 配置保留原单位和次数，升级不改写；显式设置 5 个 Turn 可保留旧产品周期。
+没有覆盖的 Goal 则采用新默认。复核仍可有证据地
 保留当前路线，不要求机械换方向，也不增加执行、配额或目标验收权限。
 
 ### Governed Turn Execution
