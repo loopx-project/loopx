@@ -141,13 +141,16 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn recoverable_backup(root: &Path) -> Option<PathBuf> {
+fn recoverable_backups(root: &Path) -> Vec<PathBuf> {
     let previous = root.join("previous");
+    let mut backups = Vec::new();
     if previous.join("LoopX.app/Contents/Info.plist").is_file() {
-        return Some(previous);
+        backups.push(previous);
     }
-    fs::read_dir(root)
-        .ok()?
+    let mut older = fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flatten()
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let sequence = entry
@@ -161,8 +164,21 @@ fn recoverable_backup(root: &Path) -> Option<PathBuf> {
                 .is_file()
                 .then_some((sequence, path))
         })
-        .max_by_key(|(sequence, _)| *sequence)
-        .map(|(_, path)| path)
+        .collect::<Vec<_>>();
+    older.sort_by_key(|(sequence, _)| std::cmp::Reverse(*sequence));
+    backups.extend(older.into_iter().map(|(_, path)| path));
+    backups
+}
+
+fn recoverable_backup(root: &Path) -> Option<PathBuf> {
+    recoverable_backups(root).into_iter().next()
+}
+
+fn verified_recoverable_backup(root: &Path) -> Option<PathBuf> {
+    recoverable_backups(root).into_iter().find(|backup| {
+        fs::read_to_string(backup.join("version")).is_ok()
+            && signature_verifies(&backup.join("LoopX.app"))
+    })
 }
 
 pub fn available(app: &AppHandle) -> bool {
@@ -210,7 +226,7 @@ pub fn restore(app: &AppHandle) -> Result<(), String> {
     // must not require it to be intact; the verified backup source is what
     // must pass verification (`copy` re-checks its codesign signature).
     let executable = std::env::current_exe().map_err(|_| "app_bundle_required")?;
-    let backup = recoverable_backup(&root(app)?).ok_or("backup_unavailable")?;
+    let backup = verified_recoverable_backup(&root(app)?).ok_or("backup_unavailable")?;
     let version = fs::read_to_string(backup.join("version")).map_err(|_| "backup_unavailable")?;
     let handle = app.clone();
     restore_verified_backup(&executable, &backup, move || {
@@ -395,6 +411,35 @@ mod tests {
         fs::create_dir_all(previous.join("LoopX.app/Contents")).unwrap();
         fs::write(previous.join("LoopX.app/Contents/Info.plist"), "plist").unwrap();
         assert_eq!(recoverable_backup(root.path()), Some(previous));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn corrupted_previous_backup_falls_back_to_latest_valid_older_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let older = root.path().join("older-1000");
+        fs::create_dir_all(&older).unwrap();
+        let older_app = ad_hoc_signed_synthetic_app(root.path(), "Older.app");
+        fs::rename(older_app, older.join("LoopX.app")).unwrap();
+        fs::write(older.join("version"), "1.2.0").unwrap();
+
+        let previous = root.path().join("previous");
+        fs::create_dir_all(&previous).unwrap();
+        let previous_app = ad_hoc_signed_synthetic_app(root.path(), "Previous.app");
+        fs::write(
+            previous_app.join("Contents/Resources/sealed-resource.txt"),
+            "corrupted after backup rotation",
+        )
+        .unwrap();
+        fs::rename(previous_app, previous.join("LoopX.app")).unwrap();
+        fs::write(previous.join("version"), "1.3.0").unwrap();
+
+        assert!(!signature_verifies(&previous.join("LoopX.app")));
+        assert!(signature_verifies(&older.join("LoopX.app")));
+        // The inexpensive status probe still sees the newest directory, while
+        // restoration skips it after signature verification fails.
+        assert_eq!(recoverable_backup(root.path()), Some(previous));
+        assert_eq!(verified_recoverable_backup(root.path()), Some(older));
     }
 
     #[test]
