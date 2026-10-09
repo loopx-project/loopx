@@ -167,7 +167,7 @@ def build_goal_configuration_catalog(
                 "default": default_replan_cadence_configuration(),
                 "consider_when": "Direction needs regular review even while the same Todo remains open.",
                 "effect": (
-                    "Choose 1–5 completed Todos or settled work Turns per Agent. "
+                    "Choose 1–6 settled work Turns or 1–5 completed Todos per Agent. "
                     "Legacy settings retain their completed-Todo units until explicitly changed."
                 ),
                 "does_not": [
@@ -177,10 +177,12 @@ def build_goal_configuration_catalog(
                 ],
                 "commands": {
                     "preview_enable": _configure_command(
-                        goal_id, "--execution-replan-after-turns", "5"
+                        goal_id, "--execution-replan-after-turns",
+                        str(default_replan_cadence_configuration()["count"]),
                     ),
                     "apply_enable": _configure_command(
-                        goal_id, "--execution-replan-after-turns", "5", execute=True
+                        goal_id, "--execution-replan-after-turns",
+                        str(default_replan_cadence_configuration()["count"]), execute=True
                     ),
                     "preview_disable": _configure_command(
                         goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns"

@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 
 from ..execution_profile import TURN_GRANULARITY_CHOICES
-from ..control_plane.goals.goal_vision_policy import MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
+from ..control_plane.goals.goal_vision_policy import (
+    DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+    MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+)
 from ..orchestration import EXPLORE_HARNESS_PROFILES
 from .registry_admin_peer import (
     register_peer_runtime_arguments,
@@ -32,7 +35,8 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         choices=TURN_GRANULARITY_CHOICES,
         help=(
             "Set sticky goal turn granularity. fine plans small checkpoints within "
-            "a coherent work slice; review defaults to 6 settled work Turns in both modes."
+            "a coherent work slice; review defaults to "
+            f"{DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD} settled work Turns in both modes."
         ),
     )
     configure_goal_parser.add_argument(
@@ -57,7 +61,10 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     configure_goal_parser.add_argument(
         "--execution-replan-after-turns", type=int,
         choices=range(1, MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD + 1),
-        help="Review direction after this many settled work Turns, independently of Todo completion (product default: 5).",
+        help=(
+            "Review direction after this many settled work Turns, independently of "
+            f"Todo completion (product default: {DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD})."
+        ),
     )
     configure_goal_parser.add_argument(
         "--clear-execution-replan-after-turns", action="store_true",
