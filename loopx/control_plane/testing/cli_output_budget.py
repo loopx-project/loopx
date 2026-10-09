@@ -383,7 +383,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "packet_summary",
         ),
         markdown_anchor="# Guided Start Goal",
-        max_chars={"json": 64_000, "markdown": 3_200},
+        # The real differential fixture grows from 2,781 to 3,217 Markdown
+        # characters with the complete Todo readback step and command. Keep
+        # that decision guidance; only the explicit detail-mode ceiling grows.
+        max_chars={"json": 64_000, "markdown": 3_600},
         max_lines={"json": 650, "markdown": 55},
     ),
     CliOutputModeVariantSpec(
