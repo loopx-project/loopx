@@ -26,6 +26,8 @@ class Provider:
         self.reaction_creates = []
         self.fail_reaction_create = False
         self.fail_reaction_delete = False
+        self.owner_ready = True
+        self.bot_ready = True
         self.profile_apps = {profile: f"cli_{profile.replace('-', '_')}"
                              for profile in ["notes-app", "steward-app"]}
 
@@ -58,10 +60,10 @@ class Provider:
                 for profile, app_id in self.profile_apps.items()]), "stderr": ""}
         profile = args[args.index("--profile") + 1]
         if "auth" in args:
-            data = {"ok": True, "appId": f"cli_{profile.replace('-', '_')}", "identities": {
-                "bot": {"available": True, "verified": True, "appName": profile,
+            data = {"ok": True, "appId": self.profile_apps[profile], "identities": {
+                "bot": {"available": self.bot_ready, "verified": self.bot_ready, "appName": profile,
                         "openId": f"ou_{profile.replace('-', '_')}_bot"},
-                "user": {"available": True, "verified": True, "openId": f"ou_{profile.replace('-', '_')}"}}}
+                "user": {"available": self.owner_ready, "verified": self.owner_ready, "openId": f"ou_{profile.replace('-', '_')}"}}}
         elif "+chat-list" in args:
             data = {"ok": True, "data": {"chats": [{"chat_id": chat, "name": title}
                 for chat, title in [("oc_community", "Community trial"), ("oc_second", "Second trial")]]}}
@@ -128,7 +130,8 @@ def connect(fixture):
     store, runtime, contexts, _, _, _, _ = fixture
     provider = Provider()
     bindings = ChatConversationBindings(root=store.root, project_contexts=contexts,
-        observe=lambda profile: observe_lark_conversation_identity(profile=profile, runner=provider, cli_bin="lark-cli"))
+        observe=lambda profile: observe_lark_conversation_identity(profile=profile, runner=provider, cli_bin="lark-cli"),
+        observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=provider, cli_bin="lark-cli", audience="group"))
     contexts.conversation_bindings = bindings
     for profile in ["notes-app", "steward-app"]:
         bindings.configure(transport_ref=profile, project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
@@ -344,7 +347,8 @@ def test_group_status_and_recipient_commands_cannot_expose_private_sessions(ordi
         runtime.close()
 
 
-def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("owner_ready", [True, False])
+def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(ordinary, monkeypatch, owner_ready):  # noqa: F811
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     import loopx.chat_lark_api as api
@@ -376,6 +380,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
     path = "/api/chat/lark/private-conversations"
     body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
         "executor_endpoint_id": "codex", "audience": "group", "group_ids": ["oc_community"]}
+    provider.owner_ready = owner_ready
     try:
         original = transport.bindings.read()
         for bad in [{"group_ids": ["oc_not_selected"]}, {"group_ids": []},
@@ -394,10 +399,78 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         assert request(path, body)[1]["revision"] == response["revision"]
         assert refreshes == [True, True]
         assert not store.list_sessions() and not provider.writes
+        if not owner_ready:
+            frozen = transport.bindings.read()
+            assert request(path, {key: value for key, value in body.items() if key not in {"audience", "group_ids"}})[0] == 400
+            assert transport.bindings.read() == frozen
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+        runtime.close()
+
+
+def test_bot_only_group_continues_after_user_logout_but_rejects_private_and_app_drift(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        provider.owner_ready = False
+        root = provider.topic("bot-only-root", "Explain the project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        home = store.load_session(first["session_id"])["codex_home"]
+        # Signing in a user later must not change this App-owned principal/home.
+        provider.owner_ready = True
+        follow = provider.topic("bot-only-follow", "Compare the config", root=root["message_id"])
+        assert transport.admit("notes-app", follow)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=follow["content"])
+        assert second["session_id"] == first["session_id"]
+        assert store.load_session(second["session_id"])["codex_home"] == home
+        private = provider.event("notes-app", "private-for-group", "List personal tasks")
+        assert transport.admit("notes-app", private)["status"] == "audience_rejected"
+        provider.profile_apps["notes-app"] = "cli_rotated_app"
+        changed = provider.topic("rotated-app", "Explain config", root=root["message_id"])
+        assert transport.admit("notes-app", changed)["status"] == "audience_rejected"
+    finally:
+        runtime.close()
+
+
+def test_group_identity_requires_verified_bot_and_private_identity_requires_verified_user():
+    provider = Provider()
+    provider.owner_ready = False
+    group = observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
+    assert group["operator_ref"] != identity_ref(group["provider_ref"], "ou_notes_app")
+    with pytest.raises(ValueError, match="owner independently"):
+        observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli")
+    provider.bot_ready = False
+    with pytest.raises(ValueError, match="App identity"):
+        observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
+
+
+def test_legacy_group_principal_and_native_home_are_not_migrated_during_observation(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        group_observer = transport.bindings._observe_group
+        transport.bindings._observe_group = None
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="codex", audience="group", group_refs=binding["group_refs"],
+            available_group_refs=binding["group_refs"])
+        transport.bindings._observe_group = group_observer
+        frozen = transport.bindings.read()
+        root = provider.topic("legacy-group-root", "Explain the project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        home = store.load_session(first["session_id"])["codex_home"]
+        follow = provider.topic("legacy-group-follow", "Compare config", root=root["message_id"])
+        assert transport.admit("notes-app", follow)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=follow["content"])
+        assert first["session_id"] == second["session_id"]
+        assert store.load_session(second["session_id"])["codex_home"] == home
+        assert transport.bindings.read() == frozen
+        provider.owner_ready = False
+        assert transport.admit("notes-app", provider.topic("legacy-logout", "Compare", root=root["message_id"]))["status"] == "audience_rejected"
+        assert transport.bindings.read() == frozen
+    finally:
         runtime.close()
 
 
