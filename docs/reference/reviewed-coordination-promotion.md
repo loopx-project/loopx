@@ -55,6 +55,19 @@ file witnesses remain available and unchanged. An inactive or interrupted
 capture returns no outbox review: recover its original management operation
 first. Neither case establishes outbox reconciliation or Host stop.
 
+Original disposition does not need the old Python capture producer. The
+shipped TS drain can prove a markerless write from the locked original source:
+unchanged previous bytes settle an abandoned no-op; exact new bytes prove the
+commit, only when those byte versions differ and later entries are excluded.
+Already committed candidate receipts replay without a second effect.
+The OS-lock Host adapter remains necessary. A lease receipt neither releases
+that lease nor grants work. An ambiguous source, including A→B→A with later
+entries, remains unproved and byte-preserved. Revision-bound rollback can retain
+the complete candidate and outbox in their original management archive; retry
+reads that same operation. Archiving is not proof of settlement or import
+readiness. These paths are covered with the old producers physically absent
+from a disposable receiver, not a declaration that they can all be deleted yet.
+
 In the App, open **Goal settings → Task ownership → Goal data storage** to read
 the same verified inventory. It shows task/archive and unsettled-lease counts
 and retained capture/outbox presence, without exposing source text, local paths

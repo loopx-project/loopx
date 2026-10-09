@@ -884,6 +884,13 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 Cold-source inventory is now an explicit read-only CLI prerequisite through the
 same TS source/lease owners. It includes unreferenced archives and retained
 leases, with full text and source-byte witnesses, before any shadow opt-in.
+Original outbox disposition is also qualified through the shipped TS effects
+with Python Todo/bootstrap/capture producers absent from a disposable receiver:
+markerless abandoned/committed recovery, receipt replay without duplicate effects,
+unchanged active leases, and refusal plus same-operation archival of ambiguous
+originals. Retain the OS-lock adapter and original history readers. This covers
+the existing disposition owner, not global Host stop, lease settlement, import
+confirmation, a canonical cutover, or permission to delete active old writers.
 The same observation discovers original capture stores/identity, management
 operation files, outbox bytes and Goal-bound rollback archives through the
 existing typed owners; present history is validated without replay or drain.

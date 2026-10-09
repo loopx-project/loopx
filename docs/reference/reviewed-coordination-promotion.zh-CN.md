@@ -41,6 +41,15 @@ Todo 和 lease 分区中待处理的原记录及有精确原回执的残留。�
 未改动的原文件见证。inactive／中断 capture 不生成该预览，应先恢复原 management
 操作；这些结果均不证明 outbox 已处置或 Host 已停。
 
+原记录处置不需要重启旧 Python capture 生产者。现有 TS drain 在原来源锁下核验无
+marker 的记录：新旧字节不同且排除后续记录时，仍为旧字节则结算为未发生的 no-op，
+精确新字节则证明提交；已进入
+candidate 的原回执只 replay，不产生第二次效果。OS-lock Host 适配器仍有必要；lease
+回执既不释放 lease，也不授予工作。来源有歧义（包括后续记录存在时的 A→B→A）则
+拒绝并保留原字节。绑定精确 revision 的 rollback 可在原 management 归档中完整
+保留 candidate/outbox，重试读回同一操作；归档不证明结算或导入就绪。独立接收端中
+物理移除旧生产者后的测试覆盖了这些路径，尚不代表可以删除全部旧 writer。
+
 App 中打开 **Goal 设置 → 任务所有权 → Goal 数据存储**，读取同一 TS owner 核验的
 盘点。页面只显示当前／归档任务及未结算 lease 数量、原 capture/outbox 文件是否存在，
 不暴露源正文、本机路径或执行密钥。“读回当前存储”重新观察，失败时清除旧数量。
