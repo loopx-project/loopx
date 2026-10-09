@@ -954,8 +954,14 @@ exact original receipts and revision-bound rollback archives. Active capture
 still refuses import after its queue drains; a fresh post-disposition backup
 binds the reviewed import. Import replay preserves later canonical writes and
 the original archived bytes with the old normal producers absent in the receiver.
-Continue ambiguous-source disposition, App loading with the old normal writer
-absent and authorized full-state reactivation in R5. The
+Original lease disposition also refuses import until native owner release;
+the fresh reviewed backup retains the released record without a new grant.
+Unproved A→B→A entries remain refused and raw-byte archived by original-operation
+rollback. A fresh confirmed import binds the current source, never treats that
+ambiguous queue as committed receipts, and preserves it after later writes and
+import replay. This qualifies inert history preservation, not proof of an
+ambiguous commit or automatic Host/lease settlement. Continue App loading with
+the old normal writer absent and authorized full-state reactivation in R5. The
 installed cold-import CLI uses the existing selected dispatcher and
 Goal path resolver; real File/SQLite import and original-receipt recovery pass
 with the four old normal producer modules physically absent in a disposable

@@ -620,7 +620,11 @@ owned Host 进程、未晋升源的原生租约和 File/SQLite 验证：进程�
 或 live 模型验收。可证明的原 Todo outbox 现与 File/SQLite 冷导入串联：四种中断窗口
 保留待处理源备份、精确原回执及绑定 revision 的 rollback 归档；队列 drain 后 capture
 仍活跃则继续拒绝导入。处置后重新备份并审核导入，原操作重试保留后续 canonical
-新写入和原归档字节，接收端旧正常生产者物理缺席。歧义来源处置、旧正常 writer 物理缺席的 App 加载、
+新写入和原归档字节，接收端旧正常生产者物理缺席。原 lease 处置后仍拒绝导入，
+直到原 owner 原生释放；新审核备份保留已释放记录，不转新 grant。无证明的 A→B→A
+记录仍被拒绝，通过原操作 rollback 保留原始字节；重新备份并明确确认当前来源的
+导入，不把歧义队列当作已提交回执，后续写入和导入重试仍保留其历史。这验收惰性
+历史保留，不证明歧义写入提交，也不自动停止 Host／结算 lease。旧正常 writer 物理缺席的 App 加载、
 完整状态重新激活继续开放；协调源备份验证不结算完整恢复。详见
 [冷源导入与支持边界](../../reference/local-authority-provider-selection.md)。
 

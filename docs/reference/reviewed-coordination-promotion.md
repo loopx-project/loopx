@@ -77,16 +77,28 @@ An empty queue with active capture still refuses import. The import has its own
 operation and receipt; abandoned writes remain absent, committed writes appear
 once, and retrying import after later canonical writes preserves the current
 provider state and original archived bytes. This covers four interrupted-write
-windows with the old normal producers absent from the receiver. It does not
-qualify ambiguous-source settlement, automatic Host shutdown, lease release or
-live reactivation of a restored Goal. Keep those original acceptance boundaries.
+windows with the old normal producers absent from the receiver.
+
+The composed File/SQLite journey also covers original lease and ambiguous-source
+history. Draining a lease receipt and stopping capture leave the source lease
+active, so import still refuses until its original owner releases it through the
+native lease command. A fresh backup and reviewed import retain that released
+record without turning it into a new grant. An unproved A→B→A outbox is refused
+without effects; original-operation rollback archives its raw bytes. A fresh
+backup can then bind an explicitly confirmed import of the current source,
+without converting the ambiguous queue into committed receipts. Later canonical
+writes and import replay preserve the released lease and original archives.
+These checks do not prove the ambiguous write committed, automatically stop a
+Host or release a lease, or qualify live reactivation of a restored Goal.
 
 In the App, open **Goal settings → Task ownership → Goal data storage** to read
 the same verified inventory. It shows task/archive and unsettled-lease counts
 and retained capture/outbox presence, without exposing source text, local paths
 or execution keys. **Read current storage** performs a fresh observation; a
-failed read clears old counts. Import is explicitly unavailable at this stage.
-There is no confirmation or migration control for an old Markdown source.
+failed read clears old counts. The [reviewed cold-import journey](local-authority-provider-selection.md)
+uses that existing surface for backup, preview and explicit confirmation.
+App loading with the old normal producer modules physically absent remains a
+separate qualification; the disposable receiver checks above cover the CLI.
 
 Read `source_inventory.active_todo_count`, `archived_todo_count`, `capture`,
 `retained_leases` and `leases_requiring_settlement`. `import_ready`,

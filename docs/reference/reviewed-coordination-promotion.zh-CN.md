@@ -56,12 +56,21 @@ rollback 保留回执并停止捕获；[审核冷导入](local-authority-provide
 重新完整备份。队列为空而 capture 仍活跃时，导入仍拒绝。导入使用自己的操作和回执；
 未发生的写入不出现，已提交写入只出现一次。后续 canonical 新写入后重试导入，当前
 provider 数据及原归档字节均保留。接收端物理移除旧正常生产者后，覆盖四种中断窗口。
-这不替代歧义来源结算、自动停止 Host、lease release 或恢复 Goal 的实际重新启用验收。
+
+File／SQLite 的组合旅程也覆盖原 lease 和歧义来源历史：drain lease 回执并停止
+capture 后，原 lease 仍 active，导入继续拒绝，直到原 owner 通过原生 lease 命令
+释放。重新备份并审核导入后，保留已释放记录，不转为新 grant。无证明的 A→B→A
+outbox 拒绝且不产生效果；原操作 rollback 归档其原始字节。重新备份后可明确确认
+当前来源的审核导入，但不会把歧义队列转成已提交回执。后续 canonical 写入和导入
+重试均保留已释放 lease 和原归档。这不证明歧义写入已提交，不自动停止 Host 或
+释放 lease，也不替代恢复 Goal 的实际重新启用验收。
 
 App 中打开 **Goal 设置 → 任务所有权 → Goal 数据存储**，读取同一 TS owner 核验的
 盘点。页面只显示当前／归档任务及未结算 lease 数量、原 capture/outbox 文件是否存在，
 不暴露源正文、本机路径或执行密钥。“读回当前存储”重新观察，失败时清除旧数量。
-此阶段明确显示导入尚不可用，不为旧 Markdown 源提供确认或迁移按钮。
+[审核冷导入旅程](local-authority-provider-selection.md)复用该入口进行备份、预览和
+明确确认。旧正常生产者模块物理缺席时的 App 加载仍需单独验收；上述独立接收端
+验证覆盖 CLI。
 
 `import_ready`、`writer_stop_verified`、`outbox_reconciliation_verified` 始终为 false。
 此命令没有 `--execute`，不启用配置、创建 shadow/provider/fence、授予 lease 或制造捕获回执。
