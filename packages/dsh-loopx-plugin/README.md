@@ -394,8 +394,9 @@ DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explici
 qualified 0.1.7-rc.2 and 0.2.0-rc.2 candidates. It excludes earlier 0.2 candidates,
 0.2.1 alpha builds and other, unqualified prerelease tuples. A stable-version
 range alone does not admit every prerelease.
-The immutable beta.5 download above contains the earlier integration; building
-this checkout produces beta.6. A source build is not a published beta.6 release.
+The immutable beta.6 download above is the published package. Building this
+checkout also produces version beta.6, but the local artifact is not the
+published release asset.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing
@@ -403,16 +404,21 @@ selected the monorepo root instead of this plugin package. Installing
 plugin. The marketplace's npm route requires a published `dsh-loopx-plugin`
 whose repository points here and whose keywords include `dsh-plugin`; otherwise
 older Hubs fall back to that invalid Git target.
-[Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14)
-also installs the catalog’s fixed GitHub release package without an npm
-publication. Upgrade the Hub with `dsh plugin --profile web add dsh-plugin`;
-the catalog still selects beta.5, and release-URL installed-state readback
-needs a further upstream repair. After the release operator completes
-the registry readback above, the platform-independent install command is
-`dsh plugin --profile web add dsh-loopx-plugin`. Replace `web` with `desktop`
-when that is your selected profile. Until publication is verified, use a
-compatible prebuilt plugin tarball, or build this package and
-install it with your supported DSH executable:
+The current [LoopX catalog entry](https://dsh-plugin.org/plugins/loopx-project/loopx?ref=hub)
+points to the published beta.6 release tarball. [DSH Plugin Hub v1.6.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.6.0)
+or later provides profile-specific install guidance and includes the earlier
+fixes for release-package readback, stale npm targets, and desktop-profile
+installs. Upgrade the Hub in the profile you use, then install LoopX from its
+catalog entry:
+
+```bash
+dsh plugin --profile web add dsh-plugin
+```
+
+Replace `web` with `desktop` when using the desktop app. LoopX is not currently
+published to npm as `dsh-loopx-plugin`; use the beta.6 release URL above for a
+direct install. To build from source instead, use the package installer with
+your supported DSH executable:
 
 ```bash
 cd packages/dsh-loopx-plugin
