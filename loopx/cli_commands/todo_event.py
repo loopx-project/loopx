@@ -14,7 +14,7 @@ from ..control_plane.work_items.task_lease import TaskLeaseError
 from ..file_lock import lock_timeout_error_fields
 from ..control_plane.coordination.legacy_writer_fence import LegacyCoordinationWriterFenced
 from ..control_plane.coordination.shadow_management import ShadowManagementError
-from ..control_plane.coordination.runtime_shadow_writer_adapter import ActiveStateAuthorityMutationError
+from ..control_plane.coordination.legacy_writer_fence import ActiveStateAuthorityMutationError
 from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .todo_argument_validation import TodoClaimArgumentError
 

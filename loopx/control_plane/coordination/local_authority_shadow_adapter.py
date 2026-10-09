@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..projects.registry_codec import load_registry
-from ...paths import resolve_runtime_root
+from ...paths import effective_runtime_root as effective_runtime_root, resolve_runtime_root
 from ...registry import find_registry_goal
 from ..effect_runtime import effect_runtime_result
 from . import local_authority_shadow_outbox as outbox
@@ -34,24 +34,6 @@ from .shadow_goal_scope import shadow_goal_scope
 
 
 from .runtime_shadow import local_authority_shadow_summary
-
-
-def effective_runtime_root(
-    registry_path: Path,
-    runtime_root_override: str | Path | None,
-) -> Path:
-    """Resolve the one runtime root every writer hook of a CLI call must share.
-
-    ``--runtime-root`` wins when given; otherwise the registry's
-    ``common_runtime_root`` applies, and a relative value resolves against the
-    registry's project root rather than the caller's working directory. Todo,
-    follow-up, handoff-mode, and task-lease hooks all consume this value so one
-    goal never splits into two candidate lineages.
-    """
-
-    registry = load_registry(registry_path)
-    override = str(runtime_root_override) if runtime_root_override is not None else None
-    return resolve_runtime_root(registry, override, registry_path=registry_path)
 
 
 # ---------------------------------------------------------------------------

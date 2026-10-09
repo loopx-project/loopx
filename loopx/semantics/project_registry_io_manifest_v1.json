@@ -1102,16 +1102,8 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>.effective_runtime_root::codec_read:load_registry#1",
-      "line": 52,
-      "column": 16,
-      "kind": "codec_read",
-      "api": "load_registry",
-      "classification": "codec_api"
-    },
-    {
       "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>.local_authority_shadow_status::codec_read:load_registry#1",
-      "line": 274,
+      "line": 256,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2097,6 +2089,14 @@
       "site": "loopx/paths.py::<module>.configured_runtime_route::codec_read:load_registry#1",
       "line": 267,
       "column": 20,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/paths.py::<module>.effective_runtime_root::codec_read:load_registry#1",
+      "line": 346,
+      "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"

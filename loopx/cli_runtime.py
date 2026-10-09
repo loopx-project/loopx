@@ -340,7 +340,7 @@ def _dispatch_common_command(
 		return 0
 	if args.command == "delegation":
 		from .cli_commands.delegation import handle_delegation
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 
@@ -411,7 +411,7 @@ def _dispatch_common_command(
 		)
 		from .cli_commands.todo import handle_todo_command
 		from .cli_rollout import append_cli_rollout_event
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 

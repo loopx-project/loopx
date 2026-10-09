@@ -126,7 +126,7 @@ from .control_plane.todos.handoff_mode import (
     enter_todo_ownership_handoff_gate,
     resolve_todo_completion_handoff,
 )
-from .control_plane.coordination.local_authority_shadow_adapter import effective_runtime_root
+from .paths import effective_runtime_root
 from .control_plane.work_items.task_lease import (
     enter_terminal_todo_lease_fence,
     hold_task_lease_mutation_fence,

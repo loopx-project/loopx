@@ -13,11 +13,12 @@ from loopx.control_plane.effect_runtime import effect_runtime_result, restart_ef
 from test_cold_source_import_cli import workspace
 
 
-@pytest.fixture(params=[True, False], ids=["writer-present", "writer-absent"])
+@pytest.fixture(params=[True, False], ids=["capture-present", "capture-absent"])
 def cold_api(tmp_path, monkeypatch, request):
     _, state, _, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     if not request.param:
-        (receiver / "loopx/control_plane/coordination/runtime_shadow_writer_adapter.py").unlink()
+        for name in ("runtime_shadow_writer_adapter.py", "local_authority_shadow_outbox.py"):
+            (receiver / "loopx/control_plane/coordination" / name).unlink()
     registry = tmp_path / "project/.loopx/registry.json"
     ready = tmp_path / "server-ready.json"
     script = """

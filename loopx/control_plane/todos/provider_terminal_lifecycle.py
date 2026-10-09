@@ -21,7 +21,7 @@ from ..coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
 )
-from ..coordination.local_authority_shadow_adapter import effective_runtime_root
+from ...paths import effective_runtime_root
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     effect_runtime_result,

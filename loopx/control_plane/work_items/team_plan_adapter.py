@@ -25,7 +25,7 @@ from ...state_refresh import now_local
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.public_safety import validate_public_safe_value
 from ..coordination.local_authority import read_canonical_todos_if_promoted
-from ..coordination.local_authority_shadow_adapter import effective_runtime_root
+from ...paths import effective_runtime_root
 from ..coordination.legacy_writer_fence import (
     legacy_coordination_todo_lock_path, legacy_todo_write_transaction,
 )

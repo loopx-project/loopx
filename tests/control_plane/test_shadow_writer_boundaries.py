@@ -42,6 +42,28 @@ def fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     return registry, state, root
 
 
+@pytest.mark.parametrize("registry_directory", [".loopx", "standalone"])
+@pytest.mark.parametrize("override", [None, "", "override", Path("path-override")])
+def test_runtime_route_keeps_project_relative_precedence_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_directory: str, override,
+) -> None:
+    from loopx.paths import effective_runtime_root
+    from loopx.control_plane.coordination.local_authority_shadow_adapter import effective_runtime_root as compatibility_route
+
+    assert compatibility_route is effective_runtime_root
+    project = tmp_path / "project"
+    registry = project / registry_directory / "registry.json"
+    registry.parent.mkdir(parents=True)
+    original = json.dumps({"common_runtime_root": "declared"}).encode()
+    registry.write_bytes(original)
+    monkeypatch.chdir(tmp_path)
+    owner = project if registry_directory == ".loopx" else registry.parent
+    assert effective_runtime_root(registry, override) == owner / str(override or "declared")
+    assert registry.read_bytes() == original
+    assert list(registry.parent.iterdir()) == [registry]
+    assert not (owner / "declared").exists()
+
+
 def test_handoff_writer_refuses_a_fence_before_primary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
