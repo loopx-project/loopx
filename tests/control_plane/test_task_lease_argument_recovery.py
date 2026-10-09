@@ -104,6 +104,51 @@ def test_missing_inputs_are_combined_and_wrong_owner_is_not_repaired(lease_cli):
     assert run(action("inspect"))["lease"] == before
 
 
+def test_recovery_round_trips_leading_hyphen_execution_keys(lease_cli):
+    run, action, _, _ = lease_cli
+    released = run(action("release", "--owner", "peer-a", "--idempotency-key", "original",
+                          "--expected-version", "1"))
+    acquired = run(action("acquire", "--owner", "peer-a", "--idempotency-key=-execution",
+                          "--write-scope", "src/**", "--expected-version",
+                          str(released["lease"]["version"])))
+    before = acquired["lease"]
+    for name, extra in [("renew", []), ("transfer", ["--new-owner", "peer-a",
+                                                   "--new-idempotency-key=-receiver"])]:
+        rejected = run(action(name, "--owner", "peer-a", "--idempotency-key=-execution",
+                              "--expected-version", str(before["version"]),
+                              "--write-scope", "other/**", *extra), code=1)
+        assert run(action("inspect"))["lease"] == before
+        repaired = rejected["recovery"]["cli_args"]
+        applied = run(repaired)["lease"]
+        assert applied["version"] == before["version"] + 1
+        assert applied["idempotency_key"] == ("-receiver" if name == "transfer" else "-execution")
+        assert applied["owner"] == "peer-a" and applied["write_scopes"] == ["src/**"]
+        assert run(repaired)["lease"] == applied
+        assert run(action("inspect"))["lease"] == applied
+        before = applied
+
+
+def test_recovery_preserves_routing_and_repeatable_string_values():
+    from loopx.cli import build_parser
+    from loopx.cli_commands.task_lease_arguments import validate_task_lease_arguments, TaskLeaseArgumentError
+
+    parser = build_parser()
+    original = parser.parse_args([
+        "--registry=-registry.json", "--runtime-root=-runtime", "task-lease", "acquire",
+        "--goal-id=-goal", "--todo-id=-todo", "--owner=-owner", "--idempotency-key=-key",
+        "--write-scope=-src/**", "--write-scope=docs with spaces/**", "--write-worktree=-tree",
+        "--new-idempotency-key=remove-me", "--expected-version", "0",
+    ])
+    with pytest.raises(TaskLeaseArgumentError) as rejected:
+        validate_task_lease_arguments(original)
+    recovered = parser.parse_args(rejected.value.recovery(
+        original, registry_path=Path("-registry.json"), runtime_root_arg="-runtime")["cli_args"])
+    for field in ("registry", "runtime_root", "goal_id", "todo_id", "owner", "idempotency_key",
+                  "write_scopes", "write_worktree", "expected_version"):
+        assert getattr(recovered, field) == getattr(original, field)
+    assert recovered.new_idempotency_key is None
+
+
 def test_transfer_repair_retains_explicit_claim_handover(lease_cli, request):
     run, action, _, _ = lease_cli
     before = run(action("inspect"))["lease"]
