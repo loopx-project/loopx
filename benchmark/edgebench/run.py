@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from sforge.harness.benchmark import load_benchmark
 from sforge.harness.config import SForgeConfig
+from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
@@ -22,7 +23,9 @@ from benchmark.runtime.codex import TASK_ENTRIES
 from benchmark.runtime.sforge import DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
-from benchmark.edgebench.prompts import blind_task_prompt
+from benchmark.edgebench.prompts import blind_task_prompt, best_only_task_prompt
+from benchmark.edgebench.online_sampling import OnlineSampler
+from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
 
 
 def _observe_run(call):
@@ -57,12 +60,15 @@ def _result_status(*, interrupted, started, runtime_seconds):
     return "terminal" if runtime_seconds > 0 else "runner_failed"
 
 
-def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort):
+def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort, feedback="native"):
     """Match the native CLI's visualizer handoff after a completed run only."""
     if status != "terminal":
         return
     final = dict(agent=agent, task=task, run_id=run_id, model=model, effort=effort,
                  **result.to_dict())
+    if feedback == "best-only":
+        final["evaluation_coverage"] = "online_only"
+        final["offline_scoring_complete"] = False
     pending = trial / "final_result.json.tmp"
     pending.write_text(json.dumps(final, indent=2, ensure_ascii=False))
     pending.replace(trial / "final_result.json")
@@ -86,7 +92,8 @@ def main(argv=None):
     parser.add_argument("--log-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--worker", choices=PROFILES, required=True)
-    parser.add_argument("--feedback", choices=("native", "blind"), default="native")
+    parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="best-only",
+                        help="New-run default: best-only; blind/native are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--model", required=True)
@@ -126,18 +133,21 @@ def main(argv=None):
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
     blind_endpoint = None
-    blind_prompt = None
-    if args.feedback == "blind":
+    feedback_prompt = None
+    if args.feedback != "native":
         proxy = urlsplit(args.api_proxy_url or "")
         judge = urlsplit(args.judge_url)
         if task.internet or task.game_mode or not proxy.hostname or not proxy.port:
-            raise ValueError("Blind feedback requires a non-game isolated task and explicit API-only proxy")
+            raise ValueError("Restricted feedback requires a non-game isolated task and explicit API-only proxy")
         ipaddress.ip_address(proxy.hostname)  # No ambiguous DNS/network identity.
         judge_port = judge.port or (443 if judge.scheme == "https" else 80)
         if (proxy.hostname, proxy.port) == (judge.hostname, judge_port):
-            raise ValueError("Blind API and judge endpoints must be distinct")
+            raise ValueError("Restricted API and judge endpoints must be distinct")
         blind_endpoint = (proxy.hostname, proxy.port)
-        blind_prompt = blind_task_prompt(task.work.agent_query, task.submit_paths)
+        if args.feedback == "best-only":
+            validate_best_only(task, args.eval_interval)
+        render_prompt = best_only_task_prompt if args.feedback == "best-only" else blind_task_prompt
+        feedback_prompt = render_prompt(task.work.agent_query, task.submit_paths)
     config = SForgeConfig(
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
@@ -149,7 +159,7 @@ def main(argv=None):
             "NO_PROXY": f"localhost,127.0.0.1,{urlsplit(args.judge_url).hostname}",
         }
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
-                         timeout_seconds=args.timeout, blind_prompt=blind_prompt,
+                         timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          replan_after_turns=args.replan_after_turns,
@@ -157,9 +167,21 @@ def main(argv=None):
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
+    sampler = None
+    if args.feedback == "best-only":
+        sampler = OnlineSampler(trial=trial, task=task, interval=args.eval_interval,
+            judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
+            secret=get_admin_secret(args.log_dir), logger=logger)
+        sampler.qualify()  # Fail before native registration, solver creation or token spend.
+    feedback = (BestOnlyFeedback(
+        trial=trial, run_id=args.run_id, task_id=args.task,
+        direction=task.judge.score_direction,
+        judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
+        admin_secret=get_admin_secret(args.log_dir), logger=logger, sampler=sampler,
+    ) if args.feedback == "best-only" else None)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url),
-                                     blind_api_endpoint=blind_endpoint)
+                                     blind_api_endpoint=blind_endpoint, feedback=feedback)
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
             raise RuntimeError(f"Missing native image: {image}")
@@ -173,6 +195,8 @@ def main(argv=None):
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
+        **({"online_admission_epoch": sampler.epoch, "offline_scoring_complete": False}
+           if sampler is not None else {}),
         **({"replan_after_effective_turns": agent.replan_after_turns}
            if agent.replan_after_turns is not None else {}),
         **({"replan_after_completed_todos": agent.replan_after_todos}
@@ -186,13 +210,17 @@ def main(argv=None):
             run_id=args.run_id, model=args.model, timeout=args.timeout,
             judge_url=args.judge_url, eval_interval=args.eval_interval,
             submission_cooldown=args.submission_cooldown, internet=task.internet,
+            disable_auto_eval=args.feedback == "best-only",
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
-            max_submissions=0 if args.feedback == "blind" else None,
+            max_submissions=0 if args.feedback != "native" else None,
         ))
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)
         receipt_path.write_text(json.dumps(receipt, indent=2))
         raise
+    finally:
+        if feedback is not None:
+            feedback.close()
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
     status = _result_status(interrupted=was_interrupted,
@@ -203,7 +231,7 @@ def main(argv=None):
                    best_score=result.best_score, total_rounds=result.total_rounds)
     _write_native_final_result(trial, result, status=status, agent=agent.name,
                                task=task.task_id, run_id=args.run_id,
-                               model=args.model, effort=args.effort)
+                               model=args.model, effort=args.effort, feedback=args.feedback)
     receipt_path.write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))
     return 0 if status == "terminal" else 130 if status == "cancelled" else 1

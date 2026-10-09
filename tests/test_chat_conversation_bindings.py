@@ -5,6 +5,7 @@ import json
 import pytest
 
 from test_chat_ordinary_project import ordinary  # noqa: F401, F811
+from test_native_steward_private import steward  # noqa: F401
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 
 
@@ -267,3 +268,118 @@ def test_read_only_bound_project_rejects_write_scoped_executor_before_session_cr
         origin="lark",
     )
     assert not replayed and replay["turn_id"] == turn["turn_id"]
+
+
+def test_external_transport_preserves_native_request_identity_and_session(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+    store, runtime, contexts, _, capture, fake, workspace = ordinary
+    observation = {"transport_ref": "external-owner", "provider_ref": "c" * 24,
+                   "operator_ref": "d" * 24, "verified": True}
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts,
+                                        observe=lambda _: observation)
+    contexts.conversation_bindings = bindings
+    binding = bindings.configure(transport_ref="external-owner", project_ref=contexts.available()[0]["project_ref"],
+                                 executor_endpoint_id="codex")
+    core = ChatExternalConversations(runtime)
+    args = {"binding_id": binding["binding_id"], "source": {"source_ref": "a" * 24,
+            "sender_ref": observation["operator_ref"], "private_human_message": True},
+            "request_ref": "e" * 24, "message": "Explain the current project", "origin": "external"}
+    enqueue = runtime.enqueue_turn
+    def crash_after_enqueue(**kwargs):
+        enqueue(**kwargs)
+        raise OSError("crash before request journal settles")
+    monkeypatch.setattr(runtime, "enqueue_turn", crash_after_enqueue)
+    try:
+        with pytest.raises(OSError, match="crash"):
+            core.admit(**args)
+        prepared = core.read_request(args["request_ref"])
+        assert prepared["status"] == "prepared"
+        original = store.turn_for_client(prepared["session_id"], "external-" + args["request_ref"])
+        turn = runtime.wait_for_turn(session_id=prepared["session_id"], turn_id=original["turn_id"], timeout_sec=10)
+        assert turn["status"] == "completed" and turn["origin"] == "external"
+        upstream = store.load_session(prepared["session_id"])["upstream_thread_id"]
+        runtime.close()
+        runtime = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=str(fake),
+                                       project_contexts=contexts, registry_path=runtime.registry_path)
+        core = ChatExternalConversations(runtime)
+        core.recover(request_ref=args["request_ref"])
+        admitted = core.read_request(args["request_ref"])
+        assert admitted["status"] == "accepted" and admitted["turn_id"] == original["turn_id"]
+        assert store.load_session(admitted["session_id"])["upstream_thread_id"] == upstream
+        assert core.admit(**args) == admitted
+        with pytest.raises(ValueError, match="identity"):
+            core.admit(**{**args, "origin": "lark"})
+        with pytest.raises(ValueError, match="origin"):
+            core.admit(**{**args, "request_ref": "f" * 24, "origin": "web"})
+        with pytest.raises(ValueError, match="audience"):
+            core.admit(**{**args, "request_ref": "f" * 24,
+                "source": {**args["source"], "sender_ref": "b" * 24}})
+        assert len(store.list_sessions()) == 1
+        assert store.load_session(admitted["session_id"])["project_context"]["binding_id"] == binding["binding_id"]
+        requests = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert len([row for row in requests if row.get("method") == "thread/start"]) == 1
+        assert len([row for row in requests if row.get("method") == "turn/start"]) == 1
+        assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
+    finally:
+        runtime.close()
+
+
+def test_external_steward_reuses_machine_grant_and_original_delegation(steward, monkeypatch):  # noqa: F811
+    from loopx.capabilities.manager_context import authority, deliver, pending
+    from test_native_steward_runtime import apply_profile
+    store, runtime, _, transport, binding, _, workspace = steward
+    apply_profile(store.root.parent, "trusted_owner")
+    runtime.registry_path.write_text(json.dumps({"runtime_root": str(store.root.parent), "goals": [
+        {"id": "registered-work", "repo": str(workspace), "coordination": {"registered_agents": ["worker"]}}]}))
+    monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: None)
+    args = {"binding_id": binding["binding_id"], "source": {"source_ref": "a" * 24,
+            "sender_ref": binding["operator_ref"], "private_human_message": True},
+            "request_ref": "e" * 24, "message": "Ask the registered worker to inspect the project", "origin": "external"}
+    row = transport.core.admit(**args)
+    assert row["status"] == "accepted"
+    session = store.load_session(row["session_id"])
+    turn = store.load_turn(row["session_id"], row["turn_id"])
+    assert turn["origin"] == "external" and turn["status"] == "queued"
+    assert session["manager_runtime_profile"] == "trusted_owner"
+    assert session["manager_runtime_sandbox"] == "danger-full-access"
+    target = {"goal_id": "registered-work", "agent_id": "worker"}
+    assert authority(store.root.parent, runtime.registry_path, session, turn)["targets"] == [target]
+    receipt = deliver(store.root.parent, runtime.registry_path, session=session, turn=turn, request=target)
+    assert pending(store.root.parent, **target)["items"][0]["message"] == args["message"]
+    assert deliver(store.root.parent, runtime.registry_path, session=session, turn=turn, request=target) == {**receipt, "replayed": True}
+    assert transport.core.admit(**args)["turn_id"] == row["turn_id"]
+    assert not authority(store.root.parent, runtime.registry_path, session, {**turn, "origin": "web"})["targets"]
+    assert not authority(store.root.parent, runtime.registry_path, session, {**turn, "message": "changed"})["targets"]
+    unbound = {**session, "steward_context": None}
+    assert not authority(store.root.parent, runtime.registry_path, unbound, turn)["targets"]
+    transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    with pytest.raises(ValueError, match="no longer authorized"):
+        transport.core.admit(**{**args, "request_ref": "f" * 24})
+
+
+def test_missing_origin_in_legacy_request_retains_lark_identity(ordinary):  # noqa: F811
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+    store, runtime, contexts, _, _, _, _ = ordinary
+    observation = {"transport_ref": "legacy-app", "provider_ref": "c" * 24,
+                   "operator_ref": "d" * 24, "verified": True}
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: observation)
+    contexts.conversation_bindings = bindings
+    binding = bindings.configure(transport_ref="legacy-app", project_ref=contexts.available()[0]["project_ref"],
+                                 executor_endpoint_id="codex")
+    core = ChatExternalConversations(runtime)
+    args = {"binding_id": binding["binding_id"], "source": {"source_ref": "a" * 24,
+            "sender_ref": observation["operator_ref"], "private_human_message": True},
+            "request_ref": "e" * 24, "message": "/help", "command": "help"}
+    try:
+        original = core.admit(**args)
+        path = core.root / (args["request_ref"] + ".json")
+        original.pop("origin")
+        path.write_text(json.dumps(original))
+        assert core.admit(**args) == original
+        with pytest.raises(ValueError, match="identity"):
+            core.admit(**args, origin="external")
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()

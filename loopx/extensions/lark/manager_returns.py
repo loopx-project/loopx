@@ -325,6 +325,10 @@ def start_return_service(server: Any, runtime_root: Path) -> Any:
     from ...capabilities.manager_context.roundtrip import ReturnService
 
     transport = LarkManagerReturnTransport(server, runtime_root)
+    composition = getattr(server, "conversation_transports", None)
+    if composition is not None:
+        composition.default_return = transport
+        transport = composition
     service = ReturnService(
         runtime_root, server.registry_path, server.chat_store, transport
     )

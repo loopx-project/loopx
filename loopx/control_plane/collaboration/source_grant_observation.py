@@ -24,7 +24,10 @@ def external_source_policy(runtime_root: Path, session: dict[str, Any], turn: di
                     (_hash([session["session_id"], turn["client_turn_id"]]) + ".json"))
     if (ingress["channel"] != session.get("channel_id")
             or ingress["message_digest"] != _hash(turn.get("message"))
-            or turn.get("origin") != "lark"):
+            or turn.get("origin") not in {"lark", "external"}):
+        raise ValueError("source mismatch")
+    if turn.get("origin") == "external" and not conversation_scope(
+            session, origin="external").get("bound_steward"):
         raise ValueError("source mismatch")
     policy = _read(_root(runtime_root) / "policy.json")
     if policy.get("schema_version") != POLICY_SCHEMA:

@@ -304,3 +304,20 @@ test("attached status names the registered recipient and stop cannot pretend hos
   for (const command of ["stop", "new"]) assert.equal(planBoundConversationRequest({...input,
     request: {...input.request, command}}).response_code, "attached_control_unavailable");
 });
+
+
+test("generic external provenance uses the same typed bound audience as legacy Lark", () => {
+  for (const contextKind of ["project", "steward"]) {
+    const selectedRow = contextKind === "project" ? row : {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+    const next = planConversationBinding({...request, binding: selectedRow}).state;
+    const selected = resolveBoundConversation({current: next, binding_id: row.binding_id,
+      source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true,
+      observation, available_projects: [project]});
+    const session = {goal_id: contextKind === "project" ? null : "loopx-manager", channel_id: selected.channel_id,
+      ...(contextKind === "project" ? {project_context: selected.context} : {steward_context: selected.context})};
+    assert.deepEqual(resolveConversationScope({...session, origin: "external"}),
+      resolveConversationScope({...session, origin: "lark"}));
+    assert.notDeepEqual(resolveConversationScope({...session, origin: "web"}),
+      resolveConversationScope({...session, origin: "external"}));
+  }
+});

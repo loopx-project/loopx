@@ -458,8 +458,65 @@ fresh processes, crossing a checkpoint and checking original-receipt replay,
 changed-intent rejection and projection/hash parity at every step. It qualifies
 that bounded storage journey, **not** Host execution, live Goal adoption or D2's
 ten-day soak. No active authority, release default or legacy-writer deletion
-decision changes. B still needs sustained workload/platform/capacity evidence;
-C still needs consumer/onboarding and supported upgrade acceptance.
+decision changes. C still needs consumer/onboarding and supported upgrade
+acceptance.
+
+The unchanged `matched-64k` capacity runner at `5f51559dc` completed independent
+10k/100k histories on macOS arm64, Node 24.21.0 / SQLite 3.53.4, with WAL/FULL
+durability and the same non-empty 1,341-file public scan root. Its formal ledger
+is **13 passed / 1 failed / 11 missing**; the process exits 1 and
+`full_d2_qualified=false`. Selected p95 measurements are:
+
+| Measurement | 10k | 100k | Frozen budget / result |
+| --- | ---: | ---: | --- |
+| Warm head | 2.360 ms | 4.860 ms | Growth 2.059x > 2x: **failed**; absolute < 50 ms passes |
+| Commit | 4.654 ms | 7.022 ms | Growth 1.509x and absolute < 100 ms pass |
+| Receipt | 5.043 ms | 6.952 ms | Growth 1.379x and absolute < 50 ms pass |
+| Fresh CLI status | 1,133.177 ms | 1,143.820 ms | < 2,000 ms passes |
+| Fresh CLI mutation | 671.668 ms | 865.628 ms | Increment 193.960 ms < 200 ms passes |
+
+Real CLI operations, head/receipt checks and temporary-store cleanup completed;
+no correctness assertion failed. These storage axes do not qualify the complete
+eight-agent/four-writer workload, steady-state RSS, large-history recovery,
+consumer lag, upgrade/rollback, ten-day soak, supported runtime matrix, promotion,
+1 MiB payload, 300k headroom or 60-second burst. No OS cache flush was performed.
+[D2 issue #4224](https://github.com/loopx-project/loopx/issues/4224) already reports
+a soak start; completion and applicability to this candidate need verification
+with its existing owner before authorizing any replacement run.
+
+Controlled diagnosis at `9d7680a34` uses the same provider/log/codec bytes as
+`5f51559dc`, real 64 KiB FULL/WAL stores and independent 10k/100k histories.
+Three uninstrumented fresh-process trials retain the 3-head/2-receipt read mix,
+with 3,000 head samples per axis per trial. Head p95 ranges are 2.91–4.84 ms
+at 10k and 4.96–10.38 ms at 100k. They demonstrate variability, not a new formal
+pass: fixture fill omits intervening reads, history is fixed during measurement,
+and the full CLI, concurrent workload and OS-cold filesystem are not measured.
+
+Actual head-path SQL timing and query bytecode isolate a history-dependent cost:
+the continuity aggregate uses SQLite's `Count` opcode over the covering index.
+Its mean execution time grows from 0.145 to 0.837 ms; the residual head work is
+0.474 versus 0.419 ms. Separate held-connection controls retain the count growth
+while indexed extrema remain small. These are instrumented component controls,
+not additive p95 budgets or a replacement for production connections. V8 capture
+identifies `current` and `identity` as hotspots but does not resolve kernel/IO
+cost or attribute the exact original 2.059x threshold crossing. Bounded JS result
+materialization never meant constant SQLite work. The regression also checks a
+non-tail hole outside the live proof window: intact extrema/head/parent cannot
+replace continuity verification. No cached authority, proof removal, provider
+change or runtime performance fix is proposed from these observations.
+
+Keep the original failed result and budgets. A passing absolute head budget
+does not cancel its failed growth row, and that row alone does not veto a
+released default under Section 7.2's consumer-impact decision. New creation
+already defaults to canonical SQLite/`hard_lease` through #5805; changing that
+owner again is not remaining work. Reconcile existing passed installed creation,
+retry, upgrade and new-write-preserving rollback evidence by source and supported
+profile. The eleven missing rows describe this capacity report, not eleven
+missing product features or invalidation of independent recovery evidence.
+B's remaining release decision concerns the declared support profile, applicable
+sustained evidence, actual consumer regressions and unresolved recovery gaps;
+retain current File comparison and existing soak evidence instead of restarting
+all acceptance from zero.
 
 ### Contract health follows Todo authority
 

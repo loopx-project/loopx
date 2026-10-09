@@ -54,3 +54,40 @@ File、SQLite 和 PostgreSQL 继续共享 provider-neutral transaction conforman
 contract；PostgreSQL 的真实服务器 qualification 仍是独立 gate。
 
 保存计划、执行和断点恢复的操作见[审核后的晋升与恢复](reviewed-coordination-promotion.zh-CN.md)。
+
+## 正常写入退役与大版本升级提案
+
+完整双语支持矩阵与 PR 顺序见
+[provider reference 的兼容截止提案](local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence)。
+这是一份提案，未改变当前安装行为或宣布发布。
+
+当前未晋升 Markdown Goal、v0 target-only 设置和显式关闭 canonical creation
+仍受支持。建议在 **2.0** 统一要求正常写入前具备 canonical authority；已有
+canonical File 不必改为 SQLite，明确 provider 和两种 ownership policy 保持。
+已有 canonical store 若仍用 `legacy` policy，先审核保留 claim 的 policy 迁移，
+不重复晋升或强制切换 provider。
+只读检查、审核迁移、受支持旧备份/格式/原回执恢复与永久 Markdown 展示保留。
+旧配置升级须明确预览确认，不能删除偏好或暗中把关闭解释为开启。
+
+当前晋升依赖真实源写入的 capture 资格。冷启动、未资格化的旧 Goal 若先禁写，
+就无法产生这份资格。选定主路径是独立验收的**旧源审核导入**，无需先在兼容
+1.x writer 上新增 capture；空库创建、isolated archive restore、降低计数或伪造
+历史不能替代该旅程。
+
+CLI 与 App 的既有 Goal 存储入口应复用同一 TS coordination owner：完整盘点和
+备份活跃/归档 Todo、metadata、身份、ownership、capture 与原回执；不支持或歧义
+内容明确拒绝，不能静默省略。停止 writer/Host、结算 active lease 并逐项对账
+outbox 后，预览来源/目标绑定的不可变计划、明确确认、fence 旧 writer、导入并
+完整读回。旧 lease/回执不转成新授权，导入新回执与历史原回执分别保存。中断、
+失响应、重启须恢复同一操作，不重复副作用或抹掉后续 canonical 新写入。
+File/SQLite 都须在旧正常 writer 物理缺席时验证失败、来源变化与恢复。
+
+这是未晋升 Goal 的导入，与既有 canonical provider 切换和新身份 archive restore
+分别验收；实现尚未完成。历史支持矩阵验收前保留兼容安装包用于恢复；可在兼容
+1.x 先发布新增 importer 和弃用提示，但不把旧 writer 使用设为导入前置。
+
+交付按完整包推进：CLI/App 直接导入与支持边界 → 同调用族旧 writer/私有 dispatch
+删除 → 逐项对账 outbox 后删除无调用 producer/重复决策。2.0 beta、rc、final
+按声明支持矩阵验收；不等待所有外部 Goal 已迁移。二进制更新不自动切 authority，
+反向迁移保留当前 head 的新写入。D2 失败/缺失如实保留，不作为所有独立内部
+退役的统一前置，也不能凭删除完成就认证发布默认。

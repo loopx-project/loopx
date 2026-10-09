@@ -282,7 +282,7 @@ def validate_external_agent_turn(*, store: Any, session: dict[str, Any],
     if saved is None:
         return
     from ...attached_session import _require_bound_host
-    if not isinstance(saved, dict) or turn.get("origin") != "lark" or goal is None:
+    if not isinstance(saved, dict) or turn.get("origin") not in {"lark", "external"} or goal is None:
         raise ValueError("the attached external audience is unavailable")
     context, target = saved["context"], saved["target"]
     if not Path(goal["repo"]).is_dir():

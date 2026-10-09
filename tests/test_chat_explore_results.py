@@ -15,7 +15,7 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
 
 @pytest.mark.parametrize("canonical", [False, True])
-def test_evidence_readback_pagination_scope_failure_and_recovery(tmp_path, monkeypatch, canonical):
+def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, monkeypatch, canonical):
     registry = tmp_path / "registry.json"
     runtime = tmp_path / "runtime"
     (tmp_path / "active.md").write_text("# Synthetic Goal\n")
@@ -43,7 +43,7 @@ def test_evidence_readback_pagination_scope_failure_and_recovery(tmp_path, monke
     linked = add_goal_todo(
         registry_path=registry, goal_id="evidence-goal", role="agent",
         text="Test a uniform bound", agent_id="worker", claimed_by="worker",
-        explore_result_node_refs=["question"],
+        explore_result_node_refs=[*[f"prior-{i}" for i in range(8)], "question"],
     )["todo_id"]
     add_goal_todo(
         registry_path=registry, goal_id="evidence-goal", role="agent",

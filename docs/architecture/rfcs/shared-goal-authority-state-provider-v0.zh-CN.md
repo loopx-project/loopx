@@ -43,6 +43,12 @@ Python Markdown 源；未完成的新建仅在 typed owner 请求时捕获源。
 发布版 v0 行为保持，活跃 legacy writer 仍有调用方。这是有界 L9 前置，不代表
 安装态升级、整 Goal 恢复、D2、cohort 准入或发布默认验收；这些既有出口保持开放。
 
+**L9 原提案读回。** 从已有 Goal 发起的全局创建保留管家上下文；打开的详情
+按原 proposal 独立读回，不用当前 Goal 的发现列表判定原操作缺失，也不把其它管家
+卡片混入 Goal。身份不匹配、记录缺失和传输失败仍明确报错；变更回执发布前取消
+过时读回。打包交互与安装态 File/SQLite 恢复只验收此投影修复，真实模型首 Turn、
+L8/D3、持续 D2 和发布默认分别保留。此处不改变 provider、policy 或旧 Goal 迁移默认。
+
 **所有权精简阶段（2026-10-01）。** R5/T4 将存储晋升与策略迁移分开：新 CLI
 promote 默认保留策略，正常策略目标收敛为 soft/hard。canonical 策略迁移复用晋升
 规则、完整归档和 command receipt owner，用一笔 CAS 保留 assignment、lease

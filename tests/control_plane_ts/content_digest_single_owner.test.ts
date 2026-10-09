@@ -122,6 +122,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/goals/shared_goal_alignment.ts",
   "control_plane/goals/source_session_lifetime.ts",
   "control_plane/governed_capability.ts",
+  "control_plane/presentation/action_review_plan.ts",
   "control_plane/quota/refresh_external_delivery.ts",
   "control_plane/runtime/execution_identity.ts",
   "control_plane/runtime/usage_statistics_cycles.ts",

@@ -24,6 +24,7 @@ use matched repetitions to test its effect.
 | Turn envelope | Off | Enable only in its ablation |
 | Replan cadence | 3 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
+| Evaluator feedback | EdgeBench: best-only (strict new-best snapshot notifications) | Native and blind remain explicit controls; freeze feedback mode for every comparison |
 | Model and effort | Caller-selected | Pin both; never infer them from a profile name |
 | Time and sampling | EdgeBench task defaults in [task settings](../edgebench/README.md#trial-timeouts); explicit flags override | Pin resolved seconds in the study manifest |
 
@@ -48,7 +49,7 @@ These are recommendations, not automatically launched experiments.
 | No LoopX | `--worker official`; omit LoopX-specific flags | What is the net effect of the whole LoopX treatment? |
 
 The no-LoopX comparison changes several mechanisms; do not attribute its delta
-to one component. Native versus blind feedback is a separate factor: repeat
+to one component. Native, blind and best-only feedback are a separate factor: repeat
 selected matched arms within each feedback setting rather than mixing them.
 Prioritize entry and cadence first; enable the other arms after verifying that
 planning, settlement and evaluation work. For Explore, inspect whether evidence
@@ -63,9 +64,9 @@ python -m benchmark.edgebench.run \
   --task portfolio_risk_calibration --tasks-dir "$TASKS_DIR" \
   --log-dir "$RUNS_DIR" --run-id "$NEW_ATTEMPT_ID" \
   --worker heartbeat-resume --task-entry loopx-planned \
-  --replan-after-turns 3 --feedback blind \
+  --replan-after-turns 3 --feedback best-only \
   --model "$MODEL" --effort xhigh --timeout 43200 --eval-interval 300 \
-  --judge-url "$JUDGE_URL"
+  --judge-url "$JUDGE_URL" --api-proxy-url "$API_PROXY_URL"
 ```
 
 Use a fresh attempt id for each arm; set the runtime's documented source pins,
