@@ -20,7 +20,9 @@ class RecordingDockerBackend(DockerBackend):
         self.log_dir, self.logger = log_dir, logger
         self.blind_api_endpoint = blind_api_endpoint
         self.feedback = feedback
-        self.feedback_command = None
+        self.execution_command = None
+        self.execution_start_marker = None
+        self.execution_receipt = None
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
             raise RuntimeError("Cannot resolve Codex OAuth endpoint")
@@ -43,11 +45,26 @@ class RecordingDockerBackend(DockerBackend):
 
     def exec_run_with_timeout(self, handle, cmd, timeout=60, **kwargs):
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
-        is_solver = self.feedback is not None and cmd == ["/bin/bash", "-c", self.feedback_command]
+        is_solver = cmd == ["/bin/bash", "-c", getattr(self, "execution_command", None)]
         try:
-            return super().exec_run_with_timeout(handle, cmd, timeout, **kwargs)
-        finally:
+            result = super().exec_run_with_timeout(handle, cmd, timeout, **kwargs)
             if is_solver:
+                # SForge's RunResult discards the process exit code. Preserve
+                # structured transport evidence without inspecting output text.
+                marker = getattr(self, "execution_start_marker", None)
+                execution_started = marker is None or super().exec_run(
+                    handle, ["test", "-f", marker], user="root").exit_code == 0
+                self.execution_receipt = dict(exit_code=result.exit_code,
+                    execution_started=execution_started,
+                    timed_out=result.timed_out, elapsed_seconds=result.elapsed_seconds)
+                target = self.log_dir.parent / "execution-receipt.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                pending = target.with_suffix(".tmp")
+                pending.write_text(json.dumps(self.execution_receipt))
+                pending.replace(target)
+            return result
+        finally:
+            if is_solver and self.feedback is not None:
                 self.feedback.pause()
 
     def create_network_isolation(self, handle, allowed_endpoints, logger):
@@ -99,3 +116,11 @@ class RecordingDockerBackend(DockerBackend):
                                          "error_kind": type(error).__name__})
             (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
         super().cleanup_container(handle, logger)
+        if self.feedback is not None:
+            # Native cleanup logs some failures instead of raising. Verify the
+            # solver is absent before returning its capacity to another trial.
+            name = handle.name if handle is not None else (
+                f"sforge.run.{self.feedback.task_id}.{self.feedback.run_id}")
+            if self.container_exists(name):
+                raise RuntimeError("Worker remains present; online capacity was not released")
+            self.feedback.release_registration()

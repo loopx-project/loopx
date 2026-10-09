@@ -73,6 +73,46 @@ Synthetic product previews: [desktop](../../assets/personal-workspace/private-pr
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
 
+## Selected group topics: isolated ordinary project Chat
+
+Settings → Lark also connects a project App to explicitly selected groups. The
+list comes from that App's provider-observed group membership; Core validates
+the allowlist at configuration time. This is an audience option on the existing
+binding, not a new Goal Channel, listener, queue or model runner. One App retains
+one binding owner. Existing private bindings keep their audience and host grants.
+
+New group bindings verify the selected Bot's App identity; they do not require
+a personal user login in that App profile. The group principal is App-scoped and
+never supplies private-owner authority. Private project/steward connections still
+require both the verified App and its independently verified user. Existing group
+bindings that used a user principal retain that exact identity and native home;
+an explicit disconnect/reconnect selects the new App principal and requires a new
+isolated home/login. Polling or a user's login/logout never migrates a binding.
+
+A human starts a topic by mentioning the Bot. Admission reads the exact provider
+message and, for a continuation, its original root; event text cannot substitute
+the root or mention. Members in that topic share its Session and FIFO; different
+topics, groups and Apps have independent Session identities. Status, stop and new
+target that topic. Admission feedback, streamed posts, terminal edits and receipt
+recovery use the existing delivery path with `source_thread` placement. A revoked
+binding or unreadable source prevents later result delivery.
+
+Group contexts always use `workspace_only` filesystem isolation, even when the
+owner's private project uses `host_default`. Only the selected read/write workspace
+grant is available. Personal portfolio, attached Agent selection, global skills,
+MCP, shell profiles and inherited account environment are unavailable. The native
+host must verify the exact permissions profile and workspace root; its independent
+store needs separate login and is never seeded from personal credentials/history.
+`/status` exposes the project title, not the host's absolute workspace path.
+
+Core, HTTP, provider-readback and native-protocol fixtures exercise these boundaries.
+They are synthetic transport/model evidence, not a live community rollout. The
+[community golden queries](../../product/use-cases/community/golden-queries.md)
+still require an independently authenticated public workspace and actual pilot
+group journeys before either developer group is enabled. Public-source reading
+needs its separately qualified scoped tool; this change does not enable unrestricted
+network or personal browser access.
+
 ## Ordinary workspace writes: default and revocation checkpoint
 
 Ordinary project Chat defaults to `workspace_write` for host-declared roots. The

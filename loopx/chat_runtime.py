@@ -1011,7 +1011,7 @@ class ChatRuntimeController:
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
         if session.get("project_context") is not None:
-            if session["project_context"].get("audience") == "bound_owner":
+            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
                 raise ValueError("bound project Chat requires its external source admission")
             context = self.project_contexts.session_context(session)
             project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
@@ -1143,7 +1143,7 @@ class ChatRuntimeController:
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
         if session.get("project_context") is not None:
-            if session["project_context"].get("audience") == "bound_owner":
+            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
                 raise ValueError("bound project steering requires its external source admission")
             self.project_contexts.session_context(session)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
@@ -1282,7 +1282,7 @@ class ChatRuntimeController:
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
         if session.get("steward_context") is not None:
-            if origin != "lark":
+            if origin not in {"lark", "external"}:
                 raise ValueError("bound steward Chat requires its external source admission")
             self.project_contexts.session_context(session)
         if session.get("project_context") is not None:
@@ -1658,6 +1658,8 @@ class ChatRuntimeController:
                 event_buffer.close()
                 return
             if response.get("context_handoff") is not None:
+                if scope["kind"] not in {"owner_goal", "owner_portfolio", "external_audience"}:
+                    raise ValueError("This workspace conversation cannot hand off to a Goal or Agent.")
                 response = apply_context_handoff(
                     self, scope, session,
                     self.store.load_turn(session_id, turn_id) or {}, response, context,

@@ -307,7 +307,7 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v7

@@ -34,6 +34,9 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
 
     assert "test:dashboard:coverage" in dashboard
     assert "personal-workspace-browser-smoke.mjs" in dashboard
+    dashboard_timeout = re.search(r"(?m)^    timeout-minutes: (\d+)$", dashboard)
+    assert dashboard_timeout is not None
+    assert int(dashboard_timeout.group(1)) >= 25
     assert "python -m ruff check" not in dashboard
     assert "python -m mypy" not in dashboard
 

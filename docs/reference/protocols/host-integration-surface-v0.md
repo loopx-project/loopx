@@ -209,6 +209,39 @@ Optional projections such as `task_graph_projection_v0`,
 inputs to a host integration. They do not add graph write authority, launch
 workers, change quota gates, or create a new source of truth.
 
+### Managed Node startup diagnostics
+
+The Effect transport's version probe and process readiness each have a bounded
+15-second budget; the version probe previously allowed only 2 seconds. This
+changes cold startup tolerance and the worst-case failed-probe wait, not work
+Turn deadlines or the Node.js 22.22.3 compatibility floor. Warm requests reuse
+the serving runtime without a new version probe. `loopx doctor` still observes
+the current launcher independently, so replacing PATH is visible immediately.
+
+Startup, doctor and guided start-goal share the same probe diagnosis:
+
+A successful initial doctor check does not guarantee a later cold-start probe
+will succeed. Deep doctor preserves the later probe's diagnostic and recovery
+below, with host-permission recovery taking precedence. Other runtime startup
+failures retain their existing recovery advice.
+
+| Diagnostic code | Observation | Recovery |
+| --- | --- | --- |
+| `node_unavailable` | Node missing or a parsed version below the floor | Install or activate a qualified Node on PATH |
+| `node_probe_timeout` | No completed version observation within the budget | Check host load and the launcher; compatibility remains unknown |
+| `node_probe_launch_failed` | The launcher could not be executed | Repair the launcher on PATH |
+| `node_probe_exit_failed` | The probe exited unsuccessfully | Repair the launcher on PATH |
+| `node_probe_invalid_version` | Successful exit without a valid version | Verify the launcher's version output |
+| `runtime_host_permission_denied` | Host denied the probe | Retry through host-approved runtime access |
+
+After recovery, run `loopx doctor --deep` and retry the original request. Failed
+probes do not dispatch semantic work, grant capability authority, rewrite Goal
+state or publish raw output, stderr or executable paths. Timeout and cancellation
+kill and reap the probe child; cancellation propagates to the caller.
+The request transport does not automatically repeat a failed Node probe before
+the caller can recover. Existing retries for other startup and safe transport
+failures remain in place.
+
 ## Controlled Writes
 
 Writes must be CLI-equivalent, idempotent where possible, and fail closed when

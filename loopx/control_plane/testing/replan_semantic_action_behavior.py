@@ -536,7 +536,23 @@ def _is_replan_successor_create(command: str) -> bool:
 
 def _required_explore_read_command(packet: Mapping[str, Any]) -> str | None:
     """Accept only this fixture's current, scoped turn-start read contract."""
-    reads = packet.get("required_reads") or []
+    interaction = packet.get("interaction_contract")
+    agent_channel = (
+        interaction.get("agent_channel")
+        if isinstance(interaction, Mapping)
+        else None
+    )
+    raw_reads = (
+        agent_channel.get("required_reads")
+        if isinstance(agent_channel, Mapping)
+        else None
+    )
+    if not isinstance(raw_reads, list):
+        raw_reads = packet.get("required_reads")
+    reads = [
+        read for read in raw_reads or []
+        if isinstance(read, Mapping) and read.get("kind") == "explore_turn_context"
+    ]
     if not reads:
         return None
     if not isinstance(reads, list) or len(reads) != 1:

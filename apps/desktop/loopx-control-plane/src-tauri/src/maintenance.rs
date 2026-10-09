@@ -671,10 +671,9 @@ fn runtime_state_publishes_own_phase(error: &str) -> bool {
 
 fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, String> {
     use crate::runtime_selection::{
-        compare_official_commits, compare_runtimes, is_private_runtime, prefer_current_bundle,
-        Selection,
+        compare_official_commits, is_private_runtime, prefer_current_bundle,
+        prefer_discovered_runtime, same_release_installation, Selection,
     };
-    use std::cmp::Ordering as VersionOrder;
     let mut selection = crate::runtime_selection::selected(app)?;
     let mut installed = crate::services::runtime_identity_for_executable(&selection.executable);
     if cfg!(dev) || !cfg!(target_os = "macos") {
@@ -692,6 +691,7 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     // reconcile discovery, a previous choice, and the App-owned installation.
     if !selection.environment_override {
         let mut candidates = crate::services::discovered_loopx_executables();
+        let default_executable = candidates.first().cloned();
         candidates.push(private_executable.to_string_lossy().into_owned());
         for executable in candidates {
             if executable == selection.executable {
@@ -710,12 +710,19 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
                             compare_official_commits,
                         )
                     } else {
-                        compare_runtimes(
+                        prefer_discovered_runtime(
                             app.package_info(),
                             current,
                             &identity,
+                            default_executable.as_ref() == Some(&executable)
+                                && same_release_installation(
+                                    &selection.executable,
+                                    current,
+                                    &executable,
+                                    &identity,
+                                ),
                             compare_official_commits,
-                        ) == Some(VersionOrder::Less)
+                        )
                     }
                 });
                 if replace {

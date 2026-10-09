@@ -14,6 +14,9 @@ other.  The unanchored forms are not interchangeable with the anchored ones --
 ``goal_channel_contracts`` and ``goal_channel_notification`` ``search()`` for an
 id inside payload text, where ``^`` and ``$`` would change the answer -- so both
 spellings stay distinct and one module decides both.
+
+The fifth shape is the application id, ``cli_``-prefixed. It has only the
+whole-value spelling because every caller applies ``fullmatch``.
 """
 
 from __future__ import annotations
@@ -26,6 +29,14 @@ LARK_EVENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,240}$")
 LARK_MESSAGE_ID_PATTERN = re.compile(r"^om_[A-Za-z0-9_-]+$")
 LARK_CHAT_ID_PATTERN = re.compile(r"^oc_[A-Za-z0-9_-]+$")
 LARK_OPEN_ID_PATTERN = re.compile(r"^ou_[A-Za-z0-9_-]+$")
+# The application a bot belongs to. Four sites decided this themselves -- the
+# transport hub, ``bot_scopes``, ``event_collector_runtime`` and
+# ``goal_channel_delivery_contract``, the last one with its own anchors on the
+# same body -- and eight more modules reach the decision by importing the
+# transport hub's name, so a fix to the body had three possible homes.
+# Every caller applies ``fullmatch``, which is why only the whole-value spelling
+# is stated here.
+LARK_APP_ID_PATTERN = re.compile(r"^cli_[A-Za-z0-9_-]+$")
 
 LARK_MESSAGE_ID_SEARCH = re.compile(r"om_[A-Za-z0-9_-]+")
 LARK_CHAT_ID_SEARCH = re.compile(r"oc_[A-Za-z0-9_-]+")

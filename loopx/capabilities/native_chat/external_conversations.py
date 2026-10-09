@@ -35,8 +35,11 @@ class ChatExternalConversations:
 
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
-              attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+              attachments: list[dict[str, Any]] | None = None,
+              origin: str = "lark") -> dict[str, Any]:
         import re
+        if origin not in {"lark", "external"}:
+            raise ValueError("unsupported external conversation origin")
         if not re.fullmatch(r"[a-f0-9]{24}", request_ref):
             raise ValueError("invalid external request reference")
         if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
@@ -54,10 +57,12 @@ class ChatExternalConversations:
             # would duplicate this fresh authority check on every request.
             selected = self.bindings.resolve(binding_id=binding_id, **source)
             expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
-                        "attachments": normalize_chat_image_attachments(attachments) or None}
+                        "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
             if path.exists():
                 row = _read_json(path)
-                if any(row.get(key) != value for key, value in expected.items()):
+                # Existing Lark journals predate persisted transport origin.
+                if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
+                       for key, value in expected.items()):
                     raise ValueError("external request identity was reused with different content")
                 if row.get("status") != "prepared":
                     return row
@@ -117,7 +122,7 @@ class ChatExternalConversations:
                 # Session check. Never move an accepted request to a new Session.
                 self._record_steward_ingress(row, selected, current, client_id)
                 turn, _ = controller.store.create_queued_turn(current["session_id"],
-                    client_turn_id=client_id, message=row["message"], origin="lark",
+                    client_turn_id=client_id, message=row["message"], origin=row.get("origin", "lark"),
                     attachments=row.get("attachments"),
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
@@ -209,7 +214,7 @@ class ChatExternalConversations:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
                     client_turn_id=plan["client_turn_id"], message=row["message"],
                     attachments=row.get("attachments"),
-                    work_dir=Path("."), objective="", origin="lark",
+                    work_dir=Path("."), objective="", origin=row.get("origin", "lark"),
                     external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
             except RuntimeError as exc:
@@ -434,7 +439,8 @@ class ChatExternalConversations:
                 self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "prepared":
                     self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
-                               message=row["message"], command=row["command"])
+                               message=row["message"], command=row["command"],
+                               attachments=row.get("attachments"), origin=row.get("origin", "lark"))
                 elif row["status"] == "command_queued":
                     self._run_steward_action(row)
                 elif row["status"] == "accepted":

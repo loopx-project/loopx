@@ -6,7 +6,6 @@ import pytest
 
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TODO_ID,
-    AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD, _append_surface_only_runs,
     _configure_autonomous_replan_fixture, _configure_selected_todo_replan_fixture,
     _configure_selectable_alternative, _heartbeat_receipt_count, _projected_cli_args,
     _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
@@ -21,7 +20,6 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     _configure_selectable_alternative(project)
     if initial_replan:
         _configure_selected_todo_replan_fixture(project, registry)
-        _append_surface_only_runs(runtime, count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--scan-path", str(project))
@@ -31,7 +29,10 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     assert first["interaction_contract"]["cli_channel"]["selection_required"]
     assert "settlement_identity" not in first["heartbeat_receipt"]
     if initial_replan:
-        assert "periodic_review_due" in {
+        # This test exercises selection recovery from an existing replan.
+        # Periodic review has its own settlement-qualified coverage; these
+        # setup runs are not settled Turns and must not trigger its cadence.
+        assert "long_todo_chain" in {
             trigger["kind"] for trigger in first["autonomous_replan_obligation"]["triggers"]
         }
     if binding == "todo":

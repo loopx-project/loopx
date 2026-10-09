@@ -153,13 +153,11 @@ def test_generated_hook_reads_reach_both_actor_arms_without_legacy_fallback(tmp_
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
     from loopx.control_plane.testing.canary_harness import write_fixture_registry
     from loopx.control_plane.testing.model_behavior_qualification import model_behavior_semantic_contract_from_packet
-    from loopx.control_plane.testing.quota_fixtures import quota_status_payload, quota_todo_item
+    from loopx.control_plane.testing.quota_fixtures import quota_status_payload
     from tests.control_plane.test_turn_start_capability_hooks import _result
 
     registry, runtime, state = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "state.md"
-    state.write_text("# Goal\n## Objective\nPreserve the complete work contract.\n## Agent Todo\n"
-        "- [ ] [P0] Continue authorized work\n"
-        "  <!-- loopx:todo todo_id=todo_fixture001 status=open task_class=advancement_task claimed_by=agent-a -->\n")
+    state.write_text("# Goal\n## Objective\nPreserve the complete work contract.\n## Agent Todo\n")
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id="fixture-goal", domain="software", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["agent-a"], quota_allowed_slots=None)
@@ -180,8 +178,8 @@ def test_generated_hook_reads_reach_both_actor_arms_without_legacy_fallback(tmp_
     assert not dispatch["failures"]
     status = quota_status_payload(goal_id="fixture-goal", status="active",
         recommended_action="Continue authorized work", coordination={"registered_agents": ["agent-a"]},
-        agent_todo_items=[quota_todo_item(todo_id="todo_fixture001", title="Continue authorized work",
-            claimed_by="agent-a")])
+        # Keep selected-Todo admission reads out of this hook-only contract test.
+        agent_todo_items=[])
     full = build_live_quota_should_run_decision(status, goal_id="fixture-goal", agent_id="agent-a",
         available_capabilities=["shell"], include_scheduler_detail=False, codex_app_current_rrule=None,
         registry_path=registry, runtime_root=runtime, turn_start_hook_dispatch=dispatch)

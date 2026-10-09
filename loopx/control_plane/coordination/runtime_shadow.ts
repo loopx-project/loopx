@@ -1,7 +1,8 @@
 import {verifyShadowRegistrySource, withShadowRegistrySource} from "./shadow_registry_source.ts";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA, currentGraphTodoIds} from "./source_projection.ts";
 import { createHash } from "node:crypto";
-import { readFile, readdir, lstat } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { open, readFile, readdir, lstat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -99,8 +100,11 @@ export async function withShadowSourceLocks<T>(request: ShadowRequest, operation
   const goal = request.goal_id;
   return await withFileMutationLock(legacyCoordinationTodoLockPath(root, goal), () =>
     withFileMutationLock(String(snapshot.state_path), () =>
-      withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), () =>
-        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation()))));
+      withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), async () => {
+        await sourceLeaseDirectory(root, goal);
+        return await withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"),
+          () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation());
+      })));
 }
 async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   return await withShadowSourceLocks(request, async () => {
@@ -117,6 +121,41 @@ async function optionalBytes(path: string): Promise<Buffer | null> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+/** Local source admission, not a lease state or an authority grant. Check the
+ * subtree before taking its lock so a source link cannot redirect lock writes. */
+async function sourceLeaseDirectory(root: string, goal: string): Promise<Stats | null> {
+  let path = root;
+  let info: Stats | null = null;
+  for (const segment of ["goals", goal, "task-leases"]) {
+    path = join(path, segment);
+    try { info = await lstat(path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new ShadowManagementError("source_lease_inventory_invalid");
+  }
+  return info;
+}
+async function sourceLeaseBytes(path: string): Promise<Buffer> {
+  const before = await lstat(path);
+  if (!before.isFile() || before.isSymbolicLink()) throw new ShadowManagementError("source_lease_inventory_invalid");
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino) throw new ShadowManagementError("source_changed_retry");
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino ||
+        before.size !== bytes.length || after.size !== bytes.length || current.size !== bytes.length ||
+        before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
+        after.mtimeMs !== current.mtimeMs || after.ctimeMs !== current.ctimeMs) {
+      throw new ShadowManagementError("source_changed_retry");
+    }
+    return bytes;
+  } finally { await handle.close(); }
 }
 export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promise<void> {
   const snapshot = sourceSnapshot(request);
@@ -147,6 +186,7 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
   const bytes = await optionalBytes(String(snapshot.state_path));
   if (bytes === null || bytesDigest(bytes) !== snapshot.state_bytes_sha256) throw new ShadowManagementError("source_changed_retry");
   const directory = join(request.runtime_root, "goals", request.goal_id, "task-leases");
+  const directoryBefore = await sourceLeaseDirectory(request.runtime_root, request.goal_id);
   let names: string[];
   try { names = await readdir(directory); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -156,14 +196,15 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
   const leases: JsonObject[] = [];
   const currentTodoIds = currentGraphTodoIds(request.projection.todos as JsonObject[]);
   // ASCII filenames must use the same ordinal order as Python's source snapshot.
-  const leaseNames = names.filter((name) => /^[A-Za-z0-9_.-]+\.json$/.test(name)).sort((left, right) => {
+  const leaseNames = names.filter((name) => name.endsWith(".json")).sort((left, right) => {
     if (left < right) return -1;
     if (left > right) return 1;
     return 0;
   });
   for (const name of leaseNames) {
-    const data = await readFile(join(directory, name));
-    const lease = canonicalAuthorityObject(JSON.parse(data.toString("utf8")), "lease");
+    if (!/^[A-Za-z0-9_.-]+\.json$/.test(name)) throw new ShadowManagementError("source_lease_inventory_invalid");
+    const data = await sourceLeaseBytes(join(directory, name));
+    const lease = canonicalAuthorityObject(JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(data)), "lease");
     if (lease.goal_id !== request.goal_id || lease.todo_id !== name.slice(0, -5)) throw new ShadowManagementError("source_lease_identity_mismatch");
     inventory.push({ name, bytes_sha256: bytesDigest(data) });
     // The legacy directory is append-retained audit history. The source
@@ -171,6 +212,10 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     // edges to Todos that still exist in the current projection.
     if (currentTodoIds.has(String(lease.todo_id))) leases.push(lease);
   }
+  const directoryAfter = await sourceLeaseDirectory(request.runtime_root, request.goal_id);
+  const namesAfter = directoryAfter === null ? [] : (await readdir(directory)).filter(name => name.endsWith(".json")).sort();
+  if (directoryBefore?.dev !== directoryAfter?.dev || directoryBefore?.ino !== directoryAfter?.ino ||
+      !canonicalAuthorityBytes(leaseNames).equals(canonicalAuthorityBytes(namesAfter))) throw new ShadowManagementError("source_changed_retry");
   if (!canonicalAuthorityBytes(inventory).equals(canonicalAuthorityBytes(snapshot.lease_inventory)) ||
       !canonicalAuthorityBytes(leases).equals(canonicalAuthorityBytes(request.projection.leases))) {
     throw new ShadowManagementError("source_changed_retry");

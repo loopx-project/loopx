@@ -5,6 +5,6 @@
   },
   "lean_analysis_proofs": {
     "timeout_seconds": 43200,
-    "eval_interval_seconds": 1800
+    "eval_interval_seconds": 300
   }
 }

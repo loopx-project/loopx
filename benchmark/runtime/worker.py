@@ -344,9 +344,15 @@ def run_once(env: dict[str, str]) -> dict:
                         command, env=env, stdout=stdout, stderr=stderr
                     ) as process:
                         allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
-                        timeout = (float(env["LOOPX_PLANNING_TIMEOUT_SEC"]) if stage == "plan"
-                                   else None if execution.timeout_seconds is None
-                                   else execution.timeout_seconds + allowance)
+                        if stage == "plan":
+                            limit = env.get("LOOPX_PLANNING_TIMEOUT_SEC")
+                            # SForge planning has no stage cap: the same absolute
+                            # trial deadline bounds this subprocess and its handoff.
+                            timeout = (float(limit) if limit is not None else
+                                       max(0, float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()))
+                        else:
+                            timeout = (None if execution.timeout_seconds is None
+                                       else execution.timeout_seconds + allowance)
                         process.communicate(
                             input=body, timeout=timeout
                         )

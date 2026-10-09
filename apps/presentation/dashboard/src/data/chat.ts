@@ -2181,7 +2181,7 @@ export type LarkPermissionGuidance = {
 
 const larkGroupChatsSchema = z.object({
   ok: z.literal(true),
-  chats: z.array(z.object({ chat_id: z.string(), chat_name: z.string() })),
+  chats: z.array(z.object({ chat_id: z.string(), chat_name: z.string(), selected: z.boolean().default(false) })),
 });
 
 export async function fetchLarkGroupChats(appRef: string, query?: string) {
@@ -2402,6 +2402,7 @@ const privateConversationSchema = z.object({
   project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
   grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
+  audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
   pending_count: z.number().int(), recovery_count: z.number().int(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
@@ -2411,11 +2412,12 @@ export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 export async function fetchPrivateConversations() {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
 }
-export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write") {
+export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write", groupIds?: string[]) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
-      ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {})}),
+      ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {}),
+      ...(groupIds !== undefined ? {audience: "group", group_ids: groupIds} : {})}),
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {
