@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import unquote
 
-from .todos import add_goal_todo
+from .control_plane.todos.mutation_api import add_goal_todo
 from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
 from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
@@ -661,6 +661,10 @@ def _normalize_todo_text(text: str) -> str:
 
 
 def _todo_revision(payload: dict[str, Any]) -> str | None:
+    # Canonical dry-runs return their provider head; the compatibility writer
+    # retains its existing document revision witness.
+    if payload.get("decision_read_from_provider") is True:
+        return str(payload["provider_revision"])
     correctness = payload.get("local_state_write_correctness")
     if not isinstance(correctness, dict):
         return None
@@ -675,13 +679,15 @@ def _todo_revision(payload: dict[str, Any]) -> str | None:
 
 
 def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str, Any]:
+    canonical = payload.get("todo")
+    record = canonical if isinstance(canonical, dict) else {}
     todo = {
         "goal_id": str(payload.get("goal_id") or ""),
         "todo_id": str(payload.get("todo_id") or ""),
-        "text": str(payload.get("todo") or ""),
-        "status": str(payload.get("status") or "open"),
-        "task_class": str(payload.get("task_class") or "advancement_task"),
-        "action_kind": str(payload.get("action_kind") or CHAT_TODO_ACTION_KIND),
+        "text": str(record.get("text") if record else payload.get("todo") or ""),
+        "status": str(record.get("status") if record else payload.get("status") or "open"),
+        "task_class": str(record.get("task_class") or payload.get("task_class") or "advancement_task"),
+        "action_kind": str(record.get("action_kind") or payload.get("action_kind") or CHAT_TODO_ACTION_KIND),
     }
     return {
         "ok": bool(payload.get("ok")),
@@ -696,6 +702,10 @@ def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str
 
 def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
     compact = _compact_todo_payload(payload, applied=False)
+    if payload.get("decision_read_from_provider") is True:
+        # A create dry-run allocates a proposed operation identity without a
+        # write. Its random Todo id is not the reviewed intent or source head.
+        compact["todo"].pop("todo_id")
     return _stable_digest(
         {
             "schema_version": CHAT_TODO_PREVIEW_SCHEMA_VERSION,

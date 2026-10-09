@@ -3,7 +3,7 @@
 from urllib.parse import parse_qs, urlparse
 
 from .status_server import is_loopback_host
-from .todos import list_goal_todos
+from .control_plane.todos.list_readback import list_goal_todos
 
 
 class TodoDetailRequestMixin:

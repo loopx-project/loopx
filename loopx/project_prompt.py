@@ -4,7 +4,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
 from .control_plane.projects.registry_codec import load_registry
 from .paths import (
     registered_goal_state_file,
