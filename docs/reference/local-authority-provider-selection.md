@@ -399,9 +399,20 @@ and native unpromoted-source leases on File/SQLite: import refuses while the
 Host runs and after it exits with an active lease; native release permits
 cutover. The imported released lease retains its identity and history, and a
 restart using the old grant is rejected before the actual Host launches.
-This does not qualify automatic Host discovery/stop, pending outbox disposition,
-live model sessions or full-history restore. The
-cold-import CLI reuses the selected command dispatcher and
+A fresh native acquisition advances that retained lease's version and execution
+epoch and can start a real supervised Host under the selected canonical provider.
+With that Host running, original-import recovery still works after the Markdown
+source is removed and preserves the current active lease. The old token refuses
+launch even while a new lease for the same Todo is active. Stopping the new Host
+also leaves its lease active until its owner releases it; import replay preserves
+the new settlement. Reacquire through the normal `task-lease acquire` workflow
+with a new execution key and the current version, rather than reusing the old
+execution receipt. Keep the supervisor/OS transport: writer retirement does not
+remove its process-exit and current-execution proof duties.
+This qualifies operator-led POSIX reactivation of synthetic work, not automatic
+Host discovery/stop, pending outbox disposition, live model sessions, App startup
+or identity adoption after full-history restore. The cold-import CLI reuses the
+selected command dispatcher and
 the existing Goal path resolver; its File/SQLite import and original-receipt
 recovery run with `todos.py`, `bootstrap.py`, `runtime_shadow_writer_adapter.py`
 and `local_authority_shadow_outbox.py` physically absent in a disposable package.

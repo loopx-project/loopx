@@ -1,7 +1,8 @@
 """Cold-import stop ordering with native leases and real owned Host processes.
 
 Disposable unpromoted sources only. This qualifies the operator-led POSIX stop
-journey, not automatic Host discovery, outbox disposition or whole-Goal restore.
+and fresh canonical-lease reactivation journey, not automatic Host discovery,
+outbox disposition, model execution or whole-Goal restore.
 """
 from __future__ import annotations
 
@@ -95,7 +96,7 @@ def source_execution(tmp_path, monkeypatch, ttl=120):
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group stop proof")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_cold_import_stops_host_then_releases_native_lease_before_cutover(tmp_path, monkeypatch, provider):
+def test_cold_import_settlement_and_fresh_canonical_host_reactivation(tmp_path, monkeypatch, provider):
     cli, command, release, prepare, drain, launch, context, runtime, _ = source_execution(tmp_path, monkeypatch)
     marker, record = tmp_path / "host.pid", tmp_path / "owned-host.json"
     owner = launch(context, marker, record)
@@ -146,6 +147,67 @@ def test_cold_import_stops_host_then_releases_native_lease_before_cutover(tmp_pa
         recovered = cli("recover-import", "--plan-sha256", prepared["plan_sha256"], "--execute")["cold_import"]
         assert recovered["status"] == "replayed" and recovered["cursor"] == "1"
         assert command("inspect")["lease"] == settled
+        # Import does not itself activate execution. A new native acquisition
+        # must advance the retained token and can launch the real supervised
+        # Host under the selected canonical provider.
+        fresh_key = "canonical-execution"
+        acquired = command("acquire", "--owner", "agent-a", "--idempotency-key", fresh_key,
+            "--expected-version", settled["version"], "--ttl-seconds", 120)
+        fresh = acquired["lease"]
+        assert acquired["source_authority"] == f"{provider}_v0"
+        assert fresh["status"] == "active" and fresh["idempotency_key"] == fresh_key
+        assert fresh["version"] == settled["version"] + 1
+        assert fresh["lease_epoch"] == settled["lease_epoch"] + 1
+        fresh_context = {**context, "lease": fresh,
+            "renew_argv": [*context["renew_argv"][:-1], fresh_key]}
+        fresh_marker, fresh_record = tmp_path / "canonical.pid", tmp_path / "canonical-host.json"
+        fresh_owner = launch(fresh_context, fresh_marker, fresh_record)
+        try:
+            deadline = time.monotonic() + 60
+            while not fresh_marker.exists() and fresh_owner.poll() is None and time.monotonic() < deadline:
+                time.sleep(.05)
+            assert fresh_marker.exists(), fresh_owner.communicate(timeout=10)
+            fresh_pid = int(fresh_marker.read_text())
+            os.kill(fresh_pid, 0)
+            assert drain(fresh_record) == "draining"
+            # Source-free original-operation replay is historical readback; it
+            # must not reinstall the released lease over a fresh execution.
+            state = tmp_path / "project/.local/goals/cold/ACTIVE_GOAL_STATE.md"
+            state.unlink()
+            replay = cli("recover-import", "--plan-sha256", prepared["plan_sha256"], "--execute")["cold_import"]
+            assert replay["status"] == "replayed" and replay["execution_authority_granted"] is False
+            assert command("inspect")["lease"] == fresh
+            os.kill(fresh_pid, 0)
+            # An old token is not revived just because the Todo now has a
+            # current active lease. Reject it before starting a second Host.
+            stale_marker, stale_record = tmp_path / "stale.pid", tmp_path / "stale-host.json"
+            stale = launch(context, stale_marker, stale_record)
+            out, err = stale.communicate(timeout=60)
+            assert stale.returncode == 0, (out, err)
+            observation = json.loads(out)
+            assert observation["outcome"] == "cancelled"
+            assert observation["lease_failure"] == {"reason": "execution_identity_changed", "boundary": "initial_proof"}
+            assert not stale_marker.exists()
+            assert json.loads(stale_record.read_text())["phase"] == "not_launched"
+            assert drain(stale_record) == "drained"
+            assert command("inspect")["lease"] == fresh
+        finally:
+            if fresh_owner.poll() is None:
+                fresh_owner.terminate()
+            out, err = fresh_owner.communicate(timeout=30)
+        assert fresh_owner.returncode == 0 and json.loads(out) == {"operator_stopped": True}, (out, err)
+        assert drain(fresh_record) == "drained"
+        with pytest.raises(ProcessLookupError):
+            os.kill(fresh_pid, 0)
+        # Host exit remains separate from settlement after migration as well.
+        assert command("inspect")["lease"] == fresh
+        released = command("release", "--owner", "agent-a", "--idempotency-key", fresh_key,
+            "--expected-version", fresh["version"])["lease"]
+        assert released["status"] == "released"
+        assert released["idempotency_key"] == fresh_key
+        assert cli("recover-import", "--plan-sha256", prepared["plan_sha256"],
+            "--execute")["cold_import"]["status"] == "replayed"
+        assert command("inspect")["lease"] == released
     finally:
         if owner.poll() is None:
             owner.terminate()

@@ -946,8 +946,14 @@ confirmation. File/SQLite HTTP qualification preserves later writes and refuses
 source/backup drift. The operator-led POSIX stop path now exercises actual owned
 Host processes and native source leases on File/SQLite: process exit and lease
 release remain separate, expired active leases refuse import, and the old grant
-cannot launch a Host after cutover. This proves the existing supervisor/lease
-boundary with synthetic work, not automatic Host discovery or live model use.
+cannot launch a Host after cutover. Fresh canonical acquisition advances the
+retained lease version/epoch and launches a real owned Host. Source-free original
+import replay preserves that active grant and its later native settlement;
+a stale token refuses before launch even while the same Todo has a fresh active
+lease. Process exit remains separate from lease release after cutover as well.
+This qualifies the existing POSIX supervisor/lease reactivation boundary with
+synthetic work. App startup, full-state identity adoption, automatic Host
+discovery and live model use remain separate acceptance gaps.
 Proved original Todo outbox disposition now composes with cold import on both
 File and SQLite: four interrupted-write windows retain pending-source backups,
 exact original receipts and revision-bound rollback archives. Active capture
