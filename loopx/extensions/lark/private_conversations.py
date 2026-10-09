@@ -117,7 +117,7 @@ class LarkPrivateConversations:
                             or any(message.get(key, "") != event.get(key, "") for key in ["parent_id", "thread_id"])):
                         return None
                     if root == event["message_id"]:
-                        original = message
+                        original: Mapping[str, Any] | None = message
                     else:
                         response = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"],
                             tail=["im", "+messages-mget", "--message-ids", root,
@@ -128,7 +128,10 @@ class LarkPrivateConversations:
                     if (not original or original.get("chat_id") != event["chat_id"]
                             or original.get("sender", {}).get("sender_type") != "user"
                             or original.get("parent_id") or original.get("root_id") not in (None, "", root)
+                            or not isinstance(original.get("mentions"), list)
                             or not lark_event_mentions_bot(original, bot_display_name=observation["bot_display_name"],
+                                                           bot_app_id=observation["bot_app_id"],
+                                                           bot_open_id=observation["bot_open_id"],
                                                            allow_text_fallback=False)):
                         return None
                 return message

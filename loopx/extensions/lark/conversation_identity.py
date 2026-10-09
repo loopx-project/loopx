@@ -42,9 +42,15 @@ def observe_lark_conversation_identity(*, profile: str, runner: CommandRunner,
     owner_id = str(owner.get("openId") or "")
     if not OPEN_ID_PATTERN.fullmatch(owner_id):
         raise ValueError("the selected App has no verified owner identity")
+    bot_open_id = str(bot.get("openId") or "")
+    if not OPEN_ID_PATTERN.fullmatch(bot_open_id):
+        bot_open_id = ""
     provider_ref = identity_ref(app_id)
     return {"transport_ref": profile, "provider_ref": provider_ref,
-            "operator_ref": identity_ref(provider_ref, owner_id), "verified": True, "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32], "bot_display_name": str(bot.get("appName") or "")}
+            "operator_ref": identity_ref(provider_ref, owner_id), "verified": True,
+            "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32],
+            "bot_display_name": str(bot.get("appName") or ""),
+            "bot_app_id": app_id, "bot_open_id": bot_open_id}
 
 
 def lark_private_source(*, provider_ref: str, event: Mapping[str, Any]) -> dict[str, Any]:

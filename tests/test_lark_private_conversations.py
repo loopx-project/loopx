@@ -47,7 +47,7 @@ class Provider:
             sender={"id": sender, "sender_type": "user"},
             **{key: event[key] for key in ["root_id", "parent_id", "thread_id"] if key in event})
         if not root and addressed:
-            self.messages[event["message_id"]]["mentions"] = [{"name": "notes-app", "id": {"open_id": "ou_bot"}}]
+            self.messages[event["message_id"]]["mentions"] = [{"name": "notes-app", "id": {"open_id": "ou_notes_app_bot"}}]
         return event
 
     def __call__(self, args, cwd=None, timeout=None):
@@ -59,7 +59,8 @@ class Provider:
         profile = args[args.index("--profile") + 1]
         if "auth" in args:
             data = {"ok": True, "appId": f"cli_{profile.replace('-', '_')}", "identities": {
-                "bot": {"available": True, "verified": True, "appName": profile},
+                "bot": {"available": True, "verified": True, "appName": profile,
+                        "openId": f"ou_{profile.replace('-', '_')}_bot"},
                 "user": {"available": True, "verified": True, "openId": f"ou_{profile.replace('-', '_')}"}}}
         elif "+chat-list" in args:
             data = {"ok": True, "data": {"chats": [{"chat_id": chat, "name": title}
@@ -280,6 +281,46 @@ def test_group_provenance_and_revocation_prevent_private_or_wrong_topic_delivery
         transport.reconcile()
         assert provider.writes == []  # Even a completed result needs current source authority.
         assert transport.admit("notes-app", root)["status"] == "audience_rejected"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("mentions", [
+    [{"name": "notes-app", "id": {"open_id": "ou_steward_app_bot"}}],
+    [{"name": "notes-app", "id": {"app_id": "cli_steward_app"}}],
+    [{"name": "notes-app"}],
+    None,
+])
+def test_group_root_requires_this_apps_provider_mention_before_capture(ordinary, mentions):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("wrong-recipient", "Explain this project")
+        message = provider.messages[root["message_id"]]
+        message["mentioned"] = True
+        if mentions is None:
+            message.pop("mentions")
+        else:
+            message["mentions"] = mentions
+        assert transport.admit("notes-app", root)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert provider.writes == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("identity", [{"open_id": "ou_notes_app_bot"}, {"app_id": "cli_notes_app"}])
+def test_group_provider_mention_survives_a_bot_rename_and_topic_followup(ordinary, identity):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("renamed-bot", "Explain this project")
+        provider.messages[root["message_id"]]["mentions"] = [{"name": "Renamed project assistant", "id": identity}]
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        followup = provider.topic("renamed-followup", "Compare its configuration", root=root["message_id"])
+        assert transport.admit("notes-app", followup)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=followup["content"])
+        assert second["session_id"] == first["session_id"]
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
     finally:
         runtime.close()
 
