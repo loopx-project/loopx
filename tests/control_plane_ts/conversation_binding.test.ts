@@ -16,6 +16,49 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("group topics require an observed App membership and cannot inherit private recipients or portfolio", () => {
+  const group = "1".repeat(24), topic = "2".repeat(24);
+  const configure = {...request, binding: {...row, audience: "group", group_refs: [group]},
+    available_group_refs: [group]};
+  const next = planConversationBinding(configure).state;
+  const use = {current: next, binding_id: row.binding_id, source_ref: topic, topic_ref: topic,
+    group_ref: group, sender_ref: "3".repeat(24), private_human_message: false,
+    group_human_message: true, observation, available_projects: [project]};
+  const resolved = resolveBoundConversation(use);
+  const context = resolved.context as Record<string, unknown>;
+  assert.equal(context.audience, "bound_group");
+  assert.equal(context.filesystem_scope, "workspace_only");
+  assert.equal(resolved.owner_manager_audience, false);
+  assert.deepEqual(resolveBoundConversation({...use, session_context: context}).context, context);
+  assert.deepEqual(resolveConversationScope({goal_id: null, channel_id: resolved.channel_id,
+    project_context: context, origin: "lark"}),
+    {kind: "project_workspace", goal_ids: [], private_conversation: false});
+  const host = projectConversationIdentity({context}).host_config as Record<string, unknown>;
+  assert.deepEqual(host.skills, {include_instructions: false});
+  assert.equal(host.project_doc_max_bytes, 0);
+  assert.equal(host.allow_login_shell, false);
+  for (const denied of [{group_ref: "4".repeat(24)}, {topic_ref: "4".repeat(24)},
+    {private_human_message: true}, {group_human_message: false},
+    {observation: {...observation, verified: false}}, {current}]) {
+    assert.throws(() => resolveBoundConversation({...use, ...denied}));
+  }
+  for (const denied of [{available_group_refs: []}, {available_group_refs: undefined},
+    {binding: {...configure.binding, context_kind: "steward", grant: "portfolio_read", goal_ids: []}},
+    {binding: {...configure.binding, executor_endpoint_id: "claude-code"}},
+    {binding: {...configure.binding, group_refs: [group, group]}}]) {
+    assert.throws(() => planConversationBinding({...configure, ...denied}));
+  }
+  for (const command of ["agents", "select_agent", "select_project"]) {
+    assert.equal(planBoundConversationRequest({binding: configure.binding,
+      request: {request_ref: topic, command}, current_session: null}).response_code, "group_recipient_unavailable");
+  }
+  const changed = planConversationBinding({...configure, current: next, expected_revision: 1,
+    binding: {...configure.binding, binding_id: "5".repeat(24), group_refs: [group, "4".repeat(24)]},
+    available_group_refs: [group, "4".repeat(24)]}).state;
+  assert.throws(() => resolveBoundConversation({...use, current: changed}), /no longer authorized/);
+  assert.equal(project.audience, "local_owner");
+});
+
 test("only a current verified private steward binding proves the machine owner audience", () => {
   const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
   const next = planConversationBinding({...request, binding: steward}).state;
@@ -303,4 +346,21 @@ test("attached status names the registered recipient and stop cannot pretend hos
   assert.equal(snapshot.queued_count, 2);
   for (const command of ["stop", "new"]) assert.equal(planBoundConversationRequest({...input,
     request: {...input.request, command}}).response_code, "attached_control_unavailable");
+});
+
+
+test("generic external provenance uses the same typed bound audience as legacy Lark", () => {
+  for (const contextKind of ["project", "steward"]) {
+    const selectedRow = contextKind === "project" ? row : {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+    const next = planConversationBinding({...request, binding: selectedRow}).state;
+    const selected = resolveBoundConversation({current: next, binding_id: row.binding_id,
+      source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true,
+      observation, available_projects: [project]});
+    const session = {goal_id: contextKind === "project" ? null : "loopx-manager", channel_id: selected.channel_id,
+      ...(contextKind === "project" ? {project_context: selected.context} : {steward_context: selected.context})};
+    assert.deepEqual(resolveConversationScope({...session, origin: "external"}),
+      resolveConversationScope({...session, origin: "lark"}));
+    assert.notDeepEqual(resolveConversationScope({...session, origin: "web"}),
+      resolveConversationScope({...session, origin: "external"}));
+  }
 });

@@ -86,6 +86,18 @@ function validateAgentTargetObservation(target: JsonObject, value: unknown, work
 
 function binding(value: unknown): JsonObject {
   const row = requireJsonObject(value, "conversation binding");
+  const group = row.audience === "group";
+  if (row.audience !== undefined && row.audience !== "group") {
+    throw new EffectRuntimeRequestError("unsupported conversation audience");
+  }
+  if (group && (row.context_kind !== "project" || row.executor_endpoint_id !== "codex")) {
+    throw new EffectRuntimeRequestError("group Chat requires a native project executor");
+  }
+  const groups = row.group_refs;
+  if (group ? !Array.isArray(groups) || groups.length === 0 || groups.length > 16
+      : groups !== undefined) throw new EffectRuntimeRequestError("invalid group audience grant");
+  const groupRefs = group ? [...new Set((groups as unknown[]).map(value => ref(value, "group reference")))].sort() : [];
+  if (group && groupRefs.length !== (groups as unknown[]).length) throw new EffectRuntimeRequestError("duplicate group audience grant");
   if (row.goal_scope !== undefined && (row.context_kind !== "steward"
       || !["all_registered", "selected"].includes(String(row.goal_scope)))) {
     throw new EffectRuntimeRequestError("unsupported steward Goal scope");
@@ -97,7 +109,7 @@ function binding(value: unknown): JsonObject {
   }
   const targets = row.agent_targets === undefined ? [] : row.agent_targets;
   if (!Array.isArray(targets) || targets.length > 16
-      || (row.context_kind !== "project" && targets.length !== 0)) {
+      || ((row.context_kind !== "project" || group) && targets.length !== 0)) {
     throw new EffectRuntimeRequestError("invalid Agent target grant set");
   }
   const agents = targets.map(agentTarget);
@@ -114,6 +126,7 @@ function binding(value: unknown): JsonObject {
     context_kind: row.context_kind, project_ref: ref(row.project_ref, "workspace reference"),
     executor_endpoint_id: token(row.executor_endpoint_id, "executor endpoint"),
     grant: row.grant, enabled: true,
+    ...(group ? {audience: "group", group_refs: groupRefs} : {}),
     ...(row.context_kind === "steward" ? {goal_ids: normalizeStewardGoalScope(row.goal_ids),
       ...(row.goal_scope !== undefined ? {goal_scope: row.goal_scope} : {})} : {}),
     ...(agents.length ? {agent_targets: agents} : {}),
@@ -161,6 +174,12 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   if (params.operation === "configure") {
     const candidate = binding(params.binding);
     observed(candidate, params.observation);
+    if (candidate.audience === "group") {
+      if (!Array.isArray(params.available_group_refs)
+          || !(candidate.group_refs as string[]).every(group => (params.available_group_refs as unknown[]).includes(group))) {
+        throw new EffectRuntimeRequestError("selected groups are not independently verified under this App");
+      }
+    }
     const project = Array.isArray(params.available_projects)
       ? params.available_projects.map(normalizeProjectContext).find(row => row.project_ref === candidate.project_ref) : undefined;
     if (!project || (candidate.grant === "workspace_write" && project.grant !== "workspace_write")) {
@@ -179,7 +198,7 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   } else if (params.operation === "grant_agent_target" || params.operation === "revoke_agent_target") {
     const id = ref(params.binding_id, "binding identity");
     const previous = current.bindings.find(row => row.binding_id === id);
-    if (!previous || previous.context_kind !== "project") throw new EffectRuntimeRequestError("Agent selection requires a project binding");
+    if (!previous || previous.context_kind !== "project" || previous.audience === "group") throw new EffectRuntimeRequestError("Agent selection requires a private project binding");
     observed(previous, params.observation);
     const existing = previous.agent_targets as JsonObject[] | undefined ?? [];
     let targets: JsonObject[];
@@ -231,7 +250,18 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   if (!row) throw new EffectRuntimeRequestError("conversation binding is no longer authorized");
   observed(row, params.observation);
   const source = ref(params.source_ref, "source conversation identity");
-  if (params.sender_ref !== row.operator_ref || params.private_human_message !== true) {
+  const group = row.audience === "group";
+  let topic: JsonObject = {};
+  if (group) {
+    const groupRef = ref(params.group_ref, "group reference"), topicRef = ref(params.topic_ref, "topic reference");
+    ref(params.sender_ref, "group sender identity");
+    if (params.group_human_message !== true || params.private_human_message !== false || topicRef !== source
+        || !(row.group_refs as string[]).includes(groupRef)) {
+      throw new EffectRuntimeRequestError("message audience is outside the binding grant");
+    }
+    topic = {group_ref: groupRef, topic_ref: topicRef, filesystem_scope: "workspace_only"};
+  } else if (params.sender_ref !== row.operator_ref || params.private_human_message !== true
+      || params.group_ref !== undefined || params.topic_ref !== undefined || params.group_human_message === true) {
     throw new EffectRuntimeRequestError("message audience is outside the binding grant");
   }
   if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
@@ -242,9 +272,10 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   }
   const goals = row.context_kind === "steward" && row.goal_scope === "all_registered"
     ? normalizeStewardGoalScope(params.available_goal_ids) : row.goal_ids;
-  const context = {...projects[0], audience: "bound_owner", binding_id: id, source_ref: source,
+  const rawContext = {...projects[0], ...topic, audience: group ? "bound_group" : "bound_owner", binding_id: id, source_ref: source,
     provider_ref: row.provider_ref, operator_ref: row.operator_ref, grant: row.grant,
     ...(row.context_kind === "steward" ? {kind: "bound_steward", grant: "portfolio_read", goal_ids: goals} : {})};
+  const context = group ? normalizeProjectContext(rawContext) : rawContext;
   if (params.session_context !== undefined) {
     const saved = requireJsonObject(params.session_context, "bound Session context");
     // New commissions may extend the same owner's scope. Workspace, role and
@@ -288,6 +319,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {operation: "reply", session_id: session, turn_id: null, response_code: "unsupported_attachment"};
   }
   if (["agents", "select_agent", "select_project"].includes(String(command))) {
+    if (requireJsonObject(params.binding, "conversation binding").audience === "group") {
+      return {operation: "reply", session_id: session, turn_id: null, response_code: "group_recipient_unavailable"};
+    }
     return {operation: "select_recipient", session_id: null, turn_id: null};
   }
   if (params.agent_target !== undefined && params.agent_target !== null) {
@@ -364,7 +398,9 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
     }
   }
   return {schema_version: "loopx_chat_bound_status_v0", observed_at: instant,
-    context_kind: selected.context_kind, workspace_path: context.workspace_path,
+    context_kind: selected.context_kind,
+    workspace_path: selected.audience === "group" ? String(context.workspace_path).split(/[\\/]/).filter(Boolean).at(-1) : context.workspace_path,
+    ...(selected.audience === "group" ? {audience: "group"} : {}),
     executor_endpoint_id: recipient?.executor_endpoint_id ?? selected.executor_endpoint_id, grant: selected.grant,
     ...(recipient ? {recipient_agent_id: recipient.agent_id, recipient_goal_id: recipient.goal_id, recipient_mode: "attached_host"} : {}),
     authorized_commission_count: steward ? (selected.goal_ids as string[]).length : 0,

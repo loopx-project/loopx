@@ -46,7 +46,7 @@ def deliver(event, root=ROOT, receipts=Path('/logs/agent/best-feedback-delivery'
             return
         text = (
             f'EdgeBench new-best feedback: evaluated snapshot {snapshot} strictly improved '
-            'the best valid score observed so far. '
+            "the task's native ranking among valid scored snapshots. "
             f'Your submitted source is {archive} (SHA-256 {digest}). '
             'Evaluation is asynchronous; this is not necessarily your current workspace. '
             'Preserve or compare this checkpoint without blindly overwriting newer work. '

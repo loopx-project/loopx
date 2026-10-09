@@ -121,6 +121,35 @@ def test_explicit_shared_pool_retains_memory_and_bounded_container_gates(monkeyp
         resource_preflight(client, 1, allow_resource_overcommit=True)
 
 
+def test_explicit_shared_floor_admits_large_cohort_without_claiming_reserved_compute(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(Path, "read_text", lambda self: "MemAvailable: 33554432 kB\n")
+    client = SimpleNamespace(info=lambda: dict(NCPU=14, MemTotal=45 << 30),
+                             containers=SimpleNamespace(list=lambda: []))
+    with pytest.raises(ValueError, match="available memory"):
+        resource_preflight(client, 12, allow_resource_overcommit=True)
+    result = resource_preflight(client, 12, allow_resource_overcommit=True,
+                                shared_startup_memory_gib=16)
+    assert result["slots"] == 12
+    assert result["startup_memory_floor"] == 16 << 30
+    assert result["reserved_cpu"] == result["reserved_memory"] == 0
+    assert result["operator_resource_monitor_required"]
+    with pytest.raises(ValueError, match="explicit resource overcommit"):
+        resource_preflight(client, 12, shared_startup_memory_gib=16)
+    for invalid in (True, 0, 15, 16.5):
+        with pytest.raises(ValueError, match="at least"):
+            resource_preflight(client, 12, allow_resource_overcommit=True,
+                               shared_startup_memory_gib=invalid)
+    monkeypatch.setattr(Path, "read_text", lambda self: "MemAvailable: 15728640 kB\n")
+    with pytest.raises(ValueError, match="available memory"):
+        resource_preflight(client, 12, allow_resource_overcommit=True,
+                           shared_startup_memory_gib=16)
+    client.containers.list = lambda: [SimpleNamespace(attrs={"HostConfig": {}})]
+    with pytest.raises(ValueError, match="unbounded"):
+        resource_preflight(client, 12, allow_resource_overcommit=True,
+                           shared_startup_memory_gib=16)
+
+
 def test_offline_high_score_and_foreign_submission_do_not_enter_incumbent(tmp_path):
     from benchmark.edgebench.feedback import BestOnlyFeedback
     queue = sampler(tmp_path)

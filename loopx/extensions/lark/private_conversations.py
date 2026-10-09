@@ -109,6 +109,31 @@ class LarkPrivateConversations:
             if (result.get("returncode") == 0 and message is not None
                     and message.get("chat_id") == event["chat_id"] and isinstance(sender, Mapping)
                     and sender.get("id") == event["sender_id"] and sender.get("sender_type") == "user"):
+                if selected["binding"].get("audience") == "group":
+                    # Provider readback, never event text, fixes the topic root.
+                    root = str(message.get("root_id") or message["message_id"])
+                    if (root != str(event.get("root_id") or event["message_id"])
+                            or (message.get("parent_id") and not message.get("root_id"))
+                            or any(message.get(key, "") != event.get(key, "") for key in ["parent_id", "thread_id"])):
+                        return None
+                    if root == event["message_id"]:
+                        original: Mapping[str, Any] | None = message
+                    else:
+                        response = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"],
+                            tail=["im", "+messages-mget", "--message-ids", root,
+                                  "--as", "bot", "--no-reactions", "--format", "json"]))
+                        original = _message(json_payload(response), root) if response.get("returncode") == 0 else None
+                    from .event_inbox import lark_event_mentions_bot
+                    observation = self.bindings.observe(record["profile"])
+                    if (not original or original.get("chat_id") != event["chat_id"]
+                            or original.get("sender", {}).get("sender_type") != "user"
+                            or original.get("parent_id") or original.get("root_id") not in (None, "", root)
+                            or not isinstance(original.get("mentions"), list)
+                            or not lark_event_mentions_bot(original, bot_display_name=observation["bot_display_name"],
+                                                           bot_app_id=observation["bot_app_id"],
+                                                           bot_open_id=observation["bot_open_id"],
+                                                           allow_text_fallback=False)):
+                        return None
                 return message
         except (KeyError, ValueError, OSError):
             pass
@@ -126,7 +151,7 @@ class LarkPrivateConversations:
             "inbox_dir": f".loopx/inbox/private-chat/{scope}", "capture_scope": "configured_chat_all",
             "reply": {"enabled": True, "sender_profile": record["profile"], "sender_identity": "bot",
                 "bot_display_name": observation["bot_display_name"], "chat_id": record["event"]["chat_id"],
-                "placement_policy": "source_context", "received_reaction_emoji": "Get" if self.reaction_feedback else "",
+                "placement_policy": "source_thread" if record["source"].get("group_ref") else "source_context", "received_reaction_emoji": "Get" if self.reaction_feedback else "",
                 "received_reaction_policy": "retain", "processing_reaction_emoji": "OnIt" if self.reaction_feedback else ""},
         })
         event = record["event"]
@@ -154,18 +179,21 @@ class LarkPrivateConversations:
                 # event_id can change on redelivery; canonical message content
                 # and audience cannot change underneath the stable message id.
                 if any(record["event"].get(key) != event.get(key) for key in
-                       ["message_id", "sender_id", "chat_id", "content", "message_type"]):
+                       ["message_id", "sender_id", "chat_id", "content", "message_type", "chat_type", "sender_type", "root_id", "parent_id", "thread_id"]):
                     return {"status": "source_conflict"}
             else:
                 record = {"schema_version": "lark_private_chat_delivery_v0", "request_ref": request,
                     "profile": profile, "binding_id": binding["binding_id"], "source": source,
                     "event": event, "deliveries": {}, "status": "captured"}
-                _atomic_write_json(path, record)
+                if binding.get("audience") != "group":
+                    _atomic_write_json(path, record)
             # Reuse this admission preflight only; Core rechecks under its
             # source fence, and outbound writes always perform a fresh check.
             source_message = self._source_message(record, selected=selected)
             if source_message is None:
                 return {"status": "source_verification_failed"}
+            if binding.get("audience") == "group":
+                _atomic_write_json(path, record)
             message_type = str(event.get("message_type") or "")
             text = ""
             attachments: list[dict[str, Any]] = []
@@ -229,7 +257,7 @@ class LarkPrivateConversations:
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                     request_ref=request, message=text, command=command, attachments=attachments)
             except ValueError:
-                record.update(status="rejected", response="操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。")
+                record.update(status="rejected", response=("群助手仅处理当前项目和话题，不能选择个人 Agent 会话；/status 查看状态，/help 查看用法。" if binding.get("audience") == "group" else "操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。"))
                 _atomic_write_json(path, record)
                 return {"status": "command_rejected"}
             except RuntimeError as exc:
@@ -628,7 +656,8 @@ class LarkPrivateConversations:
 
 
 def _command_text(code: str) -> str:
-    return {"unsupported_attachment": "这条消息未提交执行。普通项目或管家对话支持文字与图片；文件、音视频及所选 Agent 的原宿主暂不支持图片。请将文字与图片单独发送，或用 /project 返回项目对话。",
+    return {"group_recipient_unavailable": "群助手仅处理当前项目和话题，不能选择个人 Agent 会话；/status 查看状态，/help 查看用法。",
+            "unsupported_attachment": "这条消息未提交执行。普通项目或管家对话支持文字与图片；文件、音视频及所选 Agent 的原宿主暂不支持图片。请将文字与图片单独发送，或用 /project 返回项目对话。",
         "no_session": "尚无会话；发送文字即可开始。", "active_session": "正在执行；后续文字会进入同一会话队列。",
         "ready_session": "会话已就绪，可继续发送文字。", "new_session": "已关闭此前会话；下一条文字将开启新会话。",
         "attached_control_unavailable": "原 Agent 宿主尚不支持此处的实时停止或新建会话；原执行没有被停止或替换。请在原宿主处理，/project 返回普通项目对话。",
@@ -640,6 +669,11 @@ def _status_text(snapshot: dict[str, Any], *, help_requested: bool) -> str:
     steward = snapshot["context_kind"] == "steward"
     attached = bool(snapshot.get("recipient_agent_id"))
     text = render_conversation_status(snapshot)
+    if snapshot.get("audience") == "group":
+        text += "\n\n/status 当前话题状态 · /stop 停止本话题执行 · /new 本话题新会话 · /help 用法"
+        if help_requested:
+            text += "\n@此 Bot 开始新话题，后续消息在原话题继续；文字与图片沿用同一会话。仅授权当前项目工作区，不继承个人管家或 Agent 会话。"
+        return text
     text += ("\n\n/agents 授权 Agent · /project 返回项目 · /help 用法" if attached else
              "\n\n/stop 停止当前聊天 · /new 新会话 · /help 用法")
     if help_requested:

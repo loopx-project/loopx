@@ -164,7 +164,8 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
         backend.client.close()
 
 
-def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent_image):
+@pytest.mark.parametrize("selection", ["score_first", "pass_rate_first"])
+def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent_image, selection):
     """Real native copy preserves host permissions; publication must repair only public files."""
     from sforge.harness.backend.docker_backend import DockerBackend
     from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_FILE
@@ -184,7 +185,7 @@ def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent
             "s3": {"round_id": "auto-3", "source_sha256": digest}})
         publisher = BestOnlyFeedback(trial=tmp_path, run_id="fixture", task_id="fixture",
             direction="maximize", judge_url="http://127.0.0.1:1", admin_secret="synthetic",
-            logger=logging.getLogger("source-permission-smoke"), sampler=sampler)
+            logger=logging.getLogger("source-permission-smoke"), sampler=sampler, selection=selection)
         backend = DockerBackend()
         handle = backend.create_container(agent_image.id, "source-smoke-" + uuid.uuid4().hex[:10])
         backend.start_container(handle)
@@ -196,8 +197,15 @@ def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent
             assert backend.exec_run(handle, ["sh", "-c", "umask 077; "
                 "printf synthetic-secret > /tmp/host-only-sentinel"], user="root").exit_code == 0
             values = {"run_id": "fixture", "entries": [dict(type="submission", status="completed",
-                valid=True, task_id="fixture", submission_id=f"s{n}", round=f"auto-{n}", score=n)
+                valid=True, task_id="fixture", submission_id=f"s{n}", round=f"auto-{n}", score=n,
+                pass_rate=0)
                 for n in (1, 2)]}
+            if selection == "pass_rate_first":
+                publisher.update(values, backend, handle)
+                publisher.update(values, backend, handle)
+                assert backend.exec_run(handle, ["test", "-e", str(FEEDBACK_FILE)]).exit_code != 0
+                assert publisher.notifications == publisher.errors == 0
+                values["entries"][1]["pass_rate"] = .2
             publisher.update(values, backend, handle)
             packet = json.loads(backend.exec_run(handle, ["cat", str(FEEDBACK_FILE)]).output)
             remote = packet["latest"]["source_archive"]
@@ -211,7 +219,7 @@ def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent
                 return original_exec(handle, cmd, **kwargs)
             backend.exec_run = deny_read
             values["entries"].append(dict(type="submission", status="completed", valid=True,
-                task_id="fixture", submission_id="s3", round="auto-3", score=3))
+                task_id="fixture", submission_id="s3", round="auto-3", score=3, pass_rate=.3))
             with pytest.raises(RuntimeError, match="source checkpoint"):
                 publisher.update(values, backend, handle)
             assert publisher.score == 2 and publisher.notifications == 1

@@ -10,9 +10,9 @@ from __future__ import annotations
 def blind_task_prompt(original_query: str, submit_paths: list[str]) -> str:
     """Retain the native optimization contract without exposing host evaluation.
 
-    Best-score selection is task policy, not access to the scorer. The agent
-    chooses its current best version from local evidence; it cannot discover
-    which version the hidden evaluator ranks highest.
+    The task owns grading and final selection. The agent chooses its current
+    best version from local evidence; it cannot discover which version the
+    hidden evaluator ranks highest.
     """
     return _local_task_prompt(original_query, submit_paths)
 
@@ -45,7 +45,7 @@ def _local_task_prompt(original_query, submit_paths, *, intro=(
         "- **Read local test feedback carefully**: Failed local checks help identify issues\n"
         "- **Iterate**: Fix failures based on local validation, then test again\n\n"
         "### Scoring\n\n"
-        "- Your **best score** across solution versions is your final score\n"
+        "- The task's grading and final-selection rules determine your result\n"
         "- You don't lose points for failed attempts — experimentation is encouraged\n\n"
         "---\n\n"
         f"{original_query}\n"
@@ -65,8 +65,9 @@ def best_only_task_prompt(original_query: str, submit_paths: list[str]) -> str:
         "or when a session/turn starts. You do not need to poll a file. "
         "Do not wait idle for feedback; continue useful local work. "
         "The host samples submitted files on a fixed schedule; you cannot trigger evaluations. "
-        "A notification means that the named snapshot strictly improved the best valid score "
-        "observed so far (using the task's score direction). The first valid result only establishes "
+        "A notification means that the named snapshot strictly improved the task's native ranking "
+        "among valid scored snapshots (using its selection policy and score direction). "
+        "The first valid result only establishes "
         "a baseline, without a notification. Ties, regressions and unsuccessful evaluations produce "
         "no notifications. The file retains only the latest improvement.\n\n"
         "Evaluation is asynchronous: the notification refers to the named snapshot, **not necessarily "

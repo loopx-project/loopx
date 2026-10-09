@@ -4,7 +4,7 @@ import json
 import mimetypes
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,7 +48,6 @@ from .chat_manager import (
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
 from .chat_store import ChatSessionStore
-from .capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
@@ -441,6 +440,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
             self.lark_app_setup_manager.close()
         if hasattr(self, "manager_return_service"):
             self.manager_return_service.close()
+        if hasattr(self, "conversation_transports"):
+            self.conversation_transports.close()
         if hasattr(self, "delegation_wake_service"):
             self.delegation_wake_service.close()
         if hasattr(self, "lark_goal_topic_runtime"):
@@ -1571,6 +1572,7 @@ def serve_chat(
     project_workspace_grant: str = "workspace_write",
     project_filesystem_scope: str = "host_default",
     private_reactions: bool = True,
+    external_conversation_factories: tuple[Callable[[ChatHTTPServer], object], ...] = (),
 ) -> None:
     if not is_loopback_host(host):
         raise ValueError("loopx chat requires a loopback --host such as 127.0.0.1")
@@ -1640,9 +1642,11 @@ def serve_chat(
         idle_timeout_sec=idle_timeout_sec,
         hard_timeout_sec=hard_timeout_sec,
     )
-    server.runtime_controller.project_contexts.conversation_bindings = ChatConversationBindings(
-        root=server.chat_store.root, project_contexts=server.runtime_controller.project_contexts,
-        observe=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
+    from .capabilities.native_chat.transports import install_conversation_transports
+    install_conversation_transports(server, factories=external_conversation_factories,
+        observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
+            cli_bin=server.lark_cli_resolution.command or "lark-cli", audience="group"),
+        observe_default=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
             cli_bin=server.lark_cli_resolution.command or "lark-cli"))
     private_transport = LarkPrivateConversations(controller=server.runtime_controller, runtime_root=runtime_root,
         runner=server.lark_runner, cli_bin=server.lark_cli_resolution.command or "lark-cli",
@@ -1711,6 +1715,8 @@ def serve_chat(
     if open_browser:
         webbrowser.open(url)
     try:
+        if external_conversation_factories:
+            server.conversation_transports.start(server)
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)
