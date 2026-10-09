@@ -138,15 +138,24 @@ def test_incomplete_changed_or_unrelated_evidence_cannot_qualify(tmp_path, mutat
     case = _case(tmp_path)
     validation = copy.deepcopy(case[4])
     attr = validation[1]["failure_attribution"]
-    if mutation == "head": attr["head_revision"] = "f" * 40
-    elif mutation == "signature": attr["head_observation"]["failure_signature"] = "sha256:" + "d" * 64
-    elif mutation == "command": attr["same_command"] = "python -m mypy another.py"
-    elif mutation == "fixture": attr["head_observation"]["fixture_digest"] = "sha256:" + "d" * 64
-    elif mutation == "environment": attr["head_observation"]["environment_digest"] = "sha256:" + "d" * 64
-    elif mutation == "missing": attr.pop("causal_scope_analysis")
-    elif mutation == "self": attr["affected_invariant_evidence"] = ["validator:broad"]
-    elif mutation == "failed": validation[0].update(status="failed", reason="Invariant failed.")
-    elif mutation == "uncovered": validation[0]["covers_paths"] = []
+    if mutation == "head":
+        attr["head_revision"] = "f" * 40
+    elif mutation == "signature":
+        attr["head_observation"]["failure_signature"] = "sha256:" + "d" * 64
+    elif mutation == "command":
+        attr["same_command"] = "python -m mypy another.py"
+    elif mutation == "fixture":
+        attr["head_observation"]["fixture_digest"] = "sha256:" + "d" * 64
+    elif mutation == "environment":
+        attr["head_observation"]["environment_digest"] = "sha256:" + "d" * 64
+    elif mutation == "missing":
+        attr.pop("causal_scope_analysis")
+    elif mutation == "self":
+        attr["affected_invariant_evidence"] = ["validator:broad"]
+    elif mutation == "failed":
+        validation[0].update(status="failed", reason="Invariant failed.")
+    elif mutation == "uncovered":
+        validation[0]["covers_paths"] = []
     with pytest.raises(ValueError):
         _record(tmp_path, case, validation)
 
