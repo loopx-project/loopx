@@ -121,6 +121,35 @@ def test_explicit_shared_pool_retains_memory_and_bounded_container_gates(monkeyp
         resource_preflight(client, 1, allow_resource_overcommit=True)
 
 
+def test_explicit_shared_floor_admits_large_cohort_without_claiming_reserved_compute(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(Path, "read_text", lambda self: "MemAvailable: 33554432 kB\n")
+    client = SimpleNamespace(info=lambda: dict(NCPU=14, MemTotal=45 << 30),
+                             containers=SimpleNamespace(list=lambda: []))
+    with pytest.raises(ValueError, match="available memory"):
+        resource_preflight(client, 12, allow_resource_overcommit=True)
+    result = resource_preflight(client, 12, allow_resource_overcommit=True,
+                                shared_startup_memory_gib=16)
+    assert result["slots"] == 12
+    assert result["startup_memory_floor"] == 16 << 30
+    assert result["reserved_cpu"] == result["reserved_memory"] == 0
+    assert result["operator_resource_monitor_required"]
+    with pytest.raises(ValueError, match="explicit resource overcommit"):
+        resource_preflight(client, 12, shared_startup_memory_gib=16)
+    for invalid in (True, 0, 15, 16.5):
+        with pytest.raises(ValueError, match="at least"):
+            resource_preflight(client, 12, allow_resource_overcommit=True,
+                               shared_startup_memory_gib=invalid)
+    monkeypatch.setattr(Path, "read_text", lambda self: "MemAvailable: 15728640 kB\n")
+    with pytest.raises(ValueError, match="available memory"):
+        resource_preflight(client, 12, allow_resource_overcommit=True,
+                           shared_startup_memory_gib=16)
+    client.containers.list = lambda: [SimpleNamespace(attrs={"HostConfig": {}})]
+    with pytest.raises(ValueError, match="unbounded"):
+        resource_preflight(client, 12, allow_resource_overcommit=True,
+                           shared_startup_memory_gib=16)
+
+
 def test_offline_high_score_and_foreign_submission_do_not_enter_incumbent(tmp_path):
     from benchmark.edgebench.feedback import BestOnlyFeedback
     queue = sampler(tmp_path)
@@ -201,3 +230,70 @@ def test_solver_completion_pauses_feedback_without_breaking_official_resume(monk
     assert calls == []
     assert backend.exec_run_with_timeout(None, ["/bin/bash", "-c", "solver invocation"]) == "result"
     assert calls == ["pause"]
+
+
+@pytest.mark.parametrize("worker_present", [False, True])
+def test_cleanup_returns_registration_only_after_verified_worker_removal(monkeypatch, worker_present):
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    calls = []
+    backend = object.__new__(RecordingDockerBackend)
+    backend.feedback = SimpleNamespace(run_id="run", task_id="fixture",
+        close=lambda: calls.append("capture-stopped"),
+        release_registration=lambda: calls.append("registration-release"))
+    monkeypatch.setattr(DockerBackend, "cleanup_container", lambda *a, **k: calls.append("native-cleanup"))
+    def exists(name):
+        assert name == "sforge.run.fixture.run"
+        calls.append("absence-readback")
+        return worker_present
+    backend.container_exists = exists
+    if worker_present:
+        with pytest.raises(RuntimeError, match="not released"):
+            backend.cleanup_container(None)
+    else:
+        backend.cleanup_container(None)  # Registration may precede container creation.
+    assert calls == ["capture-stopped", "native-cleanup", "absence-readback"] + (
+        [] if worker_present else ["registration-release"])
+
+
+def test_release_lost_response_retries_exact_identity_without_credential_receipt(tmp_path, monkeypatch):
+    queue = sampler(tmp_path)
+    queue.close()
+    calls = []
+    class ReleaseSession:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, *, data, **kwargs):
+            calls.append((url, dict(data)))
+            if len(calls) == 1:
+                raise TimeoutError("Release accepted but acknowledgement lost")
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
+                "epoch": "epoch", "run_id": "run", "task_id": "fixture", "state": "released"})
+    monkeypatch.setattr("benchmark.edgebench.online_sampling.requests.Session", ReleaseSession)
+    with pytest.raises(TimeoutError):
+        queue.release_registration(run_id="run", task_id="fixture")
+    assert not (queue.directory / "release.json").exists()
+    queue.release_registration(run_id="run", task_id="fixture")
+    assert calls[0] == calls[1]
+    receipt = json.loads((queue.directory / "release.json").read_text())
+    assert set(receipt) == {"epoch", "run_id", "task_id", "state"}
+    assert "synthetic" not in json.dumps(receipt)
+
+
+@pytest.mark.parametrize("field,value", [("epoch", "new-epoch"), ("run_id", "another"),
+    ("task_id", "another"), ("state", "active")])
+def test_release_cannot_acknowledge_changed_epoch_or_registration(tmp_path, monkeypatch, field, value):
+    queue = sampler(tmp_path)
+    receipt = dict(epoch="epoch", run_id="run", task_id="fixture", state="released")
+    receipt[field] = value
+    class ReleaseSession:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, *args, **kwargs):
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: receipt)
+    monkeypatch.setattr("benchmark.edgebench.online_sampling.requests.Session", ReleaseSession)
+    with pytest.raises(RuntimeError, match="Stop online sampling"):
+        queue.release_registration(run_id="run", task_id="fixture")
+    queue.close()
+    with pytest.raises(ValueError, match="original registration"):
+        queue.release_registration(run_id="run", task_id="fixture")
+    assert not (queue.directory / "release.json").exists()

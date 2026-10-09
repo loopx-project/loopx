@@ -60,9 +60,13 @@ The preflight counts existing Docker container limits and retains 2 CPUs/4 GiB
 of host headroom. Unlimited containers or insufficient capacity block admission.
 Run this in an operator-controlled Docker pool: the host lock coordinates this
 adapter's online/offline processes, not arbitrary outside Docker launches. Keep
-that reserved capacity available for the cohort. Slots are finite registrations,
-not recycled when a solver finishes; start a new cohort after draining/stopping
-the previous server. Native/blind use ordinary `sforge serve` instead.
+that reserved capacity available for the cohort. Online policy v2 releases a
+run's slot after verified worker removal. An evaluation still in flight keeps
+that slot until its native result is terminal; stopping a solver alone does not
+free evaluator capacity. Native histories, archives and original registration
+identities remain readable, and released registrations reject new captures.
+Native/blind use ordinary `sforge serve` instead. Existing v1 cohorts remain
+frozen: this does not upgrade or reclaim slots in an already-running server.
 
 An operator may explicitly pass `--allow-resource-overcommit` for a monitored
 shared Docker pool. Container CPU/memory ceilings then remain enforced, but are
@@ -73,7 +77,14 @@ zero exclusive reservation and the monitoring requirement. Monitor actual memory
 CPU pressure and grading latency throughout the cohort and stop affected trials
 if sustained pressure makes operation unreliable. This mode preserves per-run
 evaluation lanes but does not guarantee dedicated compute or equal latency;
-record shared-pool contention when comparing experiments.
+record shared-pool contention when comparing experiments. For a larger explicitly
+shared cohort, `--shared-startup-memory-gib 16` may replace the per-slot startup
+estimate. It requires `--allow-resource-overcommit`, cannot be below one evaluator,
+one worker startup allowance and host headroom (16 GiB with current limits), and
+still fails on insufficient available memory or unbounded containers. This is a
+startup margin, not sustained capacity qualification: retain continuous load and
+grading-latency monitoring and stop affected trials on sustained pressure. Strict
+admission and the shared mode without this explicit option retain their defaults.
 
 Then run:
 
@@ -136,8 +147,8 @@ an evaluator-feedback-free control. Harbor is unchanged.
 | blind | None; public task files, local tests and compiler feedback remain available | Host evaluates fixed automatic samples; agent has no judge route or credentials |
 | best-only | Latest strict improvement notification and the corresponding submitted-source checkpoint; no score, delta, diagnostics or negative-result status | Fixed capture cadence; one evaluator and latest pending capture per run; agent cannot request extra evaluations |
 
-Best-only supports non-game, offline tasks with `score_first` or
-`valid_then_score` selection, including maximizing and minimizing scores. It
+Best-only supports non-game, offline tasks with `score_first`,
+`valid_then_score` or `pass_rate_first` selection, including maximizing and minimizing scores. It
 requires the explicit API-only proxy and a positive sampling interval. Unsupported
 selection policies fail with an actionable error instead of silently changing
 the task's ranking. Native grading and score selection remain unchanged. The
@@ -158,6 +169,13 @@ The publisher accepts only that sampler's admitted submission/round identities
 and verifies the original source digest. Offline/history-only results cannot
 establish the baseline or change the online incumbent. The solver command's exit
 pauses capture/delivery; official outer resume reuses the same publisher and lane.
+After native worker cleanup, the host sends an epoch-bound release for the exact
+run/task, including failures before feedback startup. The private
+`online-captures/release.json` records acknowledgement without credentials.
+Release is idempotent and does not cancel an evaluation or erase native history.
+If cleanup or release acknowledgement fails, treat release as unconfirmed and
+reconcile the exact registration before replacement admission; do not restart
+the live judge.
 
 After the entire online cohort ends, stop its judge and backfill all captures:
 
@@ -177,11 +195,17 @@ covers online submissions only; use the complete offline result for post-run
 qualification. Neither report by itself certifies integrity or score countability.
 No offline result is routed to the worker.
 
-The first completed valid finite score establishes a silent baseline. Only a
-strictly better valid score updates `/opt/edgebench-feedback/latest.json`; ties,
+The first completed valid finite score establishes a silent baseline. The task's
+native selection policy is the sole improvement criterion among valid scored
+snapshots. Only a strictly better native rank updates `/opt/edgebench-feedback/latest.json`; ties,
 regressions, invalid/non-finite results and errors do not update it. Multiple
 completed improvements observed together coalesce to the best one. Out-of-order
-results compete against the best observed score, never against the last result.
+results compete against the best observed native rank, never against the last result.
+For `pass_rate_first`, a higher pass rate can be an improvement even when its
+scalar score is lower; a scalar gain with a lower native rank is silent.
+When that policy returns no winner (for example, all pass rates are zero),
+polling stays silent and continues normally. A later native winner can improve
+the already established baseline; no scalar fallback or evaluator change is used.
 Notifications describe the named **evaluated snapshot**, not the current workspace.
 The source archive is the agent's own original submission, with its SHA-256; it
 contains no judge output. The adapter never restores files automatically.
@@ -219,7 +243,7 @@ A notification looks like this (digest abbreviated for illustration):
     "snapshot_id": "auto-7",
     "source_sha256": "<SHA-256>",
     "source_archive": "/opt/edgebench-feedback/auto-7-<SHA-256>.tar.gz",
-    "message": "This evaluated snapshot strictly improved the best valid score observed so far. It may differ from your current files; keep using local validation."
+    "message": "This evaluated snapshot strictly improved the task's native ranking among valid scored snapshots. It may differ from your current files; keep using local validation."
   }
 }
 ```

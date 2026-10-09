@@ -1644,6 +1644,8 @@ def serve_chat(
     )
     from .capabilities.native_chat.transports import install_conversation_transports
     install_conversation_transports(server, factories=external_conversation_factories,
+        observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
+            cli_bin=server.lark_cli_resolution.command or "lark-cli", audience="group"),
         observe_default=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
             cli_bin=server.lark_cli_resolution.command or "lark-cli"))
     private_transport = LarkPrivateConversations(controller=server.runtime_controller, runtime_root=runtime_root,

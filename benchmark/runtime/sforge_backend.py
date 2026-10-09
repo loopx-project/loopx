@@ -99,3 +99,11 @@ class RecordingDockerBackend(DockerBackend):
                                          "error_kind": type(error).__name__})
             (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
         super().cleanup_container(handle, logger)
+        if self.feedback is not None:
+            # Native cleanup logs some failures instead of raising. Verify the
+            # solver is absent before returning its capacity to another trial.
+            name = handle.name if handle is not None else (
+                f"sforge.run.{self.feedback.task_id}.{self.feedback.run_id}")
+            if self.container_exists(name):
+                raise RuntimeError("Worker remains present; online capacity was not released")
+            self.feedback.release_registration()
