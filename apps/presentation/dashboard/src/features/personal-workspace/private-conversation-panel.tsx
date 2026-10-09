@@ -123,7 +123,7 @@ export function PrivateConversationPanel() {
       {!loadingGroups && !groups.length && !groupError ? <p>{zh ? "此 App 尚无可见群。先将 Bot 加入调试群，再刷新。" : "This App has no visible groups. Add the Bot to a trial group, then refresh."}</p> : null}
       {groupError ? <p role="alert">{groupError}</p> : null}
       <button type="button" disabled={busy || loadingGroups || !app} onClick={() => setGroupRefresh(value => value + 1)}>{zh ? "刷新群列表" : "Refresh groups"}</button>
-      <p>{zh ? "新话题需 @此 Bot；回复留在原话题。仅使用选定工作区，不能继承个人管家、全局工具或已有 Agent 会话。需要在独立执行环境登录；连接成功不代表已通过公开群准出。" : "Mention this Bot to start; replies stay in the original topic. Only the selected workspace is available, without personal steward, global tools or existing Agent Sessions. Sign in to the independent execution environment. Connection is not public release qualification."}</p>
+      <p>{zh ? "新话题需 @此 Bot；回复留在原话题。工作区、历史和工具保持隔离，模型认证可复用可信宿主账号。连接成功不代表已通过公开群准出。" : "Mention this Bot to start; replies stay in the original topic. Workspace, history and tools remain isolated; model authentication can use the trusted host account. Connection is not public release qualification."}</p>
     </fieldset> : null}
     <label>{zh ? "角色" : "Role"}<select aria-label={zh ? "私聊角色" : "Private Chat role"} value={role} disabled={busy || audience === "group"} onChange={event => setRole(event.target.value as "project" | "steward")}>
       <option value="project">{zh ? "普通项目助手" : "Project assistant"}</option><option value="steward">{zh ? "LoopX 管家（全部已注册工作）" : "LoopX steward (all registered work)"}</option>

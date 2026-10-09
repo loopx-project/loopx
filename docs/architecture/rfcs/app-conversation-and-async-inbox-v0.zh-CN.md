@@ -74,13 +74,21 @@ listener、队列或模型 runner。一个 App 仍只有一个 binding owner，�
 群上下文强制使用 `workspace_only`，不受本人私聊 `host_default` 影响。只保留选定
 工作区的读写 grant，不提供个人 portfolio、直连 Agent 选择、全局 skills、MCP、
 shell profile 或继承的账号环境。原生宿主必须确认确切 permissions profile 和工作区
-根；独立存储需另行登录，不能复制个人凭据或历史。`/status` 只显示项目标题，不展示
+根；独立存储不能复制个人凭据或历史，模型认证可由可信宿主提供。`/status` 只显示项目标题，不展示
 宿主绝对工作区路径。
 
 Core、HTTP、provider 读回及原生协议 fixture 验证上述边界，属于合成传输/模型证据。
-[社区黄金查询](../../product/use-cases/community/golden-queries.md) 仍需独立登录的公开
-工作区和真实调试群旅程通过后，才能接入两个正式开发群。公开来源读取另需完成其
+[社区黄金查询](../../product/use-cases/community/golden-queries.md) 仍需隔离的公开工作区、
+模型认证与真实调试群旅程通过后，才能接入两个正式开发群。公开来源读取另需完成其
 限定范围工具的验收；本改动不启用无限制网络或个人浏览器。
+
+已有项目原生登录继续使用其选定账号；否则，可信宿主的原生文件式 ChatGPT 认证
+可通过 Codex 实验性 `chatgptAuthTokens` 接口，仅在私有 stdio 中提供 access token
+和账号标识。短期认证保留在进程内存，不写入项目存储、模型上下文、工具环境或命令行。
+认证失效时，由原生宿主账号存储刷新；并发请求复用已刷新的 token。宿主账号不可用、
+凭据损坏或账号变化时返回脱敏错误，恢复宿主账号后可在原 Session 重试。
+本 adapter 不桥接仅存于 keyring 的认证或 API key；仍可对项目独立执行原生登录。
+该认证路径不扩大工作区、skills、工具或群受众权限，也不代表社区准出已通过。
 
 ## 普通工作区读写：默认值与撤权检查点
 
