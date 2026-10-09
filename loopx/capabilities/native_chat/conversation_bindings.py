@@ -19,11 +19,28 @@ from ...file_lock import exclusive_file_lock
 
 class ChatConversationBindings:
     def __init__(self, *, root: Path, project_contexts: Any,
-                 observe: Callable[[str], dict[str, Any]]) -> None:
+                 observe: Callable[[str], dict[str, Any]],
+                 observe_group: Callable[[str], dict[str, Any]] | None = None) -> None:
         self.path = root / "conversation-bindings.json"
         self.projects = project_contexts
-        self.observe = observe
+        self._observe_owner = observe
+        self._observe_group = observe_group
         self.controller: Any | None = None
+
+    def observe(self, transport_ref: str, *, audience: str | None = None) -> dict[str, Any]:
+        row = next((item for item in self.read()["bindings"] if item["transport_ref"] == transport_ref), {})
+        if audience is None:
+            audience = row.get("audience", "owner")
+        if audience == "group" and self._observe_group is not None:
+            observed = self._observe_group(transport_ref)
+            # Earlier group grants used the verified user's principal. Keep
+            # that exact identity/home until an explicit disconnect/reconnect;
+            # changing it during a poll would invalidate resumed Sessions.
+            if (row.get("audience") == "group" and row.get("provider_ref") == observed["provider_ref"]
+                    and row.get("operator_ref") != observed["operator_ref"]):
+                return self._observe_owner(transport_ref)
+            return observed
+        return self._observe_owner(transport_ref)
 
     def read(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -52,7 +69,7 @@ class ChatConversationBindings:
             project_grant = self.projects.workspace_grant if context_kind == "project" and executor_endpoint_id == "codex" else "workspace_read"
         if project_grant not in {"workspace_read", "workspace_write"} or (context_kind != "project" and project_grant != "workspace_read"):
             raise ValueError("workspace write authorization is only available for project Chat")
-        observation = self.observe(transport_ref)
+        observation = self.observe(transport_ref, audience=audience or "owner")
         candidate = {
             "schema_version": "loopx_chat_conversation_binding_v0",
             "binding_id": uuid.uuid4().hex[:24], "transport_ref": transport_ref,

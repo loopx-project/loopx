@@ -1,7 +1,8 @@
-"""Lark-specific identity observation for a Core-owned private conversation.
+"""Lark-specific identity observation for a Core-owned conversation.
 
-Each non-default profile independently verifies its App and logged-in owner.
-Core receives only opaque, App-scoped references. Tokens remain in lark-cli.
+Each non-default profile independently verifies its App; private audiences
+also verify the logged-in owner. Core receives only opaque, App-scoped
+references. Tokens remain in lark-cli.
 """
 from __future__ import annotations
 
@@ -21,7 +22,9 @@ def identity_ref(*values: str) -> str:
 
 
 def observe_lark_conversation_identity(*, profile: str, runner: CommandRunner,
-                                       cli_bin: str) -> dict[str, Any]:
+                                       cli_bin: str, audience: str = "owner") -> dict[str, Any]:
+    if audience not in {"owner", "group"}:
+        raise ValueError("unsupported conversation audience")
     profile = _profile_ref(profile)
     if profile.casefold() == "default":
         raise ValueError("private conversations require an explicit non-default App profile")
@@ -34,20 +37,27 @@ def observe_lark_conversation_identity(*, profile: str, runner: CommandRunner,
     app_id = str(payload.get("appId") or "")
     if result.get("returncode") != 0 or not APP_ID_PATTERN.fullmatch(app_id):
         raise ValueError("the selected App identity could not be verified")
-    if not isinstance(bot, Mapping) or not isinstance(owner, Mapping):
+    if not isinstance(bot, Mapping) or not (bot.get("available") is True and bot.get("verified") is True):
+        raise ValueError("the selected App identity could not be verified")
+    provider_ref = identity_ref(app_id)
+    # A locally configured group grant belongs to this verified App. Its
+    # principal never identifies a human or supplies private-owner authority.
+    if audience == "group":
+        operator_ref = identity_ref(provider_ref, "group")
+    elif not isinstance(owner, Mapping):
         raise ValueError("verify this App and its owner independently before binding private Chat")
-    if not all(row.get("available") is True and row.get("verified") is True
-               for row in [bot, owner]):
-        raise ValueError("verify this App and its owner independently before binding private Chat")
-    owner_id = str(owner.get("openId") or "")
-    if not OPEN_ID_PATTERN.fullmatch(owner_id):
-        raise ValueError("the selected App has no verified owner identity")
+    else:
+        if not (owner.get("available") is True and owner.get("verified") is True):
+            raise ValueError("verify this App and its owner independently before binding private Chat")
+        owner_id = str(owner.get("openId") or "")
+        if not OPEN_ID_PATTERN.fullmatch(owner_id):
+            raise ValueError("the selected App has no verified owner identity")
+        operator_ref = identity_ref(provider_ref, owner_id)
     bot_open_id = str(bot.get("openId") or "")
     if not OPEN_ID_PATTERN.fullmatch(bot_open_id):
         bot_open_id = ""
-    provider_ref = identity_ref(app_id)
     return {"transport_ref": profile, "provider_ref": provider_ref,
-            "operator_ref": identity_ref(provider_ref, owner_id), "verified": True,
+            "operator_ref": operator_ref, "verified": True,
             "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32],
             "bot_display_name": str(bot.get("appName") or ""),
             "bot_app_id": app_id, "bot_open_id": bot_open_id}

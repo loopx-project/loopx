@@ -41,7 +41,8 @@ class PrivateConversationRequestMixin:
             existing = _active_profile_configs(build_lark_goal_topic_runtime_snapshot(
                 registry_path=self.server.registry_path, runtime_root_override=self.server.runtime_root_override))
             from .conversation_identity import identity_ref
-            observed = self.server.runtime_controller.project_contexts.conversation_bindings.observe(profile)
+            observed = self.server.runtime_controller.project_contexts.conversation_bindings.observe(
+                profile, audience=body.get("audience") or "owner")
             group_refs, available_group_refs = None, None
             if body.get("audience") == "group":
                 from .goal_topic_connections import list_lark_group_chats, LarkGroupChatLookupError
