@@ -102,3 +102,79 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
         assert _spend_run_count(runtime) == 1
     rc, final_todo = _run_generated_cli(readback, registry_path=registry)
     assert rc == 0 and final_todo["todo"]["status"] == ("open" if in_flight else "done")
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+
+    def run(*args):
+        return _run_cli(registry, runtime, *args, cwd=project)
+
+    rc, configured = run("configure-goal", "--goal-id", GOAL_ID,
+                         "--execution-replan-after-turns", "1", "--execute")
+    assert rc == 0, configured
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    rc, guard = run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    assert rc == 0, guard
+    rc, written = run("refresh-state", *binding, "--classification", "validated_progress",
+                      "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                      "--delivery-boundary", "in_flight_continuation", "--no-global-sync",
+                      "--suppress-external-sinks")
+    assert rc == 0, written
+    rc, spent = run("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
+    assert rc == 0 and _spend_run_count(runtime) == 1, spent
+
+    # Synthetic absence of runnable work; retain the real committed receipt.
+    # Initialize each authority from this fixture, never rewrite a live store.
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        "- [ ] [P1] Validate and settle the selected delivery.",
+        "- [x] [P1] Validate and settle the selected delivery.").replace(
+        f"todo_id={TODO_ID} status=open", f"todo_id={TODO_ID} status=done"))
+    if provider != "legacy":
+        goal = json.loads(registry.read_text())["goals"][0]
+        active, archived, _ = parse_todo_source(state.read_text(), goal=goal, state_path=state)
+        rows = [{"schema_version": "todo_item_v0", **row}
+                for row in [*active["agent"], *active["user"], *archived]]
+        initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=rows, handoff_mode="legacy", leases=[]),
+            state_path=state, provider=provider)
+
+    current = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--turn-instance-id", "periodic-without-todo", "--scan-path", str(project))
+    rc, guard = run("quota", "should-run", "--codex-app", *current)
+    assert rc == 0 and guard["selected_todo"] is None, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    writeback = guard["replan_action_packet"]["writeback_contract"]
+    authoring = writeback["vision_authoring"]
+    rc, detail = run("quota", "should-run", "--codex-app", *current, "--include-detail", "vision")
+    assert rc == 0 and detail["replan_action_packet"]["writeback_contract"] == writeback, detail
+    assert build_turn_envelope(guard)["replan_action_packet"]["writeback_contract"] == writeback
+    rc, envelope = run("quota", "should-run", "--codex-app", *current, "--turn-envelope")
+    assert rc == 0 and envelope["replan_action_packet"]["writeback_contract"] == writeback, envelope
+    vision = deepcopy(authoring["minimal_example"])
+    vision["path_delta"].update(
+        outcome="replan", observed_reality="The settled fixture has no runnable Todo.",
+        retained=["Original acceptance"], evidence_refs=[])
+    path = tmp_path / "periodic-vision.json"
+    command = shlex.split(guard["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+    command = command[command.index("refresh-state"):]
+    command[command.index("--agent-vision-json") + 1] = str(path)
+    command += ["--no-global-sync", "--suppress-external-sinks"]
+    path.write_text(json.dumps(vision))
+    rc, rejected = run(*command)
+    assert rc != 0 and _spend_run_count(runtime) == 1, rejected
+    assert "typed semantic delta" in rejected["error"], rejected
+    vision["path_delta"]["evidence_refs"] = ["validation:no-runnable-fixture"]
+    path.write_text(json.dumps(vision))
+    rc, accepted = run(*command)
+    assert rc == 0 and accepted["settlement_identity"] == identity, json.dumps(accepted)
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
+    for replay in (False, True):
+        rc, spent = _run_generated_cli(accepted["settlement_owed"]["command"], registry_path=registry)
+        assert rc == 0 and spent["appended"] is not replay, spent
+        assert _spend_run_count(runtime) == 2

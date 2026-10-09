@@ -525,8 +525,12 @@ not a requirement to patch vision on every in-flight step. Replace example claim
 and references with observed facts and pass the packet via `--agent-vision-json`.
 `checkpoint-context` is recovery **after** the original committed Turn writeback,
 not a first-write preparation command. MCP removes the manual CLI settlement plan
-and retains its own authoring projection; autonomous replan retains its existing
-writeback contract. TurnEnvelope preserves the ordinary plan's guidance.
+and retains its own authoring projection. The default quota CLI also retains
+autonomous replan's authoring schema. When an identical schema is already present
+in its durable-writeback step, the replan contract uses a same-response
+`vision_authoring_ref`; it never requires a diagnostic detail read for this input.
+Different schemas remain separate, and progress-only replan does not acquire a
+Vision requirement. TurnEnvelope preserves the ordinary plan's guidance.
 
 Shared `todo plan` and guided-start authoring steps also provide a routed exact
 readback command for each authored or reused Todo id. Inventory text is a bounded

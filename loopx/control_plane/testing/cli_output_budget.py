@@ -143,22 +143,24 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Fixed-path base/head emit 21,871 JSON / 8,690 Markdown chars.
             # Keep the selected-Todo source, freshness, ordering and stop rules.
             "small": {"json": 22_000, "markdown": 9_000},
-            # 36 Todos / 12 runs emit 35,710 chars; 36,000 leaves 290.
+            # Same 36-Todo / 12-run source: 35,383 -> 38,432 chars when
+            # required replan authoring is inline instead of a diagnostic read.
             # Per-Todo growth and fixed semantic growth remain independent.
-            "crowded": {"json": 36_000, "markdown": 7_800},
+            "crowded": {"json": 39_000, "markdown": 7_800},
             "multi_agent": {"json": 23_000, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 140},
-            "crowded": {"json": 850, "markdown": 90},
+            "crowded": {"json": 950, "markdown": 90},
             "multi_agent": {"json": 650, "markdown": 80},
         },
         scale_axis="todo_count",
         max_json_growth_chars_per_unit=300,
         # Required replan carries dense decision evidence from the full index.
-        # The unchanged fixture grows 21,871 -> 35,710 chars / 579 -> 836 lines.
+        # The required authoring adds 3,049 fixed chars / 94 lines; small and
+        # multi-agent cases stay identical. It does not grow with Todo count.
         # This fixed decision packet must not relax per-Todo growth or other routes.
-        max_json_fixed_semantic_growth_chars=6_000,
+        max_json_fixed_semantic_growth_chars=9_000,
     ),
     CliOutputBudgetSpec(
         surface_id="loopx_turn_plan",
