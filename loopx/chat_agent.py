@@ -705,6 +705,15 @@ class CodexChatAgentSession:
         permissions_profile = policy.get("permissions_profile") if project_context is not None else None
         if permissions_profile:
             host_config = {**(host_config or {}), **policy["host_config"]}
+            # Git must not consult private account/system configuration from
+            # workspace-only tools. Keep repository-local config available;
+            # ordinary Chat retains its existing account configuration.
+            environment = host_config["shell_environment_policy"]
+            host_config["shell_environment_policy"] = {**environment, "set": {
+                **environment["set"],
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+            }}
             host_config = _workspace_system_tools(host_config, permissions_profile)
             # The native filesystem helper re-executes this binary. A symlink
             # under the user's home must not require opening that directory.
