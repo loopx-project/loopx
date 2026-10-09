@@ -7,7 +7,6 @@ transaction-bound entries.
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -25,9 +24,11 @@ from .coordination_state_contract_generated import (
 )
 from .local_authority_shadow_projection import (
     head_digest,
-    todo_partition_projection,
 )
-from .runtime_shadow import resolve_coordination_runtime_shadow_config, capture_todo_archive_dependencies
+from .runtime_shadow import (
+    resolve_coordination_runtime_shadow_config,
+    todo_partition_projector as todo_partition_projector,
+)
 from .shadow_management import read_shadow_capture_binding, shadow_management_state_path
 from .shadow_goal_scope import shadow_goal_scope
 
@@ -127,34 +128,6 @@ class DrainResult:
         payload["ok"] = self.ok
         payload["drained_count"] = self.drained_count
         return payload
-
-
-def todo_partition_projector(
-    goal: Mapping[str, Any] | None,
-    *,
-    state_path: Path,
-    rollout_events: list[dict[str, Any]] | None = None,
-) -> outbox.TodoPartitionProjector:
-    """Production projector: parse active-state text into the todos partition."""
-
-    from ...control_plane.todos.handoff_mode import goal_handoff_mode
-    from ..todos.goal_todo_projection import project_goal_todo_items
-
-    goal_record = dict(goal) if isinstance(goal, Mapping) else None
-    events = list(rollout_events or [])
-
-    def project(state_text: str) -> dict[str, Any]:
-        return todo_partition_projection(
-            handoff_mode=goal_handoff_mode(state_text),
-            todos=capture_todo_archive_dependencies(project_goal_todo_items(
-                goal_record,
-                state_text=state_text,
-                state_path=state_path,
-                rollout_events=events,
-            ), state_text),
-        )
-
-    return project
 
 
 def read_local_authority_shadow(

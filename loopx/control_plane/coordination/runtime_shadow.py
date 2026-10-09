@@ -262,6 +262,35 @@ def capture_todo_archive_dependencies(todos: list[dict[str, Any]], state_text: s
     return result
 
 
+def todo_partition_projector(
+    goal: Mapping[str, Any] | None,
+    *,
+    state_path: Path,
+    rollout_events: list[dict[str, Any]] | None = None,
+) -> Callable[[str], dict[str, Any]]:
+    """Production projector: parse active-state text into the todos partition."""
+
+    from ..todos.handoff_mode import goal_handoff_mode
+    from .local_authority_shadow_projection import todo_partition_projection
+    from ..todos.goal_todo_projection import project_goal_todo_items
+
+    goal_record = dict(goal) if isinstance(goal, Mapping) else None
+    events = list(rollout_events or [])
+
+    def project(state_text: str) -> dict[str, Any]:
+        return todo_partition_projection(
+            handoff_mode=goal_handoff_mode(state_text),
+            todos=capture_todo_archive_dependencies(project_goal_todo_items(
+                goal_record,
+                state_text=state_text,
+                state_path=state_path,
+                rollout_events=events,
+            ), state_text),
+        )
+
+    return project
+
+
 def build_runtime_shadow_source_snapshot(
     *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
     registry_path: Path,

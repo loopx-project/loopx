@@ -466,7 +466,7 @@ def test_prose_guard_ignores_resume_evaluation_clock(
         return project_at_distinct_time
 
     monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority_shadow_adapter.todo_partition_projector",
+        "loopx.control_plane.coordination.runtime_shadow.todo_partition_projector",
         ticking_projector,
     )
     goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
@@ -499,7 +499,7 @@ def test_prose_guard_preserves_json_scalar_identity(
     original_value: bool, planned_value: int,
 ) -> None:
     """A full source projection must retain JSON types even if Python equates them."""
-    from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
+    from loopx.control_plane.coordination import runtime_shadow as adapter
     from loopx.control_plane.coordination.local_authority_shadow_projection import (
         todo_partition_projection,
     )
@@ -550,6 +550,81 @@ def test_prose_only_reward_holds_before_index_append_during_maintenance(tmp_path
             goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
             write_active_state_summary=True)
     assert (state.read_bytes(), index.read_bytes()) == before
+
+
+def test_prose_guard_rejects_a_handoff_change(tmp_path: Path) -> None:
+    from loopx.control_plane.coordination.runtime_shadow_writer_adapter import (
+        ActiveStateAuthorityMutationError, require_prose_state_write_allowed,
+    )
+    registry, state, root = fixture(tmp_path)
+    original = state.read_text()
+    with pytest.raises(ActiveStateAuthorityMutationError, match="would change canonical"):
+        require_prose_state_write_allowed(
+            registry_path=registry, runtime_root=root, goal_id=GOAL, state_path=state,
+            original_text=original, planned_text=original.replace("handoff_mode: legacy", "handoff_mode: hard_lease"),
+        )
+    assert state.read_text() == original
+
+
+@pytest.mark.parametrize("maintenance", [False, True])
+def test_prose_projection_failure_preserves_source_and_reward_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, maintenance: bool,
+) -> None:
+    from loopx.feedback import append_human_reward
+    from loopx.control_plane.coordination import runtime_shadow as source
+    from loopx.control_plane.coordination.runtime_shadow_writer_adapter import ActiveStateAuthorityMutationError
+    from loopx.control_plane.coordination.shadow_management import ShadowManagementError, shadow_management_state_path
+
+    registry, state, index, reward = reward_fixture(tmp_path)
+    called = []
+
+    def unavailable(*_args, **_kwargs):
+        called.append(True)
+        raise ValueError("source projection unavailable")
+
+    monkeypatch.setattr(source, "todo_partition_projector", unavailable)
+    if maintenance:
+        path = shadow_management_state_path(tmp_path / "runtime", GOAL)
+        path.parent.mkdir(parents=True)
+        path.write_text("{}")
+    before = state.read_bytes(), index.read_bytes(), registry.read_bytes()
+    error = ShadowManagementError if maintenance else ActiveStateAuthorityMutationError
+    with pytest.raises(error):
+        append_human_reward(registry_path=registry, runtime_root_override=None,
+            goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+            write_active_state_summary=True)
+    assert called == ([] if maintenance else [True])
+    assert (state.read_bytes(), index.read_bytes(), registry.read_bytes()) == before
+
+
+def test_configuration_and_prose_guard_load_without_capture_modules(tmp_path, monkeypatch):
+    from test_cold_source_import_cli import workspace
+
+    _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    for name in ("runtime_shadow_writer_adapter.py", "local_authority_shadow_outbox.py"):
+        (receiver / "loopx/control_plane/coordination" / name).unlink()
+    registry = tmp_path / "project/.loopx/registry.json"
+    child = subprocess.run([sys.executable, "-c", """
+import sys,loopx
+from pathlib import Path
+import loopx.presentation.configuration_api
+from loopx.feedback import require_prose_state_write_allowed
+from loopx.control_plane.coordination.legacy_writer_fence import ActiveStateAuthorityMutationError
+registry,runtime,state,package = map(Path,sys.argv[1:])
+assert Path(loopx.__file__) == package / 'loopx/__init__.py'
+original = state.read_text()
+args = dict(registry_path=registry,runtime_root=runtime,goal_id='cold',state_path=state,original_text=original)
+require_prose_state_write_allowed(**args,planned_text=original+'\\nA narrative observation.\\n')
+try:
+    require_prose_state_write_allowed(**args,planned_text=original.replace('handoff_mode: legacy','handoff_mode: hard_lease'))
+except ActiveStateAuthorityMutationError:
+    pass
+else:
+    raise AssertionError('handoff mutation was accepted')
+assert state.read_text() == original
+""", str(registry), str(runtime), str(state), str(receiver)], cwd=tmp_path,
+        env=env, capture_output=True, text=True, timeout=60)
+    assert child.returncode == 0, child.stdout + child.stderr
 
 
 def test_override_root_is_the_only_maintenance_authority(tmp_path: Path) -> None:

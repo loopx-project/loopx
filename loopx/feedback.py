@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 from .file_lock import exclusive_cross_runtime_file_lock
-from .control_plane.coordination.runtime_shadow_writer_adapter import require_prose_state_write_allowed
+from .control_plane.coordination.legacy_writer_fence import require_prose_state_write_allowed
 from .control_plane.runtime.document_io import atomic_write_state_text
 
 import re
