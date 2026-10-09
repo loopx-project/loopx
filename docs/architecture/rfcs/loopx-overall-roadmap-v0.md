@@ -948,9 +948,8 @@ Host processes and native source leases on File/SQLite: process exit and lease
 release remain separate, expired active leases refuse import, and the old grant
 cannot launch a Host after cutover. This proves the existing supervisor/lease
 boundary with synthetic work, not automatic Host discovery or live model use.
-Continue pending outbox disposition, App loading with the old normal writer
-absent and independent full-backup recovery in R5. The
-installed cold-import CLI uses the existing selected dispatcher and
+Continue pending outbox disposition and independent full-backup recovery in R5.
+The installed cold-import CLI uses the existing selected dispatcher and
 Goal path resolver; real File/SQLite import and original-receipt recovery pass
 with the four old normal producer modules physically absent in a disposable
 package. This qualifies that command's loading boundary, not every other CLI
@@ -958,13 +957,15 @@ caller or removal of those modules. Keep T4 retirement on actual callers: the
 retained prose-write guard now belongs to the existing source/fence boundary;
 the source partition projector has one shared owner, with compatible old
 imports. Configuration and direct guard checks run without both capture modules.
-Real File/SQLite App HTTP import, process restart, later canonical writes and
-prose checks run without the writer adapter, while the outbox remains present.
-The remaining runtime-root helper still couples live canonical callers to
-outbox orchestration: move its pure routing and actual imports, then repeat the
-same HTTP oracle with both modules absent. Preserve source/maintenance identity,
-Todo/handoff invariance, JSON types and failed-write behavior. This partial stage does not retire the supported
-old writer or qualify a released default.
+Pure runtime-root routing and its actual canonical Todo, acceptance, Chat and
+CLI callers now use the existing paths owner, with an identical compatibility
+reexport for capture callers. Source and fresh-wheel File/SQLite App HTTP import,
+process restart, original-operation recovery, later canonical writes and prose
+checks pass the same oracle with both capture modules present and physically
+absent. Source/maintenance identity, Todo/handoff invariance, JSON types,
+project-relative routing and failed-write behavior remain unchanged. Pending
+outbox disposition and independent complete Goal recovery stay open; this stage
+does not retire the supported old writer or qualify a released default.
 Cold-import preservation checkpoint (R5/D1, T4/C1): full-state backups now
 witness each saved regular member's bytes in their existing manifests, including
 raw Markdown history, lease/receipt files, SQLite snapshots and stored

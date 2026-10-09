@@ -409,13 +409,16 @@ This proves that command's independence, not that other commands or supported
 writers can lose those files. The retained prose-write guard now belongs to the
 existing source/fence boundary and shares the source partition projector with
 capture. Its old import remains compatible. Configuration and the guard load
-with both capture modules absent; real File/SQLite HTTP import, process restart,
-later writes and canonical prose checks also run with the writer adapter absent.
-The outbox remains present in that HTTP qualification: live canonical callers
-still obtain runtime-root routing from its orchestration adapter. Move that pure
-routing and its actual callers before qualifying App loading without both
-capture modules. Keep the existing source identity, maintenance, Todo/handoff,
-JSON type and failed-write protections. This stage does not qualify
+with both capture modules absent. Pure runtime-root routing now belongs to
+`paths.effective_runtime_root`; canonical Todo, terminal lifecycle, acceptance,
+Chat and CLI callers import that owner directly. The old adapter reexports the
+same function for supported capture callers. Source and fresh-wheel File/SQLite
+HTTP import, process restart, original-operation recovery, later writes and
+canonical prose checks use the same oracle with both capture modules present
+and physically absent. Project-relative routes, explicit override precedence,
+source identity, maintenance, Todo/handoff, JSON type and failed-write protections
+remain intact. Pending historical outbox disposition and independent complete
+Goal recovery still need their original acceptance. This stage does not qualify
 supported old-writer retirement,
 release default or historical support cutoff.
 

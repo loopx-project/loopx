@@ -617,18 +617,19 @@ L3 检查点：独立领取/接管、原子 claim 准入与维护共用 typed le
 owned Host 进程、未晋升源的原生租约和 File/SQLite 验证：进程退出不释放租约，
 过期 active 租约仍拒绝导入；原生释放后保留历史身份，切换后旧 grant 在 Host 启动前
 拒绝。这是合成工作对既有 supervisor/lease 边界的验证，不是自动发现/停止 Host
-或 live 模型验收。pending outbox 逐项处置、旧正常 writer 物理缺席的 App 加载、
-完整 Goal 历史与备份恢复继续开放；协调源备份验证不结算完整恢复。详见
+或 live 模型验收。pending outbox 逐项处置、完整 Goal 历史与备份恢复继续开放；
+协调源备份验证不结算完整恢复。详见
 [冷源导入与支持边界](../../reference/local-authority-provider-selection.md)。
 
 仍有调用方的 prose 写入保护现归属于既有 source/fence 边界，source partition
 projector 共用同一 owner，并保留旧导入兼容。配置和直接 guard 可在两个 capture
-模块物理缺席时运行；真实 File/SQLite App HTTP 导入、进程重启、后续 canonical
-写入与 prose 保护通过 writer adapter 缺席验证，但该 HTTP 路径仍保留 outbox。
-纯 runtime-root helper 仍让 canonical 调用方加载 outbox 编排；下一切片迁移其归属
-和实际 imports，再以相同 HTTP oracle 验证两模块同时缺席。保留 source/maintenance
-身份、Todo/handoff 不变、JSON 类型与失败不写；不据此删除受支持旧 writer 或结算
-完整 App/恢复与发布默认资格。
+模块物理缺席时运行。纯 runtime-root 解析及其真实 canonical Todo、terminal
+lifecycle、acceptance、Chat 和 CLI 调用方现复用既有 paths owner；旧 capture adapter
+兼容导出同一个函数。源码与 fresh wheel 的 File/SQLite App HTTP 使用同一 oracle，
+在两个 capture 模块均存在/均物理缺席时验证导入、进程重启、原操作恢复、后续
+canonical 写入及 prose 保护。保留相对项目路由、显式 override 优先、source/maintenance
+身份、Todo/handoff 不变、JSON 类型与失败不写；pending 历史 outbox 逐项处置和独立
+完整 Goal 恢复继续开放，不据此删除受支持旧 writer 或结算发布默认资格。
 
 冷旧源保留检查点：本项目全量备份现盘点注册的自定义状态与来源 registry 路由。
 真实 CLI 备份和独立静态解包保留完整 Markdown 字节、未引用的归档 Todo 与 runtime
