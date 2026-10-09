@@ -112,9 +112,17 @@ class LarkPrivateConversations:
                 if selected["binding"].get("audience") == "group":
                     # Provider readback, never event text, fixes the topic root.
                     root = str(message.get("root_id") or message["message_id"])
+                    # The compact event projection emits null for absent
+                    # ancestry. mget can enrich the thread id later; that is
+                    # not a conflict unless the event supplied another id.
+                    # Parent/root ancestry must still agree exactly.
+                    parent = str(message.get("parent_id") or "")
+                    event_parent = str(event.get("parent_id") or "")
+                    event_thread = str(event.get("thread_id") or "")
                     if (root != str(event.get("root_id") or event["message_id"])
-                            or (message.get("parent_id") and not message.get("root_id"))
-                            or any(message.get(key, "") != event.get(key, "") for key in ["parent_id", "thread_id"])):
+                            or (parent and not message.get("root_id"))
+                            or parent != event_parent
+                            or (event_thread and event_thread != str(message.get("thread_id") or ""))):
                         return None
                     if root == event["message_id"]:
                         original: Mapping[str, Any] | None = message

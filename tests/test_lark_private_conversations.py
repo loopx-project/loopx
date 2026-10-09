@@ -328,6 +328,42 @@ def test_group_provider_mention_survives_a_bot_rename_and_topic_followup(ordinar
         runtime.close()
 
 
+@pytest.mark.parametrize("is_reply", [False, True])
+def test_group_readback_accepts_null_event_fields_and_provider_enriched_thread(ordinary, is_reply):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("compact-topic", "Explain this project")
+        # The CLI event projection emits null for absent fields; mget can
+        # supply the topic's thread id even when the event did not carry it.
+        root.update(root_id=None, parent_id=None, thread_id=None)
+        provider.messages[root["message_id"]]["thread_id"] = "omt_compact_topic"
+        provider.messages[root["message_id"]]["mentions"] = [{"id": "cli_notes_app", "name": "notes-app"}]
+        event = root
+        if is_reply:
+            event = provider.topic("compact-reply", "Compare its configuration", root=root["message_id"])
+            event["thread_id"] = None
+            provider.messages[event["message_id"]]["thread_id"] = "omt_compact_topic"
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=event["content"])
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("field,value", [("parent_id", "om_wrong_parent"), ("thread_id", "omt_wrong_thread")])
+def test_group_readback_rejects_supplied_conflicting_ancestry(ordinary, field, value):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("conflicting-topic", "Explain this project")
+        event = provider.topic("conflicting-reply", "Continue", root=root["message_id"])
+        event[field] = value
+        assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert provider.writes == []
+    finally:
+        runtime.close()
+
+
 def test_group_status_and_recipient_commands_cannot_expose_private_sessions(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:
