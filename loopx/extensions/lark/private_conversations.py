@@ -87,6 +87,16 @@ class LarkPrivateConversations:
     def _binding(self, profile: str) -> dict[str, Any]:
         return next(row for row in self.bindings.read()["bindings"] if row["transport_ref"] == profile)
 
+    def _group_source_message(self, profile: str, message_id: str) -> Mapping[str, Any] | None:
+        # The display-oriented mget projection omits reply ancestry. Read the
+        # original provider envelope for group provenance, including root @.
+        result = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=profile,
+            tail=["api", "GET", f"/open-apis/im/v1/messages/{message_id}", "--as", "bot"]))
+        payload = json_payload(result)
+        if result.get("returncode") != 0 or payload.get("code", 0) != 0 or payload.get("ok") is False:
+            return None
+        return _message(payload, message_id)
+
     def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
 
@@ -110,10 +120,22 @@ class LarkPrivateConversations:
                     and message.get("chat_id") == event["chat_id"] and isinstance(sender, Mapping)
                     and sender.get("id") == event["sender_id"] and sender.get("sender_type") == "user"):
                 if selected["binding"].get("audience") == "group":
+                    canonical = self._group_source_message(record["profile"], event["message_id"])
+                    canonical_sender = canonical.get("sender") if isinstance(canonical, Mapping) else None
+                    if (canonical is None or canonical.get("chat_id") != event["chat_id"]
+                            or not isinstance(canonical_sender, Mapping)
+                            or canonical_sender.get("id") != sender.get("id")
+                            or canonical_sender.get("sender_type") != "user"
+                            or canonical.get("msg_type", canonical.get("message_type"))
+                            != message.get("msg_type", message.get("message_type"))):
+                        return None
+                    # Keep the existing text/media rendering, but only the
+                    # lossless envelope supplies identity, ancestry and @.
+                    message = {**canonical, "content": message.get("content")}
                     # Provider readback, never event text, fixes the topic root.
                     root = str(message.get("root_id") or message["message_id"])
                     # The compact event projection emits null for absent
-                    # ancestry. mget can enrich the thread id later; that is
+                    # ancestry. Readback can enrich the thread id later; that is
                     # not a conflict unless the event supplied another id.
                     # Parent/root ancestry must still agree exactly.
                     parent = str(message.get("parent_id") or "")
@@ -127,10 +149,7 @@ class LarkPrivateConversations:
                     if root == event["message_id"]:
                         original: Mapping[str, Any] | None = message
                     else:
-                        response = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"],
-                            tail=["im", "+messages-mget", "--message-ids", root,
-                                  "--as", "bot", "--no-reactions", "--format", "json"]))
-                        original = _message(json_payload(response), root) if response.get("returncode") == 0 else None
+                        original = self._group_source_message(record["profile"], root)
                     from .event_inbox import lark_event_mentions_bot
                     observation = self.bindings.observe(record["profile"])
                     if (not original or original.get("chat_id") != event["chat_id"]

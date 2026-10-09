@@ -67,6 +67,13 @@ class Provider:
         elif "+chat-list" in args:
             data = {"ok": True, "data": {"chats": [{"chat_id": chat, "name": title}
                 for chat, title in [("oc_community", "Community trial"), ("oc_second", "Second trial")]]}}
+        elif "api" in args and "GET" in args:
+            path = args[args.index("GET") + 1]
+            assert path.startswith("/open-apis/im/v1/messages/")
+            message = dict(self.messages[path.rsplit("/", 1)[-1]])
+            if message.get("msg_type") == "text" and "content" in message:
+                message["body"] = {"content": json.dumps({"text": message.pop("content")})}
+            data = {"code": 0, "data": {"items": [message]}}
         elif "+messages-mget" in args:
             ref = args[args.index("--message-ids") + 1]
             message = self.messages[ref]
@@ -360,6 +367,106 @@ def test_group_readback_rejects_supplied_conflicting_ancestry(ordinary, field, v
         assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
         assert not store.list_sessions() and not list(transport.root.glob("*.json"))
         assert provider.writes == []
+    finally:
+        runtime.close()
+
+
+def test_group_reply_uses_raw_ancestry_when_display_readback_omits_it(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("display-root", "Explain this project")
+    reply = provider.topic("display-reply", "Compare its configuration", root=root["message_id"])
+
+    def rendered_provider(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if "+messages-mget" in args:
+            payload = json.loads(result["stdout"])
+            for message in payload["data"]["items"]:
+                message = dict(message)
+                message.pop("root_id", None)
+                message.pop("parent_id", None)
+                payload["data"]["items"] = [message]
+            return {**result, "stdout": json.dumps(payload)}
+        return result
+
+    transport.runner = rendered_provider
+    try:
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        assert transport.admit("notes-app", reply)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message=reply["content"])
+        assert second["session_id"] == first["session_id"]
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+        assert len([text for _, _, text in provider.topic_writes if text == "Runtime response."]) == 2
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "code_error", "wrong_sender", "wrong_chat", "wrong_type", "wrong_root"])
+def test_group_raw_readback_failure_cannot_fall_back_to_display_authority(ordinary, failure):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("raw-root", "Explain this project")
+    reply = provider.topic("raw-reply", "Compare its configuration", root=root["message_id"])
+
+    def conflicting_provider(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if "api" in args and "GET" in args:
+            if failure == "unavailable":
+                return {"returncode": 1, "stdout": '{"code":999}', "stderr": ""}
+            if failure == "code_error":
+                return {**result, "stdout": json.dumps({**json.loads(result["stdout"]), "code": 999})}
+            payload = json.loads(result["stdout"])
+            message = dict(payload["data"]["items"][0])
+            message.update({"wrong_sender": {"sender": {"id": "ou_other", "sender_type": "user"}},
+                            "wrong_chat": {"chat_id": "oc_other"}, "wrong_type": {"msg_type": "image"},
+                            "wrong_root": {"root_id": "om_other_root"}}[failure])
+            payload["data"]["items"] = [message]
+            return {**result, "stdout": json.dumps(payload)}
+        return result
+
+    transport.runner = conflicting_provider
+    try:
+        assert transport.admit("notes-app", reply)["status"] == "source_verification_failed"
+        assert not store.list_sessions() and not list(transport.root.glob("*.json"))
+        assert not provider.writes and not provider.reaction_creates
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("kind", ["image", "post"])
+def test_group_raw_provenance_preserves_rendered_media_and_original_topic(ordinary, kind):  # noqa: F811
+    from test_lark_private_images import image_runner
+    from test_chat_image_attachments import PNG_DATA_URL
+
+    _, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("media-root", "Explain this project")
+    media = provider.topic("media-reply", "Inspect this diagram\n![Image](img_example)", root=root["message_id"])
+    media["message_type"] = kind
+    provider.messages[media["message_id"]]["msg_type"] = kind
+    download = image_runner(provider)
+
+    def raw_media_provider(args, cwd=None, timeout=None):
+        result = download(args, cwd, timeout)
+        if "api" in args and "GET" in args:
+            payload = json.loads(result["stdout"])
+            message = payload["data"]["items"][0]
+            if message.get("msg_type") == kind:
+                message.pop("content")
+                body = {"image_key": "img_example"} if kind == "image" else {
+                    "zh_cn": {"title": "", "content": [[{"tag": "text", "text": "Inspect this diagram"},
+                                                       {"tag": "img", "image_key": "img_example"}]]}}
+                message["body"] = {"content": json.dumps(body)}
+            return {**result, "stdout": json.dumps(payload)}
+        return result
+
+    transport.runner = raw_media_provider
+    try:
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        assert transport.admit("notes-app", media)["status"] == "durably_accepted"
+        second = finish_group_turn(runtime, transport, message="Inspect this diagram\n[图片 1]")
+        assert second["session_id"] == first["session_id"]
+        assert second["attachments"][0]["data_url"] == PNG_DATA_URL
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
     finally:
         runtime.close()
 
