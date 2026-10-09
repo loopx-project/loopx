@@ -351,7 +351,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     }
     assert namespace_catalog["todo_replan_cadence"]["configuration_template"] == {
         "schema_version": "todo_replan_cadence_machine_defaults_v1",
-        "count_unit": "completed_todos",
+        "count_unit": "effective_turns",
         "count": 5,
     }
     assert namespace_catalog["change_quality_qualification"][
