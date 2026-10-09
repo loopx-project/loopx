@@ -50,6 +50,54 @@ def test_node_failure_survives_startup_and_readiness_projection(monkeypatch, fai
     assert action in str(guided["recommended_action"])
 
 
+
+@pytest.mark.parametrize(
+    ("outcome", "code", "action"),
+    [
+        (node_probe.NodeProbeOutcome.TIMED_OUT, "node_probe_timeout", "host load"),
+        (node_probe.NodeProbeOutcome.LAUNCH_FAILED, "node_probe_launch_failed", "Repair the Node.js launcher"),
+        (node_probe.NodeProbeOutcome.EXIT_FAILED, "node_probe_exit_failed", "Repair the Node.js launcher"),
+        (node_probe.NodeProbeOutcome.INVALID_VERSION, "node_probe_invalid_version", "returns a valid version"),
+        (node_probe.NodeProbeOutcome.UNSUPPORTED, "node_unavailable", "Install or activate Node.js 22.22.3"),
+        (node_probe.NodeProbeOutcome.PERMISSION_DENIED, "runtime_host_permission_denied", "host-approved"),
+    ],
+)
+def test_deep_readiness_preserves_later_node_probe_recovery(tmp_path, monkeypatch, outcome, code, action):
+    observations = iter([
+        node_probe.NodeProbe(node_probe.NodeProbeOutcome.READY, "node", "24.21.0"),
+        node_probe.NodeProbe(outcome, "node"),
+    ])
+    monkeypatch.setattr(effect_runtime, "_probe_node", lambda **_: next(observations))
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", lambda: "fixture")
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda **_: pytest.fail("no dispatch"))
+    result = effect_runtime.collect_effect_runtime_readiness(deep=True)
+    assert result["ready"] is False
+    assert result["status"] == "probe_failed"
+    assert result["semantic_probe"] == "failed"
+    assert result["detected_node_version"] == "24.21.0"
+    assert result["runtime_lifecycle"]["diagnostic_code"] == code
+    assert action in result["recommended_action"]
+    assert not list(tmp_path.glob("start-*.lock"))
+
+
+def test_deep_readiness_keeps_non_node_runtime_recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(effect_runtime, "_probe_node", lambda **_: node_probe.NodeProbe(
+        node_probe.NodeProbeOutcome.READY, "node", "24.21.0",
+    ))
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", lambda: "fixture")
+
+    def fail(*_args, **_kwargs):
+        raise effect_runtime.EffectRuntimeStartupError("unavailable", diagnostic_code="runtime_start_failed")
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", fail)
+    result = effect_runtime.collect_effect_runtime_readiness(deep=True)
+    assert result["runtime_lifecycle"]["diagnostic_code"] == "runtime_start_failed"
+    assert "concurrent startup" in result["recommended_action"]
+    assert "reinstall LoopX" in result["recommended_action"]
+
+
 def test_node_probe_uses_the_existing_bounded_startup_budget(monkeypatch):
     observed = []
     monkeypatch.setattr(node_probe.shutil, "which", lambda _: "node")
@@ -184,3 +232,45 @@ def test_cancelling_real_startup_reaps_probe_and_releases_lock(tmp_path):
         os.kill(int(pid_file.read_text()), 0)
     assert not list((tmp_path / "runtime").glob("start-*.lock"))
     assert not list((tmp_path / "runtime").glob("runtime-*.json"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable launcher fixture")
+def test_deep_readiness_second_probe_timeout_recovers_real_request(tmp_path, monkeypatch):
+    actual_node = shutil.which("node")
+    assert actual_node is not None
+    counter, pid_file = tmp_path / "probe-count", tmp_path / "probe-pid"
+    launcher = _launcher(tmp_path, (
+        "import os, sys, time\nfrom pathlib import Path\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        f" counter = Path({str(counter)!r})\n"
+        " count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
+        " counter.write_text(str(count))\n"
+        " if count > 1:\n"
+        f"  Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "  time.sleep(30)\n"
+        f"os.execv({actual_node!r}, [{actual_node!r}, *sys.argv[1:]])\n"
+    ))
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _: str(launcher))
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(name, str(tmp_path))
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    result = effect_runtime.collect_effect_runtime_readiness(deep=True)
+    assert counter.read_text() == "2"
+    assert result["ready"] is False and result["semantic_probe"] == "failed"
+    assert result["runtime_lifecycle"]["diagnostic_code"] == "node_probe_timeout"
+    assert "host load" in result["recommended_action"]
+    assert "reinstall" not in result["recommended_action"]
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    assert not list((tmp_path / "runtime").glob("start-*.lock"))
+    assert not list((tmp_path / "runtime").glob("runtime-*.json"))
+    _launcher(tmp_path, f"import os, sys\nos.execv({actual_node!r}, [{actual_node!r}, *sys.argv[1:]])\n")
+    try:
+        ping = effect_runtime.effect_runtime_result("runtime.ping", {})
+        assert ping["ready"] is True
+        recovered = effect_runtime.collect_effect_runtime_readiness(deep=True)
+        assert recovered["ready"] is True and recovered["semantic_probe"] == "passed"
+        assert recovered["runtime_identity"]["sqlite_authority_qualified"] is True
+    finally:
+        assert effect_runtime.restart_effect_runtime()["stopped"] is True

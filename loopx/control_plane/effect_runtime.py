@@ -25,6 +25,7 @@ from .runtime.node_probe import (
     MINIMUM_NODE_VERSION as MINIMUM_NODE_VERSION,
     MINIMUM_NODE_VERSION_TEXT as MINIMUM_NODE_VERSION_TEXT,
     STARTUP_READY_TIMEOUT_SECONDS as STARTUP_READY_TIMEOUT_SECONDS,
+    node_probe_remediation,
     probe_node as _probe_node,
 )
 from .content_digest import BARE_SHA256_PATTERN
@@ -1208,7 +1209,8 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             "recommended_action": (
                 exc.recommended_action
                 if isinstance(exc, EffectRuntimeHostPermissionError)
-                else "Run `loopx doctor --deep` again after any concurrent startup "
+                else node_probe_remediation(diagnostic_code)
+                or "Run `loopx doctor --deep` again after any concurrent startup "
                 "finishes. If the same diagnostic code remains, reinstall LoopX "
                 "and verify Node.js before retrying."
             ),
