@@ -317,11 +317,16 @@ def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filenam
     assert [payload["response"]["message"] for kind, payload in events if kind == "answer.final"] == [expected.strip()]
 
 
-def test_acp_stdio_stream_hides_a_long_percent_encoded_private_root(tmp_path):
+@pytest.mark.parametrize("encoding", ["uppercase", "lowercase-separators", "mixed-root-byte"])
+def test_acp_stdio_stream_hides_a_long_percent_encoded_private_root(tmp_path, encoding):
     project = tmp_path / "project"
     project.mkdir()
     private = Path("/custom-volume/" + "private segment " * 18)
     encoded_path = quote(f"{private}/secret/gate.json", safe="")
+    if encoding == "lowercase-separators":
+        encoded_path = encoded_path.replace("%2F", "%2f")
+    elif encoding == "mixed-root-byte":
+        encoded_path = encoded_path.replace("custom", "%63ustom", 1)
     response, events = _run_acp_answer(
         tmp_path,
         project=project,
@@ -369,6 +374,24 @@ def test_stream_holds_a_long_fully_encoded_private_root_until_redacting():
         protected_paths=["/custom-project", root]
     )
     streamed = "".join(stream.feed(character) for character in path)
+    assert streamed == ""
+    assert stream.feed("\n") + stream.finish() == "[local-path]\n"
+
+
+@pytest.mark.parametrize("encoding", ["lowercase-separators", "mixed-root-byte"])
+def test_stream_holds_long_encoded_private_root_prefix_until_redacting(encoding):
+    root = "/custom-volume/" + "private segment " * 18
+    encoded = quote(root + "/secret/gate.json", safe="")
+    if encoding == "lowercase-separators":
+        encoded = encoded.replace("%2F", "%2f")
+    else:
+        encoded = encoded.replace("custom", "%63ustom", 1)
+
+    # The complete-path classifier accepts these spellings. The streaming
+    # filter must hold the same long root before its 160-character fallback.
+    assert redact_local_paths(encoded, protected_paths=["/custom-project", root]) == "[local-path]"
+    stream = VisibleResponseStreamFilter(protected_paths=["/custom-project", root])
+    streamed = "".join(stream.feed(character) for character in encoded)
     assert streamed == ""
     assert stream.feed("\n") + stream.finish() == "[local-path]\n"
 

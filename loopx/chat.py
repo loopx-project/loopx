@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from .todos import add_goal_todo
 from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
@@ -371,21 +371,54 @@ class VisibleResponseStreamFilter:
         self.protected_paths = tuple(protected_paths)
         self._protected = _protected_path_replacements(self.protected_paths)
         self._local_path_pattern = _local_path_pattern(self._protected)
-        self._partial_protected_roots = tuple(
-            spelling + suffix
-            for raw, _label in self._protected
-            for spelling in {
-                raw,
-                quote(raw, safe=""),
-                quote(raw, safe="/\\"),
-            }
-            # Keep a root plus a partially streamed separator too. A percent
-            # encoded separator arrives as three independent characters.
-            for suffix in ("", "/", "\\", "%", "%2", "%5", "%2F", "%5C")
+        self._partial_protected_root_atoms = tuple(
+            self._protected_root_atoms(root.rstrip("/\\") + "/")
+            for root, _label in self._protected
         )
         self.marker_pending = ""
         self.visible_pending = ""
         self.envelope_started = False
+
+    @staticmethod
+    def _protected_root_atoms(root: str) -> tuple[tuple[tuple[str, bool], ...], ...]:
+        atoms = []
+        for character in root:
+            if character in "/\\":
+                atoms.append((("/", False), ("\\", False), ("%2F", True), ("%5C", True)))
+                continue
+            encoded = "".join(
+                f"%{byte:02X}"
+                for byte in character.encode("utf-8", errors="surrogateescape")
+            )
+            atoms.append(((character, False), (encoded, True)))
+        # A following path separator is enough to put the complete root in
+        # path context. Include the whole separator token so partial `%2f` / `%5c`
+        # spellings stay buffered while they arrive across stream chunks.
+        atoms.append((("/", False), ("\\", False), ("%2F", True), ("%5C", True)))
+        return tuple(atoms)
+
+    def _is_partial_protected_root(self, pending: str) -> bool:
+        for atoms in self._partial_protected_root_atoms:
+            positions = {0}
+            for options in atoms:
+                next_positions = set()
+                for position in positions:
+                    remaining = pending[position:]
+                    if not remaining:
+                        return True
+                    for token, case_insensitive in options:
+                        comparable = remaining.casefold() if case_insensitive else remaining
+                        candidate = token.casefold() if case_insensitive else token
+                        if candidate.startswith(comparable):
+                            return True
+                        if comparable.startswith(candidate):
+                            next_positions.add(position + len(token))
+                positions = next_positions
+                if not positions:
+                    break
+            if len(pending) in positions:
+                return True
+        return False
 
     def _next_boundary(self, pending: str) -> int:
         boundary = -1
@@ -409,10 +442,7 @@ class VisibleResponseStreamFilter:
             )
             # A declared root itself can span several chunks or contain spaces.
             # Hold its prefix until it becomes a complete path token.
-            partial_root = any(
-                root.startswith(pending)
-                for root in self._partial_protected_roots
-            )
+            partial_root = self._is_partial_protected_root(pending)
             if whitespace >= 0:
                 boundary = whitespace + 1
             elif partial_root:
