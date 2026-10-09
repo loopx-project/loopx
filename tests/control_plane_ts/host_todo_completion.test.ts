@@ -68,6 +68,31 @@ test("host settlement commands preserve an exact GoalRef", () => {
   );
 });
 
+test("host settlement identity is stable within and isolated across Goal instances", () => {
+  const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const exact = (goalInstanceId: string) => identityFrom(prepare({
+    goal_ref: {goal_id: "goal", goal_instance_id: goalInstanceId},
+  }));
+  const firstA = exact(instanceA);
+  const secondA = exact(instanceA);
+  const identityB = exact(instanceB);
+  const turnInstanceIdA = `mcp-${createHash("sha256")
+    .update(["loopx_host_todo_completion_exact_v1", "goal", instanceA, "agent", todoId].join("\0"), "utf8")
+    .digest("hex")
+    .slice(0, 32)}`;
+
+  assert.deepEqual(firstA, secondA);
+  assert.equal(firstA.turn_instance_id, turnInstanceIdA);
+  assert.notEqual(firstA.turn_instance_id, identityB.turn_instance_id);
+  assert.notEqual(firstA.effect_id, identityB.effect_id);
+  const crossInstance = finalize(providerOutcomes(firstA), {
+    goal_ref: {goal_id: "goal", goal_instance_id: instanceB},
+  });
+  assert.equal(crossInstance.decision, "blocked");
+  assert.match(JSON.stringify(crossInstance.result), /settlement identity/);
+});
+
 test("vision decisions require v1 and cannot combine patch with unchanged", () => {
   assert.throws(() => prepare({vision_path: "vision.json"}), /requires v1/);
   assert.throws(() => prepare({schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,

@@ -13,6 +13,10 @@ from loopx.control_plane.testing.canary_harness import write_fixture_registry, r
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.todos import quota_selection
 from loopx.control_plane.todos.quota_summary import summarize_user_todos_for_quota
+from loopx.todos import list_goal_todos
+from tests.control_plane.test_monitor_followthrough_contract import (
+    AGENT_ID, GOAL_ID, _add_monitor, _write_fixture,
+)
 
 NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
@@ -47,7 +51,7 @@ def test_full_source_monitor_partitions_preserve_scope_and_capability_fences(sup
     result = summarize_user_todos_for_quota(source, agent_identity={"agent_id": "agent-a"})
     assert result is not None
     assert result["monitor_due_count"] == (2 if supported else 0)
-    assert [row["todo_id"] for row in result["monitor_due_items"]] == (["todo_due"] if supported else [])
+    assert [row["todo_id"] for row in result["monitor_due_items"]] == (["todo_watch"] if supported else [])
     assert result["watch_only_monitor_due_count"] == (1 if supported else 0)
     assert result["monitor_capability_blocked_due_count"] == (1 if supported else 0)
     assert result["monitor_schedule_gap_count"] == (2 if supported else 0)
@@ -138,3 +142,73 @@ def test_missing_typed_quota_owner_cannot_reactivate_python_monitor_rules(monkey
     with pytest.raises(RuntimeError, match="typed owner unavailable"):
         summarize_user_todos_for_quota(source)
     assert source == before
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
+    tmp_path, monkeypatch, provider,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state = _write_fixture(tmp_path)
+    # Deliberately create out of deadline order, so display order cannot
+    # accidentally satisfy the independently specified scheduling oracle.
+    monitors = [
+        _add_monitor(registry, text="[P1] Observe recent target", target_key="recent",
+                     next_due_at="2002-01-01T00:00:00Z"),
+        _add_monitor(registry, text="[P1] Observe oldest target", target_key="oldest",
+                     next_due_at="2000-01-01T00:00:00Z"),
+        _add_monitor(registry, text="[P1] Observe middle target", target_key="middle",
+                     next_due_at="2001-01-01T00:00:00Z"),
+    ]
+    if provider != "legacy":
+        rows = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+        projection = build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=rows, handoff_mode="soft_claim")
+        initialize_canonical_authority(runtime, GOAL_ID, projection,
+                                       state_path=state, provider=provider)
+        state.unlink()  # Canonical authority, not a stale Markdown fallback.
+
+    def call(*args):
+        code, result = run_json_cli_result(
+            *args, registry_path=registry, runtime_root=runtime)
+        assert code == 0, result
+        return result
+
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--runtime-profile", "codex_app_ssh_goal"]
+    expected = [monitors[1], monitors[2], monitors[0]]
+    previous_guard = None
+    for ordinal, item in enumerate(expected):
+        turn = f"monitor-order-{ordinal}"
+        guard = ["quota", "should-run", *scope, "--turn-instance-id", turn,
+                 "--available-capability", "network",
+                 "--available-capability", "external_evidence_poll"]
+        admitted = call(*guard)
+        assert admitted["selected_todo"]["todo_id"] == item["todo_id"]
+        lane = admitted["work_lane_contract"]
+        assert lane["monitor_due_count"] == len(expected) - ordinal
+        assert len(lane["monitor_due_items"]) == 1
+        if previous_guard:
+            assert call(*previous_guard)["should_run"] is False
+        poll = ["quota", "monitor-poll", *scope, "--turn-instance-id", turn,
+                "--todo-id", item["todo_id"], "--target-key", item["target_key"],
+                "--result-hash", f"checked-{ordinal}",
+                "--next-due-at", "2099-01-01T00:00:00Z", "--execute"]
+        settled = call(*poll)
+        assert settled["turn_continuation"]["current_turn_settled"] is True
+        replay = call(*poll)
+        assert replay["replayed"] is True and replay["appended"] is False
+        closed = call(*guard)
+        assert closed["effective_action"] == "heartbeat_settled_skip"
+        assert closed["selected_todo"]["todo_id"] == item["todo_id"]
+        assert closed["interaction_contract"]["agent_channel"]["must_attempt"] is False
+        records = call("todo", "list", "--goal-id", GOAL_ID, "--role", "agent")["todos"]
+        by_id = {row["todo_id"]: row for row in records}
+        for unpolled in expected[ordinal + 1:]:
+            assert by_id[unpolled["todo_id"]]["next_due_at"] == unpolled["next_due_at"]
+            assert not by_id[unpolled["todo_id"]].get("last_checked_at")
+        previous_guard = guard
+    events = [json.loads(line) for line in
+              (runtime / "goals" / GOAL_ID / "runs" / "index.jsonl").read_text().splitlines()]
+    assert sum(row["classification"] == "quota_monitor_poll" for row in events) == 3
+    assert not any(row["classification"] == "quota_slot_spent" for row in events)

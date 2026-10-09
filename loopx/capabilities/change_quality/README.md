@@ -81,9 +81,9 @@ file, permission, or merge authority.
    invalidates the old fingerprint, so prepare and final review run again.
 5. `change-quality record --execute` validates those four result blocks against
    the current fingerprint, derives guardrail states from sparse risks and
-   validation outcomes, and writes a compact local runtime receipt. Failed
+   validation outcomes, and writes a compact local runtime receipt. Unattributed failed
    validation, skipped required validation, and unresolved blocker risks fail
-   closed.
+   closed. Required failures remain blocking even with baseline attribution.
 6. `change-quality verify` checks the current exact scope and v2 protocol.
    Earlier experimental receipt schemas are invalid and must be requalified.
 7. `canary premerge --goal-id <goal-id>` enforces `strict_receipt`.
@@ -134,8 +134,57 @@ to project oracle candidates.
 
 A blocking finding must be a concrete correctness, security, privacy, contract,
 or required-validation failure. Subjective style advice remains nonblocking.
-A failed validator is independently non-passing even when a reviewer forgot to
-repeat it as a blocker finding.
+A failed validator remains a failed observation even when a reviewer forgot to
+repeat it as a blocker finding. Marking it optional alone cannot waive it.
+
+## Independently Attributed Baseline Failures
+
+An optional failed row may carry `failure_attribution` with
+`schema_version=change_quality_baseline_attribution_v0` and the existing PR-review
+disposition `pre_existing_unrelated`. This is a CQR qualification contract owned
+by the typed validation rule, accessed through the existing Effect runtime.
+Python retains Git, JSON/privacy and receipt IO; it does not decide the exception.
+
+The attribution binds `base_revision`, `head_revision` and `scope_fingerprint`
+to the current prepare packet. Both revisions must be distinct and the head
+must be committed and clean. `same_command` must equal the failed row's
+`command`. `baseline_observation` and `head_observation` each contain:
+
+- a completed nonzero `exit_code`;
+- `failure_signature`: SHA-256 of the **complete** normalized failing identities
+  and details, preserving multiplicity, not a count, output tail or summary;
+- `fixture_digest` and `environment_digest`: SHA-256 of the matched workload and
+  execution environment;
+- distinct opaque `evidence_id` values for the independently retained runs.
+
+All digests use `sha256:<64 lowercase hexadecimal characters>`. Exit status,
+failure signature, fixture and environment must agree across both runs. Retain
+replayable commands and full evidence privately; receipts contain compact
+references and digests only. Do not normalize away new or worsened failures.
+
+`causal_scope_analysis` explains why the change does not affect the failing
+causal path. `affected_invariant_evidence` references other `validator:<id>` rows
+that passed and are required. Those rows declare `covers_paths`; their union
+must cover every current changed path, with no unknown paths. This coverage is
+reviewer-attested: LoopX validates shape, consistency and freshness, **not** that
+a command ran or that the evidence proves causality. Independently inspect the
+full artifacts and affected invariants before recording or approving a result.
+
+A qualified optional baseline failure remains `status=failed`, and its guardrail
+stays `risk`; it is never rewritten as passed or skipped. A required failure,
+missing attribution, malformed or stale evidence, changed diagnostics/workload,
+or missing independent coverage still holds qualification. Frozen acceptance,
+security/authority obligations and required CI checks cannot be made optional to
+use this route. PR review judgment and integration authority remain distinct.
+
+Run the existing `prepare → record --execute → verify → canary premerge` journey.
+Every edit or changed base invalidates attribution. If requalification replaces
+an existing current-scope receipt, its original bytes are archived under the
+local receipt `history/` directory before updating the current pointer, under
+one writer lock. `record` returns `previous_receipt_path`; this is a private
+artifact pointer, not public PR content. Failed historical conclusions remain
+inspectable. Disabled capability behavior and configuration defaults do not
+change; removing the attribution restores the ordinary fail-closed rule.
 
 Turn may carry the packet or receipt reference inside one bounded execution.
 It does not own policy or enforcement. The authoritative merge decision stays

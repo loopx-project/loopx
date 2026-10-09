@@ -98,7 +98,8 @@ def target_authority(
 
 
 def deliver(
-    runtime_root: Path, registry_path: Path, *, session: dict, turn: dict, request: dict
+    runtime_root: Path, registry_path: Path, *, session: dict, turn: dict, request: dict,
+    source_store=None,
 ) -> dict:
     request = normalize_request(request)
     target = {key: request[key] for key in ("goal_id", "agent_id")}
@@ -200,11 +201,11 @@ def deliver(
                 goal_scope,
                 path.with_suffix(".lock"),
             ):
-                _register_unlocked(runtime_root, value, session, turn)
+                _register_unlocked(runtime_root, value, session, turn, source_store=source_store)
                 exists = persist_entry()
         else:
             with exclusive_file_lock(path.with_suffix(".lock")):
-                register(runtime_root, value, session, turn)
+                register(runtime_root, value, session, turn, source_store=source_store)
                 exists = persist_entry()
         return {
             "request_id": request_id,

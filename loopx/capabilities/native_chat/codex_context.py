@@ -63,6 +63,27 @@ def process_environment(home: Path, *, isolated: bool) -> dict[str, str]:
     return env
 
 
+def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Use native HTTP for the trusted-host ChatGPT auth bridge.
+
+    These are public transport defaults, not imported account configuration.
+    No endpoint override: Codex retains its native ChatGPT routing and refresh.
+    Explicit caller providers and independently authenticated stores stay native.
+    """
+    if host_config.get("model_provider"):
+        return dict(host_config)
+    provider = "loopx_host_chatgpt_http"
+    # Per-thread config overlays may retain omitted fields from lower layers.
+    # Do not inherit a project-defined endpoint, headers or environment key.
+    if provider in native_config.get("model_providers", {}):
+        raise ValueError("Native host ChatGPT transport conflicts with project configuration.")
+    return {**host_config, "model_provider": provider, "model_providers": {
+        **host_config.get("model_providers", {}),
+        provider: {"name": "LoopX host ChatGPT HTTP", "wire_api": "responses",
+                   "requires_openai_auth": True, "supports_websockets": False},
+    }}
+
+
 def disable_mcp_servers(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:
     """Disable effective native MCP servers, including project/managed layers.
 

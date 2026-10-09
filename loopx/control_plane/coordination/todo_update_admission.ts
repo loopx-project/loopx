@@ -11,7 +11,7 @@ import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {TODO_OWNERSHIP_INTENT_FIELDS} from "../todos/authoring_scope.ts";
 import {evaluateCoordinationTodoMutationDecision,
   COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
-import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection} from "./task_lease_proof.ts";
+import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection, isBoundUserActionMetadataUpdate} from "./task_lease_proof.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
@@ -155,18 +155,12 @@ export function todoUpdateAdmissionRejection(
     const repositoryRejection = leaseRepositoryRejection(todo, lease);
     return repositoryRejection === null ? null : reject(repositoryRejection, "Evidence association must retain the completed work repository");
   }
-  // Ordinary user actions cannot claim agent execution leases. Their exact
-  // registered bound actor may correct text/note/evidence under provider CAS
-  // without granting execution or changing lifecycle/ownership/requirements.
-  // Shared actor admission above still owns exclusions and bindings. Retained
-  // lease lineage and even a partial explicit proof keep the ordinary fence.
-  if (mode === "hard_lease" && todo.role === "user" && todo.task_class === "user_action" &&
-      todo.status === "open" && todo.claimed_by == null &&
-      input.actor_agent_id !== null && todo.bound_agent === input.actor_agent_id &&
-      input.registered_agents.includes(input.actor_agent_id) && lease === undefined &&
-      input.lease_idempotency_key == null && input.lease_expected_version == null &&
-      input.completion === undefined && input.completion_validation_revision === undefined &&
-      Object.keys(intent).every(field => field === "evidence")) {
+  // User reminders cannot take agent claims. No-lineage copy edits retain the
+  // existing provider-CAS path. Retained lineage or even a partial explicit
+  // proof must pass the ordinary execution fence below before any copy edit.
+  const boundUserActionMetadata = isBoundUserActionMetadataUpdate(todo, input);
+  if (mode === "hard_lease" && boundUserActionMetadata && lease === undefined &&
+      input.lease_idempotency_key == null && input.lease_expected_version == null) {
     return null;
   }
   if (!delegatedUnleasedOverride && (lease !== undefined || mode === "hard_lease" ||
@@ -185,7 +179,7 @@ export function todoUpdateAdmissionRejection(
         return {...reject(String(fence.code), "Todo update requires the current active lease execution proof"),
           handoff_mode: mode, recovery: todoUpdateLeaseRecovery(head, input, mode)};
       }
-      if (lease !== undefined && todo.claimed_by !== input.actor_agent_id) {
+      if (lease !== undefined && todo.claimed_by !== input.actor_agent_id && !boundUserActionMetadata) {
         return reject("update_owner_mismatch", "Leased Todo update requires the current claim owner");
       }
       if (lease !== undefined) {

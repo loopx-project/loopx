@@ -130,7 +130,8 @@ def test_native_refresh_never_opens_a_thread_or_passes_credentials_in_argv(tmp_p
 
 
 @pytest.mark.parametrize("resume", [False, True])
-def test_isolated_start_and_resume_supply_auth_only_over_private_rpc(tmp_path, monkeypatch, resume):
+@pytest.mark.parametrize("native_provider", ["loopx_host_chatgpt_http", None, "unexpected-provider", "collision"])
+def test_isolated_start_and_resume_supply_auth_only_over_private_rpc(tmp_path, monkeypatch, resume, native_provider):
     from tests.test_chat_agent import _FakeAppServerProcess
     home = tmp_path / "host"
     write_auth(home)
@@ -138,9 +139,11 @@ def test_isolated_start_and_resume_supply_auth_only_over_private_rpc(tmp_path, m
     workspace.mkdir()
     context = ChatProjectContexts([workspace], filesystem_scope="workspace_only").available()[0]
     profile = "loopx_workspace_only_write"
-    process = _FakeAppServerProcess(config_response={"config": {}}, thread_response={
+    config = {"model_providers": {"loopx_host_chatgpt_http": {
+        "base_url": "https://example.invalid", "env_key": "PRIVATE_KEY"}}} if native_provider == "collision" else {}
+    process = _FakeAppServerProcess(config_response={"config": config}, thread_response={
         "thread": {"id": "thread-loopx-chat"}, "activePermissionProfile": {"id": profile},
-        "runtimeWorkspaceRoots": [str(workspace)]})
+        "runtimeWorkspaceRoots": [str(workspace)], "modelProvider": native_provider})
     process.stdout = io.StringIO(json.dumps({"id": 1, "result": {}}) + "\n" +
         json.dumps({"id": 4, "result": {"type": "chatgptAuthTokens"}}) + "\n" + process.stdout.getvalue().split("\n", 1)[1])
     real_which = chat_agent.shutil.which
@@ -153,15 +156,34 @@ def test_isolated_start_and_resume_supply_auth_only_over_private_rpc(tmp_path, m
         launches.append((command, kwargs))
         return process
     monkeypatch.setattr(chat_agent.subprocess, "Popen", launch)
-    session = chat_agent.CodexChatAgentSession.start(codex_bin="synthetic-codex", work_dir=workspace,
-        goal_id=None, objective="project", project_context=context, codex_home=home,
-        resume_thread_id="thread-loopx-chat" if resume else None, model="synthetic-model")
+    def start():
+        return chat_agent.CodexChatAgentSession.start(codex_bin="synthetic-codex", work_dir=workspace,
+            goal_id=None, objective="project", project_context=context, codex_home=home,
+            resume_thread_id="thread-loopx-chat" if resume else None, model="synthetic-model")
+    if native_provider != "loopx_host_chatgpt_http":
+        collision = native_provider == "collision"
+        with pytest.raises(chat_agent.CodexChatAgentError, match=(
+                "conflicts with project configuration" if collision else "requested conversation provider")):
+            start()
+        assert process.poll() is not None
+        packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        assert not any(p.get("method") == "turn/start" for p in packets)
+        assert sum(p.get("method") in {"thread/start", "thread/resume"} for p in packets) == (0 if collision else 1)
+        return
+    session = start()
     try:
         packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
         login = next(p for p in packets if p["method"] == "account/login/start")
         assert login["params"] == {"type": "chatgptAuthTokens", "accessToken": "synthetic-access", "chatgptAccountId": "synthetic-account"}
         thread = next(p for p in packets if p["method"] in {"thread/start", "thread/resume"})
         assert thread["params"]["permissions"] == profile
+        assert thread["params"]["modelProvider"] == "loopx_host_chatgpt_http"
+        provider = thread["params"]["config"]["model_providers"]["loopx_host_chatgpt_http"]
+        assert provider == {"name": "LoopX host ChatGPT HTTP", "wire_api": "responses",
+                            "requires_openai_auth": True, "supports_websockets": False}
+        assert thread["params"]["config"]["permissions"][profile]["network"]["enabled"] is False
+        assert thread["params"]["config"]["skills"]["include_instructions"] is False
+        assert "LOOPX_CHAT_CODEX_MODEL_PROVIDER" not in launches[0][1]["env"]
         assert "synthetic-access" not in str(thread)
         assert "synthetic-access" not in str(launches)
         isolated = Path(launches[0][1]["env"]["CODEX_HOME"])

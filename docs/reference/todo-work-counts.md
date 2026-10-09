@@ -278,3 +278,33 @@ Agent 的 gate 仍被原有范围规则排除。保留时间偏移、微秒、�
 公开 deadline 格式、展示预算、provider 默认与既有数据不变，不增加 RPC 或迁移要求。
 下游仍按当前时刻校验投影；旧／过期摘要的 Python 兼容逻辑、有界 resume/handoff
 来源和实际 App 等待态验收继续保留，不能据此宣称全部退役或 Goal 收尾。
+
+## Due Monitor selection before display limits
+
+Timed quota planning selects already-due Monitors by claim bucket, profile rank
+and priority, then earliest due instant, then display index with stable ties.
+Eligibility and capability checks precede this order; future, expired, blocked,
+excluded and other-Agent work cannot gain execution through an older timestamp.
+Watch-only and ordinary due lanes retain the same ordering within their subsets.
+General Todo display and advancement order are unchanged.
+
+This intentionally replaces index-first selection among equally ranked due
+Monitors. A frequently recurring low-index task can no longer hide an older due
+task behind quota's one-row display cap. Legacy, File and SQLite source records
+use the timed planning adapter; old untimed planning wire requests retain their
+previous order. There is no new setting, RPC, stored field or provider migration.
+
+An exact Monitor poll still settles only its bound Turn. Replaying that Turn
+does not select another Monitor, spend quota or advance an unobserved deadline.
+A newly admitted Turn can select the next eligible task. This corrects selection
+starvation, not host capacity: it does not shorten an owner's cadence floor or
+guarantee every periodic duty fits into one wake. Hosts must use their existing
+fresh-Turn admission contract; this change does not authorize a same-wake loop.
+Frontend and Lark retain the existing Core fields and display limits.
+
+到期 Monitor 先通过归属、排除、能力与可执行检查，再按 claim 分组、profile、
+优先级排序；同等级中按最早到期时刻、展示 index 和稳定次序选择，最后裁剪展示。
+这有意替代同等级的 index 优先：高频前列任务不能一直挤占较早到期的任务。
+普通 Todo 展示、推进任务顺序、持久数据和宿主周期不变。旧 Turn 的成功观察仍只
+结算自身，重放不得选择其它 Monitor、重复扣额或推进未观察的周期；下一合法 Turn
+才能选择下一项。消除选择饥饿不等于满足全部周期容量，也不授权同次唤醒自行循环。

@@ -1,6 +1,6 @@
 ---
 name: loopx-benchmark
-description: "Use when acting as the operator or post-run analyst of a LoopX-managed benchmark experiment through benchmark-toolkit: select or launch runs, maintain experiment-board rows, qualify integrity, or analyze matched comparisons and case insights. Solving an assigned benchmark task under an existing runner does not by itself select this skill. Excludes casual benchmark discussion and ordinary software microbenchmarks."
+description: "Operate or analyze LoopX-managed benchmark experiments through benchmark-toolkit, including trajectory-based effectiveness and efficiency diagnosis, matched comparisons, run selection and integrity. Solving an assigned task under an existing runner does not by itself select this skill. Excludes casual benchmark discussion and ordinary software microbenchmarks."
 ---
 
 # LoopX Benchmark Workflow
@@ -12,9 +12,10 @@ integrity boundaries. This packaged skill is its task-triggered Agent playbook.
 An assigned solver follows its task instructions and current execution contract.
 The words “benchmark”, “evaluation”, or “submission” in that task do not grant
 the operator role or require experiment-board discovery. Use this workflow when
-the requested work actually includes run management or post-run analysis; an
-explicit request to use the skill still applies. Keep the solver's task-local
-validation and authorized submission path distinct from experiment management.
+the requested work actually includes run management, analysis of an active run,
+or post-run analysis; an explicit request to use the skill still applies. Keep
+the solver's task-local validation and authorized submission path distinct from
+experiment management.
 
 The capability is catalog-ready without a per-Goal enable switch. Installing
 this skill does not grant runner, shell, network, credential, private-evidence,
@@ -81,11 +82,48 @@ explicitly exploratory and retain the relevant limitations and counterexamples.
 - **Monitor an active campaign:** read the board and runtime-owned projections;
   update only on material run transitions. Do not manufacture progress from a
   timer tick.
+- **Diagnose effectiveness or trajectory efficiency:** follow the analysis below.
+  For active runs, use authorized solver/runtime observations and released score
+  projections; keep findings provisional and hidden evaluator evidence closed.
 - **Analyze a terminal run:** wait until solving is terminal and scoring is
   complete before reading hidden evaluator evidence or writing a case insight.
 
 For a generic library microbenchmark or an eval with no LoopX Goal/board, use
 the task's normal tools instead of imposing this workflow.
+
+## Diagnose effectiveness and trajectory efficiency
+
+Start with the task's real success criterion and evaluator behavior, then explain
+which work produced useful progress. Keep score quality and operational efficiency
+separate: fewer bytes, calls or tokens are not proof of a better task outcome.
+
+1. Read the board and align source, model, task, budget, feedback mode, sampling,
+   evaluator and concurrency. Compare common elapsed windows and label unmatched
+   history as diagnostic. Missing or invalid scores remain distinct from zero;
+   use the task's native ranking when identifying a retained best result.
+2. Inspect representative early, middle and late trajectory segments, including
+   stalls and counterexamples. Record the selection rule and sample denominator.
+   Connect actions to changed artifacts, validation and scored snapshots; count
+   planning, control reads, tool recovery and actual task work separately. Use
+   hidden task/evaluator evidence only after solver and scoring are terminal.
+3. Separate candidate causes: task difficulty or strategy, model token throughput,
+   control interaction overhead, tool failures, and evaluator/feedback delay.
+   Align artifact capture, grading and delivery times with solver activity.
+   Compare both wall time and useful progress per token/active work interval where
+   measured; a score slope or a token-rate difference alone cannot identify the
+   cause. Preserve unknowns when telemetry is absent.
+4. Turn the strongest supported cause into a small discriminating intervention
+   or ablation within existing authority. Reuse current qualified baselines and
+   change one relevant factor where possible; disclose unavoidable confounds.
+   Prioritize expected task benefit and technical depth over packet size or PR
+   count. If repeated reads are wasteful, verify the consumer's obligations before
+   reducing them; a planning or recovery change must still lead to useful work.
+5. Report observations, causal hypotheses and validated effects distinctly,
+   including regressions and remaining uncertainty. Use
+   [loopx-performance-diagnosis](../loopx-performance-diagnosis/SKILL.md) only for
+   an evidenced owned-process cost; return its measurements to this task-level
+   analysis. Do not substitute profiler hotspots for outcome evidence or require
+   profiling to inspect duplicate content and unnecessary interactions.
 
 ## Experiment sequence
 
@@ -181,9 +219,10 @@ the task's normal tools instead of imposing this workflow.
   confirmed disclosure plus causal use disqualifies the score.
 - `classify-artifacts` classifies benchmark artifact paths without reading them;
   use it before reading or publishing any candidate artifact.
-- The solver lane must not read hidden tests, verifier sources, gold answers, or
-  official feedback during the solving phase. The post-run analyst may read full
-  private evidence only after the solver is terminal and scoring is complete.
+- The solver lane must not read hidden tests, verifier sources or gold answers.
+  During solving, official feedback is limited to what the declared run protocol
+  releases to that solver. The post-run analyst may read full private evidence
+  only after the solver is terminal and scoring is complete.
 - `capability bind` selects an external provider implementation for a Goal; it
   is not the activation mechanism for this builtin capability. Todo
   `required_capability` fields remain runtime prerequisites, not product

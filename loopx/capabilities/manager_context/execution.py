@@ -167,6 +167,7 @@ def handoff_response(
     response: dict[str, Any],
     source_authorized: Callable[[], bool],
     execution_allowed: Callable[[], bool],
+    source_store=None,
 ) -> dict[str, Any]:
     """Present context delivery and separately admitted execution on one path."""
     from . import deliver
@@ -175,7 +176,7 @@ def handoff_response(
         if not source_authorized():
             raise ValueError("manager connection authority is no longer available")
         receipt = deliver(root, registry, session=session, turn=turn,
-                          request=response["context_handoff"])
+                          request=response["context_handoff"], source_store=source_store)
         execution = dispatch(root, registry, session=session, turn=turn,
                              request=response["context_handoff"], receipt=receipt,
                              execution_allowed=execution_allowed)

@@ -8,15 +8,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ...history import load_registry, validate_goal_id_path_segment
+from ...history import validate_goal_id_path_segment
+from ...file_lock import exclusive_file_lock
 from ...registry import read_json, registry_goals
+from ...control_plane.projects.registry_codec import load_registry
 from .context import build_change_quality_repository_context
 from .policy import change_quality_goal_policy
 from .result import (
     CHANGE_QUALITY_RESULT_SCHEMA_VERSION,
     REVIEW_LENSES,
     SIMPLIFY_GUARDRAIL_LENS_IDS,
-    change_quality_result_decision,
     derive_change_quality_guardrails,
     normalize_change_quality_result,
 )
@@ -135,7 +136,7 @@ def _receipt_path(
     )
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -144,14 +145,30 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     )
     temporary_path = Path(temporary)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _write_receipt(path: Path, receipt: dict[str, Any]) -> Path | None:
+    # Keep original failures (including malformed bytes) before replacing the
+    # current-scope read pointer. Concurrent writers archive under one lock.
+    with exclusive_file_lock(path):
+        previous = path.read_bytes() if path.exists() else None
+        history = None
+        if previous is not None:
+            history = path.parent / "history" / (
+                f"{path.stem}-{hashlib.sha256(previous).hexdigest()}.json"
+            )
+            if not history.exists():
+                _atomic_write_bytes(history, previous)
+        content = (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        _atomic_write_bytes(path, content)
+    return history
 
 
 def build_change_quality_prepare_packet(
@@ -206,6 +223,9 @@ def build_change_quality_prepare_packet(
                 "LoopX derives guardrail status from sparse risks[] and validation[]; the Agent does not author guardrail states.",
                 "Use blocker only for concrete correctness, security, privacy, contract, or required-validation failures.",
                 "Use repository-native tests, linters, type checkers, and build tools as language-specific oracles.",
+                *([
+                    "Failed validators remain failed. Only optional validation may be nonblocking through exact-scope change_quality_baseline_attribution_v0: independent immutable base/head runs of the same command, identical full failure-signature/fixture/environment digests, causal analysis and passed required validators covering all changed paths. Required checks, frozen criteria, missing evidence and introduced or worsened failures stay blocking. Execution and causal evidence must be independently reviewed; shape checks do not prove a run occurred."
+                ] if policy["enabled"] else []),
                 (
                     "One bounded safe-fix pass is allowed; rerun prepare after edits and review the final scope."
                     if policy["safe_fix"]
@@ -279,9 +299,11 @@ def record_change_quality_receipt(
         safe_fix_allowed=bool(policy["safe_fix"]),
         expected_changed_files=list(scope["changed_files"]),
         expected_instruction_refs=list(repository_context["instruction_refs"]),
+        expected_scope=scope,
     )
-    guardrails = derive_change_quality_guardrails(result)
-    decision, unresolved_blockers = change_quality_result_decision(result)
+    guardrails = derive_change_quality_guardrails(result, expected_scope=scope)
+    unresolved_blockers = list(guardrails["blocking_codes"])
+    decision = "fail" if unresolved_blockers else "pass"
     receipt_id = f"cqr_{str(scope['scope_fingerprint'])[:20]}"
     receipt = {
         "schema_version": CHANGE_QUALITY_RECEIPT_SCHEMA_VERSION,
@@ -301,8 +323,7 @@ def record_change_quality_receipt(
         repo_path=repo_path,
         scope_fingerprint=str(scope["scope_fingerprint"]),
     )
-    if execute:
-        _atomic_write_json(path, receipt)
+    history = _write_receipt(path, receipt) if execute else None
     return {
         "ok": decision == "pass",
         "schema_version": CHANGE_QUALITY_RECEIPT_SCHEMA_VERSION,
@@ -314,6 +335,7 @@ def record_change_quality_receipt(
         "receipt_path": str(path),
         "scope_fingerprint": scope["scope_fingerprint"],
         "receipt": receipt,
+        **({"previous_receipt_path": str(history)} if history is not None else {}),
     }
 
 
@@ -324,6 +346,7 @@ def _stored_receipt_is_valid(
     safe_fix_allowed: bool,
     changed_files: list[str],
     instruction_refs: list[str],
+    scope: dict[str, Any],
 ) -> bool:
     if not (
         receipt
@@ -344,14 +367,15 @@ def _stored_receipt_is_valid(
             safe_fix_allowed=safe_fix_allowed,
             expected_changed_files=changed_files,
             expected_instruction_refs=instruction_refs,
+            expected_scope=scope,
         )
-        guardrails = derive_change_quality_guardrails(normalized)
-        decision, unresolved = change_quality_result_decision(normalized)
+        guardrails = derive_change_quality_guardrails(normalized, expected_scope=scope)
+        unresolved = list(guardrails["blocking_codes"])
         if receipt.get("guardrails") != guardrails:
             return False
     except (TypeError, ValueError):
         return False
-    return decision == "pass" and receipt.get("unresolved_blockers") == unresolved
+    return not unresolved and receipt.get("unresolved_blockers") == unresolved
 
 
 def _read_first_receipt(paths: list[Path]) -> dict[str, Any] | None:
@@ -470,6 +494,7 @@ def verify_change_quality_receipt(
         safe_fix_allowed=bool(policy["safe_fix"]),
         changed_files=list(scope["changed_files"]),
         instruction_refs=list(repository_context["instruction_refs"]),
+        scope=scope,
     )
     previous_receipt = None
     if receipt_valid:

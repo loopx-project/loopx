@@ -183,9 +183,17 @@ def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent
             "s1": {"round_id": "auto-1", "source_sha256": digest},
             "s2": {"round_id": "auto-2", "source_sha256": digest},
             "s3": {"round_id": "auto-3", "source_sha256": digest}})
+        sampler.epoch = "synthetic-epoch"
+        sampler.evaluators = {"fixture": {"native_source_sha256": "b" * 64,
+                                          "task_spec_sha256": "c" * 64}}
         publisher = BestOnlyFeedback(trial=tmp_path, run_id="fixture", task_id="fixture",
             direction="maximize", judge_url="http://127.0.0.1:1", admin_secret="synthetic",
             logger=logging.getLogger("source-permission-smoke"), sampler=sampler, selection=selection)
+        # This fixture isolates real Docker source permissions. The next test
+        # qualifies the unpatched official HTTP transport and Codex delivery.
+        publisher._official_result = lambda entry: dict(submission_id=entry["submission_id"],
+            status="completed", error=None, report=dict(task_id="fixture", valid=True,
+                submission_id=entry["submission_id"], score=entry["score"], pass_rate=entry["pass_rate"]))
         backend = DockerBackend()
         handle = backend.create_container(agent_image.id, "source-smoke-" + uuid.uuid4().hex[:10])
         backend.start_container(handle)
@@ -240,7 +248,7 @@ def test_private_host_checkpoint_is_readable_before_notification(tmp_path, agent
         os.umask(previous_umask)
 
 
-def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, monkeypatch):
+def test_native_judge_to_codex_complete_official_result_on_improvement(tmp_path, agent_image, monkeypatch):
     import docker
     import requests
     import uvicorn
@@ -314,8 +322,18 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, mo
                                      blind_api_endpoint=("192.0.2.10", 443), feedback=publisher)
     handle, isolation = None, None
     try:
-        handle = backend.create_container(agent_image.id, name, environment={
-            "SFORGE_TOKEN": token, "SFORGE_JUDGE_URL": url})
+        payload = str(Path(os.environ['LOOPX_TEST_CODEX_DIR']).resolve())
+        # The real worker/backend owns creation; only the offline Codex binary
+        # fixture is mounted in this disposable qualification container.
+        create = backend.client.api.create_container
+        def with_codex(*args, **kwargs):
+            config = kwargs.setdefault('host_config', {})
+            config['Binds'] = [*config.get('Binds', []), f'{payload}:/opt/codex-bin:ro']
+            return create(*args, **kwargs)
+        with monkeypatch.context() as mounted:
+            mounted.setattr(backend.client.api, 'create_container', with_codex)
+            handle = backend.create_container(agent_image.id, name, environment={
+                "SFORGE_TOKEN": token, "SFORGE_JUDGE_URL": url})
         backend.start_container(handle)
         gateway = backend.get_container_gateway_ip(handle)
         # A real listening judge is reachable before policy and denied afterward.
@@ -359,19 +377,35 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, mo
         submit(1)
         wait_for(lambda: publisher.score == 1)
         assert read_packet()["latest"] is None
-        winning_round = submit(3)
-        wait_for(lambda: publisher.notifications == 1)
+        delivered = []
+        def notify(n):
+            delivered.append(submit(n + 1))
+            wait_for(lambda: publisher.notifications == n - 1)
+        def allow_api(api_port):
+            nonlocal isolation
+            isolation.cleanup()
+            backend.blind_api_endpoint = (gateway, api_port)
+            isolation = backend.create_network_isolation(handle, [
+                AllowedEndpoint(ip=gateway, port=api_port, hostname='synthetic-responses'),
+                AllowedEndpoint(ip=gateway, port=port, hostname='judge'),
+            ], logger)
+            isolation.apply()
+            assert backend.exec_run(handle, connect).exit_code != 0
+        codex_hook_journey(tmp_path, handle.raw, notify, allow_api)
         packet = read_packet()
-        assert packet["latest"]["snapshot_id"] == winning_round
-        assert "JUDGE_DIAGNOSTIC_SENTINEL" not in json.dumps(packet)
+        assert packet["latest"]["snapshot_id"] == delivered[-1]
+        assert "JUDGE_DIAGNOSTIC_SENTINEL" in json.dumps(packet)
+        official = session.get(url + "/api/v1/result/" + packet["latest"]["official_result"]["submission_id"], timeout=5).json()
+        assert packet["latest"]["official_result"] == official
+        assert packet["latest"]["evaluator"] == sampler.evaluators["fixture"]
         source = backend.exec_run(handle, ["tar", "-xzOf", packet["latest"]["source_archive"], "candidate.json"])
-        assert source.exit_code == 0 and json.loads(source.output) == {"value": 3}
+        assert source.exit_code == 0 and json.loads(source.output) == {"value": 4}
         digest = backend.exec_run(handle, ["sha256sum", packet["latest"]["source_archive"]])
         assert digest.output.split()[0] == packet["latest"]["source_sha256"]
         submit(2)
         # Observe a full publisher poll after the regression completes.
         time.sleep(11)
-        assert read_packet() == packet and publisher.notifications == 1
+        assert read_packet() == packet and publisher.notifications == 2
         assert publisher.errors == 0
         backend.start_feedback(handle)
         assert read_packet() == packet  # Native resume does not erase the signal.
@@ -451,7 +485,7 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, mo
         # These direct service probes are deliberately not sampler-admitted;
         # even an extra native history row cannot alter the online incumbent.
         time.sleep(11)
-        assert publisher.notifications == 1 and publisher.score == 3
+        assert publisher.notifications == 2 and publisher.score == 4
         # Exercise the real periodic capture loop against the live workspace.
         task = app.state.judge.tasks["fixture"]
         write = backend.exec_run(handle, ["python3", "-c",
@@ -503,9 +537,9 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, mo
             isolated.setattr(Path, "home", lambda: tmp_path / "isolated-home")
             with cohort_lock():
                 scored = score_captures(trial, app.state.judge.tasks["fixture"], config, app.state.judge.backend)
-        assert scored["offline_scoring_complete"] and scored["evaluated_captures"] == 5
+        assert scored["offline_scoring_complete"] and scored["evaluated_captures"] == 6
         assert scored["best_score"] == 10
-        assert publisher.score == 3 and publisher.notifications == 1
+        assert publisher.score == 4 and publisher.notifications == 2
     finally:
         finish_held_grade.set()
         publisher.close()
@@ -519,33 +553,20 @@ def test_native_judge_to_isolated_worker_positive_only(tmp_path, agent_image, mo
         client.images.remove(judge_tag)
 
 
-def test_codex_hook_enters_next_model_request_and_resume(tmp_path, agent_image):
+def codex_hook_journey(tmp_path, worker, notify, allow_api):
     """Real staged Codex, system hook and Docker; synthetic Responses, no paid model."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    import docker
     from benchmark.edgebench import feedback_hook
     from benchmark.runtime.codex import Execution, prepare_codex_home
 
-    payload = Path(os.environ['LOOPX_TEST_CODEX_DIR']).resolve()
     requests = []
-    client = docker.from_env()
-    worker = client.containers.run(agent_image.id, ['sleep', '300'], detach=True,
-        volumes={str(payload): {'bind': '/opt/codex-bin', 'mode': 'ro'}})
     root = '/opt/edgebench-feedback'
-    digest = 'a' * 64
 
     def write(path, data):
         result = worker.exec_run(['python3', '-c',
             'import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.parent.mkdir(parents=True,exist_ok=True);'
             'p.write_text(sys.argv[2]);p.chmod(0o644)', path, data], user='root')
         assert result.exit_code == 0, result.output
-
-    def notify(n):
-        archive = f'{root}/auto-{n}-{digest}.tar.gz'
-        write(archive, 'synthetic source')
-        write(f'{root}/latest.json', json.dumps({'schema_version': 'edgebench_best_feedback_v1',
-            'latest': {'kind': 'new_best', 'snapshot_id': f'auto-{n}', 'source_sha256': digest,
-                       'source_archive': archive}}))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -583,7 +604,7 @@ def test_codex_hook_enters_next_model_request_and_resume(tmp_path, agent_image):
     try:
         worker.reload()
         gateway = next(iter(worker.attrs['NetworkSettings']['Networks'].values()))['Gateway']
-        write(f'{root}/latest.json', json.dumps({'schema_version': 'edgebench_best_feedback_v1', 'latest': None}))
+        allow_api(server.server_port)
         write(f'{root}/hook.py', Path(feedback_hook.__file__).read_text())
         assert worker.exec_run(['sh', '-c', f'chmod 0600 {root}/hook.py; umask 077; '
             f'python3 {root}/hook.py --install'], user='root').exit_code == 0
@@ -613,8 +634,19 @@ def test_codex_hook_enters_next_model_request_and_resume(tmp_path, agent_image):
                                  environment=env, workdir='/tmp')
         assert result.exit_code == 0, result.output.decode()[-5000:]
         assert len(requests) == 3 and 'auto-3' in json.dumps(requests[-1]['input'])
-        assert 'PRIVATE_SCORE' not in json.dumps(requests)
+        for req, score in ((requests[1], 3), (requests[2], 4)):
+            context = json.dumps(req['input'])
+            assert 'JUDGE_DIAGNOSTIC_SENTINEL' in context
+            # Decode the hook's complete API body from the actual request text.
+            messages = [part['text'] for item in req['input'] if item.get('type') == 'message'
+                        for part in item.get('content', []) if 'text' in part]
+            results = [json.loads(line) for text in messages if 'EdgeBench new-best feedback' in text
+                       for line in text.splitlines() if line.startswith('{"error"')]
+            # Resume also carries prior conversation messages. Its newest
+            # delivery must bind to the new winning source, not the old report.
+            assert results[-1]['report']['score'] == score
+        # Host-only admission credentials never enter model input.
+        assert 'admin_secret' not in json.dumps(requests)
     finally:
         server.shutdown()
         thread.join(timeout=5)
-        worker.remove(force=True)

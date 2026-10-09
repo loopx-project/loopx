@@ -122,6 +122,10 @@ Acceptance 证据应来自能直接证明结果的对象：
 - assistant 的完成声明；
 - 没有 acceptance evidence 的 `no_followup`。
 
+Checkpoint 证明的对象必须明确：来源与阶段一致性不等于业务结论正确，
+续跑 journal 也不等于回滚 workspace。已有机制与剩余边界见
+[Agent 失败控制与恢复](../../architecture/agent-failure-containment-and-recovery.zh-CN.md)。
+
 一个好的 evidence ref 足够紧凑，可以恢复判断，又不复制 raw log：
 
 ```text

@@ -417,10 +417,21 @@ HTTP import, process restart, original-operation recovery, later writes and
 canonical prose checks use the same oracle with both capture modules present
 and physically absent. Project-relative routes, explicit override precedence,
 source identity, maintenance, Todo/handoff, JSON type and failed-write protections
-remain intact. Pending historical outbox disposition and independent complete
-Goal recovery still need their original acceptance. This stage does not qualify
-supported old-writer retirement,
+remain intact. Historical outbox disposition and independent data/history
+recovery retain their separate qualifications; authorized reactivation and
+remaining App writer callers still need their original acceptance. This stage
+does not qualify supported old-writer retirement,
 release default or historical support cutoff.
+Source checks accept registered runtime directory aliases only when both paths
+resolve to the same physical directory. Retargeting an alias after preview still
+rejects before the import fence; original source observations are not rewritten.
+App backup IO resolves its configured registry path to the same physical filename
+used by the source witness, including registries outside conventional Goal folders.
+
+来源校验只接受指向同一实际目录的 runtime 路径别名。预览后将别名改指向另一个
+目录，仍在写入导入 fence 前拒绝；原来源观察不会被改写。
+App 备份使用与 source witness 一致的 registry 实际路径，也覆盖位于常规 Goal
+目录之外的 registry。
 
 Deliver complete, reversible PR packages in this order:
 

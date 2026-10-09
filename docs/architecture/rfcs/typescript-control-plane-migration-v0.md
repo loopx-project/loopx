@@ -2167,6 +2167,15 @@ actual callers have moved. [Operator contract](../../reference/reviewed-coordina
 
 ### Todo summary decision ownership
 
+S7 due-Monitor fairness uses this same typed planning owner: after eligibility,
+claim/profile/priority ranks remain authoritative, while due time now precedes
+display index for equally ranked timed work. Selection precedes the one-row
+transport cap; general presentation and untimed wire compatibility remain.
+Real legacy/File/SQLite CLI journeys cover successive Monitor selection, exact
+poll replay and no extra debit. Per-Turn settlement and owner cadence remain;
+this closes index-based selection starvation, not multi-duty host capacity or
+same-wake continuation. See [the caller contract](../../reference/todo-work-counts.md#due-monitor-selection-before-display-limits).
+
 Adjacent deadline correction: projected Agent/User frontier waits must compare
 UTC instants rather than ISO spelling, preserving the pre-compaction evidence
 and three live callers (quota compaction, monitor wait, scheduler continuation).

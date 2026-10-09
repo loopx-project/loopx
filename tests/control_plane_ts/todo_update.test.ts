@@ -338,6 +338,81 @@ test("user-action copy edits never bypass retained active, expired or released l
   }
 });
 
+test("bound user-action metadata consumes a current lease proof without a claim or lease mutation", async () => {
+  const lease = {todo_id: "todo_a", owner: "agent-a", status: "active", idempotency_key: "copy-key",
+    version: 2, lease_epoch: 1, write_scopes: [], expires_at: "2026-09-06T00:00:00Z"};
+  const {store, request} = await boundUserAction({}, [lease]);
+  const before = await store.loadAuthority();
+  if (before.status !== "loaded") assert.fail("missing fixture");
+  const edit = {...request, expected_provider_revision: before.provider_revision,
+    lease_idempotency_key: "copy-key", lease_expected_version: 2};
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit, dry_run: true})).status, "planned");
+  assert.deepEqual(await store.loadAuthority(), before);
+  const applied = await executeCoordinationTodoUpdate(store, edit);
+  assert.equal(applied.status, "applied", JSON.stringify(applied));
+  const after = await store.loadAuthority();
+  if (after.status !== "loaded") assert.fail("missing fixture");
+  const updated = (after.head.todos as Record<string, unknown>[])[0]!;
+  const original = (before.head.todos as Record<string, unknown>[])[0]!;
+  assert.equal(updated.note, "Still awaits the user");
+  assert.equal(updated.evidence, "Synthetic disposition receipt");
+  for (const field of ["role", "task_class", "status", "done", "bound_agent", "claimed_by", "created_by"]) {
+    assert.equal(updated[field], original[field]);
+  }
+  assert.deepEqual(after.head.leases, before.head.leases);
+  assert.equal((await executeCoordinationTodoUpdate(store, edit)).status, "replayed");
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit, patch: {note: "Changed retry"}})).reason_code,
+    "coordination_operation_identity_mismatch");
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit, operation_id: "stale-copy"})).reason_code,
+    "provider_revision_mismatch");
+  assert.deepEqual(await store.loadAuthority(), after);
+});
+
+test("a bound user-action lease proof authorizes copy only and retains all execution fences", async () => {
+  const cases: {facts?: Record<string, unknown>; lease?: Record<string, unknown>;
+    input?: Partial<CoordinationTodoUpdateInput>}[] = [
+    {input: {actor_agent_id: "agent-b"}}, {input: {actor_agent_id: null}},
+    {facts: {excluded_agents: ["agent-a"]}}, {facts: {bound_agent: null}},
+    {facts: {task_class: "user_gate"}}, {facts: {status: "blocked"}},
+    {facts: {claimed_by: "agent-b"}}, {lease: {owner: "agent-b"}},
+    {lease: {status: "released"}}, {lease: {expires_at: "2026-09-05T22:00:00Z"}},
+    {input: {lease_idempotency_key: "wrong-key"}}, {input: {lease_expected_version: 1}},
+    {input: {lease_expected_version: null}},
+    {input: {planning_intent: {status: "blocked"}}},
+    {input: {planning_intent: {required_capabilities: ["shell"]}}},
+    {input: {planning_intent: {task_class: "user_gate"}}},
+    {input: {planning_intent: {bound_agent: "agent-b"}}},
+    {input: {planning_intent: {successor_todo_ids: ["todo_b"]}}},
+  ];
+  for (const entry of cases) {
+    const lease = {todo_id: "todo_a", owner: "agent-a", status: "active", idempotency_key: "copy-key",
+      version: 2, lease_epoch: 1, write_scopes: [], expires_at: "2026-09-06T00:00:00Z", ...entry.lease};
+    const {store, request} = await boundUserAction(entry.facts, [lease]);
+    const before = await store.loadAuthority();
+    const result = await executeCoordinationTodoUpdate(store, {...request,
+      lease_idempotency_key: "copy-key", lease_expected_version: 2, ...entry.input});
+    assert.equal(result.status, "failed", JSON.stringify({entry, result}));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+  }
+});
+
+test("bound user-action recovery points to its current proof or a fresh lease, never an agent claim", async () => {
+  for (const state of ["active", "released", "expired"] as const) {
+    const lease = {todo_id: "todo_a", owner: "agent-a", status: state === "released" ? "released" : "active",
+      idempotency_key: "copy-key", version: 2, lease_epoch: 1, write_scopes: [],
+      expires_at: state === "expired" ? "2026-09-05T22:00:00Z" : "2026-09-06T00:00:00Z"};
+    const {store, request} = await boundUserAction({}, [lease]);
+    const before = await store.loadAuthority();
+    const result = await executeCoordinationTodoUpdate(store, request);
+    assert.equal(result.status, "failed");
+    const recovery = result.recovery as Record<string, unknown>;
+    assert.equal(recovery.action, state === "active" ? "inspect_current_proof" : "acquire_fresh_lease");
+    assert.equal(recovery.execution_authority_granted, false);
+    assert.deepEqual(await store.loadAuthority(), before);
+  }
+});
+
 test("first validator binding requires explicit absence, current CAS and active lease", async () => {
   const {store, request} = await seeded();
   const loaded = await store.loadAuthority();
@@ -477,7 +552,7 @@ test("terminal or digest-stale Todo rejects validator revision without a receipt
   ]) {
     const {store, request} = await seeded({completion_validation_required: true,
       completion_validation_sha256: canonicalAuthoritySha256(declaration), ...overrides});
-    const edit = {...request, patch: {}, clear_fields: [], completion_validation_revision: {
+    const edit: CoordinationTodoUpdateInput = {...request, patch: {}, clear_fields: [], completion_validation_revision: {
       schema_version: "loopx_todo_completion_validation_revision_v0",
       expected_declaration_sha256: canonicalAuthoritySha256(declaration),
       declaration: {...declaration, validation_command_argv: ["false"]},

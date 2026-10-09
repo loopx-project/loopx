@@ -128,7 +128,7 @@ def _verification_exception_error(exc):
     return decision["error"] if decision["status"] == "explicit_unverified" else None
 
 
-def _register_unlocked(root, row, session, turn):
+def _register_unlocked(root, row, session, turn, *, source_store=None):
     value = {
         key: row[key]
         for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")
@@ -140,10 +140,22 @@ def _register_unlocked(root, row, session, turn):
         channel_id=session["channel_id"],
     )
     path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
+    source_root = None
+    if source_store is not None:
+        from ...control_plane.collaboration.source_chat_observation import trusted_source_chat_root
+
+        source_root = trusted_source_chat_root(source_store, value)
+        if source_root != str(root.resolve()):
+            value["source_chat_runtime_root"] = source_root
     if path.exists():
         old = _read(path)
-        if any(old.get(key) != value for key, value in value.items()):
+        if (any(old.get(key) != item for key, item in value.items()
+                if key != "source_chat_runtime_root")
+                or (source_root is not None and old.get("source_chat_runtime_root")
+                    not in (None, source_root))):
             raise ValueError("context return route conflict")
+        if "source_chat_runtime_root" in value and "source_chat_runtime_root" not in old:
+            _write(path, old | {"source_chat_runtime_root": source_root})
     else:
         _write(path, value | {"registered_at": _now()})
     saved = _read(path)
@@ -151,7 +163,7 @@ def _register_unlocked(root, row, session, turn):
         raise ValueError("context return route readback failed")
 
 
-def register(root, row, session, turn, *, scope=None):
+def register(root, row, session, turn, *, scope=None, source_store=None):
     """Called by trusted Chat delivery, never with model-authored routing."""
     path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
     with _request_lock(
@@ -160,7 +172,7 @@ def register(root, row, session, turn, *, scope=None):
         scope,
         path.with_suffix(".lock"),
     ):
-        _register_unlocked(root, row, session, turn)
+        _register_unlocked(root, row, session, turn, source_store=source_store)
 
 
 def _route(root, row, *, scope=None):
@@ -1345,6 +1357,58 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     return processed
 
 
+def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: False):
+    """Backfill legacy addresses from this host's committed, authorized sources.
+
+    Run once on host startup, including for already delivered returns. Never
+    scan other Chat roots or rewrite a pinned source, grant, result or receipt.
+    """
+    from ...control_plane.collaboration.source_chat_observation import observe_source_chat
+
+    if store.root.parent.resolve() == root.resolve():
+        return 0  # Co-located legacy routes already have the right address.
+    recovered = 0
+    for path in sorted((_root(root) / "roundtrips").glob("*.json")):
+        if cancelled():
+            break
+        try:
+            route = _read(path)
+            if route.get("kind") == "peer" or "source_chat_runtime_root" in route:
+                continue
+            if path.stem != route.get("request_id"):
+                continue
+            # Reject other hosts before taking a Goal lifetime lock or loading
+            # its registry. This is one startup pass, not a polling-time scan.
+            session, turn = observe_source_chat(store.root.parent, route)
+            with collaboration_goal_scope(
+                registry, goal_id=route["goal_id"], agents=(route["agent_id"],),
+                caller_goal_ref=route.get("goal_ref"), require_active=True,
+            ) as scope:
+                row = _entry(root, scope.goal_id, route["agent_id"], route["request_id"], scope=scope)
+                if any(route.get(key) != row.get(key) for key in
+                       ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
+                    continue
+                grant = (target_authority(root, session=session, turn=turn,
+                                          target={"goal_id": row["goal_id"], "agent_id": row["agent_id"]})
+                         if scope.exact else authority(root, registry, session, turn))
+                if {"goal_id": row["goal_id"], "agent_id": row["agent_id"]} not in grant["targets"]:
+                    continue
+                decide_collaboration_lifecycle(
+                    scope, operation="original_return_admit", record=row, route=route,
+                    initial_delivery=_original_delivery_facts(row, route, turn,
+                                                               source_id=grant.get("source_id")),
+                )
+                if cancelled():
+                    break
+                register(root, row, session, turn, scope=scope, source_store=store)
+                recovered += 1
+        except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected):
+            # Unrelated unavailable/revoked sources cannot starve valid ones.
+            # Preserve their records; peer admission still reports recovery.
+            continue
+    return recovered
+
+
 class ReturnService:
     """Cheap local receipt pump hosted by the existing Chat server."""
 
@@ -1359,6 +1423,10 @@ class ReturnService:
         self.thread.start()
 
     def run(self):
+        try:
+            recover_source_chat_provenance(*self.args[:3], cancelled=self.stop.is_set)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            logging.getLogger(__name__).warning("Source Chat provenance recovery unavailable")
         while not self.stop.is_set():
             try:
                 drain(*self.args, cancelled=self.stop.is_set)

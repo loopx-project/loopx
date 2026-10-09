@@ -10,6 +10,32 @@ from benchmark.edgebench.online_sampling import CaptureStatus, OnlineSampler
 from benchmark.edgebench.online_judge import resource_preflight
 
 
+@pytest.mark.parametrize("fault", [None, "missing", "task_spec_sha256", "judge_image_key",
+                                  "selection", "score_direction", "native_source_sha256"])
+def test_evaluator_configuration_is_qualified_before_solver_admission(tmp_path, fault):
+    from benchmark.edgebench.online_judge import POLICY
+    task = SimpleNamespace(task_id="fixture", judge_image_key="fixture-judge",
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize"))
+    queue = OnlineSampler(trial=tmp_path, task=task, interval=300, judge_url="http://localhost",
+        secret="synthetic", logger=logging.getLogger("test"), task_sha256="c" * 64)
+    evaluator = dict(native_source_sha256="b" * 64, task_spec_sha256="c" * 64,
+        judge_image_key="fixture-judge", selection="score_first", score_direction="maximize")
+    if fault not in (None, "missing"):
+        evaluator[fault] = "different"
+    admission = dict(policy=POLICY, epoch="epoch", max_running_per_run=1,
+                     evaluators={} if fault == "missing" else {"fixture": evaluator})
+    queue.session.get = lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: admission)
+    if fault:
+        with pytest.raises(ValueError, match="task configuration"):
+            queue.qualify()
+        assert not (queue.directory / "admission.json").exists()
+    else:
+        queue.qualify()
+        assert queue.evaluators == admission["evaluators"]
+        assert json.loads((queue.directory / "admission.json").read_text()) == admission
+
+
 def sampler(tmp_path):
     result = OnlineSampler(trial=tmp_path, task=None, interval=3600,
         judge_url="http://localhost", secret="synthetic", logger=logging.getLogger("test"))

@@ -24,6 +24,19 @@ export interface TaskLeaseProof {
   expected_version: number;
 }
 
+/** A reminder's bound actor owns copy edits, not an agent execution claim.
+ * This classifies normalized intent only; shared actor admission and the
+ * current lease/provider fences still decide whether an edit may commit. */
+export function isBoundUserActionMetadataUpdate(todo: JsonObject, input: CoordinationTodoUpdateInput): boolean {
+  return todo.role === "user" && todo.task_class === "user_action" &&
+    todo.status === "open" && todo.claimed_by == null &&
+    input.actor_agent_id !== null && todo.bound_agent === input.actor_agent_id &&
+    input.registered_agents.includes(input.actor_agent_id) &&
+    input.completion === undefined && input.completion_validation_revision === undefined &&
+    input.monitor_observation === undefined &&
+    Object.keys(input.planning_intent ?? {}).every(field => field === "evidence");
+}
+
 export function decodeTaskLeaseProof(value: unknown): TaskLeaseProof | null {
   if (value == null) return null;
   const proof = requireJsonObject(value, "lease_proof");
@@ -139,7 +152,7 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
     return {...base, action: "resolve_lifecycle_edit", reason_code: editRejection.code,
       reason: "This edit changes leased work requirements or status. Use the owning lifecycle transition; reacquiring a lease alone cannot authorize this metadata edit."};
   }
-  if (todo.claimed_by !== input.actor_agent_id) {
+  if (todo.claimed_by !== input.actor_agent_id && !isBoundUserActionMetadataUpdate(todo, input)) {
     return {...base, action: "reconcile_lease_owner",
       reason: "A leased update requires the actor to own the Todo claim. Reconcile ownership before acquiring execution authority."};
   }

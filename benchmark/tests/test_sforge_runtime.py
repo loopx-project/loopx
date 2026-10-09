@@ -142,6 +142,7 @@ def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monk
     else:
         worker.install_stop_hook(backend, None, tmp_path, None)
         assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback_delivery"] == "codex_hooks"
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback_payload"] == "official-result"
         assert json.loads((tmp_path / "worker-profile.json").read_text())["loopx_usage_ping_enabled"] is False
     assert len(ordinary_reads) == 1
 

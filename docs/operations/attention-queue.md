@@ -270,16 +270,24 @@ Text keeps the existing title/priority derivation.
 This corrects the human-facing obligation without claiming execution authority.
 It does not change status, binding, ownership, decision scope, work requirements
 or the original action's execution state. Cross-agent and excluded actors still
-refuse. User gates, unbound actions, agent Todos, retained leases (including
-expired/released history), and explicit lease proofs retain their ordinary
-admission. Completing an action uses its separate terminal lifecycle contract.
+refuse. A reminder with retained lease history requires the bound actor's
+current active lease key/version as well as provider CAS. An existing lease
+does not require or create an agent claim. Expired/released or incorrect proofs
+refuse; recovery points to inspection of a live proof or acquisition of a fresh
+lease, never claiming the user Todo. The edit neither renews nor releases the
+lease. A historical replay proves prior acceptance, not current authority.
+User gates, unbound actions, agent Todos and bundled non-copy edits retain
+their ordinary admission. Completing an action uses its separate terminal lifecycle contract.
 CLI and other transports share the canonical typed update owner; this rule
 does not activate a notification provider or prove that the reminder was sent.
 
 canonical `hard_lease` 下，尚无 claim 或租约历史的 OPEN `user_action` 可由精确绑定的
 注册 Agent 更新文案、note 和 evidence。更新复用 provider CAS 与操作幂等；不得借此
-改变生命周期、归属、执行要求或决策权限。其他角色、被排除角色、user gate、未绑定
-待办、agent Todo、历史租约及显式租约凭据仍执行原门禁。更新提醒不代表本人已执行，
+改变生命周期、归属、执行要求或决策权限。有租约历史时，同绑定角色必须提供当前有效
+租约的 key/version，并通过 provider CAS；无需、也不新增 agent claim。过期、released、
+错误凭据仍拒绝，恢复须检查当前凭据或取得新租约；更新不续租或释放，旧回执重放不授予
+当前权限。其他角色、被排除角色、user gate、未绑定待办、agent Todo 和非文案混合更新
+仍执行原门禁。更新提醒不代表本人已执行，
 也不证明通知送达。
 
 ## Boundary

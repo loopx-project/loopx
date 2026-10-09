@@ -18,6 +18,15 @@ from pathlib import Path
 from loopx.capabilities.benchmark_toolkit.experiment_board import (
     normalize_benchmark_experiment_board_row,
 )
+from .feedback_hook import FEEDBACK_PAYLOAD
+
+
+def _validate_feedback_payload(runner, profile):
+    payload = runner.get("feedback_payload")
+    if payload != profile.get("feedback_payload"):
+        raise ValueError("Settings profile disagrees with feedback payload")
+    if payload is not None and (payload != FEEDBACK_PAYLOAD or runner["feedback"] != "best-only"):
+        raise ValueError("Unsupported feedback payload for this mode")
 
 
 def digest(path: Path) -> str:
@@ -89,6 +98,7 @@ def _validate_run_data(row, config, summary, points):
         if config[key] != row[row_key]:
             raise ValueError(f"Settings identity mismatch: {key}")
     runner, profile = config["runner"], config["worker_profile"]
+    _validate_feedback_payload(runner, profile)
     if (
         runner["runner_commit"] != row["runner_revision"]
         or runner["model"] != row["model_id"]
@@ -204,6 +214,7 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
                 raise ValueError(f"Profile disagrees with runtime: {key}")
         if row.get("runner_revision") != receipt["runner_commit"]:
             raise ValueError("Board and runner revision disagree")
+        _validate_feedback_payload(receipt, profile)
         if number(final["best_score"]) != number(receipt["best_score"]):
             raise ValueError("Final and runtime scores disagree")
         score_entries = [
@@ -257,6 +268,11 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
                 "feedback",
             )
         }
+        # Old notification-only attempts retain absent/unknown payload metadata;
+        # never relabel them using today's default or operator-supplied settings.
+        if "feedback_payload" in receipt:
+            config["runner"]["feedback_payload"] = receipt["feedback_payload"]
+            config["worker_profile"]["feedback_payload"] = profile["feedback_payload"]
         row["status"], row["observed_at"] = "completed", observed_at
         row["metrics"]["best_score"] = {
             "value": final["best_score"],

@@ -102,6 +102,20 @@ def create_app(config, *, slots, reservation):
         raise ValueError("A matching capacity reservation is required")
     app = native_app(replace(config, judge_max_concurrent=slots, judge_max_pending=0))
     state = app.state.judge
+    # Bind disclosed results to the native implementation and task configuration
+    # loaded by this service. This is provenance, never a second score owner.
+    import sforge
+    source_root = Path(sforge.__file__).parent
+    source_digest = hashlib.sha256()
+    for path in sorted(source_root.rglob("*.py")):
+        source_digest.update(path.relative_to(source_root).as_posix().encode() + b"\0")
+        source_digest.update(hashlib.sha256(path.read_bytes()).digest())
+    evaluators = {task_id: dict(
+        native_source_sha256=source_digest.hexdigest(),
+        task_spec_sha256=hashlib.sha256((config.tasks_dir / f"{task_id}.json").read_bytes()).hexdigest(),
+        judge_image_key=task.judge_image_key, selection=task.judge.selection,
+        score_direction=task.judge.score_direction,
+    ) for task_id, task in state.tasks.items()}
     epoch = uuid.uuid4().hex
     lock = threading.Lock()
     runs, registrations, submissions, active = {}, {}, {}, {}
@@ -134,7 +148,7 @@ def create_app(config, *, slots, reservation):
         with lock:
             return dict(policy=POLICY, epoch=epoch, slots=slots, admitted=occupied_slots(),
                         registrations_total=len(runs), max_running_per_run=1,
-                        resource_reservation=reservation)
+                        resource_reservation=reservation, evaluators=evaluators)
 
     @app.post("/api/v1/register")
     def register(req: RegisterRequest):

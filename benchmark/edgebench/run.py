@@ -28,6 +28,7 @@ from benchmark.runtime.source import source_pins
 from benchmark.edgebench.prompts import blind_task_prompt, best_only_task_prompt
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
+from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
 
 def _observe_run(call):
@@ -176,6 +177,7 @@ def main(argv=None):
     if args.feedback == "best-only":
         sampler = OnlineSampler(trial=trial, task=task, interval=args.eval_interval,
             judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
+            task_sha256=hashlib.sha256(task_file.read_bytes()).hexdigest(),
             secret=get_admin_secret(args.log_dir), logger=logger)
         sampler.qualify()  # Fail before native registration, solver creation or token spend.
     feedback = (BestOnlyFeedback(
@@ -204,6 +206,8 @@ def main(argv=None):
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
         **({"online_admission_epoch": sampler.epoch, "offline_scoring_complete": False}
+           if sampler is not None else {}),
+        **({"feedback_payload": FEEDBACK_PAYLOAD, "evaluator": sampler.evaluators[args.task]}
            if sampler is not None else {}),
         **({"replan_after_effective_turns": agent.replan_after_turns}
            if agent.replan_after_turns is not None else {}),

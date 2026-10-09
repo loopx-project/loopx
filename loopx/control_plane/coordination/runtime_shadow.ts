@@ -2,7 +2,7 @@ import {verifyShadowRegistrySource, withShadowRegistrySource} from "./shadow_reg
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA, currentGraphTodoIds} from "./source_projection.ts";
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { open, readFile, readdir, lstat } from "node:fs/promises";
+import { open, readFile, readdir, lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -157,6 +157,19 @@ async function sourceLeaseBytes(path: string): Promise<Buffer> {
     return bytes;
   } finally { await handle.close(); }
 }
+async function sameSourceRuntimeRoot(registered: string, requested: string): Promise<boolean> {
+  if (registered === requested) return true;
+  // IO adapters resolve backup paths, while retained registry observations may
+  // name an OS or user-created alias. Admit only the same physical directory;
+  // a changed alias must still take the existing foreign-source rejection.
+  try {
+    const [source, target] = await Promise.all([realpath(registered), realpath(requested)]);
+    return source === target;
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
+  }
+}
 export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promise<void> {
   const snapshot = sourceSnapshot(request);
   await verifyShadowRegistrySource(snapshot);
@@ -164,7 +177,7 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     throw new ShadowManagementError("shadow_source_state_path_mismatch");
   }
   const registeredRoot = resolve(String(snapshot.registered_runtime_root));
-  if (registeredRoot !== request.runtime_root) {
+  if (!await sameSourceRuntimeRoot(registeredRoot, request.runtime_root)) {
     await requireShadowPrimaryWriteAllowed(registeredRoot, request.goal_id);
     const fence = await loadLegacyCoordinationWriterFence(registeredRoot, request.goal_id);
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);

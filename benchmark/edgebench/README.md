@@ -171,14 +171,17 @@ but short probes are not a prerequisite for running the intended protocol.
 `--feedback best-only` is now the default for **new attempts across all five
 workers**. This is an explicit protocol change from native, not a demonstrated
 score improvement. Existing trials and pinned study manifests keep their modes.
-Use `--feedback native` to retain the previous default or `--feedback blind` as
+Selected improvements now include the complete official result API response,
+rather than the earlier notification-only payload. This changes the new-run
+best-only treatment; old pinned attempts must keep their original protocol.
+Use `--feedback native` to retain agent-requested evaluation or `--feedback blind` as
 an evaluator-feedback-free control. Harbor is unchanged.
 
 | Mode | Agent-visible evaluator feedback | Evaluation access |
 | --- | --- | --- |
 | native | Exact score, pass rate, counts, summary, metrics and failed names; `--details` exposes per-check messages; `--list` shows active-submission history | Agent may submit within the native cooldown/budget; automatic samples are hidden |
 | blind | None; public task files, local tests and compiler feedback remain available | Host evaluates fixed automatic samples; agent has no judge route or credentials |
-| best-only | Latest strict improvement notification and the corresponding submitted-source checkpoint; no score, delta, diagnostics or negative-result status | Fixed capture cadence; one evaluator and latest pending capture per run; agent cannot request extra evaluations |
+| best-only | Latest strict improvement's complete official result API response and corresponding submitted-source checkpoint; baseline, ties, regressions and unsuccessful evaluations stay silent | Fixed capture cadence; one evaluator and latest pending capture per run; agent cannot request extra evaluations |
 
 Best-only supports non-game, offline tasks with `score_first`,
 `valid_then_score` or `pass_rate_first` selection, including maximizing and minimizing scores. It
@@ -199,7 +202,17 @@ a lost response cannot create duplicate evaluations. An unexpected judge restart
 holds that attempt for reconciliation instead of silently replaying it.
 
 The publisher accepts only that sampler's admitted submission/round identities
-and verifies the original source digest. Offline/history-only results cannot
+and verifies the original source digest. Before publication it fetches the
+selected submission's official result, verifies task/submission/score/pass-rate
+against native history, and checks the admission epoch and evaluator provenance.
+Provenance includes native Python source and task-specification digests, the judge
+image key, selection policy and score direction; the image key is not an immutable
+image-content attestation. Result-body digests bind hook delivery to that response.
+An unavailable or mismatched response preserves the incumbent for retry.
+The response is returned in full as provided by the native API, including any
+summary, metrics and diagnostics the task supplies. This does not expand access
+to raw judge output, hidden files, evaluator code or unrelated trials.
+Offline/history-only results cannot
 establish the baseline or change the online incumbent. The solver command's exit
 pauses capture/delivery; official outer resume reuses the same publisher and lane.
 After native worker cleanup, the host sends an epoch-bound release for the exact
@@ -249,7 +262,7 @@ archives retain their original permissions; evaluator and secret directories
 are not made public. The hook script and system hook configuration are also
 checked for ordinary-worker readability before handoff.
 
-All five workers receive the allowlisted notification directly through managed
+All five workers receive the source-bound official result directly through managed
 Codex `PostToolUse`, `SessionStart` and `UserPromptSubmit` hooks. A short synchronous
 reader adds `additionalContext` before the next model request, preserving the
 original tool result. It does not force a wake, interrupt active reasoning or
@@ -257,9 +270,11 @@ change Stop/continuation behavior. The official worker keeps its native Stop
 hook. Delivery is serialized and deduplicated per Codex session; a fresh session
 receives the latest checkpoint, while resume receives only a new one. The
 reader neither queries the evaluator nor interprets arbitrary packet prose.
+Official report text is evaluation data, not executable instructions or authority.
 
-This transport is qualified with staged Codex 0.160.0, the actual system hook in
-a disposable container and a synthetic Responses endpoint: a new result arriving
+Qualification uses a real native judge and publisher, staged Codex 0.160.0, the
+actual system hook in a disposable container and a synthetic Responses endpoint:
+a complete official result arriving
 during a tool call enters the next model request; a subsequent result enters a
 resumed request. Earlier Codex versions must be qualified before admission.
 Inspect session input and subsequent checkpoint adoption separately: injection
@@ -270,12 +285,37 @@ A notification looks like this (digest abbreviated for illustration):
 
 ```json
 {
-  "schema_version": "edgebench_best_feedback_v1",
+  "schema_version": "edgebench_best_feedback_v2",
   "latest": {
     "kind": "new_best",
     "snapshot_id": "auto-7",
     "source_sha256": "<SHA-256>",
     "source_archive": "/opt/edgebench-feedback/auto-7-<SHA-256>.tar.gz",
+    "run_id": "example-run",
+    "task_id": "example-task",
+    "online_epoch": "<judge-process-epoch>",
+    "evaluator": {
+      "native_source_sha256": "<SHA-256>",
+      "task_spec_sha256": "<SHA-256>",
+      "judge_image_key": "example.judge.task:version",
+      "selection": "score_first",
+      "score_direction": "maximize"
+    },
+    "result_sha256": "<SHA-256 of the canonical official_result JSON>",
+    "official_result": {
+      "submission_id": "example-submission",
+      "status": "completed",
+      "error": null,
+      "report": {
+        "task_id": "example-task",
+        "submission_id": "example-submission",
+        "valid": true,
+        "score": 3,
+        "pass_rate": 0.75,
+        "summary": "Task-provided official summary",
+        "metrics": {"coverage": 0.75}
+      }
+    },
     "message": "This evaluated snapshot strictly improved the task's native ranking among valid scored snapshots. It may differ from your current files; keep using local validation."
   }
 }
@@ -287,6 +327,8 @@ failures retry before committing an improvement. The host-only `best-only-host`
 artifacts record file publication and health; never mount or copy them into the
 worker. Worker-local session hook receipts under `/logs/agent/best-feedback-delivery`
 record emission, not model acknowledgement.
+Each hook reads the current packet while holding its session delivery lock, so a
+waiting reader cannot overwrite a newer delivery cursor and replay old feedback.
 Treat missing archive/delivery evidence as an unqualified treatment, not as a
 successful best-only trial. Public notifications do not include these errors.
 

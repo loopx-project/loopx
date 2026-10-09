@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from enum import StrEnum
@@ -29,7 +30,7 @@ class CaptureStatus(StrEnum):
 
 
 class OnlineSampler:
-    def __init__(self, *, trial, task, interval, judge_url, secret, logger):
+    def __init__(self, *, trial, task, interval, judge_url, secret, logger, task_sha256=None):
         self.trial, self.task, self.interval = trial, task, interval
         self.url, self.secret, self.logger = judge_url.rstrip("/"), secret, logger
         self.directory = trial / "online-captures"
@@ -44,6 +45,8 @@ class OnlineSampler:
         self.session.trust_env = False
         self.token = None
         self.epoch = None
+        self.evaluators = {}
+        self.task_sha256 = task_sha256
 
     def qualify(self):
         response = self.session.get(self.url + "/api/v1/best-only/admission",
@@ -53,6 +56,19 @@ class OnlineSampler:
         if value.get("policy") != POLICY or value.get("max_running_per_run") != 1 or not value.get("epoch"):
             raise ValueError("Best-only needs a capacity-reserved online judge")
         self.epoch = value["epoch"]
+        self.evaluators = value.get("evaluators", {})
+        if self.task is not None:
+            evaluator = self.evaluators.get(self.task.task_id, {})
+            expected = dict(judge_image_key=self.task.judge_image_key,
+                            selection=self.task.judge.selection,
+                            score_direction=self.task.judge.score_direction)
+            if self.task_sha256 is not None:
+                expected["task_spec_sha256"] = self.task_sha256
+            if (any(evaluator.get(key) != item for key, item in expected.items())
+                    or any(not isinstance(evaluator.get(key), str)
+                           or not re.fullmatch(r"[0-9a-f]{64}", evaluator[key])
+                           for key in ("native_source_sha256", "task_spec_sha256"))):
+                raise ValueError("Online evaluator differs from the admitted task configuration")
         (self.directory / "admission.json").write_text(json.dumps(value))
 
     def start(self, backend, handle, token):

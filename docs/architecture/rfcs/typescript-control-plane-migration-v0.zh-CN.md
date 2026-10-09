@@ -1587,6 +1587,13 @@ actual callers have moved. [Operator contract](../../reference/reviewed-coordina
 
 ### Todo 摘要决策收口
 
+S7 到期 Monitor 公平选择复用同一 typed planning owner：先筛选资格，保留
+claim/profile/priority 等级，再让同等级的到期时刻先于展示 index。先选择再按
+一项裁剪；一般展示与旧 untimed wire 兼容不变。真实 legacy/File/SQLite CLI
+覆盖连续 Monitor 选择、精确 poll 重放与无额外扣额。保留逐 Turn 结算和所有者
+周期，只关闭 index 导致的选择饥饿，不宣称多职责宿主容量或同次唤醒接续已完成。
+见[调用契约](../../reference/todo-work-counts.md#due-monitor-selection-before-display-limits)。
+
 相邻截止点修复：Agent／User frontier 等待必须比较 UTC 时刻，保留裁剪前证据和
 quota 压缩、Monitor 等待、scheduler 接续三个真实调用方。此前独立 TS 读取虽保留
 语义，却让实测 warm scheduler 消费者更慢。现在复用既有 quota planning 批次，

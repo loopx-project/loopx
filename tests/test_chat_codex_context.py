@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.capabilities.native_chat.codex_context import codex_home, disable_mcp_servers, process_environment
+from loopx.capabilities.native_chat.codex_context import codex_home, disable_mcp_servers, process_environment, shared_chatgpt_transport
 
 
 def test_default_host_preserves_environment_and_native_store(tmp_path, monkeypatch):
@@ -46,6 +46,23 @@ def test_mcp_disable_overrides_all_config_layers_without_forwarding_secrets():
     for config, override in [({"mcp_servers": "bad"}, {}), ({}, {"mcp_servers": ["bad"]})]:
         with pytest.raises(ValueError, match="MCP"):
             disable_mcp_servers(config, override)
+
+
+def test_shared_chatgpt_transport_preserves_explicit_provider_and_core_policy():
+    explicit = {"model_provider": "operator-provider", "model_providers": {
+        "operator-provider": {"name": "operator-owned"}}}
+    assert shared_chatgpt_transport(explicit, {}) == explicit
+    policy = {"default_permissions": "fixture", "permissions": {"fixture": {
+        "network": {"enabled": False}, "filesystem": {"/fixture": "write"}}}}
+    result = shared_chatgpt_transport(policy, {})
+    assert result["permissions"] == policy["permissions"]
+    assert result["default_permissions"] == "fixture"
+    assert "model_provider" not in policy
+    assert set(result["model_providers"][result["model_provider"]]) == {
+        "name", "wire_api", "requires_openai_auth", "supports_websockets"}
+    with pytest.raises(ValueError, match="conflicts with project configuration"):
+        shared_chatgpt_transport(policy, {"model_providers": {
+            result["model_provider"]: {"base_url": "https://example.invalid", "env_key": "PRIVATE_KEY"}}})
 
 
 def test_compatibility_catalog_probe_keeps_private_process_environment(tmp_path, monkeypatch):

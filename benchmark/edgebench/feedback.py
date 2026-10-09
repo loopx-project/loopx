@@ -1,8 +1,8 @@
-"""Host-owned, positive-only projection of SForge's automatic evaluations.
+"""Host-owned, best-only delivery of SForge's official evaluation response.
 
 Provider policy only: SForge still captures, evaluates and selects final scores.
-The worker receives an allowlisted notification and its own submitted source,
-never judge reports, credentials, scores or negative-result metadata.
+The worker receives the selected improvement's complete native result and its
+own submitted source, never credentials, other runs or non-improving reports.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 
 import requests
 from sforge.harness.selection import select_best
+from .feedback_hook import SCHEMA_VERSION
 
 FEEDBACK_MODES = ("native", "blind", "best-only")
 FEEDBACK_ROOT = PurePosixPath("/opt/edgebench-feedback")
@@ -88,7 +89,7 @@ class BestOnlyFeedback:
             return
         if self.token is None or self.stop_event.is_set():
             raise RuntimeError("Feedback registration is missing or already closed")
-        self._publish_json(backend, handle, {"schema_version": "edgebench_best_feedback_v1", "latest": None})
+        self._publish_json(backend, handle, {"schema_version": SCHEMA_VERSION, "latest": None})
         self._record()
         self.sampler.start(backend, handle, self.token)
         self.thread = threading.Thread(target=self._loop, args=(backend, handle), daemon=True)
@@ -161,6 +162,9 @@ class BestOnlyFeedback:
         admission = self.sampler.admitted()[candidate["submission_id"]]
         if admission["source_sha256"] != digest:
             raise ValueError("Native archive differs from admitted online capture")
+        result = self._official_result(candidate)
+        result_sha256 = hashlib.sha256(json.dumps(result, sort_keys=True,
+            ensure_ascii=False, allow_nan=False).encode()).hexdigest()
         remote = FEEDBACK_ROOT / f"{snapshot}-{digest}.tar.gz"
         prepare_feedback_root(backend, handle)
         backend.copy_to_container(handle, archive, remote)
@@ -174,9 +178,13 @@ class BestOnlyFeedback:
         if readable.exit_code or readable.output.split()[:1] != [digest]:
             raise RuntimeError("Could not verify best-only source checkpoint for worker")
         packet = {
-            "schema_version": "edgebench_best_feedback_v1",
+            "schema_version": SCHEMA_VERSION,
             "latest": {"kind": "new_best", "snapshot_id": snapshot,
                        "source_sha256": digest, "source_archive": str(remote),
+                       "run_id": self.run_id, "task_id": self.task_id,
+                       "online_epoch": self.sampler.epoch,
+                       "evaluator": self.sampler.evaluators[self.task_id],
+                       "official_result": result, "result_sha256": result_sha256,
                        "message": _MESSAGE},
         }
         if self.stop_event.is_set():
@@ -186,6 +194,35 @@ class BestOnlyFeedback:
         self.score = candidate["score"]
         self.notifications += 1
         self._record(packet)
+
+    def _official_result(self, candidate):
+        # Fetch only the sampler-admitted, selected native submission. Do not
+        # read raw judge logs, verifier code or another run's result directory.
+        response = self.session.get(f"{self.judge_url}/api/v1/result/{candidate['submission_id']}",
+                                    timeout=(3, 5))
+        response.raise_for_status()
+        result = response.json()
+        report = result.get("report")
+        if (result.get("submission_id") != candidate["submission_id"]
+                or result.get("status") != "completed" or result.get("error") is not None
+                or not isinstance(report, dict) or report.get("valid", True) is not True
+                or report.get("task_id") != self.task_id
+                or report.get("submission_id") != candidate["submission_id"]
+                or type(report.get("score")) not in (int, float)
+                or not math.isfinite(report["score"]) or report["score"] != candidate["score"]
+                or report.get("pass_rate") != candidate.get("pass_rate")):
+            raise ValueError("Official result does not match the selected native history entry")
+        # A restarted service can reuse in-memory submission IDs. Its epoch and
+        # evaluator must still match the pre-solver admission, even on retry.
+        response = self.session.get(f"{self.judge_url}/api/v1/best-only/admission",
+            params={"admin_secret": self.admin_secret}, timeout=(3, 5))
+        response.raise_for_status()
+        admission = response.json()
+        evaluator = admission.get("evaluators", {}).get(self.task_id)
+        if (admission.get("epoch") != self.sampler.epoch or not evaluator
+                or evaluator != self.sampler.evaluators.get(self.task_id)):
+            raise ValueError("Official evaluator changed; reconcile the original trial")
+        return result
 
     def _record(self, packet=None):
         # Host-only health/evidence. Do not mount this directory into the worker.

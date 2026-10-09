@@ -553,6 +553,69 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         runtime.close()
 
 
+def test_http_listener_health_belongs_to_each_bound_transport(ordinary):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.capabilities.native_chat.transports import ChatConversationTransports
+    from test_chat_transport_composition import Transport
+
+    store, runtime, provider, lark = connect(ordinary)
+    external = Transport("external-owner")
+    composed = ChatConversationTransports(observe_default=lark.bindings.observe, transports=[external])
+    bindings = ChatConversationBindings(root=store.root, project_contexts=runtime.project_contexts,
+                                       observe=composed.observe)
+    runtime.project_contexts.conversation_bindings = bindings
+    bindings.configure(transport_ref=external.transport_ref,
+        project_ref=runtime.project_contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
+    original = bindings.read()
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations, server.conversation_transports = lark, composed
+    # A stale Lark row must not mask the current locally installed provider.
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {
+        "notes-app": {"status": "listening"}, "steward-app": {"status": "starting"},
+        "external-owner": {"status": "stopped"}}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def snapshot():
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations")
+            response = connection.getresponse()
+            assert response.status == 200
+            return {row["app_ref"]: row for row in json.loads(response.read())["connections"]}
+        finally:
+            connection.close()
+
+    def unavailable():
+        raise OSError("provider credential must not be exposed")
+
+    try:
+        for state in ["starting", "listening", "retrying", "stopped", "standby", "inactive"]:
+            external.health_snapshot = lambda: {"status": state, "credential": "private-provider-data"}
+            rows = snapshot()
+            assert rows["external-owner"]["listener_status"] == state
+            assert rows["notes-app"]["listener_status"] == "listening"
+            assert rows["steward-app"]["listener_status"] == "starting"
+            assert "private-provider-data" not in json.dumps(rows)
+        for malformed in [None, [], {"status": "private-provider-data"}, {"status": []}]:
+            external.health_snapshot = lambda: malformed
+            assert snapshot()["external-owner"]["listener_status"] == "unknown"
+        external.health_snapshot = unavailable
+        assert snapshot()["external-owner"]["listener_status"] == "unknown"
+        del external.health_snapshot
+        assert snapshot()["external-owner"]["listener_status"] == "unknown"
+        del server.conversation_transports
+        server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+        assert all(row["listener_status"] == "unknown" for row in snapshot().values())
+        assert bindings.read() == original and not store.list_sessions() and not provider.writes
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        runtime.close()
+
+
 def test_bot_only_group_continues_after_user_logout_but_rejects_private_and_app_drift(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:

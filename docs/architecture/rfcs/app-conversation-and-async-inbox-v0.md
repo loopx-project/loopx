@@ -69,6 +69,18 @@ without private bindings do not add provider authentication; configured aliases
 reuse one request-scoped verified identity observation. Lark HTTP composition
 resides in the extension, while the typed binding owner remains provider-neutral.
 
+The same Settings read model includes Core bindings for locally installed
+conversation transports. Listener status comes from the exact host-composed
+provider's optional `health_snapshot()` returning a content-free `status`, or
+from the existing Lark listener observation for default profiles. This local
+hook must return cached observations without network calls. Only existing
+listener labels (`starting`, `listening`, `retrying`, `stopped`, `standby`,
+`inactive`) are projected; missing, malformed or failed observations become
+`unknown`, rendered as connection unconfirmed. Raw provider fields and exception
+messages are excluded. Listening is neither a delivery receipt nor task
+acceptance. Native binding/composition/HTTP regressions qualify the source read
+model, while each provider's installed liveness and result return remain separate.
+
 Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
@@ -148,7 +160,15 @@ project access remains writable with `host_default` filesystem scope.
 The shell environment keeps only `PATH`, disables shell profile snapshots, and
 uses a fixed minimal system search path for POSIX workspaces. This preserves native
 file commands while filtering account-configured environment overrides as well as
-inherited variables. Windows execution remains unqualified by the live probes.
+inherited variables. On macOS, the trusted host may prepend the Git binary directory
+of the standard Command Line Tools or Xcode toolchain selected by the fixed system
+`xcode-select` command and grant that toolchain read access. Every path from the
+binary through `/` must be canonical, root-owned, of the expected type and neither
+group/other-writable nor writable by the caller, including through an ACL. An unsafe
+container (including a writable `/Applications`), missing toolchain or unsupported
+selection leaves the original profile and search path intact. This adaptation does
+not enable toolchain writes, root reads, account environment or tool network access.
+Windows execution remains unqualified by the live probes.
 
 The narrowed profile also disables automatic skill catalog injection and project
 instruction discovery. The agent can read workspace-owned `AGENTS.md` and skills

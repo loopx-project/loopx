@@ -370,6 +370,7 @@ export function createEffectRuntimeHandlers(
     ["goal.acceptance.inspect", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({inspectLocalGoalAcceptance}) => inspectLocalGoalAcceptance)],
     ["goal.acceptance.configure", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptance}) => commitLocalGoalAcceptance)],
     ["goal.acceptance.verify.commit", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptanceVerification}) => commitLocalGoalAcceptanceVerification)],
+    ["goal.acceptance.lifecycle.transition", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptanceLifecycleTransition}) => commitLocalGoalAcceptanceLifecycleTransition)],
     ["agent.delivery_workspace.evaluate", lazyHandler(() => import("./agents/delivery_workspace.ts"), ({evaluateDeliveryWorkspace}) => evaluateDeliveryWorkspace)],
     [
       "quota.delivery_workspace_causality.evaluate",
@@ -458,6 +459,7 @@ export function createEffectRuntimeHandlers(
     ["scheduler.monitor_batch.plan", lazyHandler(() => import("./scheduler/monitor_batch.ts"), ({planLegacyMonitorBatch}) => planLegacyMonitorBatch)],
     ["scheduler.monitor_target.select", lazyHandler(() => import("./scheduler/monitor_successor.ts"), ({selectMonitorTodoRequest}) => selectMonitorTodoRequest)],
     ["capabilities.issue_fix.monitor_reconciliation.plan", lazyHandler(() => import("./capabilities/issue_fix_monitor_reconciliation.ts"), ({planIssueFixMonitorReconciliation}) => planIssueFixMonitorReconciliation)],
+    ["capabilities.change_quality.validation_gate", lazyHandler(() => import("./capabilities/change_quality_validation.ts"), ({qualifyChangeQualityValidation}) => qualifyChangeQualityValidation)],
     ["capabilities.pr_review.approval_closeout.plan", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({planPrReviewApprovalCloseout}) => planPrReviewApprovalCloseout)],
     ["capabilities.pr_review.configuration", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({prReviewConfiguration}) => prReviewConfiguration)],
     ["capabilities.pr_review.order", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({orderPrReviewQueue}) => orderPrReviewQueue)],

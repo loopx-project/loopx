@@ -148,7 +148,10 @@ class GoalStorageRequestMixin:
                     project_override=None, state_file_override=None)
                 if project is None:
                     raise ValueError("registered project is required")
-                registry_path = Path(self.server.registry_path)
+                # Source capture witnesses physical filenames. Give backup IO
+                # the same registry route so directory aliases cannot split
+                # its saved member map from the source's byte witness.
+                registry_path = Path(self.server.registry_path).resolve()
                 projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=root,
                     state_path=state, registry_path=registry_path, include_all_archived_todos=True)
                 backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=root,

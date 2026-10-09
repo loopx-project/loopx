@@ -150,12 +150,19 @@ export function projectQuotaSelection(value: unknown, observedAt: number | null 
   // Explicit User gate scope has already decided blocking. Claim/exclusion
   // governs Agent execution, not permission to disregard that human gate.
   const open = userMode ? blocking : blocking.filter(row => executableBy(row, agent));
-  if (agent && !userMode) open.sort((a, b) => bucket(a, agent) - bucket(b, agent) ||
-    a.profileRank - b.profileRank || a.priority - b.priority || a.index - b.index);
+  const executionRank = (a: Row, b: Row) =>
+    (agent && !userMode ? bucket(a, agent) - bucket(b, agent) || a.profileRank - b.profileRank : 0) ||
+    a.priority - b.priority;
+  if (agent && !userMode) open.sort((a, b) => executionRank(a, b) || a.index - b.index);
   const scope = agent && !userMode ? claimScope(blocking, open, agent, profile, diagnostic) : null;
   const monitors = open.filter(row => row.actionable && row.taskClass === "continuous_monitor");
   const due = supported ? monitors.filter(row => row.due && executableBy(row, agent)) : [];
   const admittedDue = due.filter(row => !row.missing.length);
+  // Timed eligibility guarantees a non-null due instant. Select from the full
+  // admitted set before transport caps: a recurring low-index Monitor must not
+  // starve older equally ranked work. Untimed legacy requests keep their order.
+  if (observedAt !== null) admittedDue.sort((a, b) => executionRank(a, b) ||
+    a.schedule!.dueAt! - b.schedule!.dueAt! || a.index - b.index);
   const watchOnlyMonitors = monitors.filter(row => row.watchOnly);
   // Gap presentation keeps source priority/index order, independent of the
   // claim/profile buckets used to select executable work.

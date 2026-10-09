@@ -408,6 +408,85 @@ def test_bound_user_action_metadata_through_real_cli(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_bound_user_action_leased_metadata_through_real_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, False)
+    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
+    target.pop("claimed_by")
+    target.update(role="user", task_class="user_action", source_section="User Todo",
+                  created_by="agent-a", bound_agent="agent-a")
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=todos, handoff_mode="hard_lease",
+    )
+    initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection,
+                                   state_path=state, provider=provider)
+    state.unlink()
+
+    def lease(action: str, *args: str) -> dict:
+        process = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            "task-lease", action, "--goal-id", "goal-a", "--todo-id", "todo_target", *args,
+        ], capture_output=True, text=True, timeout=45)
+        assert process.returncode == 0, process.stderr
+        return json.loads(process.stdout)
+
+    acquired = lease("acquire", "--owner", "agent-a", "--idempotency-key", "copy-execution")
+    retained = acquired["lease"]
+    proof = ["--task-lease-idempotency-key", "copy-execution",
+             "--task-lease-expected-version", str(retained["version"])]
+    before = records(registry)
+    args = ["--role", "user", "--text", "Reminder: disposition awaits user execution",
+            "--note", "Delivery receipt only", "--evidence", "Synthetic delivery receipt",
+            "--update-operation-id", "leased-action-copy",
+            "--update-expected-provider-revision", acquired["provider_revision"], *proof]
+    assert update(registry, *args, "--dry-run")["status"] == "planned"
+    assert records(registry) == before
+    applied = update(registry, *args)
+    assert applied["status"] == "applied" and applied["source_authority"] == f"{provider}_v0"
+    after = records(registry)
+    assert after["todo_other"] == before["todo_other"]
+    assert after["todo_target"]["note"] == "Delivery receipt only"
+    assert after["todo_target"]["evidence"] == "Synthetic delivery receipt"
+    for field in ("role", "task_class", "status", "done", "created_by", "bound_agent", "claimed_by"):
+        assert after["todo_target"].get(field) == before["todo_target"].get(field)
+    assert lease("inspect")["lease"] == retained
+    assert update(registry, *args)["status"] == "replayed"
+    assert update(registry, *args, "--note", "Conflicting retry", ok=False)["reason_code"] == "coordination_operation_identity_mismatch"
+    assert update(registry, "--role", "user", "--note", "Stale writer", *proof,
+                  "--update-operation-id", "stale-copy",
+                  "--update-expected-provider-revision", acquired["provider_revision"], ok=False)["reason_code"] == "provider_revision_mismatch"
+    for attempt in (["--agent-id", "agent-b"], ["--status", "blocked"],
+                    ["--required-capability", "shell"], ["--bound-agent", "agent-b"],
+                    ["--task-lease-idempotency-key", "wrong-key"],
+                    ["--task-lease-expected-version", "0"]):
+        update(registry, "--role", "user", "--note", "Refused edit", *proof, *attempt, ok=False)
+    assert records(registry) == after
+    assert lease("inspect")["lease"] == retained
+    released = lease("release", "--owner", "agent-a", "--idempotency-key", "copy-execution",
+                     "--expected-version", str(retained["version"]))
+    rejected = update(registry, "--role", "user", "--note", "Old execution", *proof, ok=False)
+    assert rejected["recovery"]["action"] == "acquire_fresh_lease"
+    assert rejected["recovery"]["execution_authority_granted"] is False
+    assert records(registry) == after
+    # Historical success replays but grants no authority for a new operation.
+    assert update(registry, *args)["status"] == "replayed"
+    fresh = lease("acquire", "--owner", "agent-a", "--idempotency-key", "next-copy-execution",
+                  "--expected-version", str(released["lease"]["version"]))
+    assert fresh["lease"]["lease_epoch"] == retained["lease_epoch"] + 1
+    recovered = update(registry, "--role", "user", "--note", "Recovered metadata",
+                       "--update-operation-id", "fresh-action-copy",
+                       "--update-expected-provider-revision", fresh["provider_revision"],
+                       "--task-lease-idempotency-key", "next-copy-execution",
+                       "--task-lease-expected-version", str(fresh["lease"]["version"]))
+    assert recovered["status"] == "applied"
+    assert lease("inspect")["lease"] == fresh["lease"]
+    assert not records(registry)["todo_target"].get("claimed_by")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_promoted_hard_lease_deferred_todo_resumes_through_real_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:

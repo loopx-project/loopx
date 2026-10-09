@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - 跟踪 Issue：[#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - 日期：2026-09-02
-- 最后更新：2026-09-16
+- 最后更新：2026-10-08
 - 范围：多个对等 Agent 围绕同一个共享 Goal 协作，同时保留 canonical
   intent、每个 Agent 的执行 frontier、claim/lease 所有权，以及可审计的
   replan/amendment 决策
@@ -282,6 +282,64 @@ canonical acceptance 与当前 Todo 精确详情读取。普通产品 heartbeat 
 R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完整切片应让既有
 结构化 criterion 穿过任务切换和重启，在同一 owner 拒绝覆盖丢失并使过期证据失效。
 
+### 3.8 失效证据与受影响消费者
+
+本节是既有 acceptance 与显式 result-use owner 的待实现资格合同，不新增全局错误
+状态、taint graph 或自动 amendment 政策。历史完成与当前证据使用资格是不同事实。
+保留原 receipt、声明依据与结果，重新检查当前适用性；不能靠改写已完成 Todo 让
+历史看起来一致。
+
+来源不可用、版本/范围改变、owner 确认结论错误，含义不同。来源读不到只能说明
+当前证据不可得，不能说明内容为假。语义反驳须有当前 criterion 与可归属反证，由
+所属 validator 或获授权评审确认；字节一致和传输成功无法单独解决。可选评估遵循
+[检测衔接合同](optional-semantic-assistance-jev-v0.zh-CN.md#检测结果与所属规则的衔接)。
+
+对合同要求当前证据的显式关系：
+
+1. 指明 source operation/artifact version、criterion 和实际声明的 consumer input，
+   保留原因与影响范围。不能从消息送达、共同关键词或 workspace 全部文件推断消费。
+2. 在新的验收、adoption 或所属受保护执行边界之前重验依据。Consumer 输出不变且
+   本地 validator 通过，并不能独立证明声明来源链仍有效。决定须在实际准入边界绑定
+   观察到的版本，不能用较早的 UI 读取或缓存成功授权后续使用。无关工作继续，
+   不因一个 source 缺失就停止全部 Agent。
+3. 通过现有 typed readback/guard 表达当前使用不可用。读取不修改历史、释放 lease、
+   撤回消息或启动修复。不能把任意来源失效塞进 `goal_acceptance_stale`：其现有
+   owner 表达的是 acceptance/work binding 改变。
+4. 恢复时取得当前证据，恢复精确获准依据或经既有 owner 验证替代版本，再检查
+   consumer eligibility。字节恢复只证明版本可得；已确认的语义失败还须重新验证
+   相关 criterion。模型说“修好了”、新 ACK 或新 evidence ID 均不足以解除。
+
+发送者 context 记录此前推理。受影响工作恢复或交接时，既有 context owner 须带入
+失效依据、未解决问题、当前证据与下一项必要检查。这证明新的 context delivery，
+不代表清除全部旧 session，也不证明模型理解了纠正。已经提交的外部 effect 继续
+服从自己的对账或显式授权补偿合同。
+
+**实现边界，源码 `44931b6d22a50b949d43354e6ea498fb6b68d231`：**
+[`Delegations._read_current`](../../../loopx/collaboration_mcp.py)重验 accepted
+operation 自己的规则与输出；`read` 随后才附加
+[`result_relationships`](../../../loopx/control_plane/collaboration/delegation_results.py)。
+它可以保持 accepted，同时 incoming dependency 已 unavailable。`dependencies`
+通过 `_read_current` 读取 source，因而不继续检查 source 自己的 incoming dependency。
+有界文件 I/O 诊断配合 synthetic local validation 复现了 source → A → B：A input
+改变、output 不变，A 显示依赖不可用，B 的直接使用仍合格。该诊断不是 live worker
+或 canonical store 测试。
+
+最近的实现切片是：资格化**显式关联的本机委派结果的当前使用**，保留历史 accepted/
+done receipt。复用 [`delegation.ts`](../../../loopx/control_plane/collaboration/delegation.ts)
+决定 typed eligibility，`delegation_results.py` 采集 host 观察。在 read、start、
+adoption 与 settlement 使用同一 current-use 检查；不把 `todo_done` 改成递归产物
+验证。只沿 requester 范围内的声明关系，采用单次读取的循环检测、共享来源缓存及
+经测量的深度/operation/时间界限。未访问的尾部保持 unavailable，不能假定 accepted；
+不跨准入缓存成功。对任意并发文件 writer，不声称原子快照。
+
+验收覆盖直接/传递失效、共享来源菱形、循环、来源丢失、真实声明 validator 发现
+字节不变的错误内容，以及 start 后 settlement 前失效。验证无关联输入行为等价、
+历史记录不变、verifier 成本有界、恢复不重复派发 worker。打包 team/evidence 视图
+须显示当前不可用及原因，在获授权修复来源/输入后支持当前复验并读回结果。
+修复若需要新的执行，使用另行准入的任务；复验 accepted operation 不得重新派发其
+worker。CLI/MCP/Chat 共用 owner。全 Goal 反向传播、全部 session context 纠正与
+业务回滚仍在该切片之外。
+
 ## 4. Authority matrix
 
 ### 4.1 `GoalAmendmentAuthority` 到底是什么
@@ -497,6 +555,8 @@ provider-neutral authority store contract 后面。
 
 Replan 在选择 writer 前先分类发现的 gap：
 
+- intent 不变时的检查失败或证据失效，先走既有 task/acceptance/result-use 修复或
+  重验路径；读取失败证据不授予新权限，也不一定需要修改共享工作图；
 - 完全位于 canonical intent 内的 route correction 打开或结算 Agent-scoped
   replan obligation；
 - cross-lane dependency/work-graph gap 打开 shared amendment obligation；
@@ -508,6 +568,10 @@ Replan 在选择 writer 前先分类发现的 gap：
 每个 obligation 都有 stable id。仅 ACK proposal 不会结算它。Settlement 必须是：
 该精确 obligation 对应的 committed receipt；被 policy 接受的 reject/no-change
 结构化 rationale；或显式保留因果链的 superseding obligation。
+
+证据导致的 obligation 在修复和复验中保留 source/version 与受影响 criterion。
+结算 replan 证明路径决策已接受，不能顺带解除失败的业务 criterion 或 unknown
+effect；这些仍由各自 owner 要求当前恢复证据。
 
 Commit 后，`based_on_goal_revision` 已过期的 Agent 可以观察，但在 rebase 或取得
 显式 grandfathered-work disposition 前，不能执行 controlled semantic write。

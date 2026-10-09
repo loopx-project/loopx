@@ -206,11 +206,17 @@ function decodeRequest(
 }
 
 function turnInstanceId(request: HostTodoCompletionRequest): string {
+  const identityParts = request.goal_instance_id === null
+    ? [request.goal_id, request.agent_id, request.todo_id]
+    : [
+      "loopx_host_todo_completion_exact_v1",
+      request.goal_id,
+      request.goal_instance_id,
+      request.agent_id,
+      request.todo_id,
+    ];
   const digest = createHash("sha256")
-    .update(
-      [request.goal_id, request.agent_id, request.todo_id].join("\0"),
-      "utf8",
-    )
+    .update(identityParts.join("\0"), "utf8")
     .digest("hex")
     .slice(0, 32);
   return `mcp-${digest}`;

@@ -52,6 +52,7 @@ def apply_context_handoff(
         controller.registry_path,
         session=session,
         turn=turn,
+        source_store=controller.store,
         response=response,
         source_authorized=lambda: scope["kind"] != "external_audience"
         or manager_authorization_scope_is_current(

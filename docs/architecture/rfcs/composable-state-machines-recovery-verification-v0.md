@@ -5,7 +5,7 @@
 - **Delivery maturity:** Partial implementation; bounded Turn recovery coverage, full M2 remains open
 - **Authors / owners:** Control-plane domain maintainers and testing maintainers
 - **Created:** 2026-10-01
-- **Last normative revision:** 2026-10-01
+- **Last normative revision:** 2026-10-08
 - **Implementation baseline:** `98acf52e7e41c193959bd45db622c65298273714`
 - **Related contracts:** [Effect Interpreter](agent-loop-effect-interpreter-v0.md), [TS migration](typescript-control-plane-migration-v0.md), [shared authority](shared-goal-authority-state-provider-v0.md), [quality layers](../../development/testing-and-quality.md), [overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](composable-state-machines-recovery-verification-v0.zh-CN.md)
@@ -37,6 +37,11 @@ An individually valid Todo transition can leave an unsettled Turn. A committed
 writeback followed by a lost response can invite a duplicate effect. A cleared
 gate can leave its successor permanently quiet. Local tests of each owner do
 not establish the causal relationship across these boundaries.
+
+A valid Host result can contain an incorrect artifact. Its failure evidence must
+reach the owning admission and recovery path before more work relies on it.
+A resumed process, advanced journal phase or accepted handover alone does not
+prove that the business error was corrected.
 
 ### Invariants
 
@@ -125,6 +130,63 @@ or blind retry. Pure decision replay, receipt recovery and counterfactual
 simulation follow the separate [Effect Interpreter](agent-loop-effect-interpreter-v0.md)
 contracts.
 
+### Detection, containment and recovery evidence
+
+These are composition cases, not a new shared error enum or production incident
+ledger. Optional assessment follows the
+[bounded detection contract](optional-semantic-assistance-jev-v0.md#detection-result-and-handoff-to-the-owning-rule);
+current use of affected evidence follows
+[alignment §3.8](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers).
+
+| Observation and owning evidence | Permitted containment | Required recovery evidence |
+| --- | --- | --- |
+| Identity, permission or lease check fails | Refuse new protected execution/commit; stop an owned process only under its qualified Host contract | Current authorized owner and valid preconditions; old output grants no new authority |
+| Typed transient Host failure | Existing bounded retry policy, same logical intent and checked attempt budget | Current admission and resolved effect uncertainty; backoff alone proves no repair |
+| Independent task/acceptance check fails for a named criterion | Block successful acceptance/settlement in that scope; retain the failed candidate and original identities | Actual repair or permitted replan, then a current check of the criterion and declared inputs |
+| Validator unavailable, inconclusive or necessary input unreadable | Preserve lack of evidence and the existing fail-closed gate | Obtain usable evidence; inability to check does not prove content false |
+| Observer/model suspects drift | Advisory or an explicitly enabled existing replan path | Domain investigation/current verification; confidence or a non-triggering signal cannot clear a confirmed failure |
+| Explicit consumer basis becomes invalid/unavailable | Refuse new current use at its dependency/acceptance boundary; preserve history and unrelated work | Current permitted source and consumer eligibility; confirmed semantic failure also requires criterion revalidation |
+| Provider outcome is unknown | Retain intent and hold later effects | Same-operation authoritative readback; no replacement identity |
+
+Each recovery trace retains the challenged criterion/precondition, source and
+validator basis, affected Goal/Todo/Turn/artifact/effect identities, committed or
+unknown effects, permitted next action and the check that releases the
+restriction. Reuse existing records and fields. This is not a universal wire
+packet; a necessary extension belongs to its real producer and consumer.
+
+Correct JSON and hashes around a wrong calculation still fail a criterion that
+checks the calculation. File existence cannot qualify that stronger claim. Bind
+the declared verifier to its version, scope and current source basis; silently
+weakening it is not repair. Non-executable criteria name the authorized review
+and deciding evidence, rather than treating another model's confidence as proof.
+Check before consequential acceptance/use and after relevant basis changes,
+with explicit cost and coverage limits; per-step hidden-reasoning verification
+is not required. Late detection distinguishes prevented, committed and unknown
+effects. Local recovery cannot silently compensate another provider's effect.
+
+```text
+observation + declared criterion/source basis
+  → owning check: failure, insufficient evidence, or bounded concern
+  → scoped admission/acceptance decision with original identities
+  → authorized repair, replan, takeover or same-operation reconciliation
+  → current verification + unresolved-effect readback
+  → resume eligible work, or retain a visible scoped restriction
+```
+
+These arrows compose existing owners, not a global state machine. Taking over
+unfinished repair work does not require its completion validator to pass first.
+It requires current ownership, honest failed/unknown facts and existing execution
+admission. Before claiming recovery, the receiver independently satisfies the
+affected completion/use condition.
+
+The last trusted recovery point is a **named verified basis**: identities,
+declared artifact/source versions, applicable validation and effect receipts.
+If only the phase journal survives, claim phase recovery only. Missing artifacts,
+versions or verification scope require an explicit limit and authorized
+reconstruction/revalidation. This is not automatic workspace rollback or
+arbitrary external-state restoration. Replan acceptance, context delivery,
+process progress and business recovery remain distinct.
+
 ### Safety and conditional progress
 
 Safety assertions hold for every explored prefix. Progress assertions explicitly
@@ -181,6 +243,8 @@ slice through its existing protocol; this RFC authorizes no data migration.
 | Implementation agreement | Pinned base/head production-entrypoint traces and independent durable readback | Intended semantics preserved; disclosed changes independently justified | Real affected backend required |
 | Test sensitivity | A historical defect or deliberate semantic mutation | The relevant invariant fails before/faulted and passes after repair | Do not derive expectations from candidate output |
 | User-visible continuity | Affected CLI and packaged App/Lark journeys | Truthful state, next action and original-context result | Omitted entrypoints explicitly unqualified |
+| Business error containment | Valid identity/hash with content violating the declared criterion | Independent failure blocks new successful acceptance/use in that scope | Malformed-packet detection alone is insufficient |
+| Recovery basis | Artifact, verifier, criterion or source changes between check and recovery | Old success cannot qualify a new basis; unknown effects still require readback | No arbitrary filesystem/external-effect rollback claim |
 
 Record seed or deterministic enumeration, trace bound, normalized observations,
 failure/skipped counts and a minimal counterexample in existing PR evidence.
@@ -237,6 +301,49 @@ lease transfer, stale-owner races, PostgreSQL authority, successor scheduling
 and App/Lark delivery remain outside it. M2 therefore remains open. Its next
 owning work is the existing ownership-to-settlement acceptance with a real
 lease/GoalRef fence, followed by M3's actual delivery callers.
+
+### Source-grounded implementation sequence
+
+These are unimplemented composition deltas within existing M2/M3 and roadmap
+R2/R3/R4, not new milestones. Source owners were rechecked at
+`44931b6d22a50b949d43354e6ea498fb6b68d231`.
+
+| Bounded outcome | Existing entry and owner | Current gap and decisive exit |
+| --- | --- | --- |
+| Unavailable declared ancestry prevents new dependent use | `Delegations._read_current/start`, `delegation_results.require_dependencies/adoption_evidence`, `delegation.ts` | Alignment §3.8: source → A → B with A input invalidated must refuse current dependent use even if A output is unchanged. Qualify real read/start/adopt/settlement and packaged evidence readback; keep historical completion. |
+| Independent check failure reaches an actionable original-task recovery journey | `executor._task_validation_stage`, `ValidatedTurnReceipt`, canonical `turn_loop_controller_contract_v0.json`, `turn_journal.ts` | Preserve qualified failure scope and repair/replan detail; complete bounded repair or verifier-only retry, current validation and original-effect settlement. Host assertions cannot become trusted validation. |
+| Optional semantic review explains its evidence and coverage | Existing progress-review receipt/loader and canonical Goal acceptance inspection | Bind a selected criterion and evidence coverage in shadow readback; show missing/stale basis and separate judgment dimensions. Model quality and intervention qualify separately. |
+
+For the second outcome, `_task_validation_stage` already saves the independent
+result and blocks settlement. `ValidatedTurnReceipt` omits that validation's
+`recovery_kind`; the canonical controller intentionally maps legacy
+`validation_failed` to generic repair. Preserving a trusted validator's replan
+request is a disclosed contract extension, not a violation of today's rule.
+Change the canonical contract, `scripts/generate_turn_contract.py` and the
+existing `validation_failed`/`repair` definitions in
+`loopx/semantics/vocabulary_v0.json`, retaining legacy omitted detail as generic
+repair. Do not hand-edit generated code or add
+a parallel Python decision source. Review missing, malformed and contradictory
+detail and old/new reader compatibility before selecting a wire change.
+
+Failed-Turn retry at `validation_stage=task_postcondition` already reuses the
+cached Host result and reruns validation without invoking the Host again.
+**Doing repair work** needs its own current bounded execution admission, followed
+by revalidation. Reuse criterion/verifier pins where the acceptance owner supplies
+them. A generic command without retained verification basis cannot become a
+durable business checkpoint because its exit code was zero. A replacement check
+cannot erase an old unknown effect.
+
+Start with independent counterexamples in existing fixtures, then production
+entrypoints with real validator commands and a disposable supported backend.
+Cover missing evidence, stale verifier/source, same-operation replay, failure
+during repair, stop/takeover and lost effect response. The Todo/Turn view must
+expose the failed check and scope, support authorized repair/recheck, and read
+back success or continued failure in the packaged App; CLI and affected Lark
+entries share the owner. A command-copy button or backend receipt alone does not
+complete the journey. Bound repeated verification and source-chain traversal
+using measured workloads. Roll back code through its owner while retaining
+receipts, completed effects and unresolved recovery obligations.
 
 ## 12. Open decisions
 

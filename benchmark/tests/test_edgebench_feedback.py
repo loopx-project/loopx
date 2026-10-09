@@ -46,6 +46,11 @@ def history(*entries):
 
 
 class Admissions:
+    epoch = "synthetic-epoch"
+    evaluators = {"fixture": {"native_source_sha256": "b" * 64, "task_spec_sha256": "c" * 64,
+                              "judge_image_key": "fixture", "selection": "score_first",
+                              "score_direction": "maximize"}}
+
     def admitted(self):
         return {f"s{n}": dict(round_id=f"auto-{n}", source_sha256=hashlib.sha256(b"agent source only").hexdigest())
                 for n in range(1, 10)}
@@ -63,11 +68,23 @@ class Admissions:
         pass
 
 
+def official_result(entry):
+    return dict(submission_id=entry["submission_id"], status="completed", error=None,
+                report=dict(task_id="fixture", submission_id=entry["submission_id"], valid=True,
+                            score=entry["score"], pass_rate=entry.get("pass_rate"),
+                            summary="OFFICIAL_DIAGNOSTIC", metrics={"coverage": .75},
+                            details=[{"name": "case", "message": "official detail"}]))
+
+
 @pytest.fixture
-def publisher(tmp_path):
-    return BestOnlyFeedback(trial=tmp_path, run_id="run", task_id="fixture", direction="maximize",
+def publisher(tmp_path, monkeypatch):
+    result = BestOnlyFeedback(trial=tmp_path, run_id="run", task_id="fixture", direction="maximize",
                             judge_url="http://127.0.0.1:1", admin_secret="private-secret",
                             logger=logging.getLogger("fixture"), sampler=Admissions())
+    # Selection and source-delivery tests use a provider response fixture.
+    # The unpatched HTTP/binding method is tested separately below.
+    monkeypatch.setattr(result, "_official_result", official_result)
+    return result
 
 
 def archive(publisher, n, content=b"agent source only"):
@@ -76,7 +93,7 @@ def archive(publisher, n, content=b"agent source only"):
     path.write_bytes(content)
 
 
-def test_silent_baseline_then_positive_only_disclosure_and_source_identity(publisher):
+def test_silent_baseline_then_complete_official_improvement_and_source_identity(publisher):
     transport = Transport()
     publisher.update(history(row(1, 0)), transport, None)
     assert not transport.files
@@ -85,7 +102,11 @@ def test_silent_baseline_then_positive_only_disclosure_and_source_identity(publi
     publisher.update(history(*entries), transport, None)
     packet = json.loads(transport.files[str(FEEDBACK_FILE)])
     assert set(packet) == {"schema_version", "latest"}
-    assert set(packet["latest"]) == {"kind", "snapshot_id", "source_sha256", "source_archive", "message"}
+    assert packet["schema_version"] == "edgebench_best_feedback_v2"
+    assert packet["latest"]["official_result"] == official_result(row(2, 2))
+    assert packet["latest"]["evaluator"] == Admissions.evaluators["fixture"]
+    assert (packet["latest"]["run_id"], packet["latest"]["task_id"],
+            packet["latest"]["online_epoch"]) == ("run", "fixture", "synthetic-epoch")
     assert packet["latest"]["kind"] == "new_best"
     assert packet["latest"]["snapshot_id"] == "auto-2"
     assert transport.files[packet["latest"]["source_archive"]] == b"agent source only"
@@ -96,6 +117,56 @@ def test_silent_baseline_then_positive_only_disclosure_and_source_identity(publi
     for more in [[], [row(3, 2)], [row(4, -1)]]:
         publisher.update(history(*entries, *more), transport, None)
         assert transport.files == previous
+    assert publisher.notifications == 1
+
+
+@pytest.mark.parametrize("fault", [None, "submission", "task", "score", "pass_rate", "invalid",
+                                    "pending", "error", "epoch", "evaluator", "network"])
+def test_official_response_binding_failure_retries_without_advancing(publisher, monkeypatch, fault):
+    baseline, candidate = row(1, 1, pass_rate=.5), row(2, 3, pass_rate=.75)
+    archive(publisher, 2)
+    expected = official_result(candidate)
+    response = json.loads(json.dumps(expected))
+    admission = {"epoch": "synthetic-epoch", "evaluators": Admissions.evaluators}
+    if fault == "submission":
+        response["submission_id"] = "another"
+    elif fault == "task":
+        response["report"]["task_id"] = "another"
+    elif fault in {"score", "pass_rate"}:
+        response["report"][fault] = 9
+    elif fault == "invalid":
+        response["report"]["valid"] = False
+    elif fault == "pending":
+        response["status"] = "running"
+    elif fault == "error":
+        response["error"] = "failed"
+    elif fault == "epoch":
+        admission = {**admission, "epoch": "restarted"}
+    elif fault == "evaluator":
+        admission = {**admission, "evaluators": {}}
+    calls = []
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        if fault == "network":
+            raise TimeoutError("synthetic unavailable result")
+        value = admission if url.endswith("/admission") else response
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: value)
+    monkeypatch.setattr(publisher.session, "get", get)
+    monkeypatch.setattr(publisher, "_official_result", BestOnlyFeedback._official_result.__get__(publisher))
+    transport = Transport()
+    values = history(baseline, candidate)
+    if fault:
+        with pytest.raises((ValueError, TimeoutError)):
+            publisher.update(values, transport, None)
+        assert not transport.files and publisher.score == 1 and publisher.notifications == 0
+        response, admission, fault = expected, {"epoch": "synthetic-epoch", "evaluators": Admissions.evaluators}, None
+    publisher.update(values, transport, None)
+    packet = json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]
+    assert packet["official_result"] == expected
+    assert calls[-2][0].endswith("/api/v1/result/s2")
+    assert "params" not in calls[-2][1]  # No credentials go into the disclosed API body.
+    assert calls[-1][1]["params"] == {"admin_secret": "private-secret"}
+    publisher.update(values, transport, None)
     assert publisher.notifications == 1
 
 
@@ -275,7 +346,9 @@ def test_cli_default_and_explicit_controls_reach_native_registration(tmp_path, m
     monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
     (tmp_path / "fixture.json").write_text("{}")
-    monkeypatch.setattr(run.OnlineSampler, "qualify", lambda self: setattr(self, "epoch", "synthetic-epoch"))
+    def qualify(self):
+        self.epoch, self.evaluators = Admissions.epoch, Admissions.evaluators
+    monkeypatch.setattr(run.OnlineSampler, "qualify", qualify)
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(

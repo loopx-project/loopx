@@ -4,7 +4,9 @@ import json
 import os
 import queue
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -98,6 +100,59 @@ def _approval_gate(summary: str) -> dict[str, str]:
         "kind": "approval_gate",
         "summary": summary,
         "next_action": "Review the request in the active host before continuing.",
+    }
+
+
+def _workspace_system_tools(config: dict[str, Any], profile_id: str) -> dict[str, Any]:
+    """Adapt Core's workspace profile to public native macOS dependencies.
+
+    Apple's /usr/bin/git dispatches through Xcode, outside Codex's minimal
+    system roots. Discover the installed toolchain in the trusted host, never
+    from project configuration, inherited DEVELOPER_DIR or the user's PATH.
+    """
+    if sys.platform != "darwin":
+        return config
+    try:
+        selected = subprocess.run(
+            ["/usr/bin/xcode-select", "--print-path"], cwd="/",
+            env={"PATH": os.defpath}, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding="utf-8", timeout=2, check=False,
+        )
+        root = Path(selected.stdout.strip())
+        if selected.returncode or root not in {
+            Path("/Library/Developer/CommandLineTools"),
+            Path("/Applications/Xcode.app/Contents/Developer"),
+        }:
+            return config
+        binary = root / "usr/bin/git"
+        # A writable ancestor can replace an otherwise root-owned descendant.
+        # Check the complete canonical chain, including effective ACL access.
+        for path in (binary, *binary.parents):
+            metadata = path.stat()
+            expected_type = stat.S_ISREG if path == binary else stat.S_ISDIR
+            if (path.resolve() != path or metadata.st_uid != 0
+                    or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+                    or os.access(path, os.W_OK)
+                    or not expected_type(metadata.st_mode)):
+                return config
+        if not os.access(binary, os.X_OK):
+            return config
+    except (OSError, subprocess.TimeoutExpired):
+        # Optional native dependency discovery must not open a private path or
+        # change the profile when developer tools are missing or unsupported.
+        return config
+    profiles = config["permissions"]
+    profile = profiles[profile_id]
+    environment = config["shell_environment_policy"]
+    return {
+        **config,
+        "permissions": {**profiles, profile_id: {
+            **profile, "filesystem": {**profile["filesystem"], str(root): "read"},
+        }},
+        "shell_environment_policy": {**environment, "set": {
+            **environment["set"],
+            "PATH": str(binary.parent) + os.pathsep + environment["set"]["PATH"],
+        }},
     }
 
 
@@ -623,6 +678,7 @@ class CodexChatAgentSession:
         permissions_profile = policy.get("permissions_profile") if project_context is not None else None
         if permissions_profile:
             host_config = {**(host_config or {}), **policy["host_config"]}
+            host_config = _workspace_system_tools(host_config, permissions_profile)
             # The native filesystem helper re-executes this binary. A symlink
             # under the user's home must not require opening that directory.
             resolved = str(Path(resolved).resolve())
@@ -748,6 +804,17 @@ class CodexChatAgentSession:
                     raise session._runtime_error("Codex returned an invalid project configuration.")
                 if permissions_profile:
                     host_config = codex_context.disable_mcp_servers(effective, host_config or {})
+                    if session._host_model_auth is not None:
+                        # Use public native transport defaults, not the
+                        # account's configuration or environment. Reject a
+                        # lower-layer alias collision before model dispatch.
+                        try:
+                            host_config = codex_context.shared_chatgpt_transport(host_config, effective)
+                        except ValueError:
+                            raise session._runtime_error(
+                                "Native host ChatGPT transport conflicts with project configuration."
+                            ) from None
+                        provider_override = host_config["model_provider"]
                 selected = {**effective, **(host_config or {})}
                 if read_project_defaults and model is None:
                     model = selected.get("model")

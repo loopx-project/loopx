@@ -234,7 +234,7 @@ function clockRequest(items: JsonObject[], fields: JsonObject = {}): JsonObject 
     item_limit: 8, has_deferred_count: false, has_visible_deferred_count: false}};
 }
 
-test("quota v3 derives due and gap from the same clock, preserving priority presentation and fences", () => {
+test("quota v3 derives due and gap from one clock, selecting older due work before display order", () => {
   const monitor = (id: string, fields: JsonObject = {}) => row(id, {task_class: "continuous_monitor",
     due_at: null, expires_at: null, required: [], targets: [], ...fields});
   const items = [monitor("gap-first", {index: 1}), monitor("gap-owned", {index: 2, claim: "agent-a"}),
@@ -248,12 +248,82 @@ test("quota v3 derives due and gap from the same clock, preserving priority pres
   const input = clockRequest(items), before = structuredClone(input);
   const lanes = projectTodoQuotaPlanning(input).lanes as JsonObject;
   assert.deepEqual(ids(lanes.monitor_schedule_gap_items), ["gap-first", "gap-owned"]);
-  assert.deepEqual(ids(lanes.monitor_due_items), ["due", "watch-due"]);
+  assert.deepEqual(ids(lanes.monitor_due_items), ["watch-due", "due"]);
   assert.deepEqual(ids(lanes.monitor_capability_blocked_due_items), ["capability"]);
   assert.deepEqual(ids(lanes.watch_only_monitor_due_items), ["watch-due"]);
   assert.deepEqual(input, before);
   const unsupported = projectTodoQuotaPlanning(clockRequest(items, {monitor_supported: false})).lanes as JsonObject;
   assert.deepEqual(unsupported.monitor_schedule_gap_items, []);
+  assert.deepEqual(unsupported.monitor_due_items, []);
+});
+
+test("recurring monitors cannot hide older due work behind an earlier display coordinate", () => {
+  const monitor = (id: string, index: number, due_at: number) => row(id, {
+    task_class: "continuous_monitor", claim: "agent-a", watch_only: true,
+    index, due_at, expires_at: null, required: [], targets: [],
+  });
+  for (const observed_at of [100, 200, 300]) {
+    const recent = monitor("frequent", 1, observed_at);
+    const older = monitor("overdue", 25, 50);
+    for (const items of [[recent, older], [older, recent]]) {
+      const input = clockRequest(items, {observed_at, visibility_limit: 0, backlog_limit: 0});
+      const before = structuredClone(input);
+      const lanes = projectTodoQuotaPlanning(input).lanes as JsonObject;
+      // This is the full eligible set consumed by the one-row quota projection.
+      assert.deepEqual(ids(lanes.monitor_due_items), ["overdue", "frequent"]);
+      assert.deepEqual(ids((lanes.monitor_due_items as JsonObject[]).slice(0, 1)), ["overdue"]);
+      assert.deepEqual(ids(lanes.watch_only_monitor_due_items), ["overdue", "frequent"]);
+      assert.deepEqual(input, before);
+    }
+  }
+});
+
+test("due-time fairness retains claim, profile and priority ranks, with stable time/index ties", () => {
+  const monitor = (id: string, fields: JsonObject = {}) => row(id, {
+    task_class: "continuous_monitor", claim: "agent-a", due_at: 90,
+    expires_at: null, required: [], targets: [], ...fields,
+  });
+  const items = [
+    monitor("unclaimed", {claim: null, due_at: 1}),
+    monitor("ordinary-profile", {profile_rank: 2, due_at: 2}),
+    monitor("lower-priority", {priority: 2, due_at: 3}),
+    monitor("later", {index: 1, due_at: 90}),
+    monitor("tie-b", {index: 8, due_at: 20}),
+    monitor("tie-a", {index: 8, due_at: 20}),
+    monitor("first-index", {index: 7, due_at: 20}),
+    monitor("older", {index: 99, due_at: 19.999999}),
+    monitor("higher-priority", {priority: 0, due_at: 99}),
+    monitor("preferred-profile", {profile_rank: 0, due_at: 100}),
+  ];
+  const lanes = projectTodoQuotaPlanning(clockRequest(items)).lanes as JsonObject;
+  assert.deepEqual(ids(lanes.monitor_due_items), [
+    "preferred-profile", "higher-priority", "older", "first-index", "tie-b", "tie-a",
+    "later", "lower-priority", "ordinary-profile", "unclaimed",
+  ]);
+  // General presentation is not repurposed as a scheduling order.
+  assert.deepEqual(ids(lanes.monitor_items), [
+    "preferred-profile", "higher-priority", "later", "first-index", "tie-b", "tie-a",
+    "older", "lower-priority", "ordinary-profile", "unclaimed",
+  ]);
+});
+
+test("an older date grants no eligibility and unsupported providers have no due lane", () => {
+  const monitor = (id: string, fields: JsonObject = {}) => row(id, {
+    task_class: "continuous_monitor", due_at: 1, expires_at: null,
+    required: [], targets: [], ...fields,
+  });
+  const items = [
+    monitor("peer", {claim: "agent-b"}), monitor("excluded", {excluded: ["agent-a"]}),
+    monitor("blocked", {actionable: false}), monitor("removed", {removed: true}),
+    monitor("expired", {expires_at: 100}), monitor("future", {due_at: 101}),
+    monitor("missing-date", {due_at: null}), monitor("capability", {required: ["network"]}),
+    monitor("recent", {index: 1, due_at: 90}), monitor("old", {index: 99, due_at: 20}),
+  ];
+  const lanes = projectTodoQuotaPlanning(clockRequest(items)).lanes as JsonObject;
+  assert.deepEqual(ids(lanes.monitor_due_items), ["old", "recent"]);
+  assert.deepEqual(ids(lanes.non_watch_only_monitor_due_items), ["old", "recent"]);
+  assert.deepEqual(ids(lanes.monitor_capability_blocked_due_items), ["capability"]);
+  const unsupported = projectTodoQuotaPlanning(clockRequest(items, {monitor_supported: false})).lanes as JsonObject;
   assert.deepEqual(unsupported.monitor_due_items, []);
 });
 

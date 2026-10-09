@@ -35,6 +35,29 @@ registered peer can coordinate work within one Goal. Both reuse the existing
 [delegation service](local-delegation.md), independently governed member Turns
 and TS task acceptance. A coordinator role alone grants no execution authority.
 
+## Source references in conversation answers
+
+Project, steward and collaboration answers share source-reference guidance.
+Repository-relative Markdown destinations do not identify an openable source in
+chat. For verified public repository content, the Agent should establish the
+canonical repository and revision it actually read, then cite an absolute
+permalink. A project name, an old link or the current remote branch is not enough
+to identify that revision. Private, ignored, unpublished or locally modified
+content must not be presented as that public version.
+
+Local artifact links are appropriate only where the receiving channel can
+resolve the authorized artifact. Otherwise the answer retains a plain file or
+section reference and names a material access/version gap. Making a citation
+clickable does not authorize publication or upload. This is authoring guidance,
+not a URL verifier: the channel renderer preserves authored destinations and
+delivery readback verifies what was sent, not source truth or recipient access.
+
+项目、管家和协作回复共用来源引用指导。聊天中的仓库相对路径不能作为可打开的
+来源网址；已核验的公开仓库内容应引用实际读取版本及正确仓库的绝对永久链接。
+私有、忽略、未发布或本地修改的内容不能冒充公开版本。只有接收渠道能解析已授权
+产物时才使用本地文件链接，否则保留文件／章节说明，并指出重要的访问或版本缺口。
+引用需要可用，不构成上传或发布授权；此指导不替代来源核验或渠道实际验收。
+
 ## Enable LoopX mode
 
 On a local managed Codex Goal conversation, choose **Enable LoopX** in the
