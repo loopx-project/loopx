@@ -665,11 +665,28 @@ def _resolve_delivery_sender(external_sender):
     return None, False
 
 
+def _belongs_to_chat_host(root, store, path):
+    from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
+
+    route_path = _root(root) / "roundtrips" / (path.parent.name + ".json")
+    try:
+        # Missing legacy routes can only be recovered from the coordination
+        # root's Chat receipts. Private hosts recover their frozen provenance
+        # at startup before draining; a foreign host must never claim them.
+        route = _read(route_path) if route_path.exists() else {}
+        return route.get("kind") != "peer" and is_source_chat_host(root, route, store)
+    except (OSError, ValueError, TypeError):
+        logging.getLogger(__name__).warning("Manager return source provenance unavailable")
+        return False
+
+
 def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
     processed = 0
     for path in iter_result_paths(_root(root) / "replies"):
         if cancelled():
             break
+        if not _belongs_to_chat_host(root, store, path):
+            continue
         state_path = path.with_name(path.stem + ".delivery.json")
         effect_locks = ExitStack()
         try:
@@ -992,6 +1009,8 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     for path in iter_result_paths(_root(root) / "replies"):
         if cancelled():
             break
+        if not _belongs_to_chat_host(root, store, path):
+            continue
         state_path = path.with_name(path.stem + ".delivery.json")
         with exclusive_file_lock(path.with_suffix(".lock")):
             try:
