@@ -8,13 +8,39 @@ import {canonicalTaskLease} from "./task_lease_state.ts";
 import {decodeRuntimeShadowRequest, verifyShadowSourceSnapshot, withShadowSourceLocks} from "./runtime_shadow.ts";
 import {loadLegacyCoordinationWriterFence} from "./legacy_writer_fence.ts";
 import {withShadowMaintenanceLock, ShadowManagementError, readShadowManagementState,
-  readRetainedShadowArtifacts, shadowManagementDirectory} from "./shadow_management.ts";
+  readRetainedShadowArtifacts, shadowManagementDirectory, requireShadowCaptureBinding} from "./shadow_management.ts";
 import {readLocalAuthorityShadow, LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA} from "./local_authority_shadow.ts";
+import {drainInventory} from "./shadow_drain_files.ts";
+import {planShadowDrain, SHADOW_DRAIN_PLAN_REQUEST_SCHEMA} from "./shadow_drain_plan.ts";
 import {localAuthorityProviderPaths} from "./local_authority_provider.ts";
 import {FileAuthorityStore} from "./file_authority_store.ts";
 
 export const COLD_SOURCE_INSPECTION_REQUEST_SCHEMA = "loopx_cold_source_inspection_request_v0";
 export const COLD_SOURCE_INSPECTION_RESULT_SCHEMA = "loopx_cold_source_inspection_result_v0";
+
+/** Observe the existing drain owner's decisions without publishing a cursor,
+ * replaying an entry or reclaiming bytes. Failure keeps the raw inventory;
+ * an unknown original cannot be silently classified as settled. M is held. */
+async function reviewRetainedOutbox(root: string, goal: string, view: JsonObject): Promise<JsonObject> {
+  const boundary = {executed: false, execution_authority_granted: false};
+  try {
+    const binding = await requireShadowCaptureBinding(root, goal);
+    const partitions: JsonObject[] = [];
+    for (const partition of ["todos", "leases"] as const) {
+      const inventory = await drainInventory(root, goal, partition);
+      partitions.push(planShadowDrain({schema_version: SHADOW_DRAIN_PLAN_REQUEST_SCHEMA,
+        runtime_root: root, goal_id: goal, partition,
+        capture_lineage_id: binding.capture_lineage_id, store_identity: binding.store_identity,
+        source_root_digest: binding.source_root_digest, cursor: inventory.cursor, entries: inventory.entries,
+        remaining_entries: inventory.entries.length, budget_open: true, acknowledgement: null}, view));
+    }
+    return {status: "planned", ...boundary, partitions};
+  } catch (error) {
+    const failure = error as {reasonCode?: string; reason_code?: string; code?: string};
+    return {status: "failed", ...boundary,
+      reason_code: failure.reasonCode ?? failure.reason_code ?? failure.code ?? "shadow_drain_request_invalid"};
+  }
+}
 
 export async function inspectColdCoordinationSource(value: unknown): Promise<JsonObject> {
   try {
@@ -58,13 +84,21 @@ export async function inspectColdCoordinationSource(value: unknown): Promise<Jso
           const result = await readLocalAuthorityShadow({
             schema_version: LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
             runtime_root: request.runtime_root, goal_id: request.goal_id,
-            store_kind: storeKind, read_model: "proof", scan_limit: 0,
+            store_kind: storeKind, read_model: "proof",
+            scan_limit: storeKind === "runtime_shadow" && managementState?.status === "active" ? 10000 : 0,
           });
           if (result.status !== "loaded") throw new ShadowManagementError(String(result.reason_code ?? "provider_read_unavailable"));
           return result;
         }
         const runtimeReadback = await historyReadback("runtime_shadow", artifacts.runtime_store !== null);
         const legacyReadback = await historyReadback("legacy_observation", artifacts.legacy_store !== null);
+        // Inactive/interrupted capture must recover its own management operation
+        // first. A directory alone cannot supply the missing lineage authority.
+        const outboxReview = managementState?.status === "active" && runtimeReadback !== null
+          ? await reviewRetainedOutbox(request.runtime_root, request.goal_id, runtimeReadback) : null;
+        // Full proof is an internal input to both partition plans, not extra
+        // response history. Preserve the existing compact readback boundary.
+        if (runtimeReadback !== null) (runtimeReadback.proof as JsonObject).transactions = [];
         const retainedLeases: JsonObject[] = [];
         for (const entry of request.source_snapshot.lease_inventory as JsonObject[]) {
           const name = String(entry.name);
@@ -93,7 +127,8 @@ export async function inspectColdCoordinationSource(value: unknown): Promise<Jso
             .map(lease => lease.todo_id),
           retained_leases: retainedLeases,
           capture: {management_state: managementState, artifacts,
-            runtime_shadow_readback: runtimeReadback, legacy_observation_readback: legacyReadback},
+            runtime_shadow_readback: runtimeReadback, legacy_observation_readback: legacyReadback,
+            outbox_review: outboxReview},
           projection: request.projection, source_snapshot: request.source_snapshot,
           decision_read_from_shadow: false,
         };

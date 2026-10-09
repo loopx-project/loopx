@@ -274,6 +274,7 @@ def test_old_source_http_inventory_keeps_history_and_does_not_grant_import(old_a
         assert old["outbox_files_present"] is captured
         assert old["writer_stop_verified"] is old["outbox_reconciliation_verified"] is old["import_ready"] is False
         assert result["authority_changed"] is result["execution_authority_granted"] is False
+        assert "outbox_review" not in json.dumps(result)
     assert before == capture_bytes(ws)
     assert source == (ws.state.read_bytes(), ws.registry.read_bytes())
     assert not (ws.runtime / "authority").exists()

@@ -39,6 +39,10 @@ def test_capture_inventory_keeps_original_history_and_outbox_bytes(tmp_path):
     assert raw["sha256"] == "sha256:" + hashlib.sha256(residue.read_bytes()).hexdigest()
     assert result["outbox_reconciliation_verified"] is False
     assert result["import_ready"] is False
+    review = capture["outbox_review"]
+    assert review["status"] == "failed"
+    assert review["reason_code"] == "outbox_file_invalid"
+    assert review["executed"] is False
     assert before == capture_bytes(fixture)
     assert not (fixture.runtime / "authority").exists()
 
@@ -54,11 +58,32 @@ def test_capture_inventory_keeps_rolled_back_operation_archives(tmp_path):
     assert capture["management_state"]["status"] == "inactive"
     assert capture["artifacts"]["runtime_store"] is None
     assert capture["runtime_shadow_readback"] is None
+    assert capture["outbox_review"] is None
     archives = capture["artifacts"]["rollback_archives"]
     assert len(archives) == 1
     assert archives[0]["path"] == rollback["rollback"]["candidate_archive_path"]
     assert archives[0]["sha256"] == "sha256:" + hashlib.sha256(Path(archives[0]["path"]).read_bytes()).hexdigest()
     assert before == capture_bytes(fixture)
+
+
+@pytest.mark.parametrize("window", ["before_commit", "after_commit"])
+def test_original_lease_outbox_uses_its_own_partition_without_renewal_or_cleanup(tmp_path, window):
+    fixture = workspace(tmp_path)
+    todo_id = fixture.add("Original leased task")["todo_id"]
+    fixture.crash(window, "task-lease", "acquire", "--todo-id", todo_id,
+                  "--owner", "agent-a", "--idempotency-key", "original-lease", "--ttl-seconds", "120")
+    before = capture_bytes(fixture)
+    lease_path = fixture.runtime / "goals" / fixture.goal / "task-leases" / (todo_id + ".json")
+    lease_bytes = lease_path.read_bytes()
+    result = fixture.cli("coordination-shadow", "inspect-source")["source_inventory"]
+    review = result["capture"]["outbox_review"]
+    assert review["status"] == "planned" and review["executed"] is False
+    leases = next(p for p in review["partitions"] if p["partition"] == "leases")
+    assert len(leases["pending_entry_ids"]) == (1 if window == "before_commit" else 0)
+    assert len(leases["reclaim_entry_ids"]) == (0 if window == "before_commit" else 1)
+    assert leases["next_seq"] == (1 if window == "before_commit" else 2)
+    assert todo_id in result["leases_requiring_settlement"]
+    assert lease_path.read_bytes() == lease_bytes and before == capture_bytes(fixture)
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
@@ -123,6 +148,40 @@ def test_capture_inventory_does_not_drain_crashed_original_outbox(tmp_path, wind
     assert any(e["path"].endswith(".prepared.json") for e in entries)
     assert any(e["path"].endswith(".committed.json") for e in entries)
     assert result["import_ready"] is False and result["outbox_reconciliation_verified"] is False
+    review = result["capture"]["outbox_review"]
+    assert review["status"] == "planned" and review["executed"] is False
+    plans = review["partitions"]
+    todos = next(p for p in plans if p["partition"] == "todos")
+    assert len(todos["pending_entry_ids"]) == (1 if window == "before_commit" else 0)
+    assert len(todos["reclaim_entry_ids"]) == (0 if window == "before_commit" else 1)
+    assert len(todos["replay_entries"]) == (0 if window == "before_commit" else 1)
+    assert result["writer_stop_verified"] is False
+    assert before == capture_bytes(fixture)
+
+
+@pytest.mark.parametrize("defect", ["receipt_bytes", "orphan_marker", "foreign_lineage"])
+def test_outbox_review_refuses_unproved_disposition_but_retains_original_bytes(tmp_path, defect):
+    fixture = workspace(tmp_path)
+    window = "after_commit" if defect == "receipt_bytes" else "before_commit"
+    fixture.crash(window, "todo", "add", "--role", "agent", "--text", "Original operation")
+    directory = fixture.runtime / "authority-shadow" / "outbox" / fixture.goal / "todos"
+    prepared = next(directory.glob("*.prepared.json"))
+    if defect == "orphan_marker":
+        prepared.unlink()
+    else:
+        record = json.loads(prepared.read_text())
+        if defect == "receipt_bytes":
+            record["writer"]["operation_id"] = "different-original-operation"
+        else:
+            record["capture_lineage_id"] = "foreign-lineage"
+        prepared.write_text(json.dumps(record))
+    before = capture_bytes(fixture)
+    result = fixture.cli("coordination-shadow", "inspect-source")["source_inventory"]
+    review = result["capture"]["outbox_review"]
+    assert review["status"] == "failed"
+    assert review["reason_code"] == ("outbox_receipt_mismatch" if defect == "receipt_bytes" else "outbox_file_invalid")
+    assert review["executed"] is False
+    assert result["import_ready"] is False and result["outbox_reconciliation_verified"] is False
     assert before == capture_bytes(fixture)
 
 
@@ -170,6 +229,7 @@ def test_inventory_preserves_unreferenced_archive_without_shadow_or_effects(tmp_
     assert inventory["import_ready"] is False
     assert inventory["writer_stop_verified"] is False
     assert inventory["outbox_reconciliation_verified"] is False
+    assert inventory["capture"]["outbox_review"] is None
     assert result["executed"] is False
     assert not (fixture.runtime / "authority-shadow").exists()
     assert not (fixture.runtime / "authority").exists()
