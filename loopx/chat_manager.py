@@ -47,6 +47,7 @@ from .capabilities.steward_executor import (
 from .chat_agent import (
     CONVERSATION_INTENT_RESOLUTION_INSTRUCTION,
     TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION,
+    WORK_RESULT_VERIFICATION_INSTRUCTION,
     CodexChatAgentError,
 )
 from .chat_store import (
@@ -64,6 +65,9 @@ _ORDINARY_WORK_HANDOFF_INSTRUCTION = (
 )
 _DELEGATE_ORDINARY_WORK_INSTRUCTION = (
     "Delegate ordinary requested work to the responsible worker with the original intent and constraints; "
+)
+_DURABLE_CHANGE_RECEIPT_INSTRUCTION = (
+    "Never claim that a durable change happened until the control plane returns a verified receipt. "
 )
 MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer the current user message in Chinese unless the user requests another language. "
@@ -125,8 +129,8 @@ MANAGER_AGENT_OBJECTIVE = (
     + _DELEGATE_ORDINARY_WORK_INSTRUCTION +
     "do not require the owner to approve your translation into task edits. Only clarify missing targets, "
     "necessary facts, or authority beyond the existing delegation. Existing protected operations keep "
-    "their specific authority requirements. Never claim that a durable change happened "
-    "until the control plane returns a verified receipt. "
+    "their specific authority requirements. "
+    + _DURABLE_CHANGE_RECEIPT_INSTRUCTION +
     "Background work belongs to the selected worker Agent; respond in this conversation without waiting for a heartbeat."
 )
 
@@ -155,6 +159,9 @@ def manager_agent_objective(runtime_profile: str = "restricted") -> str:
     ).replace(
         _DELEGATE_ORDINARY_WORK_INSTRUCTION,
         "When another worker is needed, preserve the original intent and constraints; ",
+    ).replace(
+        _DURABLE_CHANGE_RECEIPT_INSTRUCTION,
+        WORK_RESULT_VERIFICATION_INSTRUCTION,
     )
 
 

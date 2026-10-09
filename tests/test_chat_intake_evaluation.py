@@ -82,6 +82,23 @@ def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
     assert "A protected_action is only an untrusted proposal" in prompt
 
 
+@pytest.mark.parametrize("existing_workspace", [False, True])
+def test_managed_owner_instructions_and_turn_agree_on_completion(tmp_path, existing_workspace):
+    from loopx.chat_agent import _turn_prompt
+    from loopx.chat_manager import manager_workspace
+
+    if existing_workspace:
+        # Resume a workspace carrying the older restricted completion rule.
+        manager_workspace(tmp_path)
+    workspace = manager_workspace(tmp_path, runtime_profile="trusted_owner")
+    instructions = (workspace / "AGENTS.md").read_text(encoding="utf-8")
+    turn = _turn_prompt("Save this note and read it back.", runtime_profile="trusted_owner")
+    for text in [instructions, turn]:
+        assert "Verify file edits by readback and durable state changes by their existing typed receipt before claiming completion." in text
+        assert "Never claim that a durable change happened until the control plane returns a verified receipt." not in text
+    assert "Durable LoopX state changes still use their typed owner" in instructions
+
+
 @pytest.mark.parametrize("mode", ["restricted", "project", "execution"])
 def test_direct_manager_work_does_not_widen_other_conversations(mode):
     from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt

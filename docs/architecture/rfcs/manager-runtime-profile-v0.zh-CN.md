@@ -25,7 +25,8 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   `read-only`。
 - `trusted_owner` 允许 Codex 管家使用宿主正常提供的文件、Shell、Git、Web 和已配置
   连接器，Codex sandbox 为 `danger-full-access`。
-  已授权的普通请求现在在当前对话中按相关项目的指令与 skills 执行，并核验实际结果；
+  已授权的普通请求现在在当前对话中按相关项目的指令与 skills 执行；文件改动以读回
+  核验，持久 LoopX 状态改动仍以既有类型化回执核验。
   仅有职责相近的已注册 Agent 不再强制转交 Inbox。用户明确指定的负责人、既有 Goal
   工作，以及需要其他 Agent 上下文或执行授权的任务仍走交办。缺少 worker binding
   既不授予启动 worker 的权限，也不撤销管家本身的宿主授权；本地完成不创建替代

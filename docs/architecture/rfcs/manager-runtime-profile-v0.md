@@ -30,7 +30,8 @@ read-only.
 - `trusted_owner` lets the Codex manager use normal host filesystem, shell, Git, web, and
   configured-connector tools. Its Codex sandbox is `danger-full-access`.
   Ordinary authorized requests now execute in the current conversation using the relevant
-  project's instructions and skills, with actual result verification. A similar registered
+  project's instructions and skills, verifying file edits by readback and durable LoopX
+  state changes by their existing typed receipts. A similar registered
   responsibility alone no longer forces an inbox handoff. Explicitly assigned owners,
   established Goal work and tasks needing another Agent's context or execution grant still
   use delegation. An absent worker binding neither grants worker launch nor removes the

@@ -435,6 +435,9 @@ TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION = (
     "A missing worker execution binding does not revoke your own current host grant, but does not authorize launching that worker. "
     "For work completed here keep context_handoff=null, goal_draft=null and proposals=[], then return the verified result in this conversation. "
 )
+WORK_RESULT_VERIFICATION_INSTRUCTION = (
+    "Verify file edits by readback and durable state changes by their existing typed receipt before claiming completion. "
+)
 
 
 def _turn_prompt(
@@ -560,7 +563,7 @@ def _turn_prompt(
         "Use goal_draft=null for ordinary questions, quotations, existing-work follow-ups and execution turns. Never create or start work merely by emitting a draft. "
         "A complete draft goes directly to the existing typed creation preview with one explicit apply. Do not ask the user to confirm the same intent in prose first; optional edits remain available. No new authorization or second executor follows from a draft. "
         )
-        + ("Verify file edits by readback and durable state changes by their existing typed receipt before claiming completion. "
+        + (WORK_RESULT_VERIFICATION_INSTRUCTION
            if project_work or direct_work else "Never claim the change has been written without a verified control-plane receipt. ")
         +
         "If you encounter an identity, approval, or host-tool gate, stop and describe it in gate. "
