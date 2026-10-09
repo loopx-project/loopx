@@ -72,6 +72,73 @@ def test_project_conversation_delivers_only_to_its_registered_goal(fixture):
     assert not pending(root, "other", "peer")["items"]
 
 
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "goal-instance"])
+def test_guidance_upgrade_replays_original_request_without_rewriting_history(
+    fixture, monkeypatch, exact
+):
+    import loopx.capabilities.manager_context as context
+    from loopx.capabilities.manager_context.roundtrip import report
+
+    root, registry, session, turn, request = fixture
+    if exact:
+        data = json.loads(registry.read_text())
+        data["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+        registry.write_text(json.dumps(data))
+    # Persist through the real delivery owner using an older generated guide.
+    # Guidance is adapter metadata; the original user's content is unchanged.
+    with monkeypatch.context() as old_version:
+        old_version.setattr(context, "INSTRUCTION", "Earlier receiver guidance.")
+        first = deliver(root, registry, session=session, turn=turn, request=request)
+    rid = first["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Original assessment")
+    report(root, "research", "worker", rid, "conclusion", "Original result")
+    before = {p.relative_to(_root(root)): p.read_bytes()
+              for p in _root(root).rglob("*.json")}
+
+    for _ in range(2):
+        replay = deliver(root, registry, session=session, turn=turn, request=request)
+        assert replay == {**first, "replayed": True}
+    assert {p.relative_to(_root(root)): p.read_bytes()
+            for p in _root(root).rglob("*.json")} == before
+
+
+@pytest.mark.parametrize("change", ["message", "brief", "recipient"])
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "goal-instance"])
+def test_guidance_upgrade_still_rejects_original_request_content_conflicts(
+    fixture, monkeypatch, exact, change
+):
+    import loopx.capabilities.manager_context as context
+
+    root, registry, session, turn, request = fixture
+    if exact:
+        data = json.loads(registry.read_text())
+        data["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+        registry.write_text(json.dumps(data))
+    with monkeypatch.context() as old_version:
+        old_version.setattr(context, "INSTRUCTION", "Earlier receiver guidance.")
+        first = deliver(root, registry, session=session, turn=turn, request=request)
+    if change == "message":
+        turn = {**turn, "message": "Different original user content"}
+    elif change == "brief":
+        request = {**request, "brief": {
+            "schema_version": "collaboration_brief_v0",
+            "purpose": "A changed output destination",
+            "context": "A changed collaboration context",
+            "constraints": [], "inputs": [], "acceptance": ["Verify the changed destination"],
+            "return_requirement": "Return to the original conversation",
+        }}
+    else:
+        path = next(_root(root).glob("entries/*/" + first["request_id"] + ".json"))
+        _write(path, json.loads(path.read_text()) | {"agent_id": "peer"})
+    before = {p.relative_to(_root(root)): p.read_bytes()
+              for p in _root(root).rglob("*.json")}
+
+    with pytest.raises(ValueError, match="context request identity conflict"):
+        deliver(root, registry, session=session, turn=turn, request=request)
+    assert {p.relative_to(_root(root)): p.read_bytes()
+            for p in _root(root).rglob("*.json")} == before
+
+
 @pytest.mark.parametrize("strict_envelope", [False, True])
 @pytest.mark.parametrize("origin", ["web", "lark"])
 def test_lifecycle_only_registry_cannot_supply_context_recipients(

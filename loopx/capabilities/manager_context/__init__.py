@@ -160,15 +160,18 @@ def deliver(
         )
 
         def persist_entry() -> bool:
+            # Generated receiver guidance may change across releases. Preserve
+            # the saved guide as history; compare only the original request.
+            request_content = {key: item for key, item in value.items() if key != "instruction"}
             exists = path.exists()
             if (
                 exists
                 and {
                     key: item
                     for key, item in _read(path).items()
-                    if key not in {"delivered_at", "source_channel"}
+                    if key not in {"delivered_at", "source_channel", "instruction"}
                 }
-                != value
+                != request_content
             ):
                 raise ValueError("context request identity conflict")
             if not exists:
@@ -186,9 +189,9 @@ def deliver(
                 {
                     key: item
                     for key, item in _read(path).items()
-                    if key not in {"delivered_at", "source_channel"}
+                    if key not in {"delivered_at", "source_channel", "instruction"}
                 }
-                != value
+                != request_content
             ):
                 raise ValueError("context delivery readback failed")
             return exists
