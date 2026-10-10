@@ -279,12 +279,16 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
     root = _Path(__file__).resolve().parents[2]
     probes = [expected[value] for value in vocabulary['values']]
     probes.append({'todo_id': 't1', 'replan_obligation_id': 'r1'})
-    completed = subprocess.run(
-        ['node', '--no-warnings', '--experimental-strip-types',
-         str(root / 'scripts/settlement_binding_witness.mts')],
-        input=json.dumps({'probes': probes}), capture_output=True, text=True,
-        encoding='utf-8', check=False,
-    )
+    try:
+        completed = subprocess.run(
+            ['node', '--no-warnings', '--experimental-strip-types',
+             str(root / 'scripts/settlement_binding_witness.mts')],
+            input=json.dumps({'probes': probes}), capture_output=True, text=True,
+            encoding='utf-8', check=False,
+            timeout=30.0,
+        )
+    except subprocess.TimeoutExpired:
+        raise ValueError('settlement_binding_kind: witness probe timed out') from None
     if completed.returncode != 0:
         raise ValueError(f'settlement_binding_kind: witness probe failed: {completed.stderr.strip()[:300]}')
     observed = json.loads(completed.stdout)
