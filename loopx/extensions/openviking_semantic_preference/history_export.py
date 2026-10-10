@@ -31,6 +31,7 @@ from typing import Any
 
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...entrypoint import pin_utf8_stdio
 from ...history import collect_history, validate_goal_id_path_segment
 
 HISTORY_EXPORT_SCHEMA_VERSION = "loopx_history_conclusion_export_v0"
@@ -473,6 +474,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    pin_utf8_stdio()
     args = _parser().parse_args(argv)
     payload = export_goal_conclusions(
         goal_id=args.goal_id,

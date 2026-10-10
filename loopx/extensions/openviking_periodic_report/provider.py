@@ -19,6 +19,7 @@ from ...capabilities.periodic_report.archive import (
 from ...capabilities.periodic_report.extension_envelope import (
     validate_openviking_archive_execution_envelope,
 )
+from ...entrypoint import pin_utf8_stdio
 from .activation import (
     OPENVIKING_PERIODIC_REPORT_EXTENSION_ID,
     OPENVIKING_PERIODIC_REPORT_EXTENSION_VERSION,
@@ -325,6 +326,7 @@ def _bound_extension_revision(request: Mapping[str, Any]) -> str | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    pin_utf8_stdio()
     args = _parser().parse_args(argv)
     if args.doctor:
         sdk = _sdk_module()
