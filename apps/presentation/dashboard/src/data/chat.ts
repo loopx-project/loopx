@@ -1127,7 +1127,7 @@ export function fetchLoopXMode(sessionId: string) {
 export type DelegationInventory = {
   items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string;
     status: string; worker_active?: boolean; recovery_required: boolean | null;
-    artifacts?: Array<{ref: string; sha256: string}>}>;
+    artifacts?: Array<{ref: string; sha256: string}>; current_use?: DelegationReadback["current_use"]}>;
   has_more: boolean; next_cursor: string | null; page_readback_complete: boolean;
 };
 export type {DelegationPreflight} from "./delegation-preflight.js";
@@ -1148,6 +1148,9 @@ export type DelegationReadback = {
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>};
+  current_use?: {state: "current" | "unavailable"; checked_operation_count: number;
+    reason?: "input_unavailable" | "source_unavailable" | "source_version_changed" | "dependency_cycle" | "verification_budget_exhausted";
+    blocking_operation_id?: string; blocking_input_ref?: string; path?: string[]};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
@@ -1179,11 +1182,12 @@ export function readManagedGoalResult(goalId: string, todoId: string) {
 }
 export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
   | "stopped" | "executing" | "validating" | "dispatched" | "unknown";
-type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null};
+type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null;
+  current_use?: DelegationReadback["current_use"]};
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
 export function delegationState(row: DelegationStateFacts): DelegationState {
   if (row.status === "unavailable") return "unavailable";
-  if (row.status === "accepted") return "accepted";
+  if (row.status === "accepted") return row.current_use?.state === "unavailable" ? "unavailable" : "accepted";
   if (row.status === "rejected") return "rejected";
   // A recorded stop precedes recovery: only the separate stop receipt proves
   // the original execution released its Host group, so the stored status alone

@@ -136,6 +136,21 @@ workspace、Goal、registry、runtime 与 operator execution configuration；模
 Todo 或外部动作权限。下方 shell 命令继续作为既有 Session、无 MCP host 或显式
 shell-only 协调的兼容入口；两种入口复用同一个 `Delegations` 服务和同一套验收规则。
 
+## Source use and recheck
+
+`read` qualifies the current use of declared source operations separately from
+historical acceptance. A result with `current_use.state`
+`unavailable` cannot supply current evidence for another launch or adoption.
+The team evidence view shows the blocking input/source and withdraws its report.
+Repair the declared input/source under its existing authority, then use `read`
+or the view's recheck. That read runs validators; it never redispatches an
+accepted worker. Traversal is limited to 64 operations, 16 levels and a
+15-second elapsed budget for starting checks. An already running validator keeps
+its configured timeout. Undeclared assumptions and concurrent file snapshots
+are outside this check.
+
+中文：历史 accepted 与当前来源资格分开；获授权修复声明输入或来源后，重新读取恢复资格，不重派已验收 worker。
+
 ## Use an existing Agent conversation through its shell
 
 An attached Codex or other shell-capable Agent can use the same execution

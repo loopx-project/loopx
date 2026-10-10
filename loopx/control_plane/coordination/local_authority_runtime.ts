@@ -1,4 +1,5 @@
 import {requirePromotionRegisteredAgents} from "./shadow_registry_source.ts";
+import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
@@ -1369,7 +1370,8 @@ export async function terminalLifecycleLocalCoordinationTodo(
             ? null : requireJsonObject(input.completion_policy_request, "completion_policy_request"),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
-      }, async () => await authoritySourcesCurrent() && researchEvidence.current(), researchEvidence.qualify), ...providerEvidence};
+      }, async () => await authoritySourcesCurrent() && researchEvidence.current(),
+        researchEvidence.qualify, request => verifyReentrySettlement(root, request)), ...providerEvidence};
       } finally {await researchEvidence.close();}
     });
   } catch (error) {

@@ -319,15 +319,46 @@ not a rollback of the current head. A new wake still owes final-outcome replan
 when its checkpoint lacks a qualified path decision. Provider recovery must not
 erase that obligation or turn Todo completion into Goal acceptance.
 
-This closes the bounded CLI composition gap, not the entire installed product
-journey. The App's existing task-ownership editor migrates execution policy;
-it has no existing-Goal File/SQLite cutover interaction. The next companion
-belongs to the same TS migration owner: a path-free preview/apply transport,
-durable original-preview recovery after response loss/restart, explicit failures
-and separate selected-source readback in the existing Goal settings. Qualify it
-with the real packaged UI and backend, including pending projection/outbox and
-stopped/settled Host work. Legacy Markdown capture, isolated checkpoint import,
-whole-Goal recovery, D2 and release-default decisions remain independent gates.
+The existing Goal settings now provide File/SQLite preview, explicit apply,
+original-preview recovery after response loss/restart and independent current
+source readback through the same TS migration owner. The packaged UI/backend
+journey carries new SQLite writes back to File; historical completion does not
+reactivate an old target. Execution-policy migration remains a separate setting.
+Real HTTP/provider validation also checks a Host lease admitted after preview:
+apply refuses it after runtime restart, recovery remains read-only, and native
+lease release still requires a fresh plan because settlement changed the source.
+The native capture-disposition journey retains prepared outbox bytes in its own
+archive before provider cutover; an earlier plan cannot bypass a newer capture.
+The POSIX process journey in
+`tests/control_plane/test_local_provider_host_recovery.py` now starts and stops
+an actual supervised Host in both migration directions. Refusing cutover leaves
+that process alive; observed exit does not release its lease. Native settlement
+invalidates the old preview, and a fresh plan carries the retained lease history
+across providers. A stale execution proof cannot launch a process. A fresh lease
+advances version/epoch and starts legitimate work; replay of the original
+migration cannot revoke it. Reverse migration retains the new lease generation.
+The journey reuses the existing Host transport and canonical provider owners;
+it adds no automatic Host discovery or stop authority.
+The frozen SQLite V1 migration case also holds a real write transaction: busy
+refusal leaves all original history intact; release permits a verified upgrade
+and idempotent retry. Unsupported formats still refuse fallback creation.
+
+At `d9f27b077`, a fresh independently installed wheel passes the 23 CLI/HTTP/Host
+cases, with all 1,666 package members unchanged before and after execution.
+Its packaged App and real workspace/status/storage backend also pass explicit
+confirmation, post-commit response loss, process restart and original-preview
+read-only recovery. A new acknowledged SQLite write survives return to File
+with its complete domain transactions and original add receipt. Desktop/mobile
+readback distinguishes historical completion from the currently selected File
+provider without another apply. No source product is on the installed Python
+import path and no active Goal is switched.
+
+These are bounded local canonical continuity and POSIX execution controls, not
+proof of live attached-Host adoption, complete legacy Markdown capture, pending
+projection delivery, isolated checkpoint import, cross-platform operation or
+whole-Goal recovery. Those wider acceptance boundaries, D2 and release-default
+decisions require their own qualification; do not treat the settings journey as
+forced legacy migration.
 
 These are proposed engineering windows from a frozen candidate, not promised
 release dates. Run faults on disposable runtimes and detached verified copies;
@@ -504,6 +535,38 @@ materialization never meant constant SQLite work. The regression also checks a
 non-tail hole outside the live proof window: intact extrema/head/parent cannot
 replace continuity verification. No cached authority, proof removal, provider
 change or runtime performance fix is proposed from these observations.
+
+A fixed-history consumer control at `233cc76fd` closes the diagnostic's missing
+whole-command read comparison. On macOS arm64, Node 24.21.0 / SQLite 3.53.4,
+it reuses full-history-verified 64 KiB FULL/WAL 10k/100k synthetic histories
+in isolated copies. Each depth has 20 status and 20 quota samples, balancing
+depth and command order. Every sample starts a new Python CLI and managed
+Effect runtime, with shutdown outside timing; the OS file cache stays warm.
+Both depths use the same non-empty 1,353-file public scan root, whose input
+digest remains unchanged before/after measurement.
+
+| Complete read command | 10k p50 / p95 | 100k p50 / p95 |
+| --- | ---: | ---: |
+| `status` | 672 / 846 ms | 689 / 875 ms |
+| `quota should-run` | 873 / 1,111 ms | 894 / 1,079 ms |
+
+All 80 calls retain the canonical Todo. Final cursor/full-projection digests
+are unchanged, and oldest/middle original receipts still verify. Isolated
+runtimes are stopped and removed. This control shows no material command
+growth in that one-Todo read workload; it neither proves the original warm-head
+failure's cause nor qualifies the original formal profile. It omits mutations,
+growing history, concurrent writers, installed-wheel/App execution and the
+full-domain Goal payload. Its source and scan inputs differ from `5f51559dc`,
+so these timings are not a before/after performance-fix claim.
+
+Disposition: keep continuity verification and the current persisted format.
+No new index, cached decision, counter or connection pool is justified by this
+consumer control alone. Any future narrower-index or persisted-proof proposal
+must name its format/upgrade boundary, preserve non-tail-hole detection and
+original digests/receipts, and demonstrate a matched improvement through the
+real owning consumer before implementation. Continue existing whole-Goal
+consumer, installed recovery and contributor-owned formal qualification work;
+do not make independent migration/retirement wait for an all-green microbenchmark.
 
 Keep the original failed result and budgets. A passing absolute head budget
 does not cancel its failed growth row, and that row alone does not veto a

@@ -20,6 +20,12 @@ may use the existing browser's session; origin configuration does not prove that
 every page on that origin is public. Follow the browser's installed skill for
 TaskSpace/Page ownership and user consent.
 
+An origin list is insufficient for a public community host that must not reuse
+personal cookies. Its isolated native Chat can explicitly enable the separate
+[anonymous static public reader](public-source-reader.md), retaining its shell,
+history and private-MCP boundary. Dynamic signed-in pages remain outside that
+provider's coverage; do not silently substitute the personal Ego reader.
+
 For example, append a uniquely named server to the **actual execution host's**
 MCP configuration, preserving its existing entries and authentication:
 

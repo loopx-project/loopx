@@ -141,6 +141,38 @@ function assertFrozenV1(path: string, expectedDigest: string): void {
   assert.equal(sqliteAuthorityV1Digest(path, GOAL_ID), expectedDigest);
 }
 
+test("SQLite V1 migration refuses a busy writer without changing retained history and retries", {timeout: 30000}, async t => {
+  const root = await directory(t);
+  const v1 = createSqliteAuthorityStoreV1(root, GOAL_ID, seeds());
+  const before = sqliteAuthorityV1Digest(v1.path, GOAL_ID);
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  const writer = new DatabaseSync(v1.path);
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    const blocked = migrateSqliteAuthorityStoreV1ToV2(root, GOAL_ID, {execute: true});
+    assert.equal(blocked.status, "failed", JSON.stringify(blocked));
+    assert.equal(blocked.reason_code, "migration_transaction_failed");
+    assertFrozenV1(v1.path, before);
+  } finally {
+    writer.exec("ROLLBACK");
+    writer.close();
+  }
+  const migrated = migrateSqliteAuthorityStoreV1ToV2(root, GOAL_ID, {execute: true});
+  assert.equal(migrated.status, "migrated", JSON.stringify(migrated));
+  assert.equal(migrated.identity, v1.identity);
+  const store = new SqliteAuthorityStore(root, GOAL_ID);
+  const history = await logicalHistory(store);
+  for (const [index, row] of v1.rows.entries()) {
+    const retained = JSON.parse(history[2 + index]!);
+    assert.equal(retained.operation_id, row.operation_id);
+    assert.equal(retained.projection, JSON.stringify(row.operation_receipt.projection));
+    assert.deepEqual(retained.receipts, row.operation_receipt.receipts);
+  }
+  assert.equal((await store.verifyAuthorityHistory()).status, "verified");
+  assert.equal(migrateSqliteAuthorityStoreV1ToV2(root, GOAL_ID, {execute: true}).status, "already_current");
+  assert.deepEqual(await logicalHistory(store), history);
+});
+
 test("SQLite V1 migration fails closed when its swap target already exists", async t => {
   const root = await directory(t);
   const v1 = createSqliteAuthorityStoreV1(root, GOAL_ID, seeds());

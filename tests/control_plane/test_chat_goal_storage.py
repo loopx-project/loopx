@@ -201,6 +201,50 @@ def test_original_receipt_is_readable_when_live_provider_is_unavailable(api):
         unavailable.rename(directory)
 
 
+def test_a_preview_cannot_bypass_a_later_host_lease_and_requires_a_fresh_plan(api):
+    from loopx.control_plane.work_items.task_lease import (
+        acquire_task_lease,
+        release_task_lease,
+    )
+
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    target = "sqlite" if initial == "file" else "file"
+    task = add_goal_todo(registry_path=registry, goal_id="example", role="agent",
+                        text="Work admitted after preview", claimed_by="agent-a")
+    plan = preview(call, target)
+    acquired = acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id="example",
+        todo_id=task["todo_id"], owner="agent-a", idempotency_key="after-preview", ttl_seconds=3600)
+    assert acquired["ok"], acquired
+    leased = read(runtime)
+    restart_effect_runtime()
+    # Preview is evidence of its original source, not a reservation or a grant
+    # to copy a Host's newer active work. Recovery reads must not execute it.
+    assert operate(call, plan)[0] == 409
+    code, observed = operate(call, plan, "recover")
+    assert code == 200 and observed["recovery"] is None
+    assert observed["current"]["provider"] == initial
+    assert observed["current"]["unsettled_lease_count"] == 1
+    assert read(runtime) == leased
+    assert not (runtime / "authority-transition/local-provider" / plan["plan_sha256"]).exists()
+
+    released = release_task_lease(registry_path=registry, runtime_root=runtime, goal_id="example",
+        todo_id=task["todo_id"], owner="agent-a", idempotency_key="after-preview",
+        expected_version=acquired["lease"]["version"])
+    assert released["ok"] and released["lease"]["status"] == "released", released
+    settled = read(runtime)
+    # Settlement changed the source revision. It does not make the old preview
+    # current or erase that Host's lease lineage.
+    assert operate(call, plan)[0] == 409 and read(runtime) == settled
+    fresh = preview(call, target)
+    assert operate(call, fresh)[0] == 200
+    copied = read(runtime)
+    assert copied["todos"] == settled["todos"]
+    assert copied["leases"] == settled["leases"]
+    assert operate(call, fresh)[1]["status"] == "already_applied"
+    assert read(runtime) == copied
+
+
 @pytest.fixture(params=[False, True], ids=["cold", "retained-capture"])
 def old_api(tmp_path, monkeypatch, request):
     from tests.control_plane.test_cold_source_inspection import cold_workspace
