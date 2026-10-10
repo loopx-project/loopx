@@ -42,49 +42,53 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
+import subprocess  # noqa: F401 - smokes patch goal_policy.subprocess.run
 import sys
-from pathlib import Path
 
 # Goal context is resolved PER PROJECT from the event's cwd via the registry, and
 # "armed" = the project's .claude/loop.md exists (see goal_state.py). The registry
 # is the single source of truth; there is no separate active-state file.
+# goal_state also puts the repository root on sys.path, so it must be imported
+# before the shared policy module.
 from goal_state import active_context
+
+from loopx.control_plane.goal_mode_tool_policy import (  # noqa: E402
+    DESTRUCTIVE_SHELL_TOKENS,
+    ToolCall,
+    ToolKind,
+    Verdict,
+    decide_tool_call,
+    probe_should_run,
+    runtime_profile_flag_is_unsupported,
+    within,
+)
 
 # Read-only tools are always allowed under goal-mode. Edit/Write are scoped to
 # write_scope; Bash is gated by a destructive-command denylist. (No OS sandbox in
-# this design — the hook is the whole gate; see the module docstring.)
+# this design — the hook is the whole gate; see the module docstring.) The rule
+# itself is host-neutral and lives in loopx.control_plane.goal_mode_tool_policy; this module
+# only maps Claude Code's event and output shapes onto it.
 # NOTE: `Task` is deliberately NOT here. It can launch a subagent that performs
 # writes, so allowing it unconditionally would bypass the gate when
 # should_run=false. It must go through the gate: denied when should_run=false,
 # otherwise deferred to Claude Code's normal permission flow (unknown tool).
 READONLY_TOOLS = {"Read", "Glob", "Grep", "NotebookRead", "TodoWrite", "WebFetch", "WebSearch", "ToolSearch"}
 WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-DESTRUCTIVE = (
-    "rm -rf", "rm -fr", "mkfs", "dd if=", ":(){", "shutdown", "reboot",
-    "git push --force", "git reset --hard", "> /dev/sd", "format ",
-)
-CLAUDE_RUNTIME_PROFILE_ARGS = ["--runtime-profile", "claude_code"]
+DESTRUCTIVE = DESTRUCTIVE_SHELL_TOKENS
+CLAUDE_RUNTIME_PROFILE = "claude_code"
+CLAUDE_RUNTIME_PROFILE_ARGS = ["--runtime-profile", CLAUDE_RUNTIME_PROFILE]
 CLAUDE_LEGACY_SCHEDULER_ARGS = [
     "--host-surface", "claude_code",
     "--scheduler-owner", "agent_cli_loop",
     "--execution-mode", "interactive",
 ]
 
-
-def within(path: str, root: str) -> bool:
-    """True if `path` resolves to `root` or a descendant of it."""
-    try:
-        p = Path(path).resolve()
-        r = Path(root).resolve()
-        return r == p or r in p.parents
-    except Exception:
-        return False
+__all__ = ["decide", "emit", "should_run", "within"]
 
 
 def _gh_prefix():
     _exe = shutil.which("loopx")
-    return [_exe] if _exe else [__import__("sys").executable, "-m", "loopx.cli"]
+    return [_exe] if _exe else [sys.executable, "-m", "loopx.cli"]
 
 
 def emit(decision=None, reason=""):
@@ -100,50 +104,33 @@ def emit(decision=None, reason=""):
     }))
 
 
-def _runtime_profile_flag_is_unsupported(out: subprocess.CompletedProcess) -> bool:
-    diagnostic = str(out.stderr or "").lower()
-    return (
-        out.returncode == 2
-        and "--runtime-profile" in diagnostic
-        and (
-            "unrecognized arguments" in diagnostic
-            or "invalid choice" in diagnostic
-        )
-    )
+_runtime_profile_flag_is_unsupported = runtime_profile_flag_is_unsupported
 
 
 def should_run(registry, goal_id, agent_id=None) -> bool | None:
     """Return True/False from loopx quota should-run, or None if unknown."""
-    if not goal_id:
-        return None
-    cmd = list(_gh_prefix())
-    if registry:
-        cmd += ["--registry", registry]
-    cmd += ["--format", "json", "quota", "should-run", "--goal-id", goal_id]
-    if agent_id:
-        cmd += ["--agent-id", agent_id]
-    try:
-        out = subprocess.run(
-            [*cmd, *CLAUDE_RUNTIME_PROFILE_ARGS],
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=10,
+    return probe_should_run(
+        command_prefix=_gh_prefix(),
+        registry=registry,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_profile=CLAUDE_RUNTIME_PROFILE,
+        legacy_scheduler_args=CLAUDE_LEGACY_SCHEDULER_ARGS,
+        timeout_seconds=10,
+    )
+
+
+def _tool_call(tool: str, tool_input: dict) -> ToolCall:
+    if tool in READONLY_TOOLS:
+        return ToolCall(ToolKind.READ_ONLY)
+    if tool in WRITE_TOOLS:
+        return ToolCall(
+            ToolKind.FILE_WRITE,
+            write_path=tool_input.get("file_path") or tool_input.get("notebook_path") or "",
         )
-        if _runtime_profile_flag_is_unsupported(out):
-            out = subprocess.run(
-                [*cmd, *CLAUDE_LEGACY_SCHEDULER_ARGS],
-                capture_output=True,
-                text=True, encoding="utf-8", errors="replace",
-                timeout=10,
-            )
-    except Exception:
-        return None  # caller fails CLOSED on None for non-read-only tools
-    try:
-        data = json.loads(out.stdout or "{}")
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-    should_run_value = data.get("should_run")
-    return should_run_value if isinstance(should_run_value, bool) else None
+    if tool == "Bash":
+        return ToolCall(ToolKind.SHELL, command=tool_input.get("command") or "")
+    return ToolCall(ToolKind.OTHER)
 
 
 def decide(ev: dict) -> dict:
@@ -161,41 +148,19 @@ def decide(ev: dict) -> dict:
         return {}  # no goal here, or goal-mode off -> defer to normal flow
 
     goal_id = ctx.get("goal_id")
-    registry = ctx.get("registry")
-    agent_id = ctx.get("agent_id")
-    scope = ctx.get("write_scope") or []
-    tool = ev.get("tool_name", "")
-    ti = ev.get("tool_input", {}) or {}
-
-    def d(decision, reason):
-        return {"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason}}
-
-    if tool in READONLY_TOOLS:
-        return d("allow", "read-only/safe tool under goal-mode")
-
-    sr = should_run(registry, goal_id, agent_id)  # True / False / None
-    if sr is False:
-        return d("deny", f"goal '{goal_id}' should_run=false (quota/gate closed)")
-    if sr is None:
-        # deterministic should_run probe unavailable -> fail closed (non-read-only tool)
-        return d("deny", "loopx should_run probe unavailable — failing closed under goal-mode")
-
-    # should_run == True. Scope the Edit/Write file tools to write_scope, and
-    # gate Bash with the destructive denylist (the hook is the whole gate).
-    if tool in WRITE_TOOLS:
-        fp = ti.get("file_path") or ti.get("notebook_path") or ""
-        if scope and not any(within(fp, s) for s in scope):
-            return d("deny", f"'{fp}' outside goal write_scope {scope}")
-        return d("allow", "write within goal scope")
-    if tool == "Bash":
-        low = (ti.get("command") or "").lower()
-        if any(tok in low for tok in DESTRUCTIVE):
-            return d("deny", "destructive command blocked by goal policy")
-        return d("allow", "bash permitted under goal policy")
-    return {}  # unknown tool: defer to normal flow
+    decision = decide_tool_call(
+        _tool_call(ev.get("tool_name", ""), ev.get("tool_input", {}) or {}),
+        goal_id=goal_id,
+        write_scope=ctx.get("write_scope") or [],
+        # Looked up at call time so an in-process caller can substitute it.
+        should_run=lambda: should_run(ctx.get("registry"), goal_id, ctx.get("agent_id")),
+    )
+    if decision.verdict is Verdict.DEFER:
+        return {}  # unknown tool: defer to normal flow
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision.verdict.value,
+        "permissionDecisionReason": decision.reason}}
 
 
 def main():
