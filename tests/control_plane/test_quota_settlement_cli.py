@@ -6658,10 +6658,10 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     def frozen_completion_clock(argv, *args, **kwargs):
         if isinstance(argv, list) and argv[1:3] == ["-m", "loopx.cli"]:
             program = (
-                "import loopx.todos; "
+                "import loopx.control_plane.todos.legacy_mutation as legacy; "
                 "import loopx.control_plane.todos.provider_terminal_lifecycle as native; "
                 "clock=lambda:'2026-09-02T12:00:00+00:00'; "
-                "loopx.todos.now_local=clock; native.now_local=clock; "
+                "legacy.now_local=clock; native.now_local=clock; "
                 "from loopx.cli import main; raise SystemExit(main())"
             )
             argv = [argv[0], "-c", program, *argv[3:]]
