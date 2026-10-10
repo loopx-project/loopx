@@ -47,7 +47,7 @@ collector does not discover relevant files or scan the entire repository.
 
 | Material | How it enters the assessment |
 | --- | --- |
-| Goal and acceptance criteria | Operator-provided basis JSON |
+| Goal and acceptance criteria | Operator-provided basis; with explicit `acceptance_scope`, current canonical task criteria |
 | Files named by `--path` | Before/after contents and net changes; a not-yet-created file is allowed |
 | Optional `evidence` references in the basis | Explicitly named regular files, such as a test or probe report |
 | Other source, dependencies or conversation history | Not automatically read; its absence limits the judgment |
@@ -63,6 +63,40 @@ For example, selecting only a function's file may omit the helper it calls and
 the test that exercises it. A judgment from that packet cannot certify the full
 behavior. Include relevant tests, results and dependencies deliberately; if the
 necessary material does not fit, do not present the partial packet as complete.
+
+## Bind canonical task criteria
+
+The basis may include this private, local scope in addition to its existing
+`goal_id`, `objective` and nonempty `acceptance` fields:
+
+```json
+"acceptance_scope": {
+  "registry_ref": ".loopx/registry.json",
+  "runtime_ref": ".loopx/runtime",
+  "agent_id": "reviewer",
+  "todo_id": "todo_review",
+  "criterion_ids": ["criterion_review"]
+}
+```
+
+Use real owner paths and criterion IDs for that task. Both references must stay
+inside the selected workspace; escapes and symlinks are rejected. The examples
+are local operator configuration, not files to publish. The observer reads the
+current acceptance owner and replaces the model's acceptance list with the
+selected canonical descriptions. Private registry/runtime references are not
+sent to the model or persisted in public receipt scope. Without this block the
+basis is explicitly an operator study, not canonical acceptance.
+
+The binding pins Goal/Agent/Todo identity, contract revision/digest, task semantics
+and selected criteria. Capture rejects another task or agent before model dispatch;
+core receipt decoding applies the same identity rule. Select a new matching basis
+when changing tasks.
+A change invalidates in-flight assessment; a fresh observation needs a new basis
+revision/baseline through the existing initialization path. Core readback also
+withdraws a newly scoped receipt when its canonical binding is no longer current.
+The Goal's `assist` revision pin stays manual. Declared file net changes do not
+cover every intermediate decision or omitted dependency, and binding does not
+certify model correctness or grant mutation authority.
 
 ## Run it
 

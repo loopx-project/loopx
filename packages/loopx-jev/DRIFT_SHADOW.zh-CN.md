@@ -27,6 +27,33 @@
 
 例如只选择函数所在文件，而漏掉被调用的 helper 和对应测试，评估就不能证明完整行为。应主动纳入相关测试、结果和依赖；必要材料装不下时，不能把部分材料包装成完整证据。
 
+## 绑定规范任务 criterion
+
+在既有 `goal_id`、`objective` 和非空 `acceptance` 字段之外，basis 可以包含这个
+私有本机范围：
+
+```json
+"acceptance_scope": {
+  "registry_ref": ".loopx/registry.json",
+  "runtime_ref": ".loopx/runtime",
+  "agent_id": "reviewer",
+  "todo_id": "todo_review",
+  "criterion_ids": ["criterion_review"]
+}
+```
+
+替换为该任务真实 owner 路径与 criterion ID。两个引用必须位于选中 workspace 内，
+拒绝越界与符号链接；这些是本地操作者配置，不应发布。观察器读取当前验收 owner，
+用选中的规范描述替换模型 acceptance 列表。私有 registry/runtime 引用不发送给模型，
+也不进入公开回执范围。没有该块时，basis 明确属于 operator study，不是规范验收。
+
+binding 固定 Goal/Agent/Todo 身份、contract 修订／摘要、任务语义及所选 criterion。
+采集在模型派发前拒绝错配任务或 Agent，核心回执解码使用同一规则；切换任务须选用
+匹配的新依据。变更使在途评估失效；
+新的观察沿既有初始化入口重建 basis revision／baseline。核心读回也会在新格式回执的
+规范 binding 不再当前时撤回信号。Goal 的 `assist` revision pin 仍是手动的。
+声明文件净变化不覆盖每条中间判断或遗漏依赖；绑定不证明模型正确，也不授予修改权限。
+
 ## 操作方法
 
 使用 Python 3.11+ 和 LoopX 检出要求的 Node 运行时。采集器目前面向 Linux/macOS 的 POSIX 文件处理；Windows 采集未验证，缺少所需文件原语时记录观察不可用。此可选发行包不进入 LoopX 默认 wheel；从源码根目录在新环境中安装，再执行不需要 key 的集成测试：
