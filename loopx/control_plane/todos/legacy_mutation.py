@@ -694,7 +694,7 @@ def _update_goal_todo_legacy(
         )
     )
     if completion_validation_gate is not None:
-        validation_failure = completion_validation_gate.get("failure")
+        validation_failure: dict[str, Any] | None = completion_validation_gate.get("failure")
         if validation_failure is not None:
             return validation_failure
     write_class = "todo_claim" if claim_only else "todo_update"
@@ -827,8 +827,9 @@ def _update_goal_todo_legacy(
                 require_source_match=True,
                 missing_is_drift=False,
             )
-            if locked_completion["failure"] is not None:
-                return locked_completion["failure"]
+            locked_failure: dict[str, Any] | None = locked_completion["failure"]
+            if locked_failure is not None:
+                return locked_failure
             completion_metadata_updates_override = (
                 user_todo_completion_metadata_updates(
                     locked_completion["transaction"],
@@ -1019,7 +1020,7 @@ def _complete_goal_todo_legacy(
         completion_delivery_workspace=completion_delivery_workspace,
         completion_validation_workspace_path=completion_validation_workspace_path,
     )
-    validation_failure = validation_gate.get("failure")
+    validation_failure: dict[str, Any] | None = validation_gate.get("failure")
     if validation_failure is not None:
         return validation_failure
     with legacy_todo_write_transaction(
@@ -1074,8 +1075,9 @@ def _complete_goal_todo_legacy(
             missing_is_drift=True,
             current_completion_policy_source=locked_completion_policy_source,
         )
-        if locked_completion["failure"] is not None:
-            return locked_completion["failure"]
+        locked_failure: dict[str, Any] | None = locked_completion["failure"]
+        if locked_failure is not None:
+            return locked_failure
         completion_transaction = locked_completion["transaction"]
         completion_turn_key = completion_transaction.get(
             "completion_identity_key"

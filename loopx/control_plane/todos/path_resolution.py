@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...history import load_registry
+from ..projects.registry_codec import load_registry
 from ..goals.state_resolution import resolve_goal_state
 
 
