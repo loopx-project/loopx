@@ -12,6 +12,7 @@ from scripts.codex_app_apply_rrule import (
     _now_ms,
     _parse_args,
     _scheduler_hint_turn_instance_id,
+    _sqlite_row_exists,
     _update_sqlite,
     _update_toml,
     main,
@@ -465,3 +466,100 @@ def test_apply_creates_missing_automation_toml_and_sqlite(
     assert "/tmp/workspace" in row[3]
     assert any("scheduler-ack-current" in call for call in calls)
     assert list(tmp_path.glob("codex-dev.db.bak-*"))
+
+
+def _write_binding_registry(path: Path, *, bindings: list[dict]) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal",
+                        "repo": "/tmp/workspace",
+                        "coordination": {"thread_agent_bindings": bindings},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _install_against_bindings(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    bindings: list[dict],
+) -> str:
+    """First-install the automation for one binding set and return the refusal."""
+
+    automations_root = tmp_path / "automations"
+    db_path = tmp_path / "codex-dev.db"
+    registry_path = tmp_path / "registry.json"
+    sqlite3.connect(str(db_path)).close()
+    _write_binding_registry(registry_path, bindings=bindings)
+
+    def fake_run(command, **kwargs):
+        if "should-run" in command:
+            return _FakeCompleted(_hint_payload(apply_needed=True))
+        if "heartbeat-prompt" in command:
+            return _FakeCompleted({"ok": True, "task_body": "Advance `goal`."})
+        return _FakeCompleted({"ok": True})
+
+    monkeypatch.setattr("scripts.codex_app_apply_rrule.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "--automations-root",
+                str(automations_root),
+                "--db-path",
+                str(db_path),
+                "--registry",
+                str(registry_path),
+                "--goal-id",
+                "goal",
+                "--agent-id",
+                "agent",
+                "--automation-id",
+                "loopx-goal-agent",
+                "--loopx",
+                "loopx",
+            ]
+        )
+
+    # A refusal leaves no partial automation behind: no manifest, no row.
+    assert not (automations_root / "loopx-goal-agent" / "automation.toml").exists()
+    assert not _sqlite_row_exists(db_path, "loopx-goal-agent")
+    return str(excinfo.value)
+
+
+def test_apply_refuses_automation_without_a_bound_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """An unbound agent has no target thread, so nothing may be installed."""
+
+    message = _install_against_bindings(tmp_path, monkeypatch, bindings=[])
+
+    assert "expected exactly one bound host thread" in message
+    assert "found 0" in message
+
+
+def test_apply_refuses_automation_with_an_ambiguous_bound_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Two threads for one agent cannot be resolved to the automation's target."""
+
+    message = _install_against_bindings(
+        tmp_path,
+        monkeypatch,
+        bindings=[
+            {"agent_id": "agent", "thread_id": "thread-app"},
+            {"agent_id": "agent", "thread_id": "thread-tui"},
+        ],
+    )
+
+    assert "expected exactly one bound host thread" in message
+    assert "found 2" in message
