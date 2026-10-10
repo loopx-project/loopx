@@ -143,10 +143,8 @@ export async function admitAutomationStart(p: JsonObject): Promise<JsonObject> {
     }
     if (held !== undefined) {
       // Same identity, no durable host attempt: keep the original interval anchor.
-      return manual === null && current.eligible_now !== true
-        ? {...current, admitted: false, reserved: false, reason: "minimum_interval_wait"}
-        : {...current, admitted: true, reserved: true, resumed: true,
-          reason: "resumed_unstarted_reservation"};
+      return {...current, admitted: true, reserved: true, resumed: true,
+        reason: "resumed_unstarted_reservation"};
     }
     if (manual === null && current.eligible_now !== true) {
       return {...current, admitted: false, reserved: false, reason: "minimum_interval_wait"};

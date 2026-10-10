@@ -253,7 +253,7 @@ PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 
 
 | 有界结果 | 既有入口与 owner | 当前 checkpoint 与决定性出口 |
 | --- | --- | --- |
-| 声明来源链不可用时，阻止新的依赖使用 | `Delegations._read_current/start`、`delegation_results.require_dependencies/adoption_evidence`、`delegation.ts` | 遵循对齐 §3.8：source → A → B 中 A input 失效，即使 A output 不变也须拒绝当前依赖使用；验证真实 read/start/adopt/settlement 和打包证据读回，保留历史完成。 |
+| 声明来源链失效阻断当前使用 | `Delegations.read/start`、`delegation_results.py`、`delegation_result_use.ts` | `current_use` 区分历史完成和当前资格。新派发、采用与结算共用来源链检查；原 operation 重放只读回。File/SQLite 三层来源反例和打包团队证据页验证撤回、原因、输入引用与修复后重读。 |
 | 独立检查失败进入原任务可操作的恢复旅程 | `executor._task_validation_stage`、`ValidatedTurnReceipt`、canonical `turn_loop_controller_contract_v0.json`、`turn_journal.ts` | 传递已资格化失败范围与 repair/replan 细节；完成有界修复或只运行 verifier 的重试、当前验证与原效果结算。Host 声明不能冒充可信验证。 |
 | shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；精确 GoalRef 保持实例身份，任务变化或实例重建撤回旧判断。独立旧核心只保留手工研究的旧格式；规范 scope 不降级。显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
 
@@ -278,6 +278,11 @@ result，只重跑 validation，不再次调用 Host。**实际修复工作**需
 修复/复验，并在打包 App 读回成功或继续失败；CLI 与受影响 Lark 入口共用 owner。
 复制命令按钮或后端 receipt 不能独自完成旅程。用实际测量限制重复验证和来源链遍历
 成本；经既有 owner 回退代码，同时保留 receipt、已提交效果和未解决恢复义务。
+
+来源链每次准入最多读取 64 个 operation、16 层，按 operation 合并重复来源读取。
+15 秒经过时间预算停止发起后续检查；已启动的 validator 仍受其配置超时约束，
+这不是 15 秒 HTTP 响应承诺。预算耗尽返回不可用，不以缓存成功回退。该路径只
+覆盖明确声明的本地委派输入；跨来源不是原子快照，未声明的记忆或任意推理仍不在范围内。
 
 规范审查 basis 的 `acceptance_scope` 只引用选定 workspace 内的 registry/runtime，
 条款内容从当前 owner 读取，原命令及私有路径不进入模型问题。criterion hash、

@@ -19,7 +19,7 @@ from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
-from .codex_offline import CodexOffline
+from .codex_offline import CodexOffline, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
@@ -208,13 +208,24 @@ class SForgeWorker(CodexAgent):
         if self.feedback == "best-only":
             from benchmark.edgebench import feedback_hook
             from benchmark.edgebench.feedback import prepare_feedback_root
+            # Plain workers stage only Codex; their task image need not ship Python.
+            # Heartbeat/native-goal workers already staged this same interpreter.
+            if self.runtime is None:
+                result = backend.exec_run(handle, ["mkdir", "-p", _PYTHON], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Could not create best-only interpreter directory")
+                asyncio.run(stage_portable_python(self.environment, _PYTHON))
+                result = backend.exec_run(handle, ["chmod", "-R", "a+rX", _PYTHON], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Best-only interpreter is unreadable by worker")
+            hook_python = f"{_PYTHON}/bin/python3"
             hook = PurePosixPath("/opt/edgebench-feedback/hook.py")
             prepare_feedback_root(backend, handle)
             backend.copy_to_container(handle, Path(feedback_hook.__file__), hook)
-            result = backend.exec_run(handle, ["python3", str(hook), "--install"], user="root")
+            result = backend.exec_run(handle, [hook_python, str(hook), "--install"], user="root")
             if result.exit_code:
                 raise RuntimeError("Could not install best-only Codex delivery hooks")
-            result = backend.exec_run(handle, ["python3", "-c",
+            result = backend.exec_run(handle, [hook_python, "-c",
                 "from pathlib import Path; "
                 f"Path({str(hook)!r}).read_bytes(); Path('/etc/codex/hooks.json').read_bytes()"], user="agent")
             if result.exit_code:

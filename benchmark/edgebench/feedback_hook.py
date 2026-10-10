@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def install(config=Path('/etc/codex'), script=ROOT / 'hook.py'):
     path = config / 'hooks.json'
     settings = json.loads(path.read_text()) if path.exists() else {}
     hooks = settings.setdefault('hooks', {})
-    handler = {'hooks': [{'type': 'command', 'command': f'python3 {script}', 'timeout': 5}]}
+    handler = {'hooks': [{'type': 'command', 'command': shlex.join([sys.executable, str(script)]), 'timeout': 5}]}
     for name in EVENTS:
         groups = hooks.setdefault(name, [])
         if handler not in groups:

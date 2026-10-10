@@ -377,38 +377,30 @@ new context delivery, not erasure of all previous sessions or proof that a model
 understood the correction. Already committed external effects retain their own
 reconciliation or explicitly authorized compensation contract.
 
-**Implementation boundary, source `44931b6d22a50b949d43354e6ea498fb6b68d231`:**
-[`Delegations._read_current`](../../../loopx/collaboration_mcp.py) rechecks an
-accepted operation's own rules and outputs; `read` subsequently attaches
-[`result_relationships`](../../../loopx/control_plane/collaboration/delegation_results.py).
-That operation can remain accepted while an incoming dependency is unavailable.
-`dependencies` reads a source through `_read_current`, so this source's own
-incoming dependency is not transitively checked. A bounded file-I/O diagnostic
-with synthetic local validation reproduced this for source → A → B: A's input
-changed, its output stayed unchanged, A showed an unavailable dependency and B's
-direct use still qualified. This is not a live worker or canonical-store test.
+**Local implementation checkpoint:** the direct-only gap observed at
+`44931b6d22a50b949d43354e6ea498fb6b68d231` is addressed by the candidate
+[`delegation_result_use.ts`](../../../loopx/control_plane/collaboration/delegation_result_use.ts)
+owner and [`delegation_results.py`](../../../loopx/control_plane/collaboration/delegation_results.py)
+host observations. Read, start, adoption and settlement qualify explicit,
+requester-scoped ancestry. Historical accepted/done records remain unchanged.
+Collection has per-admission memoization, cycle detection and bounds of 64
+operations, depth 16 and a 15-second elapsed budget; the budget stops new checks,
+not an already running validator. Missing or unvisited evidence is unavailable.
+No success is cached across admissions, and this is not an atomic file snapshot.
+Admission and adoption consume the aggregate result; expiry after per-link checks
+also withdraws those links instead of preserving early success.
 
-The nearest implementation slice qualifies **current use of explicitly linked
-local delegation results**, while retaining historical accepted/done receipts.
-Reuse [`delegation.ts`](../../../loopx/control_plane/collaboration/delegation.ts)
-for typed eligibility and `delegation_results.py` for host observations. Apply
-the same current-use check to read, start, adoption and settlement; do not change
-`todo_done` into recursive artifact validation. Traverse only requester-scoped,
-declared links, with per-read cycle detection, shared-source memoization and
-measured depth/operation/time bounds. An unvisited tail is unavailable, never
-assumed accepted. Cache no success across admissions. This does not provide an
-atomic snapshot against arbitrary concurrent file writers.
-
-Qualify direct and transitive invalidation, a shared-source diamond, cycles,
-source loss, unchanged erroneous content caught by a real declared validator,
-and invalidation between start and settlement. Verify no-link parity, unchanged
-historical records, bounded verifier cost and recovery without duplicate worker
-dispatch. The packaged team/evidence view must show current unavailability and
-its reason, allow a current recheck after authorized source/input repair and
-read the result back. If repair requires new execution, use a separately admitted
-task; rechecking an accepted operation must not redispatch its worker.
-CLI/MCP/Chat share the same owner. Full Goal-wide reverse propagation,
-all-session context correction and business rollback remain outside this slice.
+[`test_delegation_result_use.py`](../../../tests/test_delegation_result_use.py)
+exercises real local workers, independent validators and both File/SQLite stores:
+source → A → B withdraws current use when A's input changes, refuses downstream
+start/adoption, retains history and recovers after repair without redispatching
+accepted workers. Typed tests cover shared sources, cycles and exhausted bounds.
+The packaged team/evidence journey reads these results through production HTTP,
+withdraws the affected report, exposes its cause and rechecks after repair.
+CLI/MCP/Chat share the same owner; usage is in
+[local delegation](../../reference/local-delegation.md#repair-and-recheck).
+This is a locally validated candidate, not installed behavior or full Goal-wide
+reverse propagation, session correction, business rollback or cross-host HA.
 
 ## 4. Authority matrix
 

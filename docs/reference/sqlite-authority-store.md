@@ -393,6 +393,27 @@ exit in an isolated synthetic Goal. Keep passed, failed and untested cases
 separate. This operation sheet is preparation, not a trial invitation or a
 certificate for a released default.
 
+Record the selected Host separately from storage readiness. In Chat, a built-in
+CLI endpoint's `available` flag checks executable discovery; it does not prove
+authentication, model access, a completed Turn or restart recovery. For Codex,
+`codex --version` and `codex login status` inspect the existing installation and
+login without sending a model request. Do not copy credentials or another
+session's history to qualify a profile. An actual adapter `thread/start` response
+also establishes only startup: an empty upstream session can still lack a
+recoverable rollout after its process exits. Keep a refused original-session
+resume visible; neither a fresh replacement nor successful startup proves
+original-operation recovery.
+
+Use `turn plan` below to inspect the selected Todo's native decision without
+starting a model, writing state, acknowledging a scheduler or spending quota.
+`outer_controller` describes the hypothetical headless caller; this read-only
+command does not install or activate that controller. A ready route remains a
+plan, and the returned required reads, lease and execution boundaries still
+apply to any later authorized execution. Qualify the cohort's chosen Host and
+workload; unavailable unrelated Hosts do not block an independently qualified
+profile. Keep successful first-Turn execution and its original-operation restart
+readback separate from these non-model checks.
+
 For an already canonical trial Goal, set `TRIAL_REGISTRY`, `TRIAL_RUNTIME` and
 `TRIAL_GOAL` to its reviewed routes; choose `TRIAL_EXIT_PLAN` outside the live
 store. Keep the plan and returned `plan_sha256` privately. Read before applying:
@@ -403,6 +424,14 @@ trial_loopx() {
   : "${TRIAL_GOAL:?Set the reviewed Goal}"
   loopx --registry "$TRIAL_REGISTRY" --runtime-root "$TRIAL_RUNTIME" --format json "$@"
 }
+trial_loopx doctor --installation-only
+trial_loopx todo list --goal-id "$TRIAL_GOAL"
+: "${TRIAL_AGENT:?Choose the registered trial Agent}" "${TRIAL_TODO:?Choose its eligible Todo}"
+trial_loopx turn plan --goal-id "$TRIAL_GOAL" --agent-id "$TRIAL_AGENT" \
+  --todo-id "$TRIAL_TODO" --host codex-cli --iteration-context fresh \
+  --execution-mode isolated-headless --scheduler-owner outer_controller \
+  --available-capability filesystem_read
+# These inspection commands do not execute the first Turn or grant a lease.
 trial_loopx todo list --goal-id "$TRIAL_GOAL"
 trial_loopx configure-goal --goal-id "$TRIAL_GOAL" --quota-compute 0 --execute
 # Separately stop owning Hosts/writers and settle active leases/captures.
@@ -447,6 +476,19 @@ Storage activation grants no Host execution, lease ownership or external access.
 夹带已退役模块。陈旧 build 产物不是兼容性，也不能作为物理退役证据。在隔离
 合成 Goal 验证安装 CLI、打包 App、完整 Todo/来源、重启原操作恢复及保留新写入的
 退出。上面的命令是操作准备，不代表已经邀请试用或发布默认资格通过。
+
+Host 与存储分别验收。Chat 内置 CLI endpoint 的 `available` 仅检查可执行文件
+能否找到；不是登录、模型访问、Turn 完成或重启恢复证明。Codex 可先用
+`codex --version`、`codex login status` 读取已有安装与登录，不发送模型请求，
+不复制凭据或其他 Session 的历史。真实 `thread/start` 返回也只证明启动；空
+Session 的进程退出后可能尚无可恢复的 rollout。原 Session 恢复拒绝须保留，
+不能用另建 Session 或启动成功证明原操作恢复。
+
+上面的 `turn plan` 只读选定 Todo 的原生决策，不启动模型、写状态、ACK 调度或
+扣额度。`outer_controller` 描述假定的 headless 调用方，并不安装或启动控制器；
+ready 路由仍是计划，后续授权执行须遵守返回的 required reads、lease 和权限边界。
+按试用所选 Host 和负载验收，不让无关 Host 不可用阻塞独立合格的 profile。
+首个真实 Turn 完成及原操作重启读回仍须分别证明，不能从上述非模型检查推断。
 
 退出先暂停自动 Turn，再分别停止 Host/writer、结算 active lease/capture；从当前
 SQLite head 预览 File 迁移，审核冻结来源与备份，再明确应用同一 plan/digest。

@@ -308,7 +308,7 @@ The table tracks independent composition boundaries within M2/M3 and roadmap R2/
 
 | Bounded outcome | Existing entry and owner | Current checkpoint and decisive exit |
 | --- | --- | --- |
-| Unavailable declared ancestry prevents new dependent use | `Delegations._read_current/start`, `delegation_results.require_dependencies/adoption_evidence`, `delegation.ts` | Alignment §3.8: source → A → B with A input invalidated must refuse current dependent use even if A output is unchanged. Qualify real read/start/adopt/settlement and packaged evidence readback; keep historical completion. |
+| Unavailable declared ancestry prevents current use | `Delegations.read/start`, `delegation_results.py`, `delegation_result_use.ts` | `current_use` separates historical completion from present eligibility. New dispatch, adoption and settlement share ancestry checks; same-operation replay only reads back. Real File/SQLite three-level counterexamples and the packaged team reader cover withdrawal, cause/input references and restored readback. |
 | Independent check failure reaches an actionable original-task recovery journey | `executor._task_validation_stage`, `ValidatedTurnReceipt`, canonical `turn_loop_controller_contract_v0.json`, `turn_journal.ts` | Preserve qualified failure scope and repair/replan detail; complete bounded repair or verifier-only retry, current validation and original-effect settlement. Host assertions cannot become trusted validation. |
 | Shadow review explains criteria and coverage | progress-review receipt/context, `progress_review_evidence.ts`, canonical acceptance inspect | Select current canonical task criteria; exact GoalRef preserves instance identity, while changed tasks or recreated instances withdraw old judgments. Independent older cores retain only the legacy manual-study shape; canonical scope never downgrades. Show separate dimensions, declared-file net change, missing evidence and unreadable storage. Default off and existing assist trigger rules retain their semantics. |
 
@@ -342,6 +342,13 @@ entries share the owner. A command-copy button or backend receipt alone does not
 complete the journey. Bound repeated verification and source-chain traversal
 using measured workloads. Roll back code through its owner while retaining
 receipts, completed effects and unresolved recovery obligations.
+
+One ancestry admission reads at most 64 operations and 16 levels, merging
+repeated source reads by operation. The 15-second elapsed budget stops starting
+further checks; an already running validator retains its configured timeout.
+This is not a 15-second HTTP deadline. Exhaustion is unavailable, never saved
+success. Coverage is explicit local delegation inputs, not undeclared memory or
+arbitrary reasoning; multiple sources are not an atomic snapshot.
 
 An optional `acceptance_scope` refers only to registry/runtime paths inside the
 selected workspace. Criteria come from the current owner; private commands and

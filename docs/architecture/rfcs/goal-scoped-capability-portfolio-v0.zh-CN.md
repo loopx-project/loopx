@@ -5,7 +5,7 @@
 - **交付成熟度：** Proposal；现有目录、hook 与外部证据切片只是部分前置
 - **作者 / Owner：** LoopX capability 与 control-plane 维护者
 - **创建时间：** 2026-09-21
-- **最近一次规范修订：** 2026-09-26
+- **最近一次规范修订：** 2026-10-10
 - **实现基线：** `65afc4872db67d36f74625a9e53ae63da2bc619c`
 - **相关契约：** [总路线图](loopx-overall-roadmap-v0.zh-CN.md)、
   [研究探索](research-exploration-control-plane-v0.zh-CN.md)、
@@ -369,6 +369,20 @@ delegation 或 governed Turn。既有 turn-start/post-writeback hook 和 pending
 可选 Turn-start 摘要只包含相关 composition ref、stale/unavailable 依赖和下次复评
 条件。直接工作不增加 Portfolio prompt 段落；完整 catalog/history 与 owner join 留给
 按需 inspect。有界声明按既有 revision 缓存，配置/provider/receipt drift 仅失效相关项。
+
+### 有界改进意图的反馈切片
+
+既有 `goal_capability_organization` provider 经 `before_plan` 消费可选的声明
+反馈。提案 digest 绑定 Goal/Agent/Todo、缺口、候选 revision 与原配置／效果／
+回滚引用。收到匹配的 `failed` 或 `no_evidence` 反馈时，不能再次建议相同输入的
+试用。省略反馈保持旧行为，这个可选 consumer 不强制持久化禁止重试。成功只请求原 owner
+评审，输入变化令旧反馈过期。独立候选与已启用直接路径仍可使用，可选反馈
+失败须隔离。[能力契约](../../../loopx/capabilities/goal_capability_organization/README.zh-CN.md)
+定义有界输入格式与身份语义。
+
+这个后端切片不增加认证、采用账本、安装器、组合语言或权限，也不完成 portfolio
+生命周期或 connector 里程碑。资格、有效效果、迁移与开发／评估总成本须分别
+留证；确定性测试不是采用决定。
 
 ### 长程职责、渐进披露与记忆演化
 

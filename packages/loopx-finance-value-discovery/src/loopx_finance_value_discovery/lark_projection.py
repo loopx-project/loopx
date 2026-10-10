@@ -8,6 +8,7 @@ finance schema.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 import re
 from typing import Any
 
@@ -203,7 +204,58 @@ def render_decision_research_markdown(view: Mapping[str, Any]) -> str:
 def build_decision_research_lark_card(view: Mapping[str, Any]) -> dict[str, Any]:
     """Prepare a complete bounded card; sending requires the existing sink authority."""
 
-    markdown = render_decision_research_markdown(view)
+    return _research_card(render_decision_research_markdown(view))
+
+
+def build_published_decision_research_lark_card(
+    *,
+    state_file: str | Path,
+    goal_id: str,
+    extension_revision: str,
+    payload_sha256: str,
+    surface_id: str = "investment-research",
+) -> dict[str, Any]:
+    """Read the exact active publication through Core; prepare, never send.
+
+    Core owns lifecycle, envelope validation and content hashing. A stale or
+    disabled publication must fail there instead of falling back to a new view.
+    """
+
+    from loopx.extensions.presentation import read_extension_projection
+
+    envelope = read_extension_projection(
+        state_file=state_file,
+        extension_id="loopx-finance-value-discovery",
+        surface_id=surface_id,
+        extension_revision=extension_revision,
+        payload_sha256=payload_sha256,
+    )
+    if envelope["goal_id"] != goal_id:
+        raise ValueError("published research does not belong to the requested Goal")
+    lineage = envelope["lineage"]
+    plain = _lark_plain_text
+    reference = [
+        "**Published review reference**",
+        f"Goal: {plain(envelope['goal_id'])} · surface: {plain(envelope['surface_id'])}",
+        f"Source: {plain(lineage['source_id'])} · version: {lineage['version']}",
+        f"Published: {plain(envelope['generated_at'])}",
+        "Review due: " + (
+            plain(envelope["review_due_at"])
+            if envelope["review_due_at"] is not None else "unknown"
+        ),
+        "Check this original review deadline before acting; card preparation does not renew it.",
+        f"Extension revision: {plain(envelope['extension_revision'])}",
+        f"Payload SHA-256: {envelope['payload_sha256']}",
+    ]
+    if lineage["supersedes"]:
+        reference.append("Supersedes: " + ", ".join(map(plain, lineage["supersedes"])))
+    markdown = render_decision_research_markdown(envelope["view"])
+    return _research_card(markdown + "\n\n" + "\n".join(reference))
+
+
+def _research_card(markdown: str) -> dict[str, Any]:
+    """Apply the same no-truncation limit to prepared and published research."""
+
     if len(markdown.encode("utf-8")) > 18_000:
         raise ValueError("Research exceeds card capacity; review the complete published result in App. No research was truncated or sent.")
     return build_lark_markdown_reply_card(

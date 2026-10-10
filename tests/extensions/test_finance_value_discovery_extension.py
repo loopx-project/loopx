@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import site
 import subprocess
 import sys
 import tomllib
@@ -19,12 +20,15 @@ from loopx.extensions.manifest import load_extension_manifest
 from loopx.extensions.presentation import (
     default_extension_projection_root,
     publish_extension_projection,
+    read_extension_projection,
 )
 from loopx.extensions.runtime import (
     default_extension_state_file,
     doctor_installed_extension,
     extension_catalog_entries,
     install_extension,
+    disable_extension,
+    enable_extension,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -353,10 +357,26 @@ def _research_dashboard_input() -> dict[str, object]:
 def _installed_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    isolated_validator: bool = False,
 ) -> tuple[Path, Path]:
+    interpreter = Path(sys.executable)
+    if isolated_validator:
+        # Core resolves the manifest's validator with -I, without PYTHONPATH.
+        environment = tmp_path / "provider-env"
+        venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+        interpreter = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        purelib = subprocess.check_output([
+            str(interpreter), "-I", "-c",
+            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+        ], text=True).strip()
+        (Path(purelib) / "finance-source.pth").write_text(
+            "\n".join([str(EXTENSION_SRC), str(ROOT), *site.getsitepackages()]) + "\n",
+            encoding="utf-8",
+        )
     provider = tmp_path / "finance-provider"
     provider.write_text(
-        f"#!{sys.executable}\n"
+        f"#!{interpreter}\n"
         "from loopx_finance_value_discovery.cli import main\n"
         "raise SystemExit(main())\n",
         encoding="utf-8",
@@ -546,6 +566,119 @@ def test_dashboard_cli_and_lark_card_share_period_metric_projection(
     assert "Spot identity joins" in markdown
     assert "SYN / USDC" in markdown
     assert "evidence-only" in markdown
+
+
+def test_published_card_reads_exact_native_envelope_without_renewing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, runtime_root = _installed_manifest(tmp_path, monkeypatch, isolated_validator=True)
+    state_file = default_extension_state_file(runtime_root)
+    request = _research_dashboard_input()
+    request["source_version"] = 7
+    request["supersedes"] = ["synthetic-prior-review"]
+    request["metrics"].append({
+        "id": "unknown-cost", "label": "Costs", "value": "unknown",
+        "detail": "Missing evidence is not zero.", "tone": "warning",
+    })
+    receipt = publish_extension_projection(
+        "loopx-finance-value-discovery", "investment-research",
+        state_file=state_file, request=request, execute=True,
+    )
+    projection_file = default_extension_projection_root(state_file) / (
+        "loopx-finance-value-discovery/investment-research.json"
+    )
+    original_state = state_file.read_bytes()
+    original_projection = projection_file.read_bytes()
+    envelope = read_extension_projection(
+        state_file=state_file, extension_id="loopx-finance-value-discovery",
+        surface_id="investment-research", extension_revision=receipt["revision"],
+        payload_sha256=receipt["payload_sha256"],
+    )
+    assert run([
+        "render-lark-card", "--published-state-file", str(state_file),
+        "--goal-id", "synthetic-research-goal",
+        "--extension-revision", receipt["revision"],
+        "--payload-sha256", receipt["payload_sha256"],
+    ]) == 0
+    card = json.loads(capsys.readouterr().out)
+    text = card["elements"][0]["text"]["content"]
+    for expected in [
+        "synthetic-research-goal", "synthetic-research-2026-01-15", "version: 7",
+        "2026-01-15T12:00:00+00:00", "2026-02-15T12:00:00+00:00",
+        receipt["revision"], receipt["payload_sha256"], "synthetic-prior-review",
+        "Costs: unknown", "Counterevidence", "investment advice: false",
+        "trading allowed: false", "does not renew it",
+    ]:
+        assert expected in text
+    from loopx_finance_value_discovery.lark_projection import render_decision_research_markdown
+
+    assert text.startswith(render_decision_research_markdown(envelope["view"]))
+    assert state_file.read_bytes() == original_state
+    assert projection_file.read_bytes() == original_projection
+
+
+def test_published_card_rejects_stale_cross_goal_disabled_and_missing_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, runtime_root = _installed_manifest(tmp_path, monkeypatch, isolated_validator=True)
+    state_file = default_extension_state_file(runtime_root)
+    receipt = publish_extension_projection(
+        "loopx-finance-value-discovery", "investment-research",
+        state_file=state_file, request=_research_dashboard_input(), execute=True,
+    )
+    args = [
+        "render-lark-card", "--published-state-file", str(state_file),
+        "--goal-id", "synthetic-research-goal",
+        "--extension-revision", receipt["revision"],
+        "--payload-sha256", receipt["payload_sha256"],
+    ]
+
+    def rejected(arguments: list[str], message: str) -> None:
+        assert run(arguments) == 1
+        result = json.loads(capsys.readouterr().out)
+        assert message in result["error"]
+        assert result["external_writes_performed"] is False
+        assert result["trading_allowed"] is False
+
+    state_before = state_file.read_bytes()
+    projection_file = default_extension_projection_root(state_file) / (
+        "loopx-finance-value-discovery/investment-research.json"
+    )
+    published = projection_file.read_bytes()
+    for flag, wrong, message in [
+        ("--payload-sha256", "0" * 64, "does not match"),
+        ("--extension-revision", "previous-revision", "does not match"),
+        ("--goal-id", "another-goal", "does not belong"),
+    ]:
+        malformed = args.copy()
+        malformed[malformed.index(flag) + 1] = wrong
+        rejected(malformed, message)
+    rejected(args[:-2], "published card requires")
+    assert state_file.read_bytes() == state_before
+    assert projection_file.read_bytes() == published
+    disable_extension("loopx-finance-value-discovery", state_file=state_file, execute=True)
+    rejected(args, "disabled")
+    enable_extension("loopx-finance-value-discovery", state_file=state_file, execute=True)
+    projection_file.unlink()
+    rejected(args, "no published projection")
+    projection_file.write_bytes(published)
+    assert run(args) == 0
+    assert "Published review reference" in json.loads(capsys.readouterr().out)["elements"][0]["text"]["content"]
+    assert projection_file.read_bytes() == published
+
+
+def test_input_card_cannot_claim_a_publication_reference(tmp_path: Path, capsys) -> None:
+    input_path = tmp_path / "research.json"
+    input_path.write_text(json.dumps(_research_dashboard_input()))
+    assert run([
+        "render-lark-card", "--input-json", str(input_path), "--goal-id", "synthetic-research-goal",
+    ]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert "publication reference flags require" in result["error"]
 
 
 @pytest.mark.parametrize(

@@ -122,7 +122,7 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
         <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/></details>
         : <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>}
       {result.error ? <p role="alert">{result.error}</p> : null}
-      {result.status === "accepted" && !result.error && !result.recovery_required ? <details>
+      {result.status === "accepted" && result.current_use?.state !== "unavailable" && !result.error && !result.recovery_required ? <details>
         <summary>{zh ? "本次验收依据" : "Current validation basis"}</summary>
         {result.validation ? <>
           <p>{result.validation.source === "goal_acceptance" ? (zh ? "Goal 验收规则" : "Goal acceptance rules")
@@ -139,7 +139,7 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
           <code>{result.validation.basis_sha256}</code>
         </> : <p>{zh ? "此运行时未提供验收依据标识。" : "This runtime did not provide the validation basis identity."}</p>}
       </details> : null}
-      {result.status === "accepted" && !result.error && !result.recovery_required && result.artifacts?.length ? result.artifacts.map(artifact => <div key={`${artifact.ref}:${artifact.sha256}`}>
+      {result.status === "accepted" && result.current_use?.state !== "unavailable" && !result.error && !result.recovery_required && result.artifacts?.length ? result.artifacts.map(artifact => <div key={`${artifact.ref}:${artifact.sha256}`}>
         <TeamArtifactReport artifact={artifact} zh={zh}/>
         <details><summary>{zh ? "版本与来源标识" : "Version and source identifiers"}</summary>
           <code>{operationId}</code><code>{result.request_id}</code><code>{result.todo_id}</code>

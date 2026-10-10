@@ -379,6 +379,11 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
   if (observation.status === "accepted") {
     requireThat(Array.isArray(observation.artifacts) && observation.artifacts.length > 0,
       "accepted inventory requires current artifacts");
+    if (observation.current_use !== undefined) {
+      const use = requireJsonObject(observation.current_use, "delegation current use");
+      requireThat(use.state === "current" || use.state === "unavailable", "invalid delegation current use");
+      result.current_use = use;
+    }
     result.artifacts = observation.artifacts.map(value => {
       const artifact = requireJsonObject(value, "accepted artifact");
       requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"

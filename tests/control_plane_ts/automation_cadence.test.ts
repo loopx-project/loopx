@@ -130,8 +130,8 @@ test("an unconfirmed reservation resumes while a confirmed start fails closed", 
     await manage({...base, operation: "configure", expected_revision: 0, min_interval_minutes: 60,
       owner_reference: "owner-request", execute: true});
     assert.equal((await start("turn:1", 1000)).reserved, true);
-    assert.equal((await start("turn:1", 1000 + 3_600_000 - 1)).reason, "minimum_interval_wait");
-    const resumed = await start("turn:1", 1000 + 3_600_000);
+    assert.equal((await start("turn:2", 1001)).reason, "minimum_interval_wait");
+    const resumed = await start("turn:1", 1001, {trigger_at_ms: 1000});
     assert.equal(resumed.admitted, true);
     assert.equal(resumed.resumed, true);
     assert.equal(resumed.reason, "resumed_unstarted_reservation");

@@ -17,7 +17,7 @@ export function GoalTeamComparison({sessionId, result, zh}: {
     setError(""); setBusy(false);
     return () => {generation.current++;};
   }, [result, sessionId]);
-  const artifacts = result.status === "accepted" && !result.error && !result.recovery_required ? result.artifacts ?? [] : [];
+  const artifacts = result.status === "accepted" && result.current_use?.state !== "unavailable" && !result.error && !result.recovery_required ? result.artifacts ?? [] : [];
   const links = result.dependencies ?? [];
   const currentSelection = currentComparisonSelection(selection, result, sessionId);
   async function compare(link: DelegationDependency) {

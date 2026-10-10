@@ -139,7 +139,7 @@ def test_misbound_result_never_advances_session_cursor(tmp_path, fault):
 def test_installer_preserves_official_stop_and_is_idempotent(tmp_path):
     settings = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': '/official-stop'}]}]}}
     (tmp_path / 'hooks.json').write_text(json.dumps(settings))
-    script = tmp_path / 'hook.py'
+    script = tmp_path / 'hook with spaces.py'
     script.write_text('# synthetic provider hook')
     script.chmod(0o600)
     previous_umask = os.umask(0o077)
@@ -151,6 +151,10 @@ def test_installer_preserves_official_stop_and_is_idempotent(tmp_path):
     install(tmp_path, script)
     assert (tmp_path / 'hooks.json').read_text() == once
     assert json.loads(once)['hooks']['Stop'] == settings['hooks']['Stop']
+    import shlex
+    import sys
+    command = json.loads(once)['hooks']['SessionStart'][0]['hooks'][0]['command']
+    assert shlex.split(command) == [sys.executable, str(script)]
     assert set(json.loads(once)['hooks']) == {'Stop', 'PostToolUse', 'SessionStart', 'UserPromptSubmit'}
     assert tmp_path.stat().st_mode & 0o777 == 0o755
     assert script.stat().st_mode & 0o777 == 0o644
