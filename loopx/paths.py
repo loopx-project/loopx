@@ -105,7 +105,7 @@ def _runtime_root_has_machine_state(root: Path) -> bool:
     project_owned: set[str] = set()
     if root == DEFAULT_RUNTIME_ROOT and project_registry.is_file() and not _is_redirected_path(project_registry):
         from .control_plane.projects.registry_codec import load_registry
-        from .file_lock import _lock_path, lock_holder_path, lock_incident_path
+        from .file_lock import _lock_path, lock_holder_paths, lock_incident_path
 
         try:
             registry = load_registry(project_registry)
@@ -113,7 +113,8 @@ def _runtime_root_has_machine_state(root: Path) -> bool:
             return True  # Unclassified existing state requires an explicit route.
         project_owned = {
             project_registry.name, _lock_path(project_registry).name,
-            lock_holder_path(project_registry).name, lock_incident_path(project_registry).name,
+            lock_incident_path(project_registry).name,
+            *(holder.name for holder in lock_holder_paths(project_registry)),
         }
         goal_root = root / DEFAULT_PROJECT_GOALS.name
         declared_dirs = set()

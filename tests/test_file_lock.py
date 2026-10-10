@@ -487,3 +487,115 @@ sys.stdin.readline()
         assert not file_lock._effect_mutation_lock_path(target).exists()
     finally:
         _stop(holder)
+
+
+class _WindowsNamedOs:
+    """The real ``os`` module reporting Windows, so any CI host can exercise
+    the Windows holder layout. Kernel locking still uses the host backend."""
+
+    name = "nt"
+
+    def __getattr__(self, attribute: str) -> object:
+        return getattr(os, attribute)
+
+
+@pytest.fixture
+def windows_holder_layout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(file_lock, "os", _WindowsNamedOs())
+    monkeypatch.setattr(
+        file_lock, "_windows_process_is_alive", lambda pid: pid == os.getpid()
+    )
+
+
+def _holder_fields(**fields: object) -> dict[str, object]:
+    return {
+        "schema_version": file_lock.LOCK_HOLDER_SCHEMA_VERSION,
+        "lock_id": "0" * 16,
+        "policy": "mutation",
+        "host": file_lock.lock_holder_host_label(),
+        "pid": os.getpid(),
+        "agent_id": "agent-a",
+        "operation": "todo-update",
+        **fields,
+    }
+
+
+def test_posix_holder_liveness_reads_the_lock_file_record(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("POSIX keeps the holder record inside the lock file")
+    target = tmp_path / "state.json"
+    assert file_lock.lock_holder_paths(target) == (lock_holder_path(target),)
+    assert file_lock.lock_holder_liveness(target) == (file_lock.LOCK_HOLDER_ABSENT, {})
+
+    with exclusive_file_lock(target, agent_id="agent-a"):
+        state, record = file_lock.lock_holder_liveness(target)
+        assert state == file_lock.LOCK_HOLDER_LIVE
+        assert record["agent_id"] == "agent-a"
+    assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_RELEASED
+
+    lock_holder_path(target).write_text("not json", encoding="utf-8")
+    assert file_lock.lock_holder_liveness(target) == (
+        file_lock.LOCK_HOLDER_UNREADABLE,
+        {},
+    )
+
+
+def test_windows_holder_sidecar_is_not_a_json_state_file(
+    tmp_path: Path, windows_holder_layout: None
+) -> None:
+    target = tmp_path / "state.json"
+    target.write_text("{}", encoding="utf-8")
+
+    with exclusive_file_lock(target, agent_id="agent-a"):
+        assert lock_holder_path(target).name == "state.json.lock.holder"
+        assert sorted(path.name for path in tmp_path.glob("*.json")) == ["state.json"]
+        assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_LIVE
+
+    # The released record persists, and still must not look like state.
+    assert lock_holder_path(target).exists()
+    assert sorted(path.name for path in tmp_path.glob("*.json")) == ["state.json"]
+    assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_RELEASED
+
+
+def test_windows_holder_removes_a_legacy_json_sidecar_on_acquire(
+    tmp_path: Path, windows_holder_layout: None
+) -> None:
+    target = tmp_path / "state.json"
+    legacy = tmp_path / "state.json.lock.holder.json"
+    legacy.write_text(
+        json.dumps(_holder_fields(acquired_at="2026-01-01T00:00:00Z")),
+        encoding="utf-8",
+    )
+    # An older release holding the lock stays visible until a new holder runs.
+    assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_LIVE
+
+    with try_exclusive_file_lock(target) as acquired:
+        assert acquired is not None
+        assert not legacy.exists()
+    assert list(tmp_path.glob("*.json")) == []
+    assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_RELEASED
+
+
+def test_windows_holder_reader_prefers_the_latest_acquisition(
+    tmp_path: Path, windows_holder_layout: None
+) -> None:
+    # Upgrade window: a newer release left a released record, then an older
+    # process acquired the same lock and wrote the legacy name.
+    target = tmp_path / "state.json"
+    (tmp_path / "state.json.lock.holder").write_text(
+        json.dumps(
+            _holder_fields(
+                acquired_at="2026-01-01T00:00:00Z",
+                released_at="2026-01-01T00:00:01Z",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "state.json.lock.holder.json").write_text(
+        json.dumps(_holder_fields(acquired_at="2026-01-01T00:00:02Z")),
+        encoding="utf-8",
+    )
+
+    state, record = file_lock.lock_holder_liveness(target)
+    assert state == file_lock.LOCK_HOLDER_LIVE
+    assert record["acquired_at"] == "2026-01-01T00:00:02Z"

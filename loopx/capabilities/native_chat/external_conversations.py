@@ -7,6 +7,7 @@ runner. Write it before admission so a crash can replay the same client identity
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
@@ -14,6 +15,10 @@ from typing import Any
 from ...chat_store import _atomic_write_json, _read_json
 from ...chat_attachments import normalize_chat_image_attachments
 from ...file_lock import exclusive_file_lock
+
+# Request journals are named by their 24-hex request_ref; lock metadata and
+# other siblings in this directory are not requests.
+_REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 
 
 def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
@@ -251,7 +256,8 @@ class ChatExternalConversations:
             message=row["message"], source_id=row["request_ref"])
 
     def pending(self) -> list[dict[str, Any]]:
-        return [_read_json(path) for path in sorted(self.root.glob("*.json"))]
+        return [_read_json(path) for path in sorted(self.root.glob("*.json"))
+                if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")

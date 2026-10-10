@@ -383,3 +383,28 @@ def test_missing_origin_in_legacy_request_retains_lark_identity(ordinary):  # no
         assert store.list_sessions() == []
     finally:
         runtime.close()
+
+
+def test_external_request_listing_ignores_lock_holder_records(ordinary):  # noqa: F811
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+    store, runtime, contexts, _, _, _, _ = ordinary
+    observation = {"transport_ref": "lock-holder-app", "provider_ref": "c" * 24,
+                   "operator_ref": "d" * 24, "verified": True}
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: observation)
+    contexts.conversation_bindings = bindings
+    binding = bindings.configure(transport_ref="lock-holder-app", project_ref=contexts.available()[0]["project_ref"],
+                                 executor_endpoint_id="codex")
+    core = ChatExternalConversations(runtime)
+    args = {"binding_id": binding["binding_id"], "source": {"source_ref": "a" * 24,
+            "sender_ref": observation["operator_ref"], "private_human_message": True},
+            "request_ref": "e" * 24, "message": "/help", "command": "help"}
+    try:
+        first = core.admit(**args)
+        # Older Windows releases left persistent lock metadata named like a journal.
+        (core.root / (args["request_ref"] + ".json.lock.holder.json")).write_text(
+            json.dumps({"schema_version": "file_lock_holder_v0", "pid": 1}))
+        second = core.admit(**{**args, "request_ref": "f" * 24})
+        assert second["status"] == first["status"]
+        assert [row["request_ref"] for row in core.pending()] == ["e" * 24, "f" * 24]
+    finally:
+        runtime.close()

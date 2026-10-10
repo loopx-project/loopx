@@ -21,7 +21,7 @@ from ...configuration_transaction import configuration_payload_revision
 from ...file_lock import (
     EFFECT_MUTATION_LOCK_SUFFIX,
     exclusive_cross_runtime_file_lock,
-    lock_holder_path,
+    lock_holder_paths,
     lock_incident_path,
 )
 from ...history import load_registry
@@ -779,7 +779,7 @@ def _orphan_source_lock_error(path: Path) -> str | None:
     kernel_lock = path.with_name(f"{path.name}.lock")
     lock_artifacts = {
         kernel_lock,
-        lock_holder_path(path),
+        *lock_holder_paths(path),
         lock_incident_path(path),
         Path(f"{path}{EFFECT_MUTATION_LOCK_SUFFIX}"),
     }
