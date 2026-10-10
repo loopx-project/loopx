@@ -171,7 +171,9 @@ Also set `CODEX_OFFLINE_DIR` (Codex, code-mode sidecar, rg),
 artifacts. The host import must come from that checkout, whose tracked files
 must match HEAD. Commit the candidate before real validation. Baselines stage only
 the runner/native transport, without installing LoopX skills or initializing
-its state. LoopX modes use the formal installer and doctor readback.
+its state. Best-only plain workers also stage the configured portable Python for
+the delivery hook, without installing LoopX. LoopX modes use the formal installer
+and doctor readback.
 
 Supply `OPENAI_BASE_URL`, `OPENAI_API_KEY` and optionally `CODEX_WIRE_API`
 (default `responses`), or stage standard Codex authentication using

@@ -332,6 +332,11 @@ waiting reader cannot overwrite a newer delivery cursor and replay old feedback.
 Treat missing archive/delivery evidence as an unqualified treatment, not as a
 successful best-only trial. Public notifications do not include these errors.
 
+The delivery hook uses the runner's staged `LOOPX_PORTABLE_PYTHON` interpreter,
+including for Official and Single workers. A task image does not need to provide
+`python3` on its PATH. Native and blind plain workers retain their installation
+path without this additional staging.
+
 Sparse feedback reduces disclosed information but still supports adaptive tuning;
 it does not prove protection against evaluator overfitting or generalization.
 Keep native/blind comparisons and any independent final evaluation separate.
