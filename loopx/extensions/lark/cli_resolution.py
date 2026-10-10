@@ -123,6 +123,8 @@ def _version(
             check=False,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
