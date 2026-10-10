@@ -53,6 +53,13 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
 
+剩余 legacy writer 和 bootstrap 的 capture 适配器，在 runtime shadow 关闭且没有
+活跃持久 binding 时，跳过 rollout 历史读取和 Todo projector 构建。原源身份仍须
+解析；已有活跃 binding 即使配置关闭，也继续要求持久 prepare。普通旧源写入因此
+省去可选捕获工作，输出、历史保留及 outbox 恢复保持原契约。Python 保留这层
+Host IO 适配，直到最后受支持的源 writer 被替换；本批不代表整个 writer 退役或
+默认 provider 资格通过。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
