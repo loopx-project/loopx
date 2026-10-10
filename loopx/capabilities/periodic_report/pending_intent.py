@@ -15,6 +15,7 @@ from ...control_plane.capability_hooks import (
     POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION,
     InteractionProjectionHookRegistration,
 )
+from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
@@ -231,7 +232,11 @@ def _active_delivery_subscription(
 
     registry = load_registry(registry_path)
     goal = find_registry_goal(registry, goal_id)
-    if not isinstance(goal, Mapping) or goal.get("status") in {"stopped", "paused", "archived"}:
+    if (
+        not isinstance(goal, Mapping)
+        or goal_is_stopped(goal)
+        or goal.get("status") in {"stopped", "paused", "archived"}
+    ):
         return None
     subscription = resolve_goal_periodic_report_subscription(
         goal,

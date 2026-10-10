@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 
 from ...agent_registry import registered_agent_ids_for_goal
+from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.capability_hooks import (
     TURN_START_HOOK_RESULT_SCHEMA_VERSION, TurnStartHookRegistration, dispatch_turn_start_hooks,
 )
@@ -25,7 +26,11 @@ def periodic_report_cadence_hooks(
     if not agent_id:
         return ()
     goal = find_registry_goal(load_registry(registry_path), goal_id)
-    if not isinstance(goal, dict) or goal.get("status") in {"stopped", "paused", "archived"}:
+    if (
+        not isinstance(goal, dict)
+        or goal_is_stopped(goal)
+        or goal.get("status") in {"stopped", "paused", "archived"}
+    ):
         return ()
     subscription = resolve_goal_periodic_report_subscription(
         goal, read_periodic_report_machine_defaults(runtime_root))
@@ -50,7 +55,11 @@ def periodic_report_cadence_hooks(
         def resolve_current_subscription():
             nonlocal current_reporters
             current_goal = find_registry_goal(load_registry(registry_path), goal_id)
-            if not isinstance(current_goal, dict) or current_goal.get("status") in {"stopped", "paused", "archived"}:
+            if (
+                not isinstance(current_goal, dict)
+                or goal_is_stopped(current_goal)
+                or current_goal.get("status") in {"stopped", "paused", "archived"}
+            ):
                 return None
             current_reporters = registered_agent_ids_for_goal(current_goal)
             if not current_reporters or agent_id not in current_reporters:
