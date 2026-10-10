@@ -71,15 +71,16 @@ def _hash_tree(root: Path) -> dict[str, Any]:
     }
 
 
-def _run_git(source_root: Path, args: list[str]) -> str | None:
+def _run_git(source_root: Path, args: list[str], timeout: float = 30.0) -> str | None:
     try:
         result = subprocess.run(
             ["git", "-C", str(source_root), *args],
             check=False,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None

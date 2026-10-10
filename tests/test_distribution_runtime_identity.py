@@ -116,3 +116,11 @@ def test_incomplete_or_redirected_distribution_cannot_claim_an_artifact(owned_pa
 
 def test_unrelated_source_root_cannot_adopt_an_installed_distribution(owned_package, tmp_path):
     assert "package_fingerprint" not in manifest.release_runtime_identity(tmp_path / "checkout")
+
+
+def test_run_git_handles_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert manifest._run_git(tmp_path, ["status"], timeout=0.1) is None
