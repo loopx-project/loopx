@@ -19,7 +19,7 @@ from .todo_semantics import (
     todo_summary_monitor_writeback_supported,
 )
 from .resume_planning import build_todo_resume_planning_request
-from .summary_item import compact_todo_summary_item
+from .summary_item import compact_todo_summary_items
 from .user_gate import is_user_gate_todo_item
 from .route_continuation import build_todo_route_continuation_facts
 from .handoff_gate import todo_summary_handoff_gates
@@ -82,9 +82,14 @@ def project_quota_planning(
     observed_at = observed_now.timestamp()
     handoff_gates = todo_summary_handoff_gates(value)
 
+    display_sources = [*all_open_items, *(item for key in ("active_next_action_items", "active_next_action_executable_items")
+        for item in (value.get(key) if isinstance(value.get(key), list) else []) if isinstance(item, dict))]
+    displays = {id(item): display for item, display in zip(display_sources,
+        compact_todo_summary_items(display_sources, strip_text=True), strict=True)}
+
     def encode(item: dict[str, Any]) -> dict[str, Any]:
         priority, index = todo_projection_sort_key(item)
-        display = compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
+        display = displays[id(item)]
         due, expires = todo_item_next_due_at(item), todo_item_expires_at(item)
         return {
             "payload": item, **({"display": display} if display != item else {}),

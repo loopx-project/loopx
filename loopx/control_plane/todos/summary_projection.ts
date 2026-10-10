@@ -1,3 +1,4 @@
+import {projectTodoHandoffContext} from "./handoff_projection.ts";
 /** Whole-source summary decisions. Python materializes these ordinals as public
  * display records; counts and closure never depend on a presentation budget. */
 import type {JsonObject} from "../effect_program.ts";
@@ -17,6 +18,7 @@ interface SummaryProjection {
   fields: JsonObject;
   lanes: Record<string, DisplayLane>;
   orchestration: {candidate_items: number[]; user_blocker_items: number[]};
+  handoff_context?: JsonObject[];
 }
 
 /** The declared order is this request version's schema, not a hint: the same
@@ -116,6 +118,10 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
   const full = requireBoolean(request.full_selection, "full_selection");
   const rows = decodeRows(request);
   validateSummarySuccession(request, rows);
+  if (request.handoff_sources !== undefined && (!Array.isArray(request.handoff_sources) || request.handoff_sources.length !== rows.length)) {
+    throw new EffectRuntimeRequestError("summary handoff cardinality mismatch");
+  }
+
   // The co-deployed adapter sends source facts, not prose or full Todo bodies.
   for (const row of rows) {
     if ((row.claim !== null && typeof row.claim !== "string") || row.claimed !== Boolean(row.claim)) {
@@ -222,7 +228,16 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
   }
   Object.assign(fields, projectTodoClosure({schema_version: "todo_closure_request_v0", role,
     source_section: request.source_section, full_selection: fullSelection, rows: source.map(index => rows[index])}));
-  return {schema_version: "todo_summary_projection_v0", source_indices: source, full_selection: fullSelection, fields, lanes,
+  return {schema_version: "todo_summary_projection_v0",
+    ...(request.handoff_sources === undefined ? {} : {handoff_context: projectTodoHandoffContext(
+      (request.handoff_sources as unknown[]).map((value, index) => {
+        const context = requireJsonObject(value, "summary handoff source");
+        // Reuse the same normalized source facts, rather than sending another
+        // Todo identity/claim/exclusion/class copy for every historical row.
+        return {...context, metadata: {...requireJsonObject(context.metadata ?? {}, "handoff metadata"),
+          todo_id: rows[index].todo_id, claimed_by: rows[index].claim, excluded_agents: rows[index].excluded},
+          texts: {...requireJsonObject(context.texts ?? {}, "handoff texts"), task_class: rows[index].task_class}};
+      }))}), source_indices: source, full_selection: fullSelection, fields, lanes,
     orchestration: {
       candidate_items: role === "agent" ? selected.projected_open_items.filter(index => rows[index].task_class === "advancement_task") : [],
       user_blocker_items: role === "user" ? selected.projected_open_items.filter(index => rows[index].linked_user_action === true) : [],
