@@ -79,6 +79,11 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
 @pytest.fixture
 def without_source_todo_writers(isolated_todo_distribution):
     package, command = isolated_todo_distribution
+    _remove_source_todo_writers(package)
+    return command
+
+
+def _remove_source_todo_writers(package):
     (package / "control_plane/todos/line_update.py").unlink()
     (package / "control_plane/todos/legacy_mutation.py").unlink(missing_ok=True)
     capture_adapter = package / "control_plane/coordination/runtime_shadow_writer_adapter.py"
@@ -92,7 +97,76 @@ def without_source_todo_writers(isolated_todo_distribution):
     for node in reversed(definitions):
         del lines[node.lineno - 1:node.end_lineno]
     capture_adapter.write_text("".join(lines))
-    return command
+
+
+@pytest.mark.parametrize("window", ["before_commit", "after_commit"])
+@pytest.mark.parametrize("corrupt_cursor", [False, True], ids=["recover", "reject-unproved-cursor"])
+def test_pending_source_outbox_survives_producer_retirement(
+    tmp_path, isolated_todo_distribution, window, corrupt_cursor,
+):
+    from shadow_e2e_fixture import workspace
+
+    package, command = isolated_todo_distribution
+    w = workspace(tmp_path / "shadow", bootstrap=False)
+    w.command, w.cwd, w.package = tuple(command), tmp_path, package
+    assert w.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
+    original = w.add("Already delivered source work")["todo_id"]
+    w.crash(window, "todo", "add", "--role", "agent", "--text", "Pending source work")
+
+    def history():
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import json,sys;from pathlib import Path;"
+             "from loopx.control_plane.coordination.local_authority_shadow_adapter "
+             "import read_local_authority_shadow;"
+             "print(json.dumps(read_local_authority_shadow(runtime_root=Path(sys.argv[1]),"
+             "goal_id=sys.argv[2],scan_limit=10000)))", str(w.runtime), w.goal],
+            cwd=tmp_path, capture_output=True, text=True, timeout=45,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    before = history()
+    assert len(before["proof"]["transactions"]) == (2 if window == "before_commit" else 3)
+    assert original in {todo["todo_id"] for todo in before["head"]["todos"]}
+    # Use the existing partition owner rather than assuming its on-disk layout.
+    from loopx.control_plane.coordination.local_authority_shadow_outbox import partition_directory
+    directory = partition_directory(w.runtime, w.goal, "todos")
+    assert len(list(directory.glob("*.prepared.json"))) == 1
+    assert len(list(directory.glob("*.committed.json"))) == 1
+    source_bytes, registry_bytes = w.state.read_bytes(), w.registry.read_bytes()
+    _remove_source_todo_writers(package)
+
+    if corrupt_cursor:
+        cursor_path = directory / "drain-cursor.json"
+        cursor = json.loads(cursor_path.read_text())
+        cursor["last_partition_digest"] = "sha256:" + "f" * 64
+        cursor_path.write_text(json.dumps(cursor))
+        pending_bytes = {f.name: f.read_bytes() for f in directory.iterdir() if f.is_file()}
+        result = w.drain()
+        assert result["ok"] is False, result
+        assert result["reason_code"] == "outbox_cursor_unproved", result
+        assert {f.name: f.read_bytes() for f in directory.iterdir() if f.is_file()} == pending_bytes
+        assert history()["proof"]["transactions"] == before["proof"]["transactions"]
+    else:
+        result = w.drain()
+        assert result["ok"] is True, result
+        assert result["delivered"] == (1 if window == "before_commit" else 0)
+        assert result["replayed"] == (0 if window == "before_commit" else 1)
+        recovered = history()
+        transactions = recovered["proof"]["transactions"]
+        assert transactions[:len(before["proof"]["transactions"])] == before["proof"]["transactions"]
+        assert len(transactions) == 3
+        assert transactions[-1]["receipts"][0]["write_class"] == "todo_add"
+        assert transactions[-1]["receipts"][0]["seq"] == 2
+        assert {todo["text"] for todo in recovered["head"]["todos"]} == {
+            "Already delivered source work", "Pending source work"}
+        assert json.loads((directory / "drain-cursor.json").read_text())["last_seq"] == 2
+        assert sorted(f.name for f in directory.iterdir()) == ["drain-cursor.json"]
+        assert w.drain()["outcome"] == "nothing_pending"
+        assert history()["proof"]["transactions"] == transactions
+    assert w.state.read_bytes() == source_bytes
+    assert w.registry.read_bytes() == registry_bytes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

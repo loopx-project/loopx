@@ -23,6 +23,9 @@ class ShadowWorkspace:
     runtime: Path
     state: Path
     goal: str = "goal-e2e"
+    command: tuple[str, ...] = (sys.executable, "-m", "loopx.cli")
+    cwd: Path = REPO
+    package: Path = Path(loopx.__file__).resolve().parent
 
     def arguments(self, *args: str) -> list[str]:
         return [
@@ -39,8 +42,8 @@ class ShadowWorkspace:
 
     def cli(self, *args: str, success: bool = True) -> dict:
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", *self.arguments(*args)],
-            cwd=REPO,
+            [*self.command, *self.arguments(*args)],
+            cwd=self.cwd,
             capture_output=True,
             text=True,
             timeout=45,
@@ -66,7 +69,7 @@ class ShadowWorkspace:
         # driver here and bind it to the actual package's production owner.
         with TemporaryDirectory(prefix="loopx-drain-fault-") as directory:
             driver = Path(directory) / "drain_fault.mts"
-            module = Path(loopx.__file__).resolve().parent / "control_plane/coordination/shadow_drain.ts"
+            module = self.package / "control_plane/coordination/shadow_drain.ts"
             driver.write_text(
                 "import {drainShadowOutbox} from " + json.dumps(module.as_uri()) + ";"
                 "let input=''; for await (const bytes of process.stdin) input+=bytes;"
@@ -91,7 +94,7 @@ class ShadowWorkspace:
                     str(self.state),
                     *self.arguments(*args),
                 ],
-                cwd=REPO,
+                cwd=self.cwd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
