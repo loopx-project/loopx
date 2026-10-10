@@ -199,7 +199,7 @@
     },
     {
       "site": "loopx/capabilities/issue_fix/explore_projection.py::<module>.project_issue_fix_explore_graph::codec_read:load_registry#1",
-      "line": 643,
+      "line": 666,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
