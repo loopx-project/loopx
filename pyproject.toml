@@ -26,10 +26,19 @@ Changelog = "https://github.com/loopx-project/loopx/releases"
 ego-source-reader = [
   "mcp==1.28.1",
 ]
+public-source-reader = [
+  "mcp==1.28.1",
+  "resvg-py==0.5.0",
+  "defusedxml==0.7.1",
+  "pillow>=11,<13",
+]
 deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
 ]
 test = [
+  "resvg-py==0.5.0",
+  "defusedxml==0.7.1",
+  "pillow>=11,<13",
   "jsonschema>=4.23,<5",
   "mcp==1.28.1",
   "pyyaml>=6,<7",
