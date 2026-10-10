@@ -528,6 +528,12 @@ The File/SQLite lifecycle and settlement oracle removes the **whole isolated
 writer module**, line editor and four capture producers from a copy of the
 installed package. It covers original creation replay, update, completion,
 supersede/archive, leased settlement, restart recovery and provider loss.
+The same source and installed-wheel arms also recover a real legacy outbox
+transaction interrupted before or after the native store commit, after those
+producer definitions are physically removed. Recovery preserves source bytes
+and original receipts, drains exactly once and rejects an unproved cursor
+without deleting pending entries. This qualifies the retained File shadow drain;
+it does not qualify cold backup import or dispose of an active Goal's outbox.
 Retained Markdown interruption/capture tests guard the compatibility arm.
 Reverting the code move requires no data conversion or receipt rewriting.
 Whole-writer retirement still needs the declared support cutoff, last callers
@@ -540,7 +546,11 @@ canonical CLI 注册及 provider 操作不加载它；这只是机械隔离，�
 删除收益，也不新增决策源。共享验证、successor intent 与原回执适配器仍有用途。
 安装包副本物理移除整个 writer、行编辑器及四个 capture producer 后，真实
 File/SQLite CLI 验证生命周期、租约结算、重启与 provider 失效恢复。未迁移
-Markdown 的中断／capture 反例继续保留，代码回滚不转换数据或重写回执。
+Markdown outbox 的真实 native commit 前／后中断，也在移除 producer 后由相同
+源码／安装包两臂恢复：源字节与原回执保持、恰好一次 drain，未证明的 cursor
+被拒绝且 pending 条目不被删除。这只验证保留的 File shadow drain，不代表冷备份
+导入合格或活跃 Goal 的 outbox 已处置。中断／capture 反例继续保留，代码回滚
+不转换数据或重写回执。
 bootstrap、handoff、team-plan 和 Monitor 的旧源调用尚须分别退役，最终删除仍须
 支持截止及 outbox 处置；本批不强制升级或更改 provider 默认值。
 

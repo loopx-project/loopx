@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -16,13 +17,73 @@ from test_quota_authority_settlement_journey import _source
 import test_quota_settlement_cli as settlement
 
 
-@pytest.fixture
-def without_source_todo_writers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("module", ["mutation_api", "legacy_mutation"])
+def test_todo_mutation_import_does_not_load_status(module):
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import importlib,sys;sys.modules['loopx.status']=None;"
+         f"owner=importlib.import_module('loopx.control_plane.todos.{module}');"
+         "assert owner.ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE == 10"],
+        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.fixture(scope="session")
+def retirement_wheel():
+    # Supply a normally built artifact: unit runs must not build the frontend
+    # or silently fabricate a package when distribution validation is missing.
+    artifact = Path(os.environ["LOOPX_TODO_RETIREMENT_WHEEL"]).resolve()
+    assert artifact.is_file() and artifact.suffix == ".whl", artifact
+    return artifact
+
+
+@pytest.fixture(
+    params=["source"] + (["wheel"] if "LOOPX_TODO_RETIREMENT_WHEEL" in os.environ else []),
+    ids=lambda arm: "installed-wheel" if arm == "wheel" else "source",
+)
+def isolated_todo_distribution(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     package_root = tmp_path / "package"
     package = package_root / "loopx"
-    shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
-                    ignore=shutil.ignore_patterns("__pycache__"))
+    command = [sys.executable, "-m", "loopx.cli"]
+    if request.param == "source":
+        shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    else:
+        installed = subprocess.run(
+            ["uv", "pip", "install", "--no-deps", "--python", sys.executable,
+             "--target", str(package_root), str(request.getfixturevalue("retirement_wheel"))],
+            cwd=tmp_path, capture_output=True, text=True, timeout=120,
+        )
+        assert installed.returncode == 0, installed.stdout + installed.stderr
+        entry = package_root / "bin/loopx"
+        assert entry.is_file()
+        command = [sys.executable, str(entry)]
+    monkeypatch.setenv("PYTHONPATH", str(package_root))
+    provenance = json.loads(subprocess.check_output(
+        [sys.executable, "-c", "import json,loopx; from importlib import metadata; "
+         "print(json.dumps({'module':loopx.__file__, "
+         "'distribution':str(metadata.distribution('loopx').locate_file(''))}))"],
+        cwd=tmp_path, text=True,
+    ))
+    assert Path(provenance["module"]) == package / "__init__.py"
+    if request.param == "wheel":
+        assert Path(provenance["distribution"]) == package_root
+        # The packaged typed owner must be shipped, not borrowed from checkout.
+        assert (package / "control_plane/todos/succession.ts").is_file()
+        assert (package / "control_plane/effect_runtime_server.ts").is_file()
+    return package, command
+
+
+@pytest.fixture
+def without_source_todo_writers(isolated_todo_distribution):
+    package, command = isolated_todo_distribution
+    _remove_source_todo_writers(package)
+    return command
+
+
+def _remove_source_todo_writers(package):
     (package / "control_plane/todos/line_update.py").unlink()
     (package / "control_plane/todos/legacy_mutation.py").unlink(missing_ok=True)
     capture_adapter = package / "control_plane/coordination/runtime_shadow_writer_adapter.py"
@@ -36,12 +97,76 @@ def without_source_todo_writers(tmp_path, monkeypatch):
     for node in reversed(definitions):
         del lines[node.lineno - 1:node.end_lineno]
     capture_adapter.write_text("".join(lines))
-    monkeypatch.setenv("PYTHONPATH", str(package_root))
-    provenance = subprocess.check_output(
-        [sys.executable, "-c", "import loopx; print(loopx.__file__)"],
-        cwd=tmp_path, text=True,
-    ).strip()
-    assert Path(provenance) == package / "__init__.py"
+
+
+@pytest.mark.parametrize("window", ["before_commit", "after_commit"])
+@pytest.mark.parametrize("corrupt_cursor", [False, True], ids=["recover", "reject-unproved-cursor"])
+def test_pending_source_outbox_survives_producer_retirement(
+    tmp_path, isolated_todo_distribution, window, corrupt_cursor,
+):
+    from shadow_e2e_fixture import workspace
+
+    package, command = isolated_todo_distribution
+    w = workspace(tmp_path / "shadow", bootstrap=False)
+    w.command, w.cwd, w.package = tuple(command), tmp_path, package
+    assert w.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"] == "applied"
+    original = w.add("Already delivered source work")["todo_id"]
+    w.crash(window, "todo", "add", "--role", "agent", "--text", "Pending source work")
+
+    def history():
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import json,sys;from pathlib import Path;"
+             "from loopx.control_plane.coordination.local_authority_shadow_adapter "
+             "import read_local_authority_shadow;"
+             "print(json.dumps(read_local_authority_shadow(runtime_root=Path(sys.argv[1]),"
+             "goal_id=sys.argv[2],scan_limit=10000)))", str(w.runtime), w.goal],
+            cwd=tmp_path, capture_output=True, text=True, timeout=45,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    before = history()
+    assert len(before["proof"]["transactions"]) == (2 if window == "before_commit" else 3)
+    assert original in {todo["todo_id"] for todo in before["head"]["todos"]}
+    # Use the existing partition owner rather than assuming its on-disk layout.
+    from loopx.control_plane.coordination.local_authority_shadow_outbox import partition_directory
+    directory = partition_directory(w.runtime, w.goal, "todos")
+    assert len(list(directory.glob("*.prepared.json"))) == 1
+    assert len(list(directory.glob("*.committed.json"))) == 1
+    source_bytes, registry_bytes = w.state.read_bytes(), w.registry.read_bytes()
+    _remove_source_todo_writers(package)
+
+    if corrupt_cursor:
+        cursor_path = directory / "drain-cursor.json"
+        cursor = json.loads(cursor_path.read_text())
+        cursor["last_partition_digest"] = "sha256:" + "f" * 64
+        cursor_path.write_text(json.dumps(cursor))
+        pending_bytes = {f.name: f.read_bytes() for f in directory.iterdir() if f.is_file()}
+        result = w.drain()
+        assert result["ok"] is False, result
+        assert result["reason_code"] == "outbox_cursor_unproved", result
+        assert {f.name: f.read_bytes() for f in directory.iterdir() if f.is_file()} == pending_bytes
+        assert history()["proof"]["transactions"] == before["proof"]["transactions"]
+    else:
+        result = w.drain()
+        assert result["ok"] is True, result
+        assert result["delivered"] == (1 if window == "before_commit" else 0)
+        assert result["replayed"] == (0 if window == "before_commit" else 1)
+        recovered = history()
+        transactions = recovered["proof"]["transactions"]
+        assert transactions[:len(before["proof"]["transactions"])] == before["proof"]["transactions"]
+        assert len(transactions) == 3
+        assert transactions[-1]["receipts"][0]["write_class"] == "todo_add"
+        assert transactions[-1]["receipts"][0]["seq"] == 2
+        assert {todo["text"] for todo in recovered["head"]["todos"]} == {
+            "Already delivered source work", "Pending source work"}
+        assert json.loads((directory / "drain-cursor.json").read_text())["last_seq"] == 2
+        assert sorted(f.name for f in directory.iterdir()) == ["drain-cursor.json"]
+        assert w.drain()["outcome"] == "nothing_pending"
+        assert history()["proof"]["transactions"] == transactions
+    assert w.state.read_bytes() == source_bytes
+    assert w.registry.read_bytes() == registry_bytes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -51,7 +176,7 @@ def test_canonical_cli_lifecycle_without_source_todo_writers(tmp_path, provider,
     def cli(*args):
         actor = ["--agent-id", "agent-a"] if args[0] in ("update", "complete", "supersede") else []
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json",
+            [*without_source_todo_writers, "--format", "json",
              "--registry", str(registry), "todo", *args, *actor],
             cwd=tmp_path, capture_output=True, text=True, timeout=45,
         )
@@ -109,7 +234,7 @@ def test_new_goal_and_original_creation_recovery_without_source_todo_writers(tmp
 
     def cli(*args, succeeds=True):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            [*without_source_todo_writers, "--format", "json", "--registry", str(registry),
              "--runtime-root", str(runtime), *args],
             cwd=tmp_path, capture_output=True, text=True, timeout=45,
         )
@@ -167,7 +292,7 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
 
     def run(*args, succeeds=True):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json",
+            [*without_source_todo_writers, "--format", "json",
              "--registry", str(registry), "--runtime-root", str(runtime), *args],
             cwd=project, capture_output=True, text=True, timeout=45,
         )
@@ -276,16 +401,15 @@ else:
 @pytest.mark.parametrize("material_change", [False, True])
 @pytest.mark.parametrize("source_writers_present", [False, True], ids=["absent", "present"])
 def test_monitor_recovery_with_source_writer_isolation(
-    tmp_path, monkeypatch, request, provider, material_change, source_writers_present,
+    tmp_path, request, provider, material_change, source_writers_present, isolated_todo_distribution,
 ):
     from test_leased_monitor_poll import LEASE, PROOF
     from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID
     from test_native_monitor_poll import _canonical
 
-    if source_writers_present:
-        isolate_sqlite_runtime(tmp_path, monkeypatch)
-    else:
-        request.getfixturevalue("without_source_todo_writers")
+    _package, command = isolated_todo_distribution
+    if not source_writers_present:
+        command = request.getfixturevalue("without_source_todo_writers")
     registry, runtime, display, monitor = _canonical(
         tmp_path, native=True, provider=provider, lease=LEASE,
     )
@@ -293,7 +417,7 @@ def test_monitor_recovery_with_source_writer_isolation(
 
     def cli(*args, succeeds=True):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json",
+            [*command, "--format", "json",
              "--registry", str(registry), "--runtime-root", str(runtime), *args],
             cwd=tmp_path, capture_output=True, text=True, timeout=45,
         )
