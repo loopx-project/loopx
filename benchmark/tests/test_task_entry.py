@@ -222,7 +222,7 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
 
     async def cli(environment, args, **kwargs):
         calls.append(args)
-        return {"after": {"execution_profile": {"replan_after_effective_turns": 3}}}
+        return {"after": {"execution_profile": {"replan_after_effective_turns": 6}}}
 
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
@@ -566,7 +566,7 @@ def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
 
 
 @pytest.mark.parametrize("settings,field,value", [
-    ({}, "replan_after_effective_turns", 3),
+    ({}, "replan_after_effective_turns", 6),
     ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
     ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
 ])
