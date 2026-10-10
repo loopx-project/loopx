@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1220" viewBox="0 0 1600 1220"><title>General long-horizon capability comes before RSI</title><desc>Stages: 739, 3870 and 2239 non-merge commits; daily averages 35.2, 50.3 and 86.1; overnight shares 40.3%, 36.1% and 24.8%. Asia/Shanghai committer time. Includes community contributions; not an AI automation measure.</desc><rect width="1600" height="1220" fill="#fafafa"/><g font-family="PingFang SC,Noto Sans CJK SC,Helvetica Neue,Arial,sans-serif">
-<text x="72" y="64" font-size="23" fill="#0070f3" font-weight="600" >LOOPX  /  LONG-HORIZON × SELF-IMPROVEMENT</text>
+<text x="72" y="64" font-size="23" fill="#0070f3" font-weight="600" >LOOPX  /  LONG-HORIZON</text><path d="M397 51 L406 60 M406 51 L397 60" fill="none" stroke="#0070f3" stroke-width="2" stroke-linecap="round"/><text x="414" y="64" font-size="23" fill="#0070f3" font-weight="600" >SELF-IMPROVEMENT</text>
 <text x="72" y="142" font-size="51" fill="#171717" font-weight="600" >General long-horizon capability comes before RSI</text>
 <text x="72" y="197" font-size="29" fill="#4d4d4d" font-weight="400" >Use the improved system to keep improving the system.</text>
 <line x1="72" x2="1528" y1="229" y2="229" stroke="#ddd"/>
@@ -25,7 +25,7 @@
 <text x="972" y="867" font-size="27" fill="#171717" font-weight="600" text-anchor="middle">Real work</text><text x="972" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">Goals, feedback</text>
 <text x="1194" y="867" font-size="27" fill="#171717" font-weight="600" text-anchor="middle">Improve</text><text x="1194" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">Test, adopt</text>
 <text x="1430" y="867" font-size="27" fill="#0070f3" font-weight="600" text-anchor="middle">Next round</text><text x="1430" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">Inherit gains</text>
-<text x="1075" y="887" font-size="27" fill="#4d4d4d" font-weight="400" text-anchor="middle">→</text><text x="1312" y="887" font-size="27" fill="#4d4d4d" font-weight="400" text-anchor="middle">→</text>
+<g fill="none" stroke="#4d4d4d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1066 879 H1084 M1078 873 L1084 879 L1078 885"/><path d="M1303 879 H1321 M1315 873 L1321 879 L1315 885"/></g>
 <path d="M1430 951 V978 H972 V951" fill="none" stroke="#0070f3" stroke-width="2"/><path d="M966 959 L972 951 L978 959" fill="none" stroke="#0070f3" stroke-width="2"/>
 <text x="1204" y="1025" font-size="24" fill="#0070f3" font-weight="500" text-anchor="middle">Adopted gains shape the next round</text>
 <text x="889" y="1073" font-size="20" fill="#666" font-weight="400" >Concept · Human-in-the-loop self-improvement</text>
