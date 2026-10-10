@@ -597,7 +597,7 @@ def assert_hosted_docs_nav_parity() -> None:
     for raw_target in iter_relative_md_targets(docs_index):
         resolved = resolve_docs_relative_target("index.md", raw_target)
         assert resolved.exists(), f"broken docs/index.md link: {raw_target}"
-        docs_relative = str(resolved.relative_to(DOCS.resolve()))
+        docs_relative = resolved.relative_to(DOCS.resolve()).as_posix()
         assert_path_in_nav_or_allowlisted(
             source_label="docs/index.md",
             docs_relative=docs_relative,
@@ -614,7 +614,7 @@ def assert_hosted_docs_nav_parity() -> None:
         resolved = resolve_docs_relative_target("README.md", raw_target)
         assert resolved.exists(), f"broken docs catalog link: {raw_target}"
         try:
-            docs_relative = str(resolved.relative_to(DOCS.resolve()))
+            docs_relative = resolved.relative_to(DOCS.resolve()).as_posix()
         except ValueError:
             continue
         assert_path_in_nav_or_allowlisted(

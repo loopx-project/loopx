@@ -63,6 +63,27 @@ test("post-commit creation projects its effects without certifying Goal completi
   }
 });
 
+test("creation rejects terminal first-Turn readback without a Host start", () => {
+  const proposal = {proposal_id: "creation", expected_state_fingerprint: "registry",
+    action_kind: "goal.create", status: "applied", receipt: {projection_verified: true}};
+  for (const status of ["failed", "interrupted", "timed_out", "completed"]) {
+    const first_turn_readback = {status, completed_at: "2026-10-01T00:00:01Z", started_at: null, upstream_turn_id: null};
+    const held = compileActionReviewPlan({...proposal, first_turn_readback});
+    assert.equal(held.reason, "readback_unverified");
+    assert.equal(held.canApply, false);
+    assert.equal(compileActionReviewPlan({...proposal, first_turn_readback: {...first_turn_readback,
+      started_at: " ", upstream_turn_id: ""}}).reason, "readback_unverified");
+    for (const start of [{started_at: "2026-10-01T00:00:00Z"}, {upstream_turn_id: "original-turn"}]) {
+      assert.equal(compileActionReviewPlan({...proposal, first_turn_readback: {...first_turn_readback, ...start}}).reason,
+        "readback_verified");
+    }
+    const ordinary = {...proposal, action_kind: "goal.update"};
+    assert.deepEqual(compileActionReviewPlan({...ordinary, first_turn_readback}), compileActionReviewPlan(ordinary));
+  }
+  assert.equal(compileActionReviewPlan({...proposal, first_turn_readback: {status: "queued"}}).reason,
+    "readback_verified");
+});
+
 test("canonical update recovery includes User completion without changing generic action authority", () => {
   const proposal = {proposal_id: "reviewed", expected_state_fingerprint: "review-basis",
     action_kind: "todo.update", status: "failed", normalized_parameters: {operation: "edit"},

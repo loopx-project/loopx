@@ -51,6 +51,15 @@ target behavior. Existing Goals keep their recorded selection. See the
 This is the source candidate, not certification of installed adoption, a released
 default, full shared Goal intent or D2/D3. Do not rebuild a creation/default owner.
 
+Canonical Todo entrypoint separation (T4): all five mutation facades now share
+`todos/mutation_api.py`; historic imports are lazy and the unpromoted writer is
+isolated in `todos/legacy_mutation.py`. The installed File/SQLite oracle can
+remove the whole writer module while exercising lifecycle and settlement
+recovery. This prepares last-caller deletion without claiming code retirement:
+bootstrap, handoff, team-plan and Monitor still have supported source callers;
+keep capture/outbox and historical recovery until their own exits. [Caller and
+rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.

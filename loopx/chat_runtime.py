@@ -790,6 +790,11 @@ class ChatRuntimeController:
                 "The attached host Session must be served by its existing host bridge.",
                 error_code="attached_session_requires_host_bridge",
             )
+        # Session open and resume preserve the same admitted, unstarted request.
+        active_id = session.get("active_turn_id")
+        active = self.store.load_turn(session_id, str(active_id)) if active_id else None
+        if accepted_turn_id is None and active is not None and active.get("status") == "queued":
+            accepted_turn_id = str(active["turn_id"])
         reusable: ChatRuntimeAdapter | None = None
         # An owner-edited model takes effect between Turns. Keep a running Turn
         # and its binding intact; accepted queued work has not started upstream.
@@ -841,26 +846,17 @@ class ChatRuntimeController:
                 )
             return reusable
         if accepted_turn_id is not None:
-            accepted_turn = self.store.load_turn(session_id, accepted_turn_id)
-            if (
-                session.get("active_turn_id") != accepted_turn_id
-                or accepted_turn is None
-                or accepted_turn.get("status") != "queued"
-            ):
-                raise ValueError(
-                    "accepted chat turn is no longer queued and active"
-                )
+            active = self.store.load_turn(session_id, accepted_turn_id)
+            if (active_id != accepted_turn_id or active is None
+                or active.get("status") != "queued"):
+                raise ValueError("accepted chat turn is no longer queued and active")
         else:
             self.store.update_session(
                 session_id,
                 status="resuming",
                 last_error_code=None,
             )
-        active_turn_id = (
-            None
-            if accepted_turn_id is not None
-            else interrupted_turn_id or session.get("active_turn_id")
-        )
+        active_turn_id = None if accepted_turn_id is not None else interrupted_turn_id or active_id
         if active_turn_id is not None:
             active = self.store.load_turn(session_id, str(active_turn_id))
             if active and active.get("status") not in TERMINAL_TURN_STATES:
@@ -951,20 +947,12 @@ class ChatRuntimeController:
                     adapter.close_session()
                     raise
         except Exception as exc:
-            if accepted_turn_id is not None:
-                self.store.update_session(
-                    session_id,
-                    status="busy",
-                    active_turn_id=accepted_turn_id,
-                    last_error_code="resume_failed",
-                )
-            else:
-                self.store.update_session(
-                    session_id,
-                    status="resume_failed",
-                    active_turn_id=None,
-                    last_error_code="resume_failed",
-                )
+            self.store.update_session(
+                session_id,
+                status="busy" if accepted_turn_id is not None else "resume_failed",
+                active_turn_id=accepted_turn_id,
+                last_error_code="resume_failed",
+            )
             gate = exc.gate if isinstance(exc, CodexChatAgentError) else None
             raise CodexChatAgentError(
                 "The previous Agent conversation could not be restored.",
@@ -1938,7 +1926,9 @@ class ChatRuntimeController:
             return True
 
     def resume_session(self, *, session_id: str, work_dir: Path, objective: str) -> dict[str, Any]:
-        prepared = self.store.prepared_managed_turn_request(session_id)
+        prepared = self.store.prepared_managed_turn_request(
+            session_id, include_accepted_queued=True,
+        )
         if prepared is not None:
             self.submit_turn(
                 session_id=session_id,

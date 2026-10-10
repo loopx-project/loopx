@@ -137,6 +137,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/operation_agent_handoff.ts",
   "control_plane/work_items/interaction_contract.ts",
   "control_plane/work_items/pending_capability_intent.ts",
+  "control_plane/work_items/replan_context.ts",
   "control_plane/work_items/replan_history_snapshot.ts",
   "control_plane/work_items/refresh_recommendation.ts",
   "control_plane/work_items/task_lease_acquire.ts",
