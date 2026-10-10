@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-07
+- Last revised: 2026-10-08
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -60,6 +60,20 @@ controls pass; it does not certify a released default or formal ten-day D2.
 Frozen failures/missing evidence remain visible. T4 deletes proven redundant
 owners alongside implementation, without waiting for R6 or all Python to vanish.
 This replaces stale current-count estimates, not historical execution evidence.
+
+Fresh public-boundary scanning retains its specialized Python regex/Host-file IO
+owner. A candidate removes the literal check's generator while preserving
+Unicode folding, authoritative regexes, every scan root, fresh reads and pre-open
+private-state filtering. Whole File/SQLite packet parity, 178 focused source
+tests and 185 real-path/negative probes per fresh wheel/sdist pass. Performance
+is **not qualified**: against pinned main `62acd670f` with matched 1,341-file
+scan populations, 32 alternating full-quota CLI pairs per backend measure File
+p50/p95 874.95/1117.08 → 945.14/1202.86 ms (p95 +7.68%) and SQLite
+831.09/1003.24 → 824.57/994.60 ms (-0.86%). Keep the original cost gate and
+all failed/interrupted evidence; the earlier source-only improvement cannot
+override this final-source File failure. Diagnose the actual consumer before
+promotion. This does not resolve the earlier frontier cutover's File cost hold,
+released-default admission, C1 writer retirement or D2.
 
 ## Native authority qualification and prototype retirement (2026-09-26)
 

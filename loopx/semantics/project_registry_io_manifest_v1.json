@@ -1039,7 +1039,7 @@
     },
     {
       "site": "loopx/contract.py::<module>.check_contract::codec_read:load_registry#1",
-      "line": 1083,
+      "line": 1088,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
