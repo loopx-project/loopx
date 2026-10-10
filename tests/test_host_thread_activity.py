@@ -394,11 +394,34 @@ def test_remote_codex_surfaces_have_no_local_observer() -> None:
 def test_automation_rrule_interval_reads_only_minutely_intervals() -> None:
     assert _automation_rrule_interval_minutes("FREQ=MINUTELY;INTERVAL=30") == 30
     assert _automation_rrule_interval_minutes("freq=minutely;interval=5") == 5
-    assert _automation_rrule_interval_minutes("FREQ=MINUTELY") == 1
+    assert _automation_rrule_interval_minutes("RRULE:FREQ=MINUTELY;INTERVAL=2") == 2
+    # Field order, spacing and duplicates follow the canonical parser.
+    assert _automation_rrule_interval_minutes("INTERVAL=3;FREQ=MINUTELY") == 3
+    assert _automation_rrule_interval_minutes("FREQ=MINUTELY; INTERVAL = 7") == 7
+    assert _automation_rrule_interval_minutes("FREQ=MINUTELY;INTERVAL=5;INTERVAL=9") == 9
     # Anything this adapter cannot read reports no interval rather than one.
     assert _automation_rrule_interval_minutes("FREQ=HOURLY;INTERVAL=2") is None
     assert _automation_rrule_interval_minutes("FREQ=MINUTELY;INTERVAL=0") is None
     assert _automation_rrule_interval_minutes(None) is None
+
+
+@pytest.mark.parametrize(
+    "rrule",
+    [
+        # An omitted INTERVAL is unreadable, not a one-minute cadence.
+        "FREQ=MINUTELY",
+        "FREQ=MINUTELY;INTERVAL=-3",
+        "FREQ=MINUTELY;INTERVAL=bad",
+        "FREQ=MINUTELY;INTERVAL=",
+        "FREQ=MINUTELY;INTERVAL=1.5",
+        # The frequency must match exactly, not as a substring.
+        "FREQ=MINUTELYISH;INTERVAL=7",
+        "MINUTELY;INTERVAL=7",
+        "",
+    ],
+)
+def test_an_unreadable_automation_rrule_never_reports_a_cadence(rrule: str) -> None:
+    assert _automation_rrule_interval_minutes(rrule) is None
 
 
 def _install_automation(
@@ -409,12 +432,14 @@ def _install_automation(
     agent_id: str,
     rrule: str,
     status: str = "ACTIVE",
+    kind: str = "heartbeat",
+    target_thread_id: str = "t-open",
 ) -> None:
     path = home.root / "automations" / automation_id / "automation.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        f'version = 1\nid = "{automation_id}"\nkind = "heartbeat"\n'
-        f'status = "{status}"\nrrule = "{rrule}"\ntarget_thread_id = "t-open"\n'
+        f'version = 1\nid = "{automation_id}"\nkind = "{kind}"\n'
+        f'status = "{status}"\nrrule = "{rrule}"\ntarget_thread_id = "{target_thread_id}"\n'
         f'prompt = "Advance `{goal_id}` from active state. Agent: `{agent_id}`."\n',
         encoding="utf-8",
     )
@@ -437,24 +462,219 @@ def test_delivery_expectations_resolve_only_installed_active_app_automations(
         rrule="FREQ=HOURLY;INTERVAL=2",
     )
 
+    lane = HostDeliveryScope(
+        goal_id="bound", agent_id="a", host_surface="codex-app", thread_id="t-open"
+    )
     resolved = codex_delivery_expectations(
         [
-            HostDeliveryScope(goal_id="bound", agent_id="a", host_surface="codex-app"),
-            HostDeliveryScope(goal_id="bound", agent_id="b", host_surface="codex-app"),
-            HostDeliveryScope(goal_id="bound", agent_id="c", host_surface="codex-app"),
+            lane,
+            HostDeliveryScope(goal_id="bound", agent_id="b", host_surface="codex-app", thread_id="t-open"),
+            HostDeliveryScope(goal_id="bound", agent_id="c", host_surface="codex-app", thread_id="t-open"),
             # The app automation is not the loop that drives another surface.
-            HostDeliveryScope(goal_id="bound", agent_id="a", host_surface="codex-cli-tui"),
+            HostDeliveryScope(goal_id="bound", agent_id="a", host_surface="codex-cli-tui", thread_id="t-open"),
+            # Without the canonical binding a lane has no identity to place.
+            HostDeliveryScope(goal_id="bound", agent_id="a", host_surface="codex-app"),
         ],
         homes=[home.root],
     )
 
     assert resolved == {
-        HostDeliveryScope(
-            goal_id="bound", agent_id="a", host_surface="codex-app"
-        ): HostDeliveryExpectation(
+        lane: HostDeliveryExpectation(
             expected_interval_minutes=30, source="codex_app_automation_rrule"
         )
     }
+
+
+def test_delivery_expectations_ignore_another_thread_or_kind_of_the_same_goal(
+    tmp_path: Path,
+) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    _install_automation(
+        home, automation_id="lane", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=5", target_thread_id="t-lane",
+    )
+    # Same Goal and agent, but another bound thread.
+    _install_automation(
+        home, automation_id="other-thread", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=60", target_thread_id="t-other",
+    )
+    # Same Goal, agent and thread, but a different kind of automation.
+    _install_automation(
+        home, automation_id="cron", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=7", kind="cron", target_thread_id="t-lane",
+    )
+
+    lane = HostDeliveryScope(
+        goal_id="bound", agent_id="a", host_surface="codex-app", thread_id="t-lane"
+    )
+    assert codex_delivery_expectations([lane], homes=[home.root]) == {
+        lane: HostDeliveryExpectation(
+            expected_interval_minutes=5, source="codex_app_automation_rrule"
+        )
+    }
+    # A thread with no automation of its own inherits neither neighbour's cadence.
+    assert (
+        codex_delivery_expectations(
+            [
+                HostDeliveryScope(
+                    goal_id="bound", agent_id="a", host_surface="codex-app", thread_id="t-unbound"
+                )
+            ],
+            homes=[home.root],
+        )
+        == {}
+    )
+
+
+def test_two_automations_claiming_one_lane_report_no_cadence(tmp_path: Path) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    for automation_id, interval in (("first", 5), ("second", 9)):
+        _install_automation(
+            home, automation_id=automation_id, goal_id="bound", agent_id="a",
+            rrule=f"FREQ=MINUTELY;INTERVAL={interval}", target_thread_id="t-lane",
+        )
+    lane = HostDeliveryScope(
+        goal_id="bound", agent_id="a", host_surface="codex-app", thread_id="t-lane"
+    )
+    assert codex_delivery_expectations([lane], homes=[home.root]) == {}
+
+
+def _attached_delivery_window(
+    payload: dict[str, Any], *, expectations: Any, now: datetime
+) -> dict[str, Any]:
+    attach_host_thread_activity(payload, observers=codex_thread_observers())
+    attach_host_delivery_windows(payload, expectations=expectations, now=now)
+    threads = payload["run_history"]["goals"][0]["host_thread_activity"]["threads"]
+    return threads[0]["delivery_window"]
+
+
+def test_status_route_measures_a_lane_against_its_own_automation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    home.thread("t-open", [_event(T2, "task_complete")])
+    _install_automation(
+        home, automation_id="lane", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=5", target_thread_id="t-open",
+    )
+    monkeypatch.setenv("LOOPX_CODEX_HOMES", str(home.root))
+    payload = _status({"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-open"})
+
+    window = _attached_delivery_window(
+        payload,
+        expectations=codex_delivery_expectations,
+        now=datetime(2026, 9, 25, 10, 7, tzinfo=timezone.utc),
+    )
+
+    assert window["state"] == "fresh"
+    assert window["expected_interval_minutes"] == 5
+    assert window["window_minutes"] == 10
+    assert window["age_seconds"] == 60
+    assert window["source"] == "codex_app_automation_rrule"
+
+
+def test_status_route_does_not_measure_a_lane_against_another_threads_automation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    # Recent manual activity on the lane's own thread, and one automation
+    # installed for another thread of the same Goal with a wide cadence.
+    home.thread("t-open", [_event(T2, "task_complete")])
+    _install_automation(
+        home, automation_id="other-thread", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=60", target_thread_id="t-other",
+    )
+    monkeypatch.setenv("LOOPX_CODEX_HOMES", str(home.root))
+    payload = _status({"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-open"})
+
+    window = _attached_delivery_window(
+        payload,
+        expectations=codex_delivery_expectations,
+        now=datetime(2026, 9, 25, 10, 7, tzinfo=timezone.utc),
+    )
+
+    assert window == {
+        "schema_version": "loopx_host_delivery_window_v0",
+        "state": "unknown",
+        "reason": "no_expectation",
+    }
+
+
+@pytest.mark.parametrize("rrule", ["FREQ=MINUTELY;INTERVAL=-3", "FREQ=MINUTELY", "FREQ=MINUTELYISH;INTERVAL=1"])
+def test_status_route_never_reports_fresh_from_an_unreadable_cadence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rrule: str
+) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    home.thread("t-open", [_event(T2, "task_complete")])
+    _install_automation(
+        home, automation_id="lane", goal_id="bound", agent_id="a",
+        rrule=rrule, target_thread_id="t-open",
+    )
+    monkeypatch.setenv("LOOPX_CODEX_HOMES", str(home.root))
+    payload = _status({"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-open"})
+
+    window = _attached_delivery_window(
+        payload,
+        expectations=codex_delivery_expectations,
+        now=datetime(2026, 9, 25, 10, 7, tzinfo=timezone.utc),
+    )
+
+    assert window["state"] == "unknown"
+    assert window["reason"] == "no_expectation"
+
+
+def _offered_scopes(payload: dict[str, Any]) -> list[HostDeliveryScope]:
+    seen: list[HostDeliveryScope] = []
+
+    def expectations(scopes: Any) -> dict[HostDeliveryScope, HostDeliveryExpectation]:
+        seen.extend(scopes)
+        return {}
+
+    attach_host_delivery_windows(payload, expectations=expectations)
+    return seen
+
+
+def test_delivery_scope_carries_the_canonical_binding_without_serializing_it() -> None:
+    payload = _status({"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-open"})
+    attach_host_thread_activity(
+        payload,
+        observers={"codex-app": lambda _ids: {
+            "t-open": HostThreadActivity(state=HostThreadState.IDLE, last_event_at=T1),
+        }},
+    )
+
+    assert [
+        (scope.goal_id, scope.agent_id, scope.host_surface, scope.thread_id)
+        for scope in _offered_scopes(payload)
+    ] == [("bound", "a", "codex-app", "t-open")]
+    # The binding stays in coordination; the projection never names the thread.
+    assert "t-open" not in json.dumps(
+        payload["run_history"]["goals"][0]["host_thread_activity"]
+    )
+
+
+def test_a_lane_bound_to_two_threads_is_offered_without_an_identity() -> None:
+    payload = _status(
+        {"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-one"},
+        {"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-two"},
+    )
+    attach_host_thread_activity(
+        payload,
+        observers={"codex-app": lambda _ids: {
+            "t-one": HostThreadActivity(state=HostThreadState.IDLE, last_event_at=T1),
+            "t-two": HostThreadActivity(state=HostThreadState.IDLE, last_event_at=T1),
+        }},
+    )
+
+    assert [scope.thread_id for scope in _offered_scopes(payload)] == [None, None]
+    assert all(
+        row["delivery_window"] == {
+            "schema_version": "loopx_host_delivery_window_v0",
+            "state": "unknown",
+            "reason": "no_expectation",
+        }
+        for row in payload["run_history"]["goals"][0]["host_thread_activity"]["threads"]
+    )
 
 
 def test_delivery_expectations_read_no_home_without_an_app_lane(tmp_path: Path) -> None:

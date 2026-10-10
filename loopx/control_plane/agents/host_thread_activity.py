@@ -188,11 +188,17 @@ class HostDeliveryExpectation:
 
 @dataclass(frozen=True)
 class HostDeliveryScope:
-    """One bound lane a delivery window can be reported for."""
+    """One bound lane a delivery window can be reported for.
+
+    ``thread_id`` is the canonical binding the lane was observed through, so a
+    provider can tell this lane's own automation from another lane's. It is
+    carried only to resolve the expectation: the window payload never names it.
+    """
 
     goal_id: str
     agent_id: str
     host_surface: str
+    thread_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +314,35 @@ HostDeliveryExpectationProvider = Callable[
 ]
 
 
+def _bound_thread_ids(goal: Mapping[str, Any]) -> dict[tuple[str, str], str | None]:
+    """Map each ``(agent, surface)`` lane of a Goal to its canonical thread.
+
+    A lane the Goal binds to more than one thread has no single identity, so it
+    maps to ``None`` and its window stays ``unknown``.
+    """
+
+    resolved: dict[tuple[str, str], str | None] = {}
+    for agent_id, host_surface, thread_id in _goal_bindings(goal):
+        key = (agent_id, host_surface)
+        resolved[key] = None if key in resolved else thread_id
+    return resolved
+
+
+def _scope_from_row(
+    goal_id: str, row: Mapping[str, Any], bound: Mapping[tuple[str, str], str | None]
+) -> HostDeliveryScope | None:
+    agent_id = str(row.get("agent_id") or "").strip()
+    host_surface = str(row.get("host_surface") or "").strip()
+    if not goal_id or not agent_id or not host_surface:
+        return None
+    return HostDeliveryScope(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        host_surface=host_surface,
+        thread_id=bound.get((agent_id, host_surface)),
+    )
+
+
 def attach_host_delivery_windows(
     status_payload: dict[str, Any],
     *,
@@ -318,15 +353,19 @@ def attach_host_delivery_windows(
     """Add ``delivery_window`` to each observed lane of ``host_thread_activity``.
 
     This reads the projection that ``attach_host_thread_activity`` already
-    produced, so no host record is read twice. A lane the expectation provider
-    cannot resolve is reported as ``unknown``, never as healthy.
+    produced, so no host record is read twice. Each lane is resolved through the
+    canonical binding the Goal records, so a cadence installed for another
+    thread of the same Goal is not read as this lane's. A lane the expectation
+    provider cannot resolve is reported as ``unknown``, never as healthy.
     """
 
     run_history = status_payload.get("run_history")
     goals = run_history.get("goals") if isinstance(run_history, Mapping) else None
     if not isinstance(goals, list):
         return
-    rows_by_goal: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    rows_by_goal: list[
+        tuple[str, list[dict[str, Any]], dict[tuple[str, str], str | None]]
+    ] = []
     scopes: list[HostDeliveryScope] = []
     for goal in goals:
         if not isinstance(goal, dict):
@@ -339,30 +378,19 @@ def attach_host_delivery_windows(
         if not rows:
             continue
         goal_id = str(goal.get("id") or "").strip()
-        rows_by_goal.append((goal, rows))
+        bound = _bound_thread_ids(goal)
+        rows_by_goal.append((goal_id, rows, bound))
         for row in rows:
-            agent_id = str(row.get("agent_id") or "").strip()
-            host_surface = str(row.get("host_surface") or "").strip()
-            if goal_id and agent_id and host_surface:
-                scopes.append(
-                    HostDeliveryScope(
-                        goal_id=goal_id,
-                        agent_id=agent_id,
-                        host_surface=host_surface,
-                    )
-                )
+            scope = _scope_from_row(goal_id, row, bound)
+            if scope is not None:
+                scopes.append(scope)
     resolved = expectations(scopes) if scopes else {}
-    for goal, rows in rows_by_goal:
-        goal_id = str(goal.get("id") or "").strip()
+    for goal_id, rows, bound in rows_by_goal:
         for row in rows:
-            scope = HostDeliveryScope(
-                goal_id=goal_id,
-                agent_id=str(row.get("agent_id") or "").strip(),
-                host_surface=str(row.get("host_surface") or "").strip(),
-            )
+            scope = _scope_from_row(goal_id, row, bound)
             row["delivery_window"] = build_host_delivery_window(
                 _activity_from_row(row),
-                resolved.get(scope),
+                resolved.get(scope) if scope is not None else None,
                 now=now,
                 tolerance=tolerance,
             ).to_payload()

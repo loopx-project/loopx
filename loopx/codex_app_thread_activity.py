@@ -44,6 +44,10 @@ _TAIL_CHUNK_BYTES = 256 * 1024
 _TAIL_LIMIT_BYTES = 8 * 1024 * 1024
 _ROLLOUT_CACHE_LIMIT = 256
 
+# The canonical rrule parser reads INTERVAL with JavaScript's integer
+# conversion, which reports no value outside this range.
+_MAX_SAFE_INTEGER = 2**53 - 1
+
 _rollout_cache: dict[tuple[str, int, int], HostThreadActivity] = {}
 
 
@@ -305,31 +309,57 @@ def codex_thread_observers(homes: list[Path] | None = None) -> dict[str, HostThr
 def _automation_rrule_interval_minutes(rrule: Any) -> int | None:
     """Read the interval a minutely automation rrule asks for.
 
-    The canonical parse lives in the TypeScript scheduler
-    (``scheduler/state_store.ts``); this reads the same ``INTERVAL=`` field from
-    the installed automation so that a status projection needs no scheduler
-    runtime. An rrule this adapter cannot read reports no interval, never one.
+    The canonical parse is ``schedulerRruleIntervalMinutes`` in the TypeScript
+    scheduler (``scheduler/state_store.ts``). Its Python twin
+    (``scheduler_rrule_interval_minutes``) is an effect-runtime call, so reading
+    an installed automation through it would give the status route a scheduler
+    runtime dependency. This mirrors the canonical contract rather than keeping
+    a second, looser dialect: the same normalization, the same first-``=``
+    split, an exact ``FREQ=MINUTELY``, and a positive integer ``INTERVAL``. An
+    rrule this adapter cannot read reports no interval, never one.
     """
 
-    text = str(rrule or "").strip().upper()
-    if "FREQ=MINUTELY" not in text:
+    text = str(rrule or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if text.upper().startswith("RRULE:"):
+        text = text[6:].strip()
+    parts: dict[str, str] = {}
+    for part in text.split(";"):
+        separator = part.find("=")
+        if separator < 0:
+            continue
+        parts[part[:separator].strip().upper()] = part[separator + 1 :].strip()
+    if parts.get("FREQ", "").upper() != "MINUTELY":
         return None
-    match = re.search(r"\bINTERVAL=(\d+)\b", text)
-    if match is None:
-        # A minutely rrule without INTERVAL fires every minute.
-        return 1
-    interval = int(match.group(1))
+    # ``INTERVAL`` is read the way the canonical parser reads it: absent,
+    # non-numeric and out-of-range all report no interval, so an unreadable
+    # rrule can never be measured as if it fired every minute.
+    raw_interval = parts.get("INTERVAL", "")
+    if re.fullmatch(r"[+-]?[0-9]+", raw_interval) is None:
+        return None
+    interval = int(raw_interval)
+    if interval > _MAX_SAFE_INTEGER or interval < -_MAX_SAFE_INTEGER:
+        return None
     return interval if interval > 0 else None
 
 
 def _installed_automation_intervals(
     homes: list[Path] | None = None,
-) -> dict[tuple[str, str], int]:
-    """Map each installed app automation to the interval it will fire at."""
+) -> dict[tuple[str, str, str], int]:
+    """Map each installed heartbeat automation to the lane it serves.
+
+    A lane is identified the way the canonical resolver identifies it
+    (``loopx.upgrade.resolve_codex_app_automation_rrule``): Goal, agent and the
+    bound ``target_thread_id``. Only a ``kind = "heartbeat"`` manifest carries a
+    heartbeat cadence, and an automation that cannot be placed on one lane -- or
+    two that claim the same lane -- is omitted, so the window stays ``unknown``
+    instead of being measured against another lane's cadence.
+    """
 
     from .upgrade import infer_agent_id_from_prompt, infer_goal_id_from_prompt
 
-    intervals: dict[tuple[str, str], int] = {}
+    intervals: dict[tuple[str, str, str], int] = {}
+    ambiguous: set[tuple[str, str, str]] = set()
     for home in codex_homes() if homes is None else homes:
         for path in sorted((home / "automations").glob("*/automation.toml")):
             try:
@@ -338,15 +368,27 @@ def _installed_automation_intervals(
                 continue
             if str(item.get("status") or "").upper() != "ACTIVE":
                 continue
+            # Another kind installed for the same Goal is a different loop, not
+            # this lane's heartbeat.
+            if str(item.get("kind") or "").strip().lower() != "heartbeat":
+                continue
             prompt = item.get("prompt")
             if not isinstance(prompt, str) or not prompt.strip():
                 continue
             goal_id = infer_goal_id_from_prompt(prompt)
             agent_id = infer_agent_id_from_prompt(prompt)
+            target_thread_id = str(item.get("target_thread_id") or "").strip()
             interval = _automation_rrule_interval_minutes(item.get("rrule"))
-            if not goal_id or not agent_id or interval is None:
+            if not goal_id or not agent_id or not target_thread_id or interval is None:
                 continue
-            intervals[(goal_id, agent_id)] = interval
+            key = (goal_id, agent_id, target_thread_id)
+            if key in intervals:
+                # Two automations claim one lane: neither is that lane's cadence.
+                del intervals[key]
+                ambiguous.add(key)
+                continue
+            if key not in ambiguous:
+                intervals[key] = interval
     return intervals
 
 
@@ -357,8 +399,10 @@ def codex_delivery_expectations(
 ) -> dict[HostDeliveryScope, HostDeliveryExpectation]:
     """Resolve each bound app lane's cadence from its installed automation.
 
-    A lane the installed automations cannot place is omitted, so its window is
-    reported as ``unknown`` rather than measured against a guessed cadence.
+    A lane is placed by its canonical binding, so an automation installed for
+    another thread of the same Goal is not read as this lane's. A lane the
+    installed automations cannot place is omitted, so its window is reported as
+    ``unknown`` rather than measured against a guessed cadence.
     """
 
     wanted = list(scopes)
@@ -369,7 +413,11 @@ def codex_delivery_expectations(
     for scope in wanted:
         if scope.host_surface != CODEX_APP_BINDING_SURFACE:
             continue
-        interval = intervals.get((scope.goal_id, scope.agent_id))
+        if not scope.thread_id:
+            # Without the binding, this lane cannot be told apart from another
+            # lane of the same Goal and agent.
+            continue
+        interval = intervals.get((scope.goal_id, scope.agent_id, scope.thread_id))
         if interval is None:
             continue
         expectations[scope] = HostDeliveryExpectation(
