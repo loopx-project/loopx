@@ -256,12 +256,16 @@ File → SQLite → 已确认的 Todo 新增／修改／完成 → 新进程读�
 保留前缀，不能充当当前 head 的回退。checkpoint 缺少合格路径决策时，新一轮仍
 须重规划；provider 恢复不能抹掉这项义务，也不能把 Todo 完成当作 Goal 验收。
 
-这补齐了有界 CLI 组合验收，不是完整安装态产品验收。App 的任务所有权编辑器
-只迁移执行策略，尚无已有 Goal 的 File/SQLite 切换交互。下一配套仍复用同一 TS
-migration owner：在现有 Goal 设置中提供不接收调用者路径的 preview/apply，
-失响应／重启后恢复原预览，明确拒绝原因，并单独读回当前选中来源。须用真实
-packaged UI 和后端核验 pending projection/outbox、Host 停止及结算。旧 Markdown
-完整捕获、隔离 checkpoint 导入、全 Goal 恢复、D2 与发布默认决策仍各自验收。
+已有 Goal 设置现已通过同一 TS migration owner 提供 File/SQLite 预览、显式应用、
+失响应／重启后恢复原预览，以及独立的当前来源读回。真实 packaged UI／后端旅程
+将 SQLite 新写入带回 File；历史完成回执不能重新采用旧目标。执行策略迁移仍是
+另一个设置。真实 HTTP／provider 还覆盖预览后新准入的 Host lease：runtime 重启后
+应用仍拒绝，恢复只读；原生 release 改变了 source，结算后仍须审核新计划。
+原生 capture disposition 先在其所属归档保留 prepared outbox 字节，再切换 provider；
+旧计划不能绕过后来启动的 capture。这些只验证本地 canonical 连续性，不证明真实
+Host 进程已停止、旧 Markdown 完整捕获、pending projection 投递、隔离 checkpoint
+导入或全 Goal 恢复。这些更广的验收边界、D2 和发布默认决策各自核验，
+设置旅程不强制 legacy 迁移。
 
 以下是冻结候选版本后的工程窗口，不是承诺发布日期。故障注入只用可丢弃 runtime
 和经过验证的隔离副本，不能为了测试杀掉或改写活跃 Goal。

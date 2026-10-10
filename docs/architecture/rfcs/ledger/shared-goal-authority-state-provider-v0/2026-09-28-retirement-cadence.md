@@ -319,15 +319,21 @@ not a rollback of the current head. A new wake still owes final-outcome replan
 when its checkpoint lacks a qualified path decision. Provider recovery must not
 erase that obligation or turn Todo completion into Goal acceptance.
 
-This closes the bounded CLI composition gap, not the entire installed product
-journey. The App's existing task-ownership editor migrates execution policy;
-it has no existing-Goal File/SQLite cutover interaction. The next companion
-belongs to the same TS migration owner: a path-free preview/apply transport,
-durable original-preview recovery after response loss/restart, explicit failures
-and separate selected-source readback in the existing Goal settings. Qualify it
-with the real packaged UI and backend, including pending projection/outbox and
-stopped/settled Host work. Legacy Markdown capture, isolated checkpoint import,
-whole-Goal recovery, D2 and release-default decisions remain independent gates.
+The existing Goal settings now provide File/SQLite preview, explicit apply,
+original-preview recovery after response loss/restart and independent current
+source readback through the same TS migration owner. The packaged UI/backend
+journey carries new SQLite writes back to File; historical completion does not
+reactivate an old target. Execution-policy migration remains a separate setting.
+Real HTTP/provider validation also checks a Host lease admitted after preview:
+apply refuses it after runtime restart, recovery remains read-only, and native
+lease release still requires a fresh plan because settlement changed the source.
+The native capture-disposition journey retains prepared outbox bytes in its own
+archive before provider cutover; an earlier plan cannot bypass a newer capture.
+These are local canonical continuity checks, not proof of real Host process stop,
+complete legacy Markdown capture, pending projection delivery, isolated checkpoint
+import or whole-Goal recovery. Those wider acceptance boundaries, D2 and
+release-default decisions require their own qualification; do not treat the
+settings journey as forced legacy migration.
 
 These are proposed engineering windows from a frozen candidate, not promised
 release dates. Run faults on disposable runtimes and detached verified copies;
