@@ -16,6 +16,18 @@ from test_quota_authority_settlement_journey import _source
 import test_quota_settlement_cli as settlement
 
 
+@pytest.mark.parametrize("module", ["mutation_api", "legacy_mutation"])
+def test_todo_mutation_import_does_not_load_status(module):
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import importlib,sys;sys.modules['loopx.status']=None;"
+         f"owner=importlib.import_module('loopx.control_plane.todos.{module}');"
+         "assert owner.ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE == 10"],
+        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.fixture
 def without_source_todo_writers(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
