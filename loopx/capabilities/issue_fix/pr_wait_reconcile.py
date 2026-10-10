@@ -17,7 +17,7 @@ from ...control_plane.todos.resume_condition import compact_todo_resume_items
 from ...history import load_registry
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import (
-    append_rollout_event, build_rollout_event, load_rollout_events, rollout_event_log_path,
+    append_rollout_event, build_rollout_event, rollout_event_log_path,
 )
 from ...todos import list_goal_todos
 from . import pr_lifecycle
@@ -41,23 +41,11 @@ def reconcile_pr_wait_dependencies(
         if "excluded_agents" in original:
             row["excluded_agents"] = original["excluded_agents"]
     log = rollout_event_log_path(runtime, goal_id)
-    events = load_rollout_events(log)
-    # Never send narratives/raw evidence across the typed boundary.
-    event_fields = ("event_kind", "classification", "recorded_at", "event_id", "status", "pr_ref")
-    event_facts = []
-    for event in events:
-        refs = event.get("code_refs") or {}
-        fact = {key: event[key] for key in event_fields if key in event}
-        if isinstance(refs, dict) and "pr_ref" in refs:
-            fact["code_refs"] = {"pr_ref": refs["pr_ref"]}
-        fact["source_refs"] = [{"kind": ref.get("kind"), "ref": ref.get("ref")}
-            for ref in event.get("source_refs") or [] if isinstance(ref, dict)
-            and ref.get("kind") in {"pr", "pull_request"}]
-        event_facts.append(fact)
     plan = effect_runtime_result("todo.pr_wait_observation.plan", {
         "schema_version": "todo_pr_wait_observation_request_v0", "agent_id": agent_id,
         "generated_at": now_utc_iso(), "items": compact,
-        "rollout_events": event_facts,
+        "rollout_events": [],
+        "rollout_event_source": {"runtime_root": str(runtime), "goal_id": goal_id},
     })
     results: list[dict[str, Any]] = []
     for target in plan["targets"]:

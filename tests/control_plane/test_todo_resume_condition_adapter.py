@@ -220,7 +220,7 @@ def test_resume_evaluator_omits_rollout_history_without_pr_waits(monkeypatch) ->
     assert captured["rollout_events"] == []
 
 
-def test_resume_evaluator_retains_the_latest_bounded_matching_events(
+def test_resume_evaluator_deduplicates_identity_without_losing_the_first_proof(
     monkeypatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -255,9 +255,8 @@ def test_resume_evaluator_retains_the_latest_bounded_matching_events(
     )
 
     compacted = captured["rollout_events"]
-    assert len(compacted) == 256
-    assert compacted[0]["event_id"] == "merge-44"
-    assert compacted[-1]["event_id"] == "merge-299"
+    assert len(compacted) == 1
+    assert compacted[0]["event_id"] == "merge-0"
 
 
 def test_resume_evaluator_filters_exact_repository_before_bounding_events(
@@ -356,3 +355,14 @@ def test_resume_evaluator_uses_task_repository_to_bound_unqualified_pr_wait(
             "pr_ref": "https://github.com/owner/repo/pull/42",
         }
     ]
+
+
+def test_no_global_merge_budget_can_evict_a_different_exact_dependency():
+    items = [{"todo_id": f"todo_wait_{index}", "status": "open",
+              "resume_when": f"pr_merged:owner/repo#{index + 1}"} for index in range(270)]
+    events = [{"event_kind": "pr_merge", "event_id": f"original-{index}",
+               "pr_ref": f"owner/repo#{index + 1}"} for index in range(270)]
+    result = resume_condition.evaluate_todo_resume_conditions(items, source_items=[], rollout_events=events)
+    assert len(result) == 270
+    assert all(condition["satisfied"] for condition in result.values())
+    assert result["todo_wait_0"]["matched_event_id"] == "original-0"

@@ -7,6 +7,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { evaluateTodoResumeConditions, normalizeTodoResumeWhen,
   TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+  readTodoResumeRolloutEvents,
 } from "./resume_condition.ts";
 
 export const PR_WAIT_OBSERVATION_REQUEST = "todo_pr_wait_observation_request_v0";
@@ -76,4 +77,14 @@ export function planPrWaitObservations(value: unknown): JsonObject {
     waiting_targets: waiting, unresolved, due_count: due.length,
     observation_classification: PR_WAIT_OBSERVATION_CLASSIFICATION,
     poll_interval_seconds: PR_WAIT_POLL_INTERVAL_SECONDS, max_poll_targets: MAX_POLL_TARGETS};
+}
+
+/** Production transport reads the same complete retained source as resume
+ * readback; display tails and Python payload limits never choose poll targets.
+ */
+export async function planPrWaitObservationsFromSource(value: unknown): Promise<JsonObject> {
+  const request = requireJsonObject(value, "PR wait observation request");
+  const plan = planPrWaitObservations(request); // Validate before reading local state.
+  if (request.rollout_event_source === undefined) return plan;
+  return planPrWaitObservations({...request, rollout_events: [...await readTodoResumeRolloutEvents(request)]});
 }

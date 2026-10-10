@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { readGoalRolloutEventSnapshot } from "../rollout_receipt_log.ts";
+
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
@@ -377,6 +379,74 @@ function matchingPrMerge(
     };
   }
   return null;
+}
+
+/** Complete retained facts, reduced by exact dependency rather than an event
+ * count. The first recorded merge remains the proof as unrelated history grows.
+ * Unbound references retain only the existing eight diagnostic candidates; they
+ * never become a repository binding or satisfaction evidence.
+ */
+export function compactTodoResumeMergeEvidence(items: unknown[], events: readonly JsonObject[]): JsonObject[] {
+  const exact = new Set<string>();
+  const unbound = new Set<number>();
+  for (const [index, raw] of items.entries()) {
+    const item = todoItem(raw, `items[${index}]`);
+    const spec = parseResumeWhen(item.resume_when);
+    if (spec?.kind !== "pr_merged") continue;
+    const ref = normalizedPrRef(spec.target)!;
+    const repo = ref.repo ?? githubRepository(item.task_repository);
+    if (repo) exact.add(`${repo}#${ref.number}`);
+    else unbound.add(ref.number);
+  }
+  const facts = new Map<string, JsonObject>();
+  const diagnostics = new Map<number, Map<string, JsonObject>>();
+  for (const {event, refs} of prMergedEvents([...events])) {
+    for (const ref of refs) {
+      const fact: JsonObject = {event_kind: normalizedString(event.event_kind), pr_ref: ref.normalized};
+      for (const key of ["event_id", "recorded_at"]) {
+        if (typeof event[key] === "string" && event[key].trim()) fact[key] = event[key].trim();
+      }
+      if (exact.has(ref.normalized) && !facts.has(ref.normalized)) facts.set(ref.normalized, fact);
+      if (unbound.has(ref.number) && ref.repo !== null) {
+        const candidates = diagnostics.get(ref.number) ?? new Map<string, JsonObject>();
+        if (!candidates.has(ref.normalized)) candidates.set(ref.normalized, fact);
+        diagnostics.set(ref.number, candidates);
+      }
+    }
+  }
+  for (const candidates of diagnostics.values()) {
+    for (const ref of [...candidates.keys()].sort((a, b) => a.localeCompare(b)).slice(0, 8)) {
+      if (!facts.has(ref)) facts.set(ref, candidates.get(ref)!);
+    }
+  }
+  return [...facts.values()];
+}
+
+/** Host transport supplies the existing Goal log location, never a display
+ * tail as complete evidence. The pure evaluator and all non-local callers keep
+ * their existing request shape and semantics. No Todo or log is written here.
+ */
+export async function readTodoResumeRolloutEvents(request: JsonObject): Promise<readonly JsonObject[]> {
+  if (request.rollout_event_source === undefined) {
+    return Array.isArray(request.rollout_events) ? request.rollout_events as JsonObject[] : [];
+  }
+  const source = requireJsonObject(request.rollout_event_source, "rollout_event_source");
+  const runtimeRoot = requireNonEmptyString(source.runtime_root, "runtime_root");
+  const goalId = requireNonEmptyString(source.goal_id, "goal_id");
+  return (await readGoalRolloutEventSnapshot(runtimeRoot, goalId))?.events ?? [];
+}
+
+export async function evaluateTodoResumeConditionsFromSource(value: unknown): Promise<JsonObject> {
+  const request = requireJsonObject(value, "todo_resume_evaluation_request");
+  const evaluated = evaluateTodoResumeConditions(request); // Reject bad input before IO.
+  if (request.rollout_event_source === undefined) return evaluated;
+  const items = request.items as JsonObject[];
+  const waits = items.some(raw => parseResumeWhen(raw.resume_when)?.kind === "pr_merged");
+  if (!waits) return evaluated;
+  return evaluateTodoResumeConditions({...request, rollout_events: [
+    ...compactTodoResumeMergeEvidence(items, await readTodoResumeRolloutEvents(request)),
+    ...(Array.isArray(request.rollout_events) ? request.rollout_events : []),
+  ]});
 }
 
 function prMergedCondition(

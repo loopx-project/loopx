@@ -7,6 +7,7 @@ import {
   TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
   TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
   evaluateTodoResumeConditions,
+  compactTodoResumeMergeEvidence,
   diagnoseTodoResumeCondition,
   normalizeTodoResumeWhen,
   planTodoExternalWaitTransition,
@@ -372,4 +373,33 @@ test("a satisfied monitor fence must be cleared before it can be re-armed", () =
       todo("todo_fallback001", "open"),
     ],
   }), /clear the satisfied resume_when/);
+});
+
+test("complete PR evidence keeps every exact dependency and original alias proof", () => {
+  const items = Array.from({length: 300}, (_, index) => todo(`todo_wait_${index}`, "open", "advancement_task",
+    {resume_when: `pr_merged:owner/repo#${index + 1}`}));
+  const events = items.map((_, index) => ({event_kind: "pr_merge", event_id: `first-${index}`,
+    pr_ref: `owner/repo#${index + 1}`, recorded_at: "2026-10-01T00:00:00Z"}));
+  const evidence = compactTodoResumeMergeEvidence(items, [...events,
+    ...events.map(row => ({...row, event_id: `repeat-${row.event_id}`})),
+    {event_kind: "validation", pr_ref: "owner/repo#301"}]);
+  assert.equal(evidence.length, 300);
+  assert.equal(evidence[0].event_id, "first-0");
+  const result = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items, source_items: [], rollout_events: evidence});
+  assert.ok((result.conditions as Array<{condition: Record<string, unknown>}>).every(row => row.condition.satisfied));
+
+  const waits = [todo("todo_alias", "open", "advancement_task", {resume_when: "pr_merged:old/repo#42"}),
+    todo("todo_wrong", "open", "advancement_task", {resume_when: "pr_merged:unrelated/repo#42"}),
+    todo("todo_missing", "open", "advancement_task", {resume_when: "pr_merged:#42"})];
+  const facts = compactTodoResumeMergeEvidence(waits, [{event_kind: "PR_MERGE", event_id: "alias-proof",
+    pr_ref: "new/repo#42", source_refs: [{kind: "pr", ref: "https://github.com/old/repo/pull/42"}]}]);
+  const aliases = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: waits, source_items: [], rollout_events: facts});
+  const conditions = (aliases.conditions as Array<{condition: Record<string, unknown>}>).map(row => row.condition);
+  assert.equal(conditions[0].matched_event_id, "alias-proof");
+  assert.equal(conditions[0].satisfied, true);
+  assert.equal(conditions[1].satisfied, false);
+  assert.equal(conditions[2].satisfied, false);
+  assert.equal(conditions[2].repository_binding_state, "ambiguous");
 });

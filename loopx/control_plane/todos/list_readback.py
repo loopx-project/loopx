@@ -33,6 +33,7 @@ from .list_projection import (
     todo_list_projection_contract,
 )
 from .todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
+from .resume_condition import TodoResumeRolloutEvents
 
 
 def _restore_full_source_body(
@@ -97,6 +98,8 @@ def list_goal_todos(
         rollout_event_log_path(runtime_root, goal_id),
         limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
     )
+
+    rollout_events = TodoResumeRolloutEvents(rollout_events, runtime_root=runtime_root, goal_id=goal_id)
 
     roles = [role] if role else ["user", "agent"]
     canonical_read = read_canonical_todos_if_promoted(
