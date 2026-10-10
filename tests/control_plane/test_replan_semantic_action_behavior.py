@@ -89,6 +89,40 @@ def _exhausted_action(
     )
 
 
+def _inline_explore_context_action(
+    request: Mapping[str, object],
+) -> ScriptedExecToolAction:
+    packet = _latest_quota_packet(request)
+    interaction = packet["interaction_contract"]
+    assert isinstance(interaction, Mapping)
+    channel = interaction["agent_channel"]
+    assert isinstance(channel, Mapping)
+    work_context = channel["work_context"]
+    assert isinstance(work_context, Mapping)
+    sources = work_context["sources"]
+    assert isinstance(sources, list)
+    explore_sources = [
+        source for source in sources
+        if isinstance(source, Mapping)
+        and source.get("kind") == "explore_turn_context"
+    ]
+    assert len(explore_sources) == 1
+    source = explore_sources[0]
+    content = source.get("content")
+    assert isinstance(content, Mapping)
+    assert content.get("goal_id") == "replan-semantic-action-fixture"
+    assert content.get("agent_id") == "codex-replan-semantic-action"
+    boundary = content.get("boundary")
+    assert isinstance(boundary, Mapping)
+    assert boundary.get("read_only") is True
+    assert isinstance(source.get("command"), str) and source["command"]
+    assert not any(
+        isinstance(read, Mapping) and read.get("kind") == "explore_turn_context"
+        for read in channel.get("required_reads", [])
+    )
+    return ScriptedExecToolAction(command="cat replan-frontier.json")
+
+
 def _composition_successor_action(
     request: Mapping[str, object],
 ) -> ScriptedExecToolAction:
@@ -426,7 +460,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     transport = ScriptedDoubaoExecTransport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
-            ScriptedExecToolAction(command="cat replan-frontier.json"),
+            _inline_explore_context_action,
             ScriptedExecToolAction(command="cat fixture/permission-config.json"),
             _composition_successor_action,
         ]
@@ -466,6 +500,30 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     assert quota_packet["replan_action_packet"]["bounded_frontier"][
         "experiment_node_ref"
     ] == selected_gap["experiment_node_ref"]
+
+
+def test_required_explore_read_uses_nested_interaction_contract() -> None:
+    command = (
+        "loopx --format json explore turn-context --goal-id "
+        "replan-semantic-action-fixture --agent-id codex-replan-semantic-action"
+    )
+    packet = {
+        "interaction_contract": {
+            "agent_channel": {
+                "required_reads": [
+                    {"kind": "goal_state", "command": "cat goal-state.md"},
+                    {
+                        "kind": "explore_turn_context",
+                        "source": "turn_start_capability_hook",
+                        "ordering": "before_work",
+                        "command": command,
+                    },
+                ],
+            },
+        },
+    }
+
+    assert replan_behavior._required_explore_read_command(packet) == command
 
 
 def test_action_outside_observed_frontier_is_rejected(tmp_path: Path) -> None:
@@ -539,9 +597,9 @@ def test_manual_evidence_read_is_context_not_replan_completion(
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(
                 command=(
-                    "loopx --format json evidence-log "
+                    "loopx --format json history "
                     "--goal-id replan-semantic-action-fixture "
-                    "--agent-id codex-replan-semantic-action --thin"
+                    "--agent-id codex-replan-semantic-action"
                 )
             ),
         ]

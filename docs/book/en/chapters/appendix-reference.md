@@ -76,7 +76,7 @@ Capability describes a caller outcome contract; Provider supplies implementation
 | Read an exact Todo | `loopx todo list --goal-id <goal-id> --todo-id <todo-id>` | Absence from a display is not absence of work |
 | Compact a work list | `loopx todo list --goal-id <goal-id> --thin --format json` | Bounded display is not the whole candidate set |
 | Inspect a lease | `loopx task-lease inspect` | Observation does not acquire new proof |
-| Read Agent evidence | `loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30` | Separate history from current facts |
+| Read Agent evidence | `loopx history --goal-id <goal-id> --agent-id <agent-id> --limit 30` | Separate history from current facts |
 | Request admission | `loopx quota should-run` | Read the full contract; relevant Host paths can record receipts |
 | Inspect a managed Turn journal | `loopx turn inspect-journal` | Preserve original Turn key; diagnosis does not recover |
 | Discover configuration and capabilities | `loopx capability list/show`, `loopx configure-goal` | Separate reads without setting flags from execution |

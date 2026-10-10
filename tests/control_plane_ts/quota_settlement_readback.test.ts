@@ -14,6 +14,10 @@ import test from "node:test";
 
 import { settlementIdentity } from "../../loopx/control_plane/effect_program.ts";
 import {
+  createEffectRuntimeHandlers,
+  dispatchEffectRuntimeMethod,
+} from "../../loopx/control_plane/effect_runtime_handlers.ts";
+import {
   acquireFileMutationLock,
   releaseFileMutationLock,
 } from "../../loopx/control_plane/effect_runtime_io.ts";
@@ -726,6 +730,55 @@ test("accepted in-flight writeback closes only the exact Turn, not its Todo", as
       assert.equal(result.replay_phase, entry.expected);
       assert.equal(result.completion_event, null);
       assert.equal((result.terminal_closeout as any).payload.ok, false);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+});
+
+test("accepted semantic progress settles its Turn while the Todo stays open", async t => {
+  const checkpoint = {
+    schema_version: "vision_checkpoint_v0", agent_id: agentId, satisfied: true,
+    delivery_boundary: "semantic_closeout",
+    triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_progress"}],
+  };
+  const cases = [
+    {name: "paid progress", spend: true, expected: "settled"},
+    {name: "spend still required", spend: false, expected: "settlement_pending"},
+    {name: "missing writeback receipt", spend: true, remove: "refresh_state", expected: "open"},
+    {name: "missing spend receipt", spend: true, remove: "quota_spend", expected: "settlement_pending"},
+    ...[
+      ["not accepted", {satisfied: false}],
+      ["truthy acceptance", {satisfied: "true"}],
+      ["wrong schema", {schema_version: "other"}],
+      ["other agent", {agent_id: "peer"}],
+      ["no outcome trigger", {triggers: []}],
+      ["in-flight trigger", {triggers: [{kind: "in_flight_continuation", todo_id: todoId}]}],
+      ["mismatched outcome", {triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_gap"}]}],
+    ].map(([name, patch]) => ({name: String(name), spend: true, checkpoint: {...checkpoint, ...(patch as Record<string, unknown>)}, expected: "open"})),
+    ...["goal_id", "agent_id", "todo_id", "turn_instance_id"].map(field => ({
+      name: `other ${field}`, spend: true, patch: {[field]: "other"}, expected: "open",
+    })),
+    {name: "other effect", spend: true, patch: {settlement_identity: {...identity, effect_id: "other"}}, expected: "open"},
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const root = await fixture({writeback: true, spend: entry.spend,
+      visionCheckpoint: "checkpoint" in entry ? entry.checkpoint : checkpoint});
+    try {
+      if ("remove" in entry) {
+        const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+        const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        await writeFile(log, rows.filter(row => row.event_kind !== entry.remove).map(row => JSON.stringify(row)).join("\n") + "\n");
+      }
+      if ("patch" in entry) {
+        const index = join(root, "goals", goalId, "runs", "index.jsonl");
+        const rows = (await readFile(index, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        rows[0] = {...rows[0], ...entry.patch};
+        await writeFile(index, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+      }
+      const result = await readQuotaSettlement(request(root));
+      assert.equal(result.replay_phase, entry.expected);
+      assert.equal(result.completion_event, null);
+      assert.equal((result.terminal_closeout as any).payload.ok, false);
+      if (entry.name === "paid progress") assert.equal((result.progress as any).state, "settled");
     } finally { await rm(root, {recursive: true, force: true}); }
   });
 });
@@ -1640,3 +1693,123 @@ test("fails closed on a settlement event schema mismatch", async () => {
     /settlement readback line 2 is malformed/,
   );
 });
+
+// The cadence consumer must adopt the same quota owner, including its instance
+// and lock lifecycle; independently reading the alias history is insufficient.
+test("effective cadence scopes settlement and ACKs to its admitted Goal instance", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const ref = { goal_id: goalId, goal_instance_id: instanceA };
+  const root = await fixture({ writeback: true, spend: true, completion: true, goalRef: ref });
+  const cadence = (binding: Record<string, unknown>, threshold = 1) => ({
+    schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: threshold, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: { monitors: [], advancements: [], resume: null },
+    settlement_source: { runtime_root: root, goal_id: goalId, ...binding },
+    runs: [
+      { goal_ref: {...ref, goal_instance_id: instanceB}, agent_id: agentId,
+        public_agent_id: agentId, monitor_agent_id: agentId, turn_id: "retired-ack",
+        classification: "state_refreshed", generated_at: "later", observed_at: 2,
+        accepted_ack: true, progress: null, monitor: {} },
+      { goal_ref: ref, agent_id: agentId, public_agent_id: agentId,
+        monitor_agent_id: agentId, turn_id: turnId,
+        classification: "state_refreshed", generated_at: "earlier", observed_at: 1,
+        accepted_ack: false, progress: null, monitor: {} },
+    ],
+  });
+  try {
+    assert.equal((await projectSettledReplanHistory(cadence({}))).trigger, null);
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const borrowed = {...binding, borrow_source_admission: true};
+      const result = await projectSettledReplanHistory(cadence(borrowed));
+      assert.equal(requireJsonObject(result.trigger, "trigger").run_count, 1);
+      assert.equal((await projectSettledReplanHistory(cadence(borrowed, 2))).trigger, null);
+      // The caller still owns both locks and can perform its next read/commit.
+      assert.equal((await readQuotaSettlement(request(root, borrowed))).found, true);
+    });
+    await assert.rejects(withSourceAdmission(root, instanceA, instanceB,
+      binding => projectSettledReplanHistory(cadence(binding))), /stale_goal_instance/);
+    await assert.rejects(projectSettledReplanHistory(cadence({goal_ref: ref})),
+      /must be supplied together/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("effective cadence skips settlement read without a matching should-run receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({guard: false});
+  await appendFile(
+    join(root, "goals", goalId, "runs", "index.jsonl"),
+    "not-json\n",
+  );
+  const request = {
+    schema_version: "replan_history_request_v0",
+    operation: "periodic",
+    agent_id: agentId,
+    monitor_agent_id: agentId,
+    neutral_classifications: [],
+    stall_threshold: 2,
+    periodic_threshold: 1,
+    monitor_threshold: 6,
+    streak_threshold: 5,
+    monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId},
+    runs: [{
+      agent_id: agentId,
+      public_agent_id: agentId,
+      monitor_agent_id: agentId,
+      classification: "progress",
+      generated_at: "2026-09-24T10:00:00Z",
+      observed_at: 1,
+      turn_id: "turn-history-only",
+      accepted_ack: false,
+      progress: null,
+      monitor: {},
+    }],
+  };
+  try {
+    const result = await projectSettledReplanHistory(request);
+    assert.equal(result.trigger, null);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test(
+  "replan history RPC rejects a relative runtime root before empty-receipt early return",
+  async () => {
+    const handlers = createEffectRuntimeHandlers({
+      fingerprint: "replan-history-runtime-root-test",
+      requestShutdown() {},
+    });
+    const request = {
+      schema_version: "replan_history_request_v0",
+      operation: "periodic",
+      agent_id: agentId,
+      monitor_agent_id: agentId,
+      neutral_classifications: [],
+      stall_threshold: 2,
+      periodic_threshold: 1,
+      monitor_threshold: 6,
+      streak_threshold: 5,
+      monitor_schema: "dead_monitor_repeat_v0",
+      todos: {monitors: [], advancements: [], resume: null},
+      settlement_source: {runtime_root: "relative", goal_id: goalId},
+      runs: [],
+    };
+
+    await assert.rejects(
+      dispatchEffectRuntimeMethod(
+        handlers,
+        "work_item.replan_history.project",
+        request,
+      ),
+      /runtime_root must be absolute/,
+    );
+  },
+);

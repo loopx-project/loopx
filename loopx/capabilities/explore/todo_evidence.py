@@ -73,7 +73,7 @@ def build_todo_typed_evidence_audit(
         for finding in projection.get("findings") or []
         if isinstance(finding, Mapping)
         and str(finding.get("node_id") or "") in linked_ids
-    ][:MAX_AUDIT_FINDINGS]
+    ]
     edges = [
         edge
         for edge in projection.get("edges") or []
@@ -83,8 +83,10 @@ def build_todo_typed_evidence_audit(
             str(edge.get("from_node") or "") in linked_ids
             or str(edge.get("to_node") or "") in linked_ids
         )
-    ][:MAX_AUDIT_EDGES]
+    ]
 
+    # Classify every linked row in the supplied projection; detail budgets must
+    # not erase a hazard or change the meaning of the status counts.
     node_statuses = Counter(str(node.get("status") or "open") for node in linked_nodes)
     finding_statuses = Counter(
         str(finding.get("status") or "tentative") for finding in findings
@@ -115,8 +117,8 @@ def build_todo_typed_evidence_audit(
         "resolved_node_refs": [str(node.get("node_id") or "") for node in linked_nodes],
         "unknown_node_refs": unknown_refs,
         "nodes": [_compact_node(node) for node in linked_nodes],
-        "findings": [_compact_finding(finding) for finding in findings],
-        "relevant_edges": [_compact_edge(edge) for edge in edges],
+        "findings": [_compact_finding(finding) for finding in findings[:MAX_AUDIT_FINDINGS]],
+        "relevant_edges": [_compact_edge(edge) for edge in edges[:MAX_AUDIT_EDGES]],
         "status_counts": {
             "nodes": dict(sorted(node_statuses.items())),
             "findings": dict(sorted(finding_statuses.items())),

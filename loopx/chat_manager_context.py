@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import os
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -14,11 +14,14 @@ from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_manager_details import read_manager_goal_details
 from .chat_manager_history import read_manager_delivery_history
+from .capabilities.manager_context.inspection import agent_work_summary
 from .history import decode_registry_snapshot
 from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
 from .chat import redact_local_paths
 from .control_plane.collaboration import conversation_scope
 from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.goals.goal_ref_validation import exact_goal_ref
+from .control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 
 
 # A progress question needs a bounded window, not a single day. One day of
@@ -370,17 +373,132 @@ def _remote_evidence(
         }
 
 
-def manager_authorization_scope_id(goal_ids: list[str], *, runtime_root=None, channel_id=None) -> str:
+def manager_authorization_scope_id(
+    goal_refs: list[str | Mapping[str, Any]], *, runtime_root=None, channel_id=None
+) -> str:
     """Opaque identity for the exact external Goal evidence scope."""
-    normalized = sorted(set(goal_ids))
+    normalized: dict[tuple[str, str, str], str | dict[str, str]] = {}
+    for value in goal_refs:
+        if isinstance(value, Mapping):
+            goal_id = str(value.get("goal_id") or "")
+            if value.get("goal_instance_id") is not None:
+                identity = exact_goal_ref(
+                    goal_id,
+                    str(value.get("goal_instance_id") or ""),
+                )
+                key = (goal_id, "goal_instance_id", identity["goal_instance_id"])
+            else:
+                operation_id = str(value.get("creation_operation_id") or "").strip()
+                if not goal_id or not operation_id:
+                    raise ValueError("manager Goal identity is incomplete")
+                identity = {
+                    "goal_id": goal_id,
+                    "creation_operation_id": operation_id,
+                }
+                key = (goal_id, "creation_operation_id", operation_id)
+            normalized[key] = identity
+        else:
+            goal_id = str(value)
+            normalized[(goal_id, "legacy", "")] = goal_id
+    encoded_scope = [
+        normalized[key]
+        for key in sorted(normalized)
+    ]
     if runtime_root is not None and channel_id:
         from .capabilities.manager_context.ssh_evidence import grants
         remote = grants(runtime_root, channel_id)
         if remote:
-            normalized.append("ssh_evidence:" + json.dumps(remote, sort_keys=True))
+            encoded_scope.append("ssh_evidence:" + json.dumps(remote, sort_keys=True))
     return hashlib.sha256(
-        json.dumps(normalized, separators=(",", ":")).encode()
+        json.dumps(encoded_scope, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
+
+
+def manager_authorization_scope_id_for_registry(
+    registry_path: Path,
+    goal_ids: list[str],
+    *,
+    runtime_root=None,
+    channel_id=None,
+    expected_inventory_revision: str | None = None,
+) -> str | None:
+    """Bind authorized aliases to the current canonical Goal instances."""
+
+    try:
+        raw = registry_path.read_bytes()
+        revision = "sha256:" + hashlib.sha256(raw).hexdigest()
+        if (
+            expected_inventory_revision is not None
+            and revision != expected_inventory_revision
+        ):
+            return None
+        registry = decode_registry_snapshot(registry_path, raw)
+        goals = registry.get("goals")
+        if not isinstance(goals, list):
+            return None
+        refs: list[str | dict[str, str]] = []
+        for goal_id in sorted(set(goal_ids)):
+            matches = [
+                goal
+                for goal in goals
+                if isinstance(goal, dict) and goal.get("id") == goal_id
+            ]
+            if len(matches) != 1:
+                return None
+            instance_id = matches[0].get("goal_instance_id")
+            if instance_id is not None:
+                refs.append(exact_goal_ref(goal_id, str(instance_id)))
+                continue
+            creation_operation_id = str(
+                matches[0].get("creation_operation_id") or ""
+            ).strip()
+            if creation_operation_id:
+                refs.append(
+                    {
+                        "goal_id": goal_id,
+                        "creation_operation_id": creation_operation_id,
+                    }
+                )
+            elif registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID:
+                return None
+            else:
+                refs.append(goal_id)
+        return manager_authorization_scope_id(
+            refs,
+            runtime_root=runtime_root,
+            channel_id=channel_id,
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def manager_authorization_scope_is_current(
+    registry_path: Path | None,
+    scope_resolver: Callable[[dict[str, Any]], Any] | None,
+    session: dict[str, Any],
+    expected_scope_id: Any,
+    *,
+    runtime_root: Path,
+) -> bool:
+    """Re-resolve an external audience against the current Goal instances."""
+
+    if (
+        registry_path is None
+        or scope_resolver is None
+        or not isinstance(expected_scope_id, str)
+    ):
+        return False
+    current = scope_resolver(session)
+    return (
+        isinstance(current, list)
+        and manager_authorization_scope_id_for_registry(
+            registry_path,
+            current,
+            runtime_root=runtime_root,
+            channel_id=session.get("channel_id"),
+        )
+        == expected_scope_id
+    )
 
 
 def manager_turn_context(
@@ -425,7 +543,7 @@ def manager_turn_context(
     }
     owner_scope = conversation["private_conversation"]
     scope = conversation["goal_ids"] if owner_scope else authorized_goal_ids
-    if not owner_scope and not scope:
+    if not owner_scope and not scope and not (conversation.get("bound_steward") is True and scope == []):
         return unavailable_manager_context(
             "external_authorization_unavailable",
             evidence_window=_evidence_window(
@@ -462,6 +580,7 @@ def manager_turn_context(
         # travels with the row instead of being reconstructed from todos.
         include_goal_lifecycle=True,
         include_goal_attention=True,
+        include_goal_instance_id=True,
     )
     labels: dict[str, str] = {}
     try:
@@ -504,6 +623,11 @@ def manager_turn_context(
         rows.append(
             {
                 "goal_id": row["goal_id"],
+                **(
+                    {"goal_instance_id": row["goal_instance_id"]}
+                    if row.get("goal_instance_id")
+                    else {}
+                ),
                 "activation_state": row.get("activation_state", "unknown"),
                 "host_id": row.get("host_id"),
                 "project_id": row.get("project_id"),
@@ -525,13 +649,7 @@ def manager_turn_context(
                     row["goal_id"], "portfolio_row_missing_lifecycle"
                 ),
                 "agents": [
-                    {
-                        "agent_id": a.get("agent_id"),
-                        "source_verified": a.get("source_verified"),
-                        "waiting_on": a.get("waiting_on"),
-                        "owner_gate_ids": a.get("owner_gate_ids", []),
-                        "todo_count_in_projection": len(a.get("todos", [])),
-                    }
+                    agent_work_summary(a)
                     for a in row.get("agents", [])
                 ],
                 "deliveries": row.get("deliveries", []),
@@ -582,7 +700,23 @@ def manager_turn_context(
         json.dumps(result, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
     if not owner_scope:
-        result["authorization_scope_id"] = manager_authorization_scope_id(scope or [], runtime_root=runtime_root, channel_id=session.get("channel_id"))
+        expected_revision = portfolio.get("inventory_revision")
+        scope_id = (
+            manager_authorization_scope_id_for_registry(
+                registry_path,
+                scope or [],
+                runtime_root=runtime_root,
+                channel_id=session.get("channel_id"),
+                expected_inventory_revision=expected_revision,
+            )
+            if isinstance(expected_revision, str)
+            else None
+        )
+        if scope_id is None:
+            return unavailable_manager_context("external_authorization_changed")
+        result["authorization_scope_id"] = scope_id
+    if conversation.get("bound_steward") is True:
+        result["bound_steward"] = {"authorized": True, "goal_count": len(scope or []), "empty": scope == []}
     return result
 
 
@@ -630,18 +764,65 @@ def collect_manager_turn_context(
             return None
 
     before = resolve()
-    context = manager_turn_context(
-        registry_path,
-        session,
-        runtime_root,
-        authorized_goal_ids=before,
-        include_details=include_details,
-        remote_evidence=remote_evidence,
-        remote_runner=remote_runner,
-        # The Turn owner already re-resolves the external scope after the local
-        # collection; the source read checks the same exact scope around it.
-        remote_scope_valid=lambda: before == resolve(),
+    before_scope_id = (
+        manager_authorization_scope_id_for_registry(
+            registry_path,
+            before,
+            runtime_root=runtime_root,
+            channel_id=session.get("channel_id"),
+        )
+        if registry_path is not None and before is not None
+        else None
     )
-    if before != resolve():
-        return unavailable_manager_context("external_authorization_changed")
+
+    def scope_unchanged() -> bool:
+        current = resolve()
+        if before != current:
+            return False
+        if before_scope_id is None:
+            return registry_path is None
+        return (
+            registry_path is not None
+            and current is not None
+            and before_scope_id
+            == manager_authorization_scope_id_for_registry(
+                registry_path,
+                current,
+                runtime_root=runtime_root,
+                channel_id=session.get("channel_id"),
+            )
+        )
+
+    for attempt in range(2):
+        context = manager_turn_context(
+            registry_path,
+            session,
+            runtime_root,
+            authorized_goal_ids=before,
+            include_details=include_details,
+            remote_evidence=remote_evidence,
+            remote_runner=remote_runner,
+            # Source reads and the Turn owner check the same exact authority.
+            remote_scope_valid=scope_unchanged,
+        )
+        after = resolve()
+        after_scope_id = (
+            manager_authorization_scope_id_for_registry(
+                registry_path,
+                after,
+                runtime_root=runtime_root,
+                channel_id=session.get("channel_id"),
+            )
+            if registry_path is not None and after is not None
+            else None
+        )
+        if before != after or before_scope_id != after_scope_id:
+            return unavailable_manager_context("external_authorization_changed")
+        # Recollect local, on-demand context once under the original scope.
+        # Inline remote collection owns one dial/Turn budget, including failed
+        # reads; recollecting it would restart that budget.
+        if (attempt == 0 and not remote_evidence and before_scope_id is not None
+                and context.get("warnings") == ["external_authorization_changed"]):
+            continue
+        break
     return context

@@ -60,3 +60,51 @@ capacity slice should measure bridge bytes, peak memory and p95 settlement cost,
 then qualify checkpoint/cursor reduction against this complete-history oracle,
 including late ACKs, missing attribution and deduplicated Turns. Do not archive,
 truncate or increase thresholds merely to make settlement succeed.
+
+## Effective-Turn cadence qualification in progress
+
+The completed-Todo threshold can defer direction review indefinitely when one
+open Todo spans many settled Turns. Lowering the historical run-record threshold
+does not fix this: a classified row alone does not prove an accepted settlement.
+The candidate keeps the existing work-item history reducer and composes the
+quota settlement readback over one immutable snapshot per projection. Python
+transports the explicit cadence and scope; it does not interpret receipts.
+
+The explicit Goal option uses a separate `replan_after_effective_turns` key;
+existing completed-Todo values keep their units. An isolated real CLI fixture
+qualifies an open Todo across successive settlements, excludes an unspent
+writeback and a debit missing its receipt, preserves accepted negative work,
+and compares quota and writeback obligation identities. Peer ACK and retry
+cases retain the existing history owner. Existing callers without the option
+retain their historical behavior.
+
+The candidate now extends the existing cadence capability's versioned machine
+configuration with an explicit counting unit, retaining v0 storage on read.
+The packaged Chinese and English device/Goal editors passed real revision-checked handlers:
+legacy-unit readback, v1 migration, invalid-input rejection without mutation,
+Goal override and clear-to-inherit, with a narrow viewport and keyboard focus.
+The shared browser fixture now declares and verifies its disposable sync target
+before serving writes; a server runtime alone is not source-route isolation.
+
+Exact-source readback now uses the existing quota admission and borrows enclosing
+refresh locks. Retired-instance ACKs cannot reset the current lane; absent or stale
+admission is rejected. This qualifies the shared readback boundary, not a new
+source-session product entrypoint.
+
+A synthetic repeated batch exposed full-history owner filtering before every
+explicit readback. V8 profiling localized that cost to the quota readback owner.
+Reusing its existing Turn indexes before filtering removes that repeated scan;
+latest-Turn inference still sees the complete owner-scoped history. Controlled
+1,000-Turn warm samples decreased from 177–195 ms to 13–19 ms. These local samples
+are not a fleet p95 or evidence of solver improvement.
+
+Harbor and SForge now transport the explicit Turn option through the existing
+Goal CLI and verify its persisted unit/value before execution. A single adapter
+mapping supplies configuration and receipts; Python introduces no counting owner.
+An isolated real CLI bootstrap, override and rollback passed; focused adapter
+checks cover legacy defaults, unsupported profiles and wrong-unit readback.
+
+This remains a proposed runtime change, not experiment adoption. Runtime merge,
+full provider-installed execution and matched outcome qualification remain
+separate; active workloads keep their frozen cadence. SForge planned task entry
+is a separate remaining adapter journey.

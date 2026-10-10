@@ -48,12 +48,13 @@ def test_cadence_configuration_previews_persists_and_restores_default(tmp_path):
         for c in catalog["capabilities"]
         if c["capability_id"] == "todo_replan_cadence"
     )
-    assert feature["current"] == {"completed_todos": 3}
+    assert feature["current"] == {"count_unit": "completed_todos", "count": 3}
     editor = feature["configuration_editor"]
     assert editor["writable_scopes"] == ["machine", "goal"]
-    assert editor["fields"][0]["input_kind"] == "number"
-    assert editor["fields"][0]["minimum"] == 1
-    assert editor["fields"][0]["maximum"] == 5
+    assert editor["fields"][0]["input_kind"] == "select"
+    assert editor["fields"][1]["input_kind"] == "number"
+    assert editor["fields"][1]["minimum"] == 1
+    assert editor["fields"][1]["maximum"] == 6
     configure_goal(
         registry_path=registry,
         goal_id="example",

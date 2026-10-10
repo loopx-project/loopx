@@ -11,6 +11,51 @@ from loopx.session_runtime import build_session_runtime_readonly_projection
 from loopx.status import collect_status
 
 
+@pytest.mark.parametrize("locator", [
+    "~/evidence.txt", "path:/srv/evidence.txt", "file:///tmp/evidence.txt",
+])
+def test_persisted_local_evidence_is_omitted_from_public_lifecycle(tmp_path, locator):
+    """Read real history through status; keep private source bytes untouched."""
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text("---\nstatus: active\n---\n\n# Goal\n", encoding="utf-8")
+    registry = project / "registry.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1, "common_runtime_root": str(runtime),
+        "goals": [{
+            "id": "demo", "status": "active", "domain": "software",
+            "repo": str(project), "state_file": state.name,
+            "adapter": {"kind": "session_runtime", "status": "connected-read-only"},
+        }],
+    }), encoding="utf-8")
+    runs = runtime / "goals" / "demo" / "runs"
+    runs.mkdir(parents=True)
+    run_path = runs / "run.json"
+    record = {
+        "goal_id": "demo", "generated_at": "2026-09-01T00:00:00+00:00",
+        "classification": "state_refreshed", "delivery_outcome": "outcome_progress",
+        "recommended_action": locator, "evidence_ref": locator,
+        "json_path": str(run_path),
+    }
+    run_path.write_text(json.dumps(record), encoding="utf-8")
+    index = runs / "index.jsonl"
+    index.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in (state, registry, run_path, index)}
+
+    result = collect_status(
+        registry_path=registry, runtime_root_override=str(runtime),
+        scan_roots=[], limit=5, include_public_boundary_scan=False,
+    )
+    assert result["ok"] is True
+    lifecycle = result["run_history"]["goals"][0]["artifact_lifecycle"]
+    milestone = lifecycle["milestones"][0]
+    assert milestone["label"] == "outcome_progress"
+    assert milestone["reached_evidence_refs"] == []
+    assert locator not in json.dumps(lifecycle)
+    assert {path: path.read_bytes() for path in before} == before
+
+
 @pytest.mark.parametrize("display_limit", [0, 5])
 @pytest.mark.parametrize("adapter_kind,include_work_projection", [
     ("session_runtime", True), ("session_runtime", False),

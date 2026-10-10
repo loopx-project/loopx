@@ -207,7 +207,7 @@ from .control_plane.agents.subagent_activity import (
 from .control_plane.agents.management_projection import (
     build_agent_management_projection as _build_agent_management_projection_read_model,
 )
-from .control_plane.runtime.agent_scoped_evidence_log import (
+from .control_plane.runtime.agent_evidence_history import (
     MAX_PROJECTED_READ_RECEIPTS,
     project_evidence_log_read_receipts,
 )
@@ -223,7 +223,6 @@ from .control_plane.todos.todo_summary import (
     MAX_STATUS_TODOS_PER_ROLE as _TODO_SUMMARY_MAX_STATUS_TODOS_PER_ROLE,
     MAX_TODO_VISIBILITY_LANE_ITEMS as _TODO_SUMMARY_MAX_TODO_VISIBILITY_LANE_ITEMS,
     active_state_todo_attention_item as _active_state_todo_attention_item_read_model,
-    active_next_action_todo_ids,
     attach_dependency_blockers,
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
@@ -482,6 +481,7 @@ def autonomous_replan_obligation_from_runs(
     agent_todos: dict[str, Any] | None,
     agent_id: str | None = None,
     external_progress_review: dict[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     from .control_plane.status.autonomous_replan_projection import (
         autonomous_replan_obligation_from_runs as _autonomous_replan_obligation_from_runs,
@@ -492,6 +492,7 @@ def autonomous_replan_obligation_from_runs(
         agent_todos=agent_todos,
         agent_id=agent_id,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
     )
 
 
@@ -616,6 +617,7 @@ def project_post_handoff_history(
     for run, signal in zip(runs, projection["runs"], strict=True):
         compact = {field: run[field] for field in (
             "generated_at", "classification", "health_check", "json_exists", "markdown_exists",
+            "progress_scope",
         ) if field in run}
         compact.update({field: signal[field] for field in ("delivery_batch_scale", "delivery_turn_kind")})
         if signal.get("delivery_claim_conflicts"):
@@ -711,17 +713,20 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    registry_path: Path | None = None,
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
+    include_agent_next_actions: bool = False,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return _active_state_todo_fields_read_model(
         goal,
         runtime_root=runtime_root,
+        registry_path=registry_path,
+        include_agent_next_actions=include_agent_next_actions,
         rollout_events=rollout_events,
         **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         resolve_goal_local_path=resolve_goal_local_path,
         active_state_next_action_entries=active_state_next_action_entries,
-        active_next_action_todo_ids=active_next_action_todo_ids,
         load_rollout_events=load_rollout_events,
         rollout_event_log_path=rollout_event_log_path,
         max_todo_index_rollout_events_per_goal=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
@@ -1110,6 +1115,8 @@ def build_attention_queue(
         return active_state_todo_fields(
             goal,
             runtime_root=runtime_root,
+            include_agent_next_actions=include_task_graph,
+            registry_path=registry_path,
             rollout_events=supplied_events,
             **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         )
@@ -1151,6 +1158,7 @@ def build_attention_queue(
             source_registry_shadow_findings=SOURCE_REGISTRY_SHADOW_FINDINGS,
             monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
             external_progress_review_context=external_progress_review_context,
+            registry_path=registry_path,
         ),
         runtime_root=runtime_root,
         include_task_graph=include_task_graph,

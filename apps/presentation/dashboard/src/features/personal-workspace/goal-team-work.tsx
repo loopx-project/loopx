@@ -7,19 +7,21 @@ import {DelegationPreflightStatus} from "./delegation-preflight-status";
 
 type Member = {id: string; agent_id: string; todo_id: string};
 type DelegationRecord = DelegationInventory["items"][number];
-type PulseBucket = "executing" | "validating" | "accepted" | "attention" | "dispatched" | "unknown";
+type PulseBucket = "executing" | "validating" | "accepted" | "attention" | "stopped" | "dispatched" | "unknown";
 type CheckTone = "unchecked" | "ready" | "unverified" | "blocked";
 
 const PULSE_BUCKETS: Record<DelegationState, PulseBucket> = {
   executing: "executing", validating: "validating", accepted: "accepted",
   rejected: "attention", recovery_required: "attention", unavailable: "attention",
-  dispatched: "dispatched", unknown: "unknown",
+  // A recorded stop is not proof its Host group released; it is its own bucket.
+  stopped: "stopped", dispatched: "dispatched", unknown: "unknown",
 };
 const PULSE_LABELS: Record<PulseBucket, {zh: string; en: string}> = {
   executing: {zh: "执行中", en: "Executing"},
   validating: {zh: "正在验收", en: "Validating"},
   accepted: {zh: "已通过", en: "Accepted"},
   attention: {zh: "需要处理", en: "Needs attention"},
+  stopped: {zh: "已登记停止", en: "Stop on record"},
   dispatched: {zh: "等待回读", en: "Awaiting readback"},
   unknown: {zh: "状态未知", en: "Unknown"},
 };
@@ -41,6 +43,8 @@ function StateIcon({state}: {state: DelegationState | PulseBucket | CheckTone}) 
   if (state === "validating") return <Loader2 aria-hidden="true" size={14}/>;
   if (state === "accepted" || state === "ready") return <CheckCircle2 aria-hidden="true" size={14}/>;
   if (state === "dispatched") return <Clock3 aria-hidden="true" size={14}/>;
+  // A recorded stop is an explicit terminal marker, not an unknown to triage.
+  if (state === "stopped") return <CircleDashed aria-hidden="true" size={14}/>;
   if (state === "unverified") return <ShieldCheck aria-hidden="true" size={14}/>;
   if (state === "unchecked") return <CircleDashed aria-hidden="true" size={14}/>;
   if (state === "unknown") return <CircleHelp aria-hidden="true" size={14}/>;
@@ -49,10 +53,16 @@ function StateIcon({state}: {state: DelegationState | PulseBucket | CheckTone}) 
 
 /** On-demand observations share the caller/config pin of this Goal conversation. */
 export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {sessionId: string; members: Member[]; zh: boolean; canMessage: boolean; ingress: LoopXModeSnapshot["ingress"]}) {
-  const [selected, setSelected] = useState<string | null>(null);
+  // Navigation retains references only. Each visit remounts the evidence reader
+  // and rechecks current authority and acceptance, including on the way back.
+  const [evidencePath, setEvidencePath] = useState<string[]>([]);
+  const selected = evidencePath.at(-1) ?? null;
   const backButton = useRef<HTMLButtonElement | null>(null);
   const lastSelection = useRef<string | null>(null);
   const selectedTrigger = useRef<HTMLButtonElement | null>(null);
+  const refreshButton = useRef<HTMLButtonElement | null>(null);
+  const pageCursor = useRef<string | undefined>(undefined);
+  const pendingListFocus = useRef(false);
   const [page, setPage] = useState<DelegationInventory | null>(null);
   const [checks, setChecks] = useState<Record<string, DelegationPreflight>>({});
   const [checkErrors, setCheckErrors] = useState<Record<string, string>>({});
@@ -60,22 +70,36 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
-  useEffect(() => {(selected ? backButton.current : selectedTrigger.current)?.focus();}, [selected]);
+  useEffect(() => {
+    if (selected) backButton.current?.focus();
+    else if (pendingListFocus.current && !busy) {
+      (selectedTrigger.current ?? refreshButton.current)?.focus();
+      pendingListFocus.current = false;
+    }
+  }, [selected, busy, page]);
   const memberKey = members.map(member => `${member.id}:${member.agent_id}:${member.todo_id}`).join("|");
   useEffect(() => {
-    generation.current++; setPage(null); setChecks({}); setCheckErrors({}); setInspectionTotal(0); setError(""); setBusy(false);
+    generation.current++; pendingListFocus.current = false;
+    setPage(null); setChecks({}); setCheckErrors({}); setInspectionTotal(0); setError(""); setBusy(false);
     void read();
     return () => {generation.current++;};
   }, [sessionId, memberKey]);
   async function read(cursor?: string) {
     const current = ++generation.current;
-    setBusy(true); setError(""); setPage(null); setSelected(null);
+    pageCursor.current = cursor;
+    setBusy(true); setError(""); setPage(null); setEvidencePath([]);
     try {
       const result = await fetchLoopXTeamWork(sessionId, cursor);
       if (current === generation.current) setPage(result);
     } catch (failure) {
       if (current === generation.current) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {if (current === generation.current) setBusy(false);}
+  }
+  function returnToList() {
+    // Reconcile current acceptance before restoring the original page/focus.
+    // A failed read leaves recovery available, rather than stale success rows.
+    pendingListFocus.current = true;
+    void read(pageCursor.current);
   }
   async function inspect(id: string) {
     const current = ++generation.current;
@@ -115,8 +139,17 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   const unverified = Object.values(checks).filter(check => check.state === "runtime_unverified").length;
   const blocked = checked - ready - unverified;
   if (selected) return <div className="goal-team-work">
-    <button ref={backButton} type="button" onClick={() => setSelected(null)}>{zh ? "返回执行列表" : "Back to executions"}</button>
-    <GoalTeamEvidence key={`${sessionId}:${selected}`} sessionId={sessionId} operationId={selected} zh={zh} canMessage={canMessage} ingress={ingress} onInspect={setSelected}/>
+    <div className="goal-team-work-actions">
+      <button ref={backButton} type="button" onClick={() => {
+        if (evidencePath.length > 1) setEvidencePath(path => path.slice(0, -1));
+        else returnToList();
+      }}>
+        {evidencePath.length > 1 ? (zh ? "返回上一份证据" : "Back to previous evidence") : (zh ? "返回执行列表" : "Back to executions")}
+      </button>
+      {evidencePath.length > 1 ? <button type="button" onClick={returnToList}>{zh ? "返回执行列表" : "Back to executions"}</button> : null}
+    </div>
+    <GoalTeamEvidence key={`${sessionId}:${selected}`} sessionId={sessionId} operationId={selected} zh={zh} canMessage={canMessage} ingress={ingress}
+      onInspect={operationId => {if (operationId !== selected) setEvidencePath(path => [...path, operationId]);}}/>
   </div>;
 
   const items = page?.items ?? [];
@@ -130,7 +163,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
     else unboundRecords.push(row);
   }
   const pulse = items.reduce((counts, row) => {counts[PULSE_BUCKETS[delegationState(row)]] += 1; return counts;},
-    {executing: 0, validating: 0, accepted: 0, attention: 0, dispatched: 0, unknown: 0} as Record<PulseBucket, number>);
+    {executing: 0, validating: 0, accepted: 0, attention: 0, stopped: 0, dispatched: 0, unknown: 0} as Record<PulseBucket, number>);
   const visibleBuckets = (Object.keys(PULSE_LABELS) as PulseBucket[]).filter(bucket => bucket !== "unknown" || pulse.unknown > 0);
 
   function renderRecord(row: DelegationRecord, showAgent: boolean) {
@@ -142,7 +175,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
         <code>{row.operation_id ?? row.record_id}</code>{row.todo_id ? <code>{row.todo_id}</code> : null}
       </details> : null}
       {row.operation_id ? <button ref={row.operation_id === lastSelection.current ? selectedTrigger : undefined} type="button" onClick={() => {
-        lastSelection.current = row.operation_id; setSelected(row.operation_id);
+        lastSelection.current = row.operation_id; setEvidencePath([row.operation_id!]);
       }}>{zh ? "查看证据与反馈" : "Evidence and feedback"}</button> : null}
     </li>;
   }
@@ -181,7 +214,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
         </li>;
       })}</ul>
       <div className="goal-team-work-actions"><strong>{zh ? "此协调身份的持久工作" : "Durable work for this coordinator"}</strong>
-        <span><button type="button" disabled={busy} onClick={() => {setChecks({}); setCheckErrors({}); void read();}}>{zh ? "重新核验" : "Refresh"}</button>
+        <span><button ref={refreshButton} type="button" disabled={busy} onClick={() => {setChecks({}); setCheckErrors({}); void read();}}>{zh ? "重新核验" : "Refresh"}</button>
         {page?.has_more && page.next_cursor ? <button type="button" disabled={busy} onClick={() => void read(page.next_cursor!)}>{zh ? "下一页" : "Next page"}</button> : null}</span></div>
       {busy ? <p role="status">{zh ? "正在读取当前事实…" : "Reading current facts…"}</p> : null}
       {error ? <p role="alert">{error}</p> : null}

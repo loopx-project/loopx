@@ -5,8 +5,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .capabilities.configuration_ui import build_capability_configuration_catalog
+from .capabilities.content_ops.reference import reference_configuration_descriptor
 from .control_plane.agent_context import agent_context_descriptor
-from .control_plane.goals.goal_vision_policy import completed_todo_replan_threshold
+from .explore_graph import explore_configuration
+from .capabilities.todo_replan_cadence.machine_defaults import default_replan_cadence_configuration
 
 DEFAULT_MULTI_SUBAGENT_MAX_CHILDREN = 2
 
@@ -116,9 +118,9 @@ def build_goal_configuration_catalog(
         if isinstance(feature_summary.get("coordination_runtime_shadow"), Mapping)
         else {}
     )
-    graph_enable_args = ("--explore-graph-enabled",)
+    explore = explore_configuration(graph, harness)
     harness_enable_args = (
-        "--explore-harness-enabled",
+        "--explore-mode", "planning",
         "--explore-harness-profile",
         "generic",
     )
@@ -161,43 +163,40 @@ def build_goal_configuration_catalog(
             {
                 "feature_id": "todo_replan_cadence",
                 "display_name": "Goal review cadence",
-                "availability": "supported_opt_in",
-                "default": {"completed_todos": 5},
-                "current": {
-                    "completed_todos": completed_todo_replan_threshold(
-                        settings.get("execution_profile")
-                    ),
-                },
-                "consider_when": "A short Todo chain needs earlier review against the Goal.",
+                "availability": "supported_explicit_override",
+                "default": default_replan_cadence_configuration(),
+                "consider_when": "Direction needs regular review even while the same Todo remains open.",
                 "effect": (
-                    "Requires review after 1–5 same-agent advancement Todo completions "
-                    "without a covering outcome checkpoint; default 5 in standard and fine modes."
+                    "Choose 1–6 settled work Turns or 1–5 completed Todos per Agent. "
+                    "Legacy settings retain their completed-Todo units until explicitly changed."
                 ),
                 "does_not": [
                     "create host continuation turns or interrupt running work",
-                    "count open Todos, protocol steps, or another Agent's completions",
+                    "count retries, unfinished attempts or another Agent's work as effective Turns",
                     "bypass quota, permissions, or outcome evidence requirements",
                 ],
                 "commands": {
                     "preview_enable": _configure_command(
-                        goal_id, "--execution-replan-after-todos", "3"
+                        goal_id, "--execution-replan-after-turns",
+                        str(default_replan_cadence_configuration()["count"]),
                     ),
                     "apply_enable": _configure_command(
-                        goal_id, "--execution-replan-after-todos", "3", execute=True
+                        goal_id, "--execution-replan-after-turns",
+                        str(default_replan_cadence_configuration()["count"]), execute=True
                     ),
                     "preview_disable": _configure_command(
-                        goal_id, "--clear-execution-replan-after-todos"
+                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns"
                     ),
                     "apply_disable": _configure_command(
-                        goal_id, "--clear-execution-replan-after-todos", execute=True
+                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns", execute=True
                     ),
                     "verify": [inspect_command],
                 },
                 "documentation": {
-                    "path": "docs/quota-allocation.md#completed-todo-review-cadence",
+                    "path": "docs/quota-allocation.md#goal-review-cadence",
                     "url": (
                         "https://github.com/loopx-project/loopx/blob/main/"
-                        "docs/quota-allocation.md#completed-todo-review-cadence"
+                        "docs/quota-allocation.md#goal-review-cadence"
                     ),
                 },
             },
@@ -477,61 +476,12 @@ def build_goal_configuration_catalog(
                 },
             },
             {
-                "feature_id": "explore_graph",
-                "display_name": "Explore Graph",
-                "availability": "supported_opt_in",
-                "default": {"enabled": False},
-                "current": {"enabled": graph.get("enabled") is True},
-                "consider_when": (
-                    "The goal needs a durable topology of hypotheses, evidence, decisions, "
-                    "or an already configured operator-facing graph sink."
-                ),
-                "effect": "Projects durable Explore evidence after material refreshes.",
-                "does_not": [
-                    "enable Explore Harness",
-                    "spawn workers, claim todos, or spend quota by itself",
-                ],
-                "commands": {
-                    "preview_enable": _configure_command(goal_id, *graph_enable_args),
-                    "apply_enable": _configure_command(
-                        goal_id, *graph_enable_args, execute=True
-                    ),
-                    "preview_disable": _configure_command(
-                        goal_id, "--no-explore-graph-enabled"
-                    ),
-                    "apply_disable": _configure_command(
-                        goal_id, "--no-explore-graph-enabled", execute=True
-                    ),
-                    "verify": [
-                        inspect_command,
-                        shlex.join(
-                            [
-                                "loopx",
-                                "explore",
-                                "graph",
-                                "--goal-id",
-                                goal_id,
-                                "--graph-format",
-                                "mermaid",
-                            ]
-                        ),
-                    ],
-                },
-                "documentation": {
-                    "path": "loopx/capabilities/explore/README.md",
-                    "url": (
-                        "https://github.com/loopx-project/loopx/blob/main/"
-                        "loopx/capabilities/explore/README.md"
-                    ),
-                },
-            },
-            {
                 "feature_id": "explore_harness",
                 "display_name": "Explore Harness",
                 "availability": "supported_opt_in",
-                "default": {"enabled": False, "profile": "generic"},
+                "default": {"mode": "off", "profile": "generic"},
                 "current": {
-                    "enabled": harness.get("enabled") is True,
+                    "mode": explore["mode"],
                     "profile": harness.get("profile"),
                     "composition_mode": harness.get("composition_mode", "disabled"),
                     "composition_scope_id": harness.get("composition_scope_id"),
@@ -541,21 +491,22 @@ def build_goal_configuration_catalog(
                     "The goal benefits from comparing alternative branches with explicit "
                     "evaluation criteria and guardrails."
                 ),
-                "effect": "Enables read-only Explore planning. Explicit composition replans require an exact experiment successor or typed result; task completion remains separate.",
+                "effect": "Records durable Explore evidence with optional read-only branch planning. Explicit composition replans require an exact experiment successor or typed result; task completion remains separate.",
                 "does_not": [
-                    "enable Explore Graph",
-                    "launch workers, claim todos, acquire leases, mutate state, or spend quota",
+                    "grant permission to launch workers, claim todos, acquire leases or spend quota",
                 ],
                 "commands": {
+                    "preview_evidence_only": _configure_command(goal_id, "--explore-mode", "evidence"),
+                    "apply_evidence_only": _configure_command(goal_id, "--explore-mode", "evidence", execute=True),
                     "preview_enable": _configure_command(goal_id, *harness_enable_args),
                     "apply_enable": _configure_command(
                         goal_id, *harness_enable_args, execute=True
                     ),
                     "preview_disable": _configure_command(
-                        goal_id, "--no-explore-harness-enabled"
+                        goal_id, "--explore-mode", "off"
                     ),
                     "apply_disable": _configure_command(
-                        goal_id, "--no-explore-harness-enabled", execute=True
+                        goal_id, "--explore-mode", "off", execute=True
                     ),
                     "verify": [
                         inspect_command,
@@ -584,9 +535,9 @@ def build_goal_configuration_catalog(
                 "feature_id": "pull_request_review",
                 "display_name": "Pull-request review",
                 "availability": "supported",
-                "default": {"wait_for_ci": True, "review_priority": "other-developers-first"},
+                "default": {"wait_for_ci": True, "review_order": "forward"},
                 "current": feature_summary.get("pull_request_review") or {},
-                "effect": "Choose CI waiting and review priority for this Goal; clear the complete override to restore machine defaults.",
+                "effect": "Choose Goal and registered-Agent review directions and CI waiting; clear the complete override to restore machine defaults.",
                 "documentation": {"path": "loopx/capabilities/pr_review_queue/README.md"},
             },
             {
@@ -934,6 +885,7 @@ def build_goal_configuration_catalog(
             "documentation": {},
         }
     )
+    catalog["features"].append(reference_configuration_descriptor())
     overrides = machine_inheritable_goal_overrides or {}
     for feature in catalog["features"]:
         feature_id = str(feature.get("feature_id") or "")

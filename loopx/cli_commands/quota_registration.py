@@ -178,6 +178,19 @@ def register_quota_command(
             "The default full decision remains unchanged."
         ),
     )
+    capture_group = quota_parser.add_mutually_exclusive_group()
+    capture_group.add_argument(
+        "--decision-output-dir",
+        help=(
+            "For turn-scoped quota should-run, create a new private directory and "
+            "save the complete decided JSON as decision.json before display projection. "
+            "Use a unique directory per invocation; reading it never reruns the guard."
+        ),
+    )
+    capture_group.add_argument(
+        "--decision-output-root",
+        help="Create a unique private decision directory below this existing root on every guard invocation.",
+    )
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(

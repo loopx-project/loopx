@@ -32,7 +32,7 @@ def require_parent_context_access(root, registry, parent, target_agent_id, *, sc
     if not conversation_scope(conversation, origin=conversation["origin"])["private_conversation"]:
         # Use the original provider/store provenance and the existing source
         # authority owner. Reading must not recover or rewrite a return route.
-        from ...chat_store import ChatSessionStore
+        from .source_chat_observation import observe_source_chat
         from .source_grant_observation import source_context_authority
 
         try:
@@ -40,12 +40,8 @@ def require_parent_context_access(root, registry, parent, target_agent_id, *, sc
             if any(route.get(key) != original.get(key) for key in
                    ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
                 raise ValueError("original source route identity mismatch")
-            store = ChatSessionStore(root)
-            session = store.load_session(route["session_id"])
-            turn = store.turn_for_client(route["session_id"], route["client_turn_id"])
-            if (not session or session.get("status") == "closed" or not turn
-                    or session.get("channel_id") != route.get("channel_id")
-                    or session.get("channel_id") != original.get("source_channel")):
+            session, turn = observe_source_chat(root, route)
+            if session.get("channel_id") != original.get("source_channel"):
                 raise ValueError("original source conversation unavailable for peer context forwarding")
         except (OSError, KeyError) as exc:
             raise ValueError("original source conversation unavailable for peer context forwarding") from exc

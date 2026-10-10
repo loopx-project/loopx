@@ -1,13 +1,18 @@
 """Accepted requests must settle even when the runtime cannot be prepared."""
 
 import json
+from pathlib import Path
+import runpy
+import sys
 import threading
+import time
 import urllib.request
 
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError
-from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_coordination import PROJECT_CONTEXT_VERSION
+from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
 from loopx.extensions.lark.goal_topic_runtime import (
@@ -36,6 +41,138 @@ def drain(runtime, session_id, tmp_path):
     if worker:
         worker.join(3)
         assert not worker.is_alive()
+
+
+@pytest.fixture
+def codex_startup(tmp_path):
+    """Exercise the real stdio handshake and cleanup, without model execution."""
+    capture = tmp_path / "requests.jsonl"
+    attempts = tmp_path / "attempts"
+    entered, release = tmp_path / "entered", tmp_path / "release"
+    source = runpy.run_path(str(Path(__file__).parents[1] / "examples/loopx-chat-runtime-smoke.py"))["FAKE_CODEX"]
+
+    def start(mode, *, stage="thread/resume"):
+        script = source.replace("#!/usr/bin/env python3", f"#!{sys.executable}")
+        script = script.replace("import time", f'''import time
+import os
+from pathlib import Path
+attempts = Path({str(attempts)!r})
+previous = json.loads(attempts.read_text()) if attempts.exists() else []
+if previous:
+    try:
+        os.kill(previous[-1], 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("previous startup process must be closed")
+attempt = len(previous) + 1
+attempts.write_text(json.dumps([*previous, os.getpid()]))''')
+        script = script.replace('    method = request.get("method")', f'''
+    with open({str(capture)!r}, "a") as output:
+        output.write(json.dumps({{"attempt": attempt, **request}}) + "\\n")
+    method = request.get("method")
+    if method == {stage!r}:
+        if {mode!r} == "always" or (attempt == 1 and {mode!r} in {{"once", "stop"}}):
+            continue
+        if {mode!r} == "gate":
+            print(json.dumps({{"id": request["id"], "error": {{"code": -32000, "message": "permission denied"}}}}), flush=True)
+            continue
+        if {mode!r} == "approval":
+            print(json.dumps({{"id": 99, "method": "item/commandExecution/requestApproval", "params": {{}}}}), flush=True)
+            continue
+        if {mode!r} == "stop" and attempt == 2:
+            Path({str(entered)!r}).touch()
+            while not Path({str(release)!r}).exists():
+                time.sleep(0.01)
+    if method == "turn/start" and {mode!r} == "turn_timeout":
+        continue''')
+        fake = tmp_path / "codex"
+        fake.write_text(script)
+        fake.chmod(0o700)
+        store, sid, _ = session_runtime(tmp_path)
+        store.update_session(sid, upstream_thread_id="durable-thread",
+                             coordination_context_version=PROJECT_CONTEXT_VERSION)
+        runtime = ChatRuntimeController(store=store, codex_bin=str(fake), startup_timeout_sec=0.5)
+        runtimes.append(runtime)
+        return store, sid, runtime
+
+    runtimes = []
+    yield start, capture, attempts, entered, release
+    release.touch()
+    for runtime in runtimes:
+        runtime.close()
+
+
+@pytest.mark.parametrize("stage", ["initialize", "thread/resume"])
+def test_resumed_startup_timeout_recovers_original_queued_request(codex_startup, tmp_path, stage):
+    start, capture, attempts, _, _ = codex_startup
+    store, sid, runtime = start("once", stage=stage)
+    turn, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="original", message="Research",
+                                   work_dir=tmp_path, objective="Research")
+    result = runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=5)
+    assert result["status"] == "completed", result
+    assert store.load_session(sid)["upstream_thread_id"] == "durable-thread"
+    assert store.load_session(sid)["active_turn_id"] is None
+    assert len(json.loads(attempts.read_text())) == 2
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    resumes = [row for row in requests if row["method"] == "thread/resume"]
+    assert all(row["params"]["threadId"] == "durable-thread" for row in resumes)
+    assert all(row["params"]["approvalPolicy"] == "never" and row["params"]["sandbox"] == "read-only" for row in resumes)
+    if stage == "thread/resume":
+        assert len(resumes) == 2 and resumes[0]["params"] == resumes[1]["params"]
+    assert not any(row["method"] == "thread/start" for row in requests)
+    assert len([row for row in requests if row["method"] == "turn/start"]) == 1
+    replay, created = runtime.enqueue_turn(session_id=sid, client_turn_id="original", message="Research",
+                                          work_dir=tmp_path, objective="Research")
+    assert not created and replay["turn_id"] == turn["turn_id"] and replay["status"] == "completed"
+
+
+@pytest.mark.parametrize("mode,resumed,stage,launches", [
+    ("always", True, "thread/resume", 2),
+    ("gate", True, "thread/resume", 1),
+    ("approval", True, "thread/resume", 1),
+    ("always", False, "thread/start", 1),
+    ("turn_timeout", True, "thread/resume", 1),
+])
+def test_startup_recovery_does_not_replay_gate_fresh_or_started_requests(
+    codex_startup, tmp_path, mode, resumed, stage, launches,
+):
+    start, capture, attempts, _, _ = codex_startup
+    _, _, runtime = start(mode, stage=stage)
+    adapter = None
+    try:
+        with pytest.raises(CodexChatAgentError):
+            adapter = CodexAppServerAdapter.start(
+                codex_bin=runtime.codex_bin, work_dir=tmp_path, goal_id="public-research",
+                objective="Research", resume_thread_id="durable-thread" if resumed else None,
+                startup_timeout_sec=0.5,
+            )
+            adapter.start_turn("Research", lambda *args: None)
+    finally:
+        if adapter:
+            adapter.close_session()
+    assert len(json.loads(attempts.read_text())) == launches
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert len([row for row in requests if row["method"] == "turn/start"]) == (1 if mode == "turn_timeout" else 0)
+
+
+def test_persisted_stop_wins_after_resumed_startup_retry(codex_startup, tmp_path):
+    start, capture, _, entered, release = codex_startup
+    store, sid, runtime = start("stop")
+    turn, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="stop", message="Research",
+                                   work_dir=tmp_path, objective="Research")
+    deadline = time.monotonic() + 3
+    while not entered.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert entered.exists(), "second startup was not reached"
+    # Another controller's stop receipt must survive this worker's local locks.
+    stopper = ChatRuntimeController(store=store, codex_bin="unused-test-codex")
+    assert stopper.interrupt_turn(session_id=sid, turn_id=turn["turn_id"])["status"] == "interrupted"
+    release.touch()
+    drain(runtime, sid, tmp_path)
+    assert store.load_turn(sid, turn["turn_id"])["status"] == "interrupted"
+    assert not any(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines())
+    assert not any(row["kind"] == "turn.failed" for row in store.events_after(sid, turn["turn_id"], None))
 
 
 @pytest.mark.parametrize("claimed", [False, True])

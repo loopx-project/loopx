@@ -715,6 +715,15 @@ never infers an actor identity from an arbitrary target URI.
 
 ## Stage 4 evaluation and release gate
 
+The PR-review caller also consumes [Git-owned review experiences](../pr_review_queue/experiences/README.md)
+through a read-only native source adapter. Qualified Agent enablement, automatic
+recall and an explicit `pull_request_review.review` surface are required; another
+module's route does not enable it. Existing corpus/experience qualification and
+the TypeScript decision owner bind context delivery to the current exact head.
+This adds advisory repository context for that opted-in caller, with no provider
+write, new setting, semantic-adoption claim or utility score. The public #5944
+case preserves differing review frames and unresolved outcomes separately.
+
 Stage 4 is one bounded contract suite over the existing shared core. It does
 not add another evaluator, store, provider, scheduler, or semantic router:
 

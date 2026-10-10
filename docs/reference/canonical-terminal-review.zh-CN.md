@@ -15,7 +15,14 @@ loopx todo list --goal-id example-goal --todo-id todo_work
 loopx todo project-markdown --goal-id example-goal --execute
 ```
 
-确实没有后继时才使用 `--no-follow-up`。有租约的工作还需要当前
+确实不需要后继时才使用 `--no-follow-up`。重规划时，应对照原授权目标和当前证据
+检查未达验收项：若仍有合理的范围内下一步，就继续或重规划，无需等待预先分配
+的 successor。Todo 队列为空本身不会收窄授权。否则说明为何已无合理的范围内下一步，
+保留未达要求，不把它们说成已完成；也不为了保持活跃而造任务、扩大授权或耗尽预算。
+
+这是共享 replan packet 中的模型决策指引，会进入精简 CLI 和 host envelope。它没有
+新增自然语言验收的机器判官，不改变 lifecycle 准入，也不要求每个完成的 Todo 都建后继。
+有租约的工作还需要当前
 `--task-lease-idempotency-key` 和 `--task-lease-expected-version`；用户确认不提供
 租约或 lifecycle grant。Chat 重试同一个失败 proposal；stale proposal 需要重新预览，
 不能换一个 operation id 绕过审核。
@@ -91,11 +98,17 @@ legacy unscoped 回执属于该周期。三种意图共用同一个终结事务�
 ## 受配额约束的 CLI 完成
 
 交付通过原 validator，不等于该 Turn 已结算。共享 TS settlement plan 依次引导普通
-Todo 完成、永久 `refresh-state` 写回、一次 `quota spend-slot` 扣额，以及最终
-`todo complete --no-follow-up`；全部绑定原 Goal、Agent、Todo 和 Turn。普通完成
+Todo 完成、永久 `refresh-state` 写回和一次 `quota spend-slot` 扣额；全部绑定原
+Goal、Agent、Todo 和 Turn。只有当前契约允许最终范围收尾时，才执行
+`todo complete --no-follow-up`。普通完成
 保留 `active_goal` continuation，不制造虚假后继。该命令的执行条件是
 `todo_deliverable_complete`，必需的验证不会随条件省略。符合准入的
 `in_flight_continuation` 保留未交付 Todo 为 open，不会伪造通过验证的完成。
+
+共享 Todo 摘要仍保留缺少后继的诊断和计数，但告警是复核引导，不要求制造后继或
+终结已完成阶段。先复核剩余的授权 Goal 验收与可执行任务；范围内仍有工作时继续
+已有任务或重规划。队列为空本身不能证明最终范围可以收尾。图校验、空前沿重规划
+与终态证明仍由已有 typed 规则决定；这次提示调整覆盖 CLI、status 和 quota 读回。
 
 若提前终结、缺少写回或扣额，CLI JSON 和 Markdown 返回同一恢复计划；原 registry/runtime、
 project/state 路由和租约证明保留在对应命令支持的参数中。命令模板只是引导，不提供
@@ -116,8 +129,19 @@ project/state 路由和租约证明保留在对应命令支持的参数中。命
 
 `todo supersede --turn-instance-id <原 Turn>` 现在接受普通完成已有的精确
 Goal/Agent/Todo/Turn guard 身份。先验证原身份，再由已有 terminal authority 决定
-退役；租约、actor 和重试意图不变的门禁仍然保留。若已有真实的未来 Monitor，先用
-`todo update --successor-todo-id` 关联，再 supersede，不制造另一条替代任务。
+退役；租约、actor 和重试意图不变的门禁仍然保留。对于已晋级的 canonical authority，
+直接向 `todo supersede` 传入 `--successor-todo-id <已有 ID>`。既有 typed transaction
+在一次提交中关联后继、退役原 Todo 并释放原租约。后继保留声明的 scope、owner、
+状态和到期时间；命令不会重写已租用工作的要求，也不会制造另一条替代任务。
+可关联多个已有后继，但不能与 `--next-agent-todo` 或 `--next-user-todo` 混用。
+缺失、其他 Goal 或自身关联在写入前拒绝。精确回放恢复原回执，改变意图则拒绝；
+新的终结操作不能向已退役 Todo 追加后继。
+
+与先 `todo update --successor-todo-id` 再 `todo supersede` 相比，直接路径删除中间
+canonical mutation 和一次 CLI 往返，不承诺 provider 整体延迟改善。原预先关联与
+生成后继的路径仍支持。未晋级的 Markdown Goal 拒绝新的直接关联选项，并给出迁移
+指引；省略该选项保留原行为。本批通过既有事务扩展 CLI 与公开 lifecycle facade，
+不改变 Chat/Lark 操作，也不新增配置开关。
 
 scoped 退役回执、原永久写回和原一次扣额都齐全后，同 Turn 的 `quota should-run`
 返回 `heartbeat_settled_skip`。退役不代表交付通过 validator，不关闭 Goal，也不消费

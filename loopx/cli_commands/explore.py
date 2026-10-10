@@ -20,7 +20,7 @@ from ..capabilities.explore.result_log import (
     build_explore_node_event,
     build_explore_result_projection,
     explore_result_log_path,
-    load_explore_result_events,
+    load_explore_result_events_strict,
 )
 from ..capabilities.explore.research_evidence import append_research_observation
 from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
@@ -80,6 +80,15 @@ def register_explore_commands(
         help="Record the exploration topology and project it into a Feishu/Lark result board.",
     )
     sub = parser.add_subparsers(dest="explore_command", required=True)
+
+    context = sub.add_parser("turn-context", help="Read bounded enabled Explore evidence and planning guidance for an agent turn.")
+    add_subcommand_format(context)
+    context.add_argument("--goal-id", required=True)
+    context.add_argument("--agent-id", required=True)
+    context.add_argument("--result-limit", type=int, default=3, help="Evidence details per page (1..20); default 3.")
+    context.add_argument("--result-offset", type=int, default=0, help="Continue using the previous page's result_revision.")
+    context.add_argument("--result-node", help="Read evidence for one question node.")
+    context.add_argument("--result-revision", help="Evidence revision returned by the previous page; rejects changed evidence.")
 
     schema = sub.add_parser("schema", help="Print the result-board schema and LoopX mapping.")
     add_subcommand_format(schema)
@@ -252,7 +261,7 @@ def _projection_for(
     source_registry: Path | None = None,
 ) -> dict[str, object]:
     log_path = explore_result_log_path(runtime_root, args.goal_id)
-    events = load_explore_result_events(log_path, goal_id=args.goal_id)
+    events = load_explore_result_events_strict(log_path, goal_id=args.goal_id)
     finding_limit = (
         int(args.finding_limit)
         if finding_limit_override is None
@@ -318,6 +327,8 @@ def _tree_lines(tree: object, *, indent: int = 0) -> list[str]:
 
 
 def render_explore_markdown(payload: dict[str, object]) -> str:
+    if "graph_enabled" in payload and "harness_enabled" in payload:
+        return "# Explore Harness turn context\n\n```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```\n"
     lines = ["# LoopX Explore", ""]
     if not payload.get("ok"):
         lines.extend([f"- ok: `{payload.get('ok')}`", f"- error: `{payload.get('error')}`", ""])
@@ -518,6 +529,12 @@ def handle_explore_command(
         )
         if args.explore_command == "schema":
             payload = lark_explore_schema_payload()
+        elif args.explore_command == "turn-context":
+            from ..capabilities.explore.turn_context import explore_turn_context
+            payload = explore_turn_context(registry_path=Path(str(source_runtime_route["source_registry"])), runtime_root=runtime_root,
+                                           goal_id=args.goal_id, agent_id=args.agent_id,
+                                           result_limit=args.result_limit, result_offset=args.result_offset,
+                                           result_node=args.result_node, result_revision=args.result_revision)
         elif args.explore_command == "node":
             event = build_explore_node_event(
                 goal_id=args.goal_id,

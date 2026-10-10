@@ -62,6 +62,11 @@ def test_host_materialization_installs_generated_loopx_entry_skill(
     assert "explicit new-Goal request" in skill_text
     assert "`ordered_steps` and `goal_start_contract` as authoritative" in skill_text
     assert "surface the exact pasteable gate" in skill_text
+    # Optional preference instructions belong to its active hook, not this
+    # universally installed entry skill (including the empty-store recipe).
+    assert "semantic-preference" not in skill_text
+    assert "Agent preferences" not in skill_text
+    assert "preference-dependent" not in skill_text
     assert "follow its exact CLI `interaction_contract` or quota command first" in skill_text
     assert "reuse the packet's verified thread binding" not in skill_text
     assert "capability show <capability-id> --format json" not in skill_text

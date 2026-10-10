@@ -242,7 +242,7 @@ def run_codex_operation_host(
     reasoning_effort: str | None = None,
     source_route: Mapping[str, str] | None = None,
     mcp_server: Mapping[str, Any] | None = None,
-    timeout_seconds: float = 115,
+    timeout_seconds: float | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     confirmed_operation_id: str | None = None,
 ) -> dict[str, Any]:
@@ -359,9 +359,9 @@ def run_codex_operation_host(
             resume_thread_id=binding["session_id"] if binding else None,
             dynamic_tools=[OPERATION_TOOL],
             host_config=host_config,
-            response_timeout_sec=min(timeout_seconds, 30),
+            response_timeout_sec=30 if timeout_seconds is None else min(timeout_seconds, 30),
             hard_timeout_sec=timeout_seconds,
-            idle_timeout_sec=min(timeout_seconds, 180),
+            idle_timeout_sec=180 if timeout_seconds is None else min(timeout_seconds, 180),
         )
 
         def store_binding():

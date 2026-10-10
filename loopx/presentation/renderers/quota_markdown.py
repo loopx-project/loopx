@@ -391,6 +391,8 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"- agent_lane_next_action_text: {markdown_scalar(agent_lane_next_action.get('text'))}"
             )
+        if agent_lane_next_action.get("next_step"):
+            lines.append(f"- agent_lane_next_step: {markdown_scalar(agent_lane_next_action['next_step'])}")
     agent_lane_frontier_hint = as_dict(payload.get("agent_lane_frontier_hint"))
     if agent_lane_frontier_hint:
         lines.append(
@@ -701,14 +703,23 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
                 f"{key}={'pass' if passed else 'fail'}" for key, passed in checks.items()
             ))
             lines.append(f"  - resolution: {trigger.get('resolution_hint')}")
-    required_reads = as_list(payload.get("required_reads"))
-    for read in required_reads[:3]:
+    interaction = as_dict(payload.get("interaction_contract"))
+    channel = as_dict(interaction.get("agent_channel"))
+    context = as_dict(channel.get("work_context"))
+    if context:
+        from .turn_envelope_markdown import work_context_lines
+
+        lines.extend(work_context_lines(context))
+    required_reads = as_list(channel.get("required_reads",
+        interaction.get("required_reads", payload.get("required_reads"))))
+    for read in required_reads:
         if not isinstance(read, dict):
             continue
         command = str(read.get("command") or "").strip()
         if command:
             lines.append(
                 "- required_read: "
+                f"source={read.get('source')} "
                 f"kind={read.get('kind')} "
                 f"agent_id={read.get('agent_id')} "
                 f"todo_id={read.get('todo_id') or ''} "

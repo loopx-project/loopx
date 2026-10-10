@@ -75,7 +75,7 @@ def test_public_acquire_renew_complete_and_retired_retry(tmp_path, monkeypatch, 
         assert completed["ok"]
         assert state.exists()
         readback = cli(["todo", "list"])
-        assert readback["todos"][0]["status"] == "done"
+        assert readback["todo"]["status"] == "done"
         terminal = cli(["task-lease", "inspect"])
         assert terminal["lease"]["status"] == "released" and not terminal["active"]
         assert (cli(["task-lease", "acquire"], *next_proof, "--ttl-seconds", "600", expected_exit=1))["error_code"] == "todo_not_open"

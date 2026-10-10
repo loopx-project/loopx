@@ -384,22 +384,46 @@ def test_status_reports_backlog_candidate_and_growth_facts(tmp_path: Path) -> No
 def test_capture_evidence_v1_reports_measured_facts_only(tmp_path: Path) -> None:
     registry, state, runtime_root = _fixture(tmp_path)
     capture = _record_todo_write(registry, state, runtime_root, "Evidence fact")
+    # A prepared entry and its commit marker are the two files this pass retires.
+    assert len(list(_todo_dir(runtime_root).iterdir())) == 2
     drain = _drain(registry, runtime_root)
     evidence = adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=drain)
-    assert adapter.valid_evidence_v1(evidence, goal_id=GOAL_ID)
     assert evidence["outcome"] == "delivered"
-    assert evidence["entry"]["entry_id"] == capture.outcome.entry_id
+    assert evidence["reason_code"] is None
+    assert evidence["entry"] == {
+        "entry_id": capture.outcome.entry_id,
+        "partition": "todos",
+        "seq": 1,
+        "partition_digest": capture.outcome.partition_digest,
+        "source_bytes_digest": text_digest(state.read_text(encoding="utf-8")),
+    }
     assert evidence["source_transaction_correlated"] is True
     assert evidence["durable_source_outbox"] is True
     assert evidence["source_candidate_compared"] is False
     assert evidence["parity_verdict"] == "not_evaluated"
-    assert evidence["drain"]["candidate_readback_verified"] is True
+    assert evidence["drain"] == {
+        "outcome": "drained",
+        "delivered": 1,
+        "replayed": 0,
+        "reclaimed_residue": 2,
+        "pending_after": 0,
+        "prepared_only_after": 0,
+        "stopped_at": None,
+        "last_cursor": "2",
+        "provider_revision": drain.provider_revision,
+        "candidate_readback_verified": True,
+    }
+    assert evidence["store_identity"] == drain.store_identity
 
     deferred = adapter.DrainResult(goal_id=GOAL_ID, outcome="drain_deferred", reason_code="drain_lock_busy")
-    assert adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=deferred)["outcome"] == "drain_deferred"
+    deferred_evidence = adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=deferred)
+    assert deferred_evidence["outcome"] == "drain_deferred"
+    assert deferred_evidence["reason_code"] == "drain_lock_busy"
+    assert deferred_evidence["drain"]["candidate_readback_verified"] is None
     pending = adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=None)
     assert pending["outcome"] == "pending"
     assert pending["drain"] is None
+    observed = [evidence, deferred_evidence, pending]
 
     for skipped_reason in ("partition_unchanged", "shadow_disabled"):
         skipped = outbox.CaptureOutcome(partition="todos", skipped_reason=skipped_reason)
@@ -409,13 +433,38 @@ def test_capture_evidence_v1_reports_measured_facts_only(tmp_path: Path) -> None
         # Nothing was recorded, so nothing durable or correlated may be claimed.
         assert no_transaction["durable_source_outbox"] is False
         assert no_transaction["source_transaction_correlated"] is False
-        assert adapter.valid_evidence_v1(no_transaction, goal_id=GOAL_ID)
+        assert no_transaction["entry"] == {
+            "entry_id": None,
+            "partition": "todos",
+            "seq": None,
+            "partition_digest": None,
+            "source_bytes_digest": None,
+        }
+        observed.append(no_transaction)
     failed = outbox.CaptureOutcome(partition="todos", failure={"reason_code": "outbox_prepare_failed", "error_class": "OSError"})
     failed_evidence = adapter.capture_evidence(goal_id=GOAL_ID, capture=failed, drain=None)
     assert failed_evidence["outcome"] == "capture_failed"
     assert failed_evidence["durable_source_outbox"] is False
     assert failed_evidence["source_transaction_correlated"] is False
-    assert adapter.valid_evidence_v1(failed_evidence, goal_id=GOAL_ID)
+    assert failed_evidence["reason_code"] == "outbox_prepare_failed"
+    assert failed_evidence["entry"]["entry_id"] is None
+    observed.append(failed_evidence)
+
+    # Independent wire expectations: observation never grants candidate authority.
+    common_facts = {
+        "schema_version": "loopx_local_authority_shadow_evidence_v1",
+        "goal_id": GOAL_ID,
+        "capture_kind": "source_transaction_outbox",
+        "source_candidate_compared": False,
+        "parity_verdict": "not_evaluated",
+        "primary_authority": "legacy_local",
+        "candidate_provider": "file",
+        "candidate_read_for_decision": False,
+        "provider_to_local_writes": False,
+        "primary_writeback_preserved": True,
+    }
+    for payload in observed:
+        assert {key: payload[key] for key in common_facts} == common_facts
 
 
 def test_an_orphan_marker_above_the_cursor_is_still_corruption(tmp_path: Path) -> None:

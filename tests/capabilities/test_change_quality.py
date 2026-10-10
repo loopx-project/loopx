@@ -814,6 +814,7 @@ def test_strict_verification_failure_overrides_premerge_gate(
         base_ref="HEAD",
     )
     gate = build_premerge_validation_gate(
+        catalog_path=Path(__file__).resolve().parents[2] / "docs/concepts/interaction-pattern-catalog.md",
         changed_files=["app.py"],
         base_ref="HEAD",
         execute=False,
@@ -860,6 +861,8 @@ def test_premerge_cli_enforces_goal_receipt_policy(
             "--goal-id",
             GOAL_ID,
             "--no-execute",
+            "--catalog",
+            str(Path(__file__).resolve().parents[2] / "docs/concepts/interaction-pattern-catalog.md"),
         ]
     )
     payload = json.loads(capsys.readouterr().out)
@@ -918,6 +921,8 @@ def test_premerge_cli_resolves_global_registry_after_successful_gate(
             "--goal-id",
             GOAL_ID,
             "--no-progress",
+            "--catalog",
+            str(Path(__file__).resolve().parents[2] / "docs/concepts/interaction-pattern-catalog.md"),
         ]
     )
     payload = json.loads(capsys.readouterr().out)

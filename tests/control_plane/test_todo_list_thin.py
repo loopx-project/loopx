@@ -438,7 +438,6 @@ def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
         registry_path=registry_path,
         goal_id=GOAL_ID,
         todo_id="todo_agent_190",
-        thin=True,
     )
 
     assert len(default["todos"]) == default["todo_count"] == 382
@@ -475,8 +474,7 @@ def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
     assert explicitly_limited["omitted_todo_count"] == 380
     assert explicitly_limited["todo_list_field_projection"]["item_limit_per_role"] == 1
     assert direct_match["todo_count"] == 1
-    assert direct_match["returned_todo_count"] == 1
-    assert direct_match["omitted_todo_count"] == 0
+    assert "todos" not in direct_match
     assert direct_match["todo"]["todo_id"] == "todo_agent_190"
 
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_thin"]

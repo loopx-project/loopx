@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
+import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +21,6 @@ from .coordination_state_contract_generated import (
     COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA as RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA,
-    COORDINATION_RUNTIME_SHADOW_COMMIT_REQUEST_SCHEMA as RUNTIME_SHADOW_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA as RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA as RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA_VERSION,
@@ -35,7 +36,6 @@ from .coordination_state_contract_generated import (
 
 
 RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION = "loopx_coordination_runtime_shadow_config_v0"
-RUNTIME_SHADOW_METHOD = "coordination.runtime_shadow.commit"
 RUNTIME_SHADOW_INSPECT_METHOD = "coordination.runtime_shadow.inspect"
 RUNTIME_SHADOW_BOOTSTRAP_METHOD = "coordination.runtime_shadow.bootstrap"
 RUNTIME_SHADOW_ROLLBACK_METHOD = "coordination.runtime_shadow.rollback"
@@ -207,31 +207,6 @@ def resolve_coordination_runtime_shadow_config(
 
 RuntimeInvoker = Callable[..., object]
 
-def load_task_lease_runtime_shadow_records(
-    *,
-    runtime_root: Path,
-    goal_id: str,
-) -> list[dict[str, object]]:
-    """Read complete legacy lease records for a source snapshot."""
-
-    lease_directory = runtime_root / "goals" / goal_id / "task-leases"
-    if not lease_directory.exists():
-        return []
-    records: list[dict[str, object]] = []
-    for path in sorted(lease_directory.glob("*.json")):
-        if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
-            continue
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, Mapping):
-            raise ValueError(f"task lease is not an object: {path.name}")
-        todo_id = value.get("todo_id")
-        if not isinstance(todo_id, str) or not todo_id:
-            raise ValueError(f"task lease omits todo_id: {path.name}")
-        from .local_authority_shadow_projection import compact_lease
-        records.append(compact_lease(value, goal_id=goal_id, file_stem=path.stem))
-    records.sort(key=lambda item: str(item["todo_id"]))
-    return records
-
 
 def build_todo_runtime_shadow_projection(
     *,
@@ -287,9 +262,39 @@ def capture_todo_archive_dependencies(todos: list[dict[str, Any]], state_text: s
     return result
 
 
+def todo_partition_projector(
+    goal: Mapping[str, Any] | None,
+    *,
+    state_path: Path,
+    rollout_events: list[dict[str, Any]] | None = None,
+) -> Callable[[str], dict[str, Any]]:
+    """Production projector: parse active-state text into the todos partition."""
+
+    from ..todos.handoff_mode import goal_handoff_mode
+    from .local_authority_shadow_projection import todo_partition_projection
+    from ..todos.goal_todo_projection import project_goal_todo_items
+
+    goal_record = dict(goal) if isinstance(goal, Mapping) else None
+    events = list(rollout_events or [])
+
+    def project(state_text: str) -> dict[str, Any]:
+        return todo_partition_projection(
+            handoff_mode=goal_handoff_mode(state_text),
+            todos=capture_todo_archive_dependencies(project_goal_todo_items(
+                goal_record,
+                state_text=state_text,
+                state_path=state_path,
+                rollout_events=events,
+            ), state_text),
+        )
+
+    return project
+
+
 def build_runtime_shadow_source_snapshot(
     *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
     registry_path: Path,
+    include_all_archived_todos: bool = False,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Bind the supplied Goal and every derived fact to one registry observation."""
     from ...agent_registry import registered_agent_ids_for_goal
@@ -306,6 +311,7 @@ def build_runtime_shadow_source_snapshot(
         projection, snapshot = _build_runtime_shadow_source_snapshot(
             goal=current, runtime_root=runtime_root, state_path=state_path,
             registry_path=registry_path, registry=registry,
+            include_all_archived_todos=include_all_archived_todos,
         )
         snapshot["registry_source"] = {
             **witness, "registered_agents": registered_agent_ids_for_goal(current),
@@ -313,9 +319,53 @@ def build_runtime_shadow_source_snapshot(
     return projection, snapshot
 
 
+def _source_lease_paths(runtime_root: Path, goal_id: str) -> list[Path]:
+    """Keep unsafe filesystem sources out of the transport; TS rechecks admission."""
+    from .shadow_management import ShadowManagementError
+
+    directory = runtime_root
+    for segment in ("goals", goal_id, "task-leases"):
+        directory /= segment
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            return []
+        if not stat.S_ISDIR(info.st_mode):
+            raise ShadowManagementError("source_lease_inventory_invalid")
+    paths = sorted(path for path in directory.iterdir() if path.name.endswith(".json"))
+    for path in paths:
+        if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
+            raise ShadowManagementError("source_lease_inventory_invalid")
+    return paths
+
+
+def _source_lease_bytes(path: Path) -> bytes:
+    from .shadow_management import ShadowManagementError
+
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ShadowManagementError("source_lease_inventory_invalid")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ShadowManagementError("source_changed_retry")
+        data = stream.read()
+        after = os.fstat(stream.fileno())
+        current = path.lstat()
+        if ((current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(current.st_mode) or before.st_size != len(data)
+                or after.st_size != len(data) or current.st_size != len(data)
+                or before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns
+                or after.st_mtime_ns != current.st_mtime_ns or after.st_ctime_ns != current.st_ctime_ns):
+            raise ShadowManagementError("source_changed_retry")
+    return data
+
+
 def _build_runtime_shadow_source_snapshot(
     *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
     registry_path: Path, registry: dict[str, Any],
+    include_all_archived_todos: bool = False,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Project exactly the bytes carried by one ephemeral source precondition.
 
@@ -324,7 +374,7 @@ def _build_runtime_shadow_source_snapshot(
     """
     from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION, rollout_event_log_path
     from ...paths import resolve_runtime_root
-    from ...state_refresh import resolve_goal_state
+    from ..goals.state_resolution import resolve_goal_state
     from ..goals.legacy_event_source import state_event_log_candidates
     from ..todos.active_state_todo_parser import parse_active_state_todos
     from ..todos.goal_todo_projection import todo_summaries_from_fields
@@ -365,16 +415,30 @@ def _build_runtime_shadow_source_snapshot(
         raise ShadowManagementError("legacy_todo_event_source_retired",
             "legacy_todo_event_source_retired: preserve and export legacy Todo events with a compatible older release before migration")
 
-    fields = parse_active_state_todos(state_text, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
-    todos = todo_summaries_from_fields(fields=fields, source="markdown_active_state", rollout_events=rollout_events, roles=["user", "agent"], status=None,
-        todo_id=None, agent_id=None, limit=None).todos
-    todos = capture_todo_archive_dependencies(todos, state_text)
+    if include_all_archived_todos:
+        from ..todos.active_state_todo_parser import parse_todo_source
+        from ..todos.todo_summary import structured_todo_item, canonical_todo_read_record
+        active, archived, _ = parse_todo_source(state_text)
+        for item in archived:
+            if item.get("role") not in {"agent", "user"}:
+                raise ShadowManagementError("cold_source_archive_role_unproved",
+                    "Archived Todo role must be explicit; cold inspection cannot infer its owner from prose")
+        # A cold inventory reads persisted records, not attention summaries or
+        # the live graph's dependency-only archive. Reuse the full record codec
+        # for both sections, retaining their original heading and full text.
+        todos = [canonical_todo_read_record(structured_todo_item(
+            item, role=item["role"], source_section=item["source_section"],
+            archive_state=item["archive_state"], text_limit=None))
+            for item in [*active["user"], *active["agent"], *archived]]
+    else:
+        fields = parse_active_state_todos(state_text, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
+        todos = todo_summaries_from_fields(fields=fields, source="markdown_active_state", rollout_events=rollout_events, roles=["user", "agent"], status=None,
+            todo_id=None, agent_id=None, limit=None).todos
+        todos = capture_todo_archive_dependencies(todos, state_text)
     leases: list[dict[str, Any]] = []
     inventory: list[dict[str, object]] = []
-    for path in sorted((runtime_root / "goals" / goal_id / "task-leases").glob("*.json")):
-        if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
-            continue
-        data = path.read_bytes()
+    for path in _source_lease_paths(runtime_root, goal_id):
+        data = _source_lease_bytes(path)
         leases.append(compact_lease(json.loads(data), goal_id=goal_id, file_stem=path.stem))
         inventory.append({"name": path.name, "bytes_sha256": "sha256:" + hashlib.sha256(data).hexdigest()})
     projection = build_todo_runtime_shadow_projection(goal_id=goal_id, todos=todos, leases=leases,
@@ -387,60 +451,6 @@ def _build_runtime_shadow_source_snapshot(
         "state_bytes_sha256": "sha256:" + hashlib.sha256(state_bytes).hexdigest(),
         "lease_inventory": inventory, "projection_sha256": hashlib.sha256(canonical_bytes(projection)).hexdigest(),
         "evidence_files": evidence}
-
-
-def dispatch_coordination_runtime_shadow(
-    *,
-    goal: Mapping[str, Any] | None,
-    runtime_root: Path,
-    goal_id: str,
-    operation_id: str,
-    event_kind: str,
-    source_version: str,
-    projection: Mapping[str, Any],
-    runtime_invoker: RuntimeInvoker = effect_runtime_result,
-) -> dict[str, object]:
-    """Mirror a committed mutation, isolating all shadow failures from truth."""
-
-    config = resolve_coordination_runtime_shadow_config(goal)
-    if not config.enabled:
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_dispatch_v0",
-            "status": "disabled",
-            "reason_code": config.reason_code,
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-
-    request = {
-        "schema_version": RUNTIME_SHADOW_REQUEST_SCHEMA_VERSION,
-        "runtime_root": str(runtime_root.expanduser().absolute()),
-        "goal_id": goal_id,
-        "operation_id": operation_id,
-        "event_kind": event_kind,
-        "source_version": source_version,
-        "projection": dict(projection),
-    }
-    try:
-        result = runtime_invoker(RUNTIME_SHADOW_METHOD, request)
-    except Exception as exc:
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_dispatch_v0",
-            "status": "failed",
-            "reason_code": "shadow_runtime_unavailable",
-            "reason": str(exc),
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-    if not isinstance(result, Mapping):
-        return {
-            "schema_version": "loopx_coordination_runtime_shadow_dispatch_v0",
-            "status": "failed",
-            "reason_code": "shadow_runtime_result_invalid",
-            "primary_writeback_preserved": True,
-            "decision_read_from_shadow": False,
-        }
-    return dict(result)
 
 
 def bootstrap_coordination_runtime_shadow(

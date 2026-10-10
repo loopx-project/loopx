@@ -8,6 +8,7 @@ import pytest
 from loopx.control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_view,
+    requalify_bound_heartbeat_receipt,
     upgrade_identityless_heartbeat_receipt,
 )
 from loopx.rollout_event_log import (
@@ -153,6 +154,32 @@ def test_concurrent_identityless_receipt_upgrades_append_one_correction(
         results[0][0]["event_id"]
     }
     assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL_ID))) == 2
+
+
+def test_concurrent_work_requalification_appends_one_same_binding_receipt(tmp_path: Path) -> None:
+    proof = {"ok": True, "should_run": True, "must_attempt_work": True,
+             "delivery_allowed": True, "quiet_noop_allowed": False,
+             "todo_id": TODO_ID, "settlement_effect_id": EFFECT_ID}
+    original = build_rollout_event(goal_id=GOAL_ID, event_kind="quota_should_run",
+        agent_id=AGENT_ID, todo_id=TODO_ID, run_id=TURN_ID,
+        status="successor_replan_required", summary="delivery denied",
+        details={**proof, "delivery_allowed": False})
+    log_path = rollout_event_log_path(tmp_path, GOAL_ID)
+    append_rollout_event(log_path, original)
+
+    def qualify(_: int) -> tuple[dict[str, object], bool]:
+        return requalify_bound_heartbeat_receipt(tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID,
+            turn_instance_id=TURN_ID, todo_id=TODO_ID, replan_obligation_id=None,
+            status="normal_run", details=proof, registry_path=None, goal_ref=None)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(qualify, range(8)))
+    assert sum(appended for _, appended in results) == 1
+    assert len({event["event_id"] for event, _ in results}) == 1
+    events = load_rollout_events(log_path)
+    assert len(events) == 2 and events[0] == original
+    assert events[1]["details"]["settlement_effect_id"] == EFFECT_ID
+    assert events[1]["causality"]["caused_by"] == original["event_id"]
 
 
 def test_legacy_todo_only_receipt_upgrades_derived_effect_identity(

@@ -179,6 +179,37 @@ LABELED_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
     re.I,
 )
 
+# A credential label reached inside a field name rather than as a free-standing
+# word: ``db_password = 'S3cret!value'``, ``password_hash=Qwerty1234567890``,
+# ``client_secret: abcdef123456``. Every label arm above anchors the label with
+# ``\\b``, and ``_`` is a word character, so a label glued to a field-name prefix
+# or suffix is invisible to all of them -- the two capability faces caught that
+# spelling with a substring rule of their own (Refs #5136, direction 1).
+#
+# The value carries no test, which is what the free-standing assignment arm above
+# already does: an operator beside a credential label states an assignment, so a
+# short or quoted value such as ``client_secret="hunter"`` cannot be released by a
+# digit or word-length accident (Refs #5136, direction 2; those rows are the
+# direction-4 counterexamples the migrated callers still lacked). The residual
+# runs the other way: the field-name suffix also absorbs prose that ends on the
+# label's plural before an operator, ``secrets:`` included, which the
+# free-standing arm's ``\\b`` does not reach. That is why this arm stays an
+# opt-in rather than a member of the ``credential`` category.
+_COMPOUND_LABEL_SOURCE = "pass" + r"word|sec" + r"ret|api" + r"[_-]?key"
+COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN = re.compile(
+    r"[A-Za-z0-9_]*(?:" + _COMPOUND_LABEL_SOURCE + r")[A-Za-z0-9_]*[\"']?\s*[:=]",
+    re.IGNORECASE,
+)
+# The credential half of the rule, on its own, named so the two capability faces
+# that ask it share one definition instead of each restating a category pair. Both
+# categories are listed rather than subtracted from `ALL_CATEGORIES`:
+# `credential_word` is one of the two, and a policy written as a difference would
+# drop it -- loosening a face that never asked to be loosened -- the next time a
+# category is added.
+CREDENTIAL_CATEGORIES: frozenset[str] = frozenset(
+    {CATEGORY_CREDENTIAL, CATEGORY_CREDENTIAL_WORD}
+)
+
 # Refs #5136: relocated here from control_plane/runtime/public_safety.py so a
 # single owner defines each shape. public_safety re-exports these names, so its
 # ~8 direct importers and 30+ recursive-validation callers are unchanged. This
@@ -200,10 +231,9 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
 # path behind an explicit `path:` prefix. Whether a surface *rejects* what this
 # owner recognizes stays the caller's named policy, so a surface can still opt
 # into the narrower legacy set by asking for `LOCAL_PATH_SURFACE_PATTERN` alone.
-# `file://` is deliberately not in this set: direction 3 does classify it as a
-# local path, but every surface that has to stop carrying one already rejects it
-# here as a raw remote location, and the surfaces that keep ordinary URLs would
-# need a per-surface decision rather than a shared-pattern change.
+# Typed public exports also reject file URLs, including host-qualified ones.
+# The internal text-owner classifier and legacy compactor retain their separate
+# policies; recognizing a locator here does not change those destinations.
 HOME_RELATIVE_PATH_PATTERN = re.compile(r"(?<![\w~])~[\\/][^\s`'\"<>]+")
 PATH_PREFIX_LOCAL_PATTERN = re.compile(
     r"(?<![\w:])path:[\\/][^\s`'\"<>]+", re.IGNORECASE
@@ -221,11 +251,66 @@ LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN = re.compile(
     r"(?:^|[\s:=])(?:/Users/|/private/|/tmp/|~[/\\])",
     re.IGNORECASE,
 )
+FILE_URL_LOCAL_PATH_PATTERN = re.compile(r"\bfile://", re.IGNORECASE)
 PUBLIC_SAFE_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     LOCAL_PATH_SURFACE_PATTERN,
     HOME_RELATIVE_PATH_PATTERN,
     PATH_PREFIX_LOCAL_PATTERN,
     LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
+    FILE_URL_LOCAL_PATH_PATTERN,
+)
+# Presentation redaction keeps its historical Unix-root boundary behavior (it
+# catches paths even after a colon), consumes the shared absolute, drive-letter
+# and UNC detector, and recognizes extended Windows device paths for display
+# only. Those extended forms remain outside the shared state-owner contract.
+# Keeping these definitions here lets presentation choose its own redaction
+# policy without changing other callers (Refs #5136, direction 3).
+PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN = re.compile(
+    r"(?<=:)(?:"
+    r"[A-Za-z]:[\\/][^\s`|,)]+|"
+    r"\\\\\?\\(?:(?i:UNC)\\[A-Za-z0-9_.-]+\\|(?i:Volume)\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}\\)[^\s`|,)]+|"
+    r"\\\\\?\\(?i:GLOBALROOT\\Device\\)[^\s`|,)]+|"
+    r"\\\\[A-Za-z0-9_.-]+\\[^\s`|,)]+"
+    r")"
+)
+PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN = re.compile(
+    r"\\\\\?\\(?:(?i:UNC)\\[A-Za-z0-9_.-]+\\|"
+    r"(?i:Volume)\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}\\|"
+    r"(?i:GLOBALROOT\\Device\\))[^\s`|,)]+",
+    re.IGNORECASE,
+)
+PRESENTATION_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/(?:Users|home|private|tmp|var)/[^\s`|,)]+"),
+    LOCAL_PATH_SURFACE_PATTERN,
+    PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN,
+    PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN,
+)
+PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
+    tuple[str, re.Pattern[str]], ...
+] = (
+    (
+        "absolute local path",
+        re.compile(
+            r"/(?:Users|home|private|tmp|var)/[^\s`\"'<>]+|"
+            + "(?:"
+            + LOCAL_PATH_SURFACE_PATTERN.pattern
+            + "|"
+            + PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN.pattern
+            + ")|"
+            + PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN.pattern
+        ),
+    ),
+    (
+        "private key material",
+        re.compile(r"BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY"),
+    ),
+    (
+        "credential assignment",
+        re.compile(
+            r"\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]",
+            re.IGNORECASE,
+        ),
+    ),
 )
 # Refs #5136: one definition for "this string carries a raw remote location".
 # Three validators each restated the same scheme list, and the canonical
@@ -258,6 +343,14 @@ PUBLIC_SAFE_REFERENCE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$"
 )
 COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+# One definition for "a compact, path-safe opaque identifier". Four contracts each
+# compiled this body under their own name -- the Chat action surface, the Chat
+# action store, a Goal reference validator and the BotMux runtime -- and a fifth
+# waits in the goal-deletion service, so a bound fix had five places to land. Each
+# consumer keeps its own field names and error text; this states syntax only, and
+# a value this shape accepts is not yet a claim that the destination may publish
+# it.
+OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
     r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$"
 )
@@ -442,7 +535,8 @@ def find_public_safe_local_path(value: str | None) -> re.Pattern[str] | None:
     surfaces that publish outside the runtime (Refs #5136, direction 3): the
     absolute roots, the two gap shapes `classify_private_text` reaches only when
     a caller opts into `include_path_gaps`, and the colon/equals boundary form
-    the migrated surfaces already enforced. Recognition is still not permission:
+    the migrated surfaces already enforced, plus file URLs. Recognition is still
+    not permission:
     a caller that must keep a narrower historical verdict asks for
     `LOCAL_PATH_SURFACE_PATTERN` directly, and each surface keeps its own
     rejection message and length limit.
@@ -461,6 +555,7 @@ def classify_private_text(
     *,
     categories: frozenset[str] = ALL_CATEGORIES,
     include_path_gaps: bool = False,
+    include_compound_field_assignment: bool = False,
 ) -> PrivateTextMatch | None:
     """Return the first recognized private-text match within ``categories``.
 
@@ -474,6 +569,12 @@ def classify_private_text(
     home-relative (``~/``) and ``path:``-prefixed local references. It defaults
     to False so this consolidation does not silently tighten any surface that
     has not chosen the wider policy.
+
+    ``include_compound_field_assignment`` opts a surface into
+    ``COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN``. It is an opt-in rather than
+    a ``credential`` category member for the reason stated on that constant: a
+    category addition would widen the four migrated text owners and the
+    publication tier by absence, which is a per-face decision nobody has made.
     """
 
     if not value:
@@ -490,6 +591,16 @@ def classify_private_text(
                 return PrivateTextMatch(
                     CATEGORY_LOCAL_PATH, "local path behind a relative/prefixed form", pattern
                 )
+    if (
+        include_compound_field_assignment
+        and CATEGORY_CREDENTIAL in categories
+        and COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN.search(value)
+    ):
+        return PrivateTextMatch(
+            CATEGORY_CREDENTIAL,
+            "credential field name behind an assignment operator",
+            COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN,
+        )
     return None
 
 
@@ -498,12 +609,16 @@ def matches_private_text_policy(
     *,
     categories: frozenset[str] = ALL_CATEGORIES,
     include_path_gaps: bool = False,
+    include_compound_field_assignment: bool = False,
 ) -> bool:
     """True when ``value`` is recognized within the named policy's categories."""
 
     return (
         classify_private_text(
-            value, categories=categories, include_path_gaps=include_path_gaps
+            value,
+            categories=categories,
+            include_path_gaps=include_path_gaps,
+            include_compound_field_assignment=include_compound_field_assignment,
         )
         is not None
     )

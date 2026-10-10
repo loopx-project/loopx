@@ -18,7 +18,18 @@ loopx todo list --goal-id example-goal --todo-id todo_work
 loopx todo project-markdown --goal-id example-goal --execute
 ```
 
-Use `--no-follow-up` only when no successor is needed. Leased work additionally
+Use `--no-follow-up` only when no successor is needed. At replan, review unmet
+acceptance against the original authorized goal and current evidence. If a
+reasonable in-scope next step remains, continue or replan; a preassigned successor
+is not required. An empty Todo queue alone does not narrow the authorization.
+Otherwise explain why no reasonable in-scope next step remains, preserving unmet
+requirements rather than claiming them achieved. Do not invent work, expand
+authority or consume the remaining budget merely to stay active.
+
+This is agent decision guidance in the shared replan packet, including compact
+CLI and host envelopes. It does not add a machine judge of free-text acceptance,
+change lifecycle admission, or require a successor for every completed Todo.
+Leased work additionally
 requires its current `--task-lease-idempotency-key` and
 `--task-lease-expected-version`; owner confirmation is not a lease or a lifecycle
 grant. Chat users retry the same failed proposal. A stale proposal requires a
@@ -113,13 +124,22 @@ command or transport in this slice.
 
 A declared deliverable passing its validator is not the same event as its Turn
 being settled. The shared TypeScript settlement plan orders ordinary Todo
-completion, durable `refresh-state`, one `quota spend-slot`, then final
-`todo complete --no-follow-up`, all bound to the original Goal, Agent, Todo and
-Turn. Ordinary completion retains `active_goal` continuation without creating
+completion, durable `refresh-state` and one `quota spend-slot`, all bound to the
+original Goal, Agent, Todo and Turn. Final `todo complete --no-follow-up` applies
+only when the current contract permits final scope closeout. Ordinary completion
+retains `active_goal` continuation without creating
 an artificial successor. Its command has the condition
 `todo_deliverable_complete`; required validation is never conditional or waived.
 Qualified `in_flight_continuation` leaves unfinished work open and omits ordinary
 completion rather than pretending the deliverable passed.
+
+The shared Todo summary keeps missing-successor diagnostics and counts, but its
+warning is review guidance, not an obligation to create a successor or terminate
+a completed stage. Review remaining authorized Goal acceptance and the runnable
+frontier; continue existing work or replan while scope remains. An empty queue
+alone does not certify final scope closeout. Graph validation, empty-frontier
+replan and terminal proof remain governed by their existing typed rules. This
+guidance change is shared by CLI, status and quota readback.
 
 If final closeout is attempted before writeback/accounting, CLI JSON and Markdown
 return that same recovery plan. Supplied registry/runtime, project/state routes
@@ -146,9 +166,25 @@ or Lark transport is introduced.
 `todo supersede --turn-instance-id <original-turn>` now accepts the same exact
 Goal/Agent/Todo/Turn guard identity as ordinary completion. It validates that
 identity before the existing terminal authority admits retirement; lease,
-actor and unchanged-intent recovery rules still apply. Link an existing future
-Monitor with `todo update --successor-todo-id` before superseding rather than
-manufacturing another replacement.
+actor and unchanged-intent recovery rules still apply. For promoted canonical
+authority, pass `--successor-todo-id <existing-id>` directly to `todo supersede`.
+The existing typed transaction links the successor, retires the original Todo
+and releases its original lease in one commit. The successor keeps its declared
+scope, owner, status and due time; the command neither rewrites leased work
+requirements nor creates another replacement. Multiple existing links are
+accepted, but cannot be mixed with `--next-agent-todo` or `--next-user-todo`.
+Missing, other-Goal and self links fail before mutation. Exact replay recovers
+the original receipt; changed intent is rejected. A fresh terminal operation
+cannot append a new successor to an already retired Todo.
+
+Compared with `todo update --successor-todo-id` followed by `todo supersede`,
+the direct path removes the intermediate canonical mutation and CLI round trip.
+It does not promise a provider-wide latency improvement. The old prelinked and
+generated-successor paths remain supported. Unpromoted Markdown Goals reject
+the new direct-link option with migration guidance; omitting the option keeps
+their existing behavior. This extends the CLI and public lifecycle facade using
+the existing transaction, without changing Chat/Lark actions or adding a
+configuration switch.
 
 Once that scoped retirement, the original durable writeback and one original
 quota spend all exist, same-Turn `quota should-run` returns

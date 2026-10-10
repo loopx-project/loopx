@@ -7,7 +7,7 @@ from typing import Any
 
 from ...registry import atomic_write_json
 from ..projects.registry_codec import SOURCE_SESSION_PROFILE_ID
-from ..todos.active_state_editing import fsync_state_directory
+from ..runtime.document_io import fsync_state_directory
 from .goal_ref_validation import (
     GOAL_INSTANCE_ID,
     exact_goal_ref,

@@ -791,6 +791,12 @@ def compact_quota_should_run_cli_payload(
             compact = dict(compact)
             compact["goal_route_hint"] = _compact_goal_route_hint(goal_route_hint)
         compact = _compact_shadowed_action_projections(compact)
+    agent_lane_next_action = compact.get("agent_lane_next_action")
+    if isinstance(agent_lane_next_action, dict) and "content_revision" in agent_lane_next_action:
+        compact = dict(compact)
+        agent_lane_next_action = dict(agent_lane_next_action)
+        agent_lane_next_action.pop("content_revision", None)
+        compact["agent_lane_next_action"] = agent_lane_next_action
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )

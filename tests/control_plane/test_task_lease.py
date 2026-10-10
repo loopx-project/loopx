@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from loopx.control_plane.work_items import task_lease, task_lease_acquire_adapter
+from loopx.control_plane.work_items.local_lease_record import read_lease
 from loopx.control_plane.work_items.task_lease import (
     MAX_TASK_LEASE_TTL_SECONDS,
     TaskLeaseError,
@@ -22,6 +23,28 @@ from loopx.control_plane.work_items.task_lease import (
     write_scopes_overlap,
 )
 from loopx.todos import add_goal_todo
+
+
+@pytest.mark.parametrize("raw", [None, b'{"status":"active"}', b"{broken", b"\xff"],
+                         ids=["missing", "valid", "invalid-json", "invalid-utf8"])
+def test_local_lease_reader_preserves_bytes_and_types_corruption(tmp_path: Path, raw: bytes | None) -> None:
+    path = tmp_path / "lease.json"
+    if raw is not None:
+        path.write_bytes(raw)
+        before_mtime = path.stat().st_mtime_ns
+
+    if raw in (b"{broken", b"\xff"):
+        with pytest.raises(TaskLeaseError) as error:
+            read_lease(path)
+        assert error.value.code == "corrupt_lease"
+    else:
+        assert read_lease(path) == ({"status": "active"} if raw is not None else None)
+
+    if raw is None:
+        assert not path.exists()
+    else:
+        assert path.read_bytes() == raw
+        assert path.stat().st_mtime_ns == before_mtime
 
 
 @pytest.mark.parametrize(

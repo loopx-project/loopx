@@ -1,0 +1,130 @@
+{
+  "observed_at": "2026-10-06T06:57:55+00:00",
+  "runs": [
+    {
+      "run_id": "portfolio-official-native-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "8412734b11a835056fbbad95a0e408fc80700995763952a511c4ac0ce66b6628",
+        "worker-profile.json": "8b5197fd70297ecb4207fd5d88b12cb1ed93291ffb67ec26293e32f916d6b881",
+        "final_result.json": "fd445436a574c7f7bb0b0c0fdb07953024a2aa208e98c8f0a2885ce9ee07480f",
+        "run_history.json": "e04ec106909e0861d3ff2aeaa630aadb230285037bf421d65254be6dd14f23a9"
+      },
+      "settings_file": "settings/portfolio-official-native-ledgerv2-01.json",
+      "settings_sha256": "f2bf2100d36d00a9cf9f9a7fe7275dc2949a3cc221eca68c2e4d6b3eba4d6fa2"
+    },
+    {
+      "run_id": "portfolio-official-blind-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "c39ba8021fb63d46d751855ad68c5597bb735691477fba19f0133fbc1c77f0db",
+        "worker-profile.json": "3fda76c5d01fc4a0d6bd0029156660aa93a8300833f13eb4bf27864049fd47f5",
+        "final_result.json": "d8f81197eaebaaba475b12dcc69d1077965c6123a2454f15fff6275c1f68fa2d",
+        "run_history.json": "f18948e961c9e551edf81daf4f398aea0df9052ccc39d0563c65f0c9185c954d"
+      },
+      "settings_file": "settings/portfolio-official-blind-ledgerv2-01.json",
+      "settings_sha256": "d65f1973bdc23f7a91269a13f869e70563303375418a8fc0131767ddcc1a0bdb"
+    },
+    {
+      "run_id": "portfolio-single-native-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "0efcc5bad55609ced536865d4c88843c20bc3b71fb216bfa0d7ddf4337b3798d",
+        "worker-profile.json": "2daf454ca36a600450d1633a9f98e28973f780591b32b732ff55a130bc0d29c2",
+        "final_result.json": "ecbc1d2f0a1298c2e1f921616c194e7a89b3212fdaba5fe336a8ac70d3784ea0",
+        "run_history.json": "c082d6eb0c7b4e2f64581887115cf1701196eb037e3eaee97b454d598cf6ba82"
+      },
+      "settings_file": "settings/portfolio-single-native-ledgerv2-01.json",
+      "settings_sha256": "f933807503a45c736829cd84600e348ab8c734f99268d3fb747494a021354a5c"
+    },
+    {
+      "run_id": "portfolio-single-blind-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "5518fcaa7ec9a0dac4b85adce587f601425205696f06fc8af501f91f96eba234",
+        "worker-profile.json": "6ac74e36b789d22b3aab3b09ad60dba4712c0efe3eb37f4c5e2bafe11d27ea5f",
+        "final_result.json": "c2dc747fe649fcc478098610f72da0fade409e4433d9067316f3d539a0ee74db",
+        "run_history.json": "49063a15bcc7e028354a231de639277e61e8d87d39aaf88c8f6e5c7f4128e563"
+      },
+      "settings_file": "settings/portfolio-single-blind-ledgerv2-01.json",
+      "settings_sha256": "34b3f3293d2098ae2af758efb52f693d9e25901141c525e5e16270b6e54b99f7"
+    },
+    {
+      "run_id": "portfolio-native-goal-native-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "ef39ef6ae4f048386a9d0f240a0193fcede30fc97e48ae3edc3fb07c4b05629a",
+        "worker-profile.json": "4adf7e39f64c2649bfcf478ea7d01792e34864a7f53e79b2ee31cf5dc2029d1d",
+        "final_result.json": "de7fde6295e788143ad42a3507defbb46b8f714e3fd59a9a94048fb5beb8e9d0",
+        "run_history.json": "523012a2ed3366f8d39437a9d8d46cd2866f401f38ac4dd45758469308be33c4"
+      },
+      "settings_file": "settings/portfolio-native-goal-native-ledgerv2-01.json",
+      "settings_sha256": "57bb41786a76cdacbe1d79fc447d0327ee6eba6c0ace1dc192bc01fc55f155f3"
+    },
+    {
+      "run_id": "portfolio-native-goal-blind-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "a83d7005e27eee10531b3d6898a0fcb251a9b0d74cb5a71f2ba6d7e6e7a00e7f",
+        "worker-profile.json": "3c4620c876fe8c883012fa70494dc9bda4ed4190f89ad3de3cc3519e96a23f48",
+        "final_result.json": "f865df5a70daece660f3fcf6b71bc08b1fc966f2747e9a4109503ae1aebcb54b",
+        "run_history.json": "1053fe61ae3909a0ad746eb8ce1458cdaf04c32d55083a759a2b657b48abde50"
+      },
+      "settings_file": "settings/portfolio-native-goal-blind-ledgerv2-01.json",
+      "settings_sha256": "dac3486d86a80d26c77c5b81d3fc1b4d455e8df239569328e324882420742126"
+    },
+    {
+      "run_id": "portfolio-heartbeat-resume-native-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "a1667194a107d73ce4decb42dda0666b811c3bcb4cf41536b6388d0bce59188d",
+        "worker-profile.json": "ebf0a6022b63df16a049ce0e712929ddea841fe9b32d865464708da2b0cceb9e",
+        "final_result.json": "3c1a19afa06321e479a74747a6c3194e741219b5fc87e01030e0d95f12697df1",
+        "run_history.json": "93084cbc918e7ce1969a76643a6647cde82cac3ea8d965ac7a58c55019baecec"
+      },
+      "settings_file": "settings/portfolio-heartbeat-resume-native-ledgerv2-01.json",
+      "settings_sha256": "88768c33458dc4fef4c7a24eebff7ed6c7c338a7e31d017dbc291c6622be4d47"
+    },
+    {
+      "run_id": "portfolio-heartbeat-resume-blind-ledgerv2-01",
+      "source_sha256": {
+        "runtime-receipt.json": "4ac34de0745d78303aff1861ba90eb1160ac3c3905a9076d1a5db460ac3bf0d2",
+        "worker-profile.json": "e808de8711ad5fc084551e7887f03859d24250d8cbbfc725cd767c7cf851ea89",
+        "final_result.json": "3b4212d11b27f6ce80c062cdde26c7f621c9240b8569bc9a599ffc3f08581681",
+        "run_history.json": "80d078c5db48ed9becb3baf1c9d40cd0bcee47f1a0a022d4820853ad644e9f42"
+      },
+      "settings_file": "settings/portfolio-heartbeat-resume-blind-ledgerv2-01.json",
+      "settings_sha256": "32a19a8e17341657859787fb3fc6864700d21fb54f3e7357fe406ffb9513a239"
+    },
+    {
+      "run_id": "portfolio-heartbeat-explore-native-qualifiedv13-01",
+      "source_sha256": {
+        "runtime-receipt.json": "95432a3e5e990c48573d0db56a999c73f24b9bbf82701e6e5d2594afb2a17311",
+        "worker-profile.json": "3305f506263918334b445259e04f4d01efc572a5d9f1399280ef62f3cb9da376",
+        "final_result.json": "40d0bed9934bc961d3b03470bef5ca8abe0b629bd47a272eaef214a9986110f6",
+        "run_history.json": "c84ae571722417757c6e4116a1afa6e7c6669c47b0077c944ef4cc841c8ea236"
+      },
+      "settings_file": "settings/portfolio-heartbeat-explore-native-qualifiedv13-01.json",
+      "settings_sha256": "cc244b5d7ef4f1dcea894224997778b79cbe8beea5c9888e356d6311df25d2bd"
+    },
+    {
+      "run_id": "portfolio-heartbeat-explore-blind-qualifiedv13-02",
+      "source_sha256": {
+        "runtime-receipt.json": "ee46f78659c3c3c2ef72337ff9ba11cb36aaedb1134a44e6987c9fa66ba99c89",
+        "worker-profile.json": "0e1c2b21cd25ae5cb444f87767ba849cfdffb69cb11960d9499faa07e9a1156b",
+        "final_result.json": "4748d1a34034b96d602614e5761ef7a48c229de6b99dd25b4a1b898cf09587d7",
+        "run_history.json": "bdce7467053af3e16c446981637173b05b815202242ea0263362794278bc1bf3"
+      },
+      "settings_file": "settings/portfolio-heartbeat-explore-blind-qualifiedv13-02.json",
+      "settings_sha256": "2cd4b9453e187392e182dd0750ade9634bbe96bfc56150c1590a0f7155f7755b"
+    }
+  ],
+  "files_sha256": {
+    "run-rows.json": "43c9b833801ea1b366f14be751fe7fc3dcca1d214d4aad26e991d740d08fdff5",
+    "samples.csv": "ba49e21f3e2b23d86b4e42706adf4525e1e8286d2d383aa0058cb5a6b4090eab",
+    "scores.csv": "de7defe62245f2ab279bff3545e3189bcc73468cfc8b0cc4ec1f523d2b33fac0",
+    "settings/portfolio-heartbeat-explore-blind-qualifiedv13-02.json": "2cd4b9453e187392e182dd0750ade9634bbe96bfc56150c1590a0f7155f7755b",
+    "settings/portfolio-heartbeat-explore-native-qualifiedv13-01.json": "cc244b5d7ef4f1dcea894224997778b79cbe8beea5c9888e356d6311df25d2bd",
+    "settings/portfolio-heartbeat-resume-blind-ledgerv2-01.json": "32a19a8e17341657859787fb3fc6864700d21fb54f3e7357fe406ffb9513a239",
+    "settings/portfolio-heartbeat-resume-native-ledgerv2-01.json": "88768c33458dc4fef4c7a24eebff7ed6c7c338a7e31d017dbc291c6622be4d47",
+    "settings/portfolio-native-goal-blind-ledgerv2-01.json": "dac3486d86a80d26c77c5b81d3fc1b4d455e8df239569328e324882420742126",
+    "settings/portfolio-native-goal-native-ledgerv2-01.json": "57bb41786a76cdacbe1d79fc447d0327ee6eba6c0ace1dc192bc01fc55f155f3",
+    "settings/portfolio-official-blind-ledgerv2-01.json": "d65f1973bdc23f7a91269a13f869e70563303375418a8fc0131767ddcc1a0bdb",
+    "settings/portfolio-official-native-ledgerv2-01.json": "f2bf2100d36d00a9cf9f9a7fe7275dc2949a3cc221eca68c2e4d6b3eba4d6fa2",
+    "settings/portfolio-single-blind-ledgerv2-01.json": "34b3f3293d2098ae2af758efb52f693d9e25901141c525e5e16270b6e54b99f7",
+    "settings/portfolio-single-native-ledgerv2-01.json": "f933807503a45c736829cd84600e348ab8c734f99268d3fb747494a021354a5c"
+  }
+}

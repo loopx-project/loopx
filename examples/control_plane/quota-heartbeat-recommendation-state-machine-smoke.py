@@ -182,7 +182,7 @@ def assert_monitor_lanes_do_not_collapse_due_work() -> None:
     assert due_lane and due_lane["must_attempt_work"] is True, due_lane
     assert due_lane["obligation"] == "attempt_due_monitor", due_lane
     assert due["recommended_mode"] == "follow_work_lane_contract", due
-    assert due["latest_run"]["progress_scope"] == "dependency_observation", due
+    assert due["latest_run"]["progress_scope"] == "primary_goal", due
 
 
 def assert_read_only_map_lifecycle_modes() -> None:
@@ -233,6 +233,7 @@ def assert_post_handoff_primary_outcome_modes() -> None:
             "post_handoff_latest_run": {
                 **base_item["handoff_readiness"]["post_handoff_latest_run"],
                 "classification": "dependency_observed_after_merge",
+                "progress_scope": "dependency_observation",
             },
         },
     }

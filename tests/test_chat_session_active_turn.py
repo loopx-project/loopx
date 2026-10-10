@@ -225,7 +225,7 @@ def test_generated_message_id_skips_transcript_deduplication(
         store.append_message(
             session_id,
             role="agent",
-            text="ignored replay",
+            text="durable completion",
             message_id="completion-one",
         )
         == expected

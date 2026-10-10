@@ -66,6 +66,7 @@ from .project_lifecycle_inputs import (
     inline_agent_vision_packet,
     inline_progress_observation,
     reject_non_standard_json_constant,
+    split_explore_result_input,
 )
 from .project_lifecycle_sinks import (
     apply_external_sink_postcondition,
@@ -82,7 +83,13 @@ def register_refresh_state_command(
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     context_parser = subparsers.add_parser(
-        "checkpoint-context", help="Read a fresh decision basis for an existing Turn's missing checkpoint.",
+        "checkpoint-context", help="Recover a missing checkpoint after a committed Turn writeback.",
+        description=(
+            "Recovery only: requires the original committed refresh-state writeback. "
+            "For the first writeback, supply the vision with refresh-state directly. "
+            "Use this command only when recovery requests a fresh checkpoint context; "
+            "reuse the original Turn identity."
+        ),
     )
     add_subcommand_format(context_parser)
     for option in ("goal-id", "agent-id", "turn-instance-id"):
@@ -125,9 +132,19 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument(
         "--next-action",
         help=(
-            "Explicitly update the active state's durable ## Next Action before "
-            "appending the refresh run. Without this flag, --recommended-action "
-            "only describes the run record."
+            "Record a next step bound to this agent's selected advancement Todo in "
+            "the existing recommendation receipt; at most 1200 characters after "
+            "trimming. Keep detailed evidence in artifacts and summarize the next step. "
+            "Does not overwrite Markdown "
+            "Next Action, select another task, or grant execution authority."
+        ),
+    )
+    refresh_state_parser.add_argument(
+        "--next-action-basis",
+        help=(
+            "Current agent's Next Action basis from status --agent-id or the quota "
+            "agent_lane_next_action. Rejects a stale task or same-agent step. "
+            "Without it, the command uses a fresh invocation read."
         ),
     )
     refresh_state_parser.add_argument(
@@ -150,7 +167,10 @@ def register_refresh_state_command(
         help=(
             "Typed semantic boundary for vision checkpointing. Defaults to "
             "semantic_closeout; in_flight_continuation is valid only for an "
-            "open agent-bound Todo reporting outcome_progress."
+            "open agent-bound Todo reporting outcome_progress. A within-Todo "
+            "--next-action is allowed; Todo completion, durable shared Next Action "
+            "updates and --autonomous-replan-recorded require semantic_closeout "
+            "with its vision checkpoint. Choose the boundary from the actual work."
         ),
     )
     refresh_state_parser.add_argument(
@@ -191,7 +211,9 @@ def register_refresh_state_command(
         action="store_true",
         help=(
             "Mark this refresh as the explicit autonomous replan ACK. "
-            "Use only after the agent has performed and written back the bounded replan slice."
+            "Use only after the agent has performed and written back the bounded replan slice. "
+            "Requires --delivery-boundary semantic_closeout (the default); do not "
+            "add this ACK to an ordinary in_flight_continuation."
         ),
     )
     refresh_state_parser.add_argument(
@@ -212,11 +234,21 @@ def register_refresh_state_command(
         "--progress-evidence-id",
         dest="progress_evidence_ids",
         action="append",
+        help=(
+            "Opaque public-safe evidence identifier, 1-128 characters; start with an "
+            "ASCII letter or digit, then use letters, digits, '.', '_', ':', '/', '-'. "
+            "For example evidence:validation-1, not a leading-dot file path. "
+            "Repeat for additional evidence; this identifier does not upload a file."
+        ),
     )
     refresh_state_parser.add_argument(
         "--progress-coverage-complete",
         action="store_true",
         default=None,
+    )
+    refresh_state_parser.add_argument(
+        "--explore-result-json",
+        help="Path to an explicit explore_result_attachment_v0; ingest and link after committed work writeback.",
     )
     refresh_state_parser.add_argument(
         "--reward-memory-reflection-json",
@@ -294,7 +326,11 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument(
         "--vision-todo-delta",
         action="append",
-        help="Compact todo delta for an inline vision patch. Repeat for multiple deltas.",
+        help=(
+            "Compact todo delta for an inline vision patch, at most 80 characters "
+            "per item. Repeat for multiple deltas; only the first 8 are retained. "
+            "The whole vision packet must also fit its shared text budget."
+        ),
     )
     refresh_state_parser.add_argument(
         "--vision-unchanged-reason",
@@ -331,8 +367,9 @@ def register_refresh_state_command(
         "--progress-scope",
         choices=PROGRESS_SCOPE_CHOICES,
         help=(
-            "Refresh scope. In multi-agent goals, use agent_lane for per-agent runnable "
-            "status, or goal with any registered peer for durable goal-level status/Next Action."
+            "Progress report scope; --agent-id defaults to agent_lane. A confirmed "
+            "registered peer may update its selected task step without changing "
+            "that scope; report scope does not grant shared task authority."
         ),
     )
     refresh_state_parser.add_argument(
@@ -444,6 +481,14 @@ def handle_refresh_state_command(
         elif inline_vision_packet:
             agent_vision_packet = inline_vision_packet
             merge_agent_vision_patch = True
+        agent_vision_packet, explore_result = split_explore_result_input(
+            agent_vision_packet, getattr(args, "explore_result_json", None),
+            scope_context=dict(
+                registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+                turn_instance_id=args.turn_instance_id,
+            ),
+        )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(
             getattr(args, "reward_memory_reflection_json", None) or ""
@@ -508,6 +553,7 @@ def handle_refresh_state_command(
             classification=args.classification,
             recommended_action=args.recommended_action,
             next_action=args.next_action,
+            next_action_basis=getattr(args, "next_action_basis", None),
             delivery_batch_scale=args.delivery_batch_scale,
             delivery_outcome=args.delivery_outcome,
             delivery_boundary=getattr(args, "delivery_boundary", None),
@@ -533,6 +579,7 @@ def handle_refresh_state_command(
             vision_unchanged_reason=args.vision_unchanged_reason,
             checkpoint_read_context_id=getattr(args, "checkpoint_read_context", None),
             progress_observation=progress_observation,
+            explore_result=explore_result,
             usage_measurement=usage_measurement,
             usage_codex_session=(
                 Path(args.usage_codex_session).expanduser()
@@ -741,6 +788,18 @@ def handle_refresh_state_command(
         if not material_refresh_ready:
             print_payload(payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
+        if payload.get("explore_result") is not None:
+            from ..capabilities.explore.result_writeback import deliver_result_attachment
+            delivery = deliver_result_attachment(
+                payload=payload, registry_path=registry_path,
+                runtime_root=Path(payload["runtime_root"]),
+                goal_id=args.goal_id, agent_id=args.agent_id,
+                todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
+            )
+            payload["explore_result_delivery"] = delivery
+            if not delivery["ok"]:
+                payload["ok"] = False
+                payload["error"] = "Primary writeback committed; replay this exact refresh to retry Explore result delivery"
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,

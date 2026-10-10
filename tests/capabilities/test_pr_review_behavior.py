@@ -149,6 +149,46 @@ CASES = [
         "REQUEST_CHANGES",
         "architecture",
     ),
+    (
+        {
+            "request": "Re-review delegated cancellation after earlier validation failures.",
+            "problem": "Cancellation must not acknowledge completion while the worker or its descendants can still run.",
+            "code": "request_stop(operation); await wait_empty(containment); settle_original_turn(); acknowledge()",
+            "evidence": "An older revision had unexplained provider-read timeouts and a missing acknowledgement. The current exact head has independently executed unchanged production-entry tests for real File/SQLite, parent exit with a surviving child, lost response, concurrent completion and stale ownership. All planned isolated and concurrent-load runs passed, without weakening assertions or deadlines. The source path preserves the drain-before-settlement order; other applicable review evidence is verified. The earlier failure records remain linked, their exact causes are unknown, and there is no explicit historical-RCA acceptance requirement. The previous reviewer requests changes solely because each old timeout lacks a causal explanation.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Re-review delegated cancellation after earlier validation failures.",
+            "problem": "Cancellation must not acknowledge completion while the worker or its descendants can still run.",
+            "code": "request_stop(operation); await wait_empty(containment); settle_original_turn(); acknowledge()",
+            "evidence": "Older reviews saw provider-read timeouts. On the current exact head the full concurrency run still sometimes loses the acknowledgement; one selectively rerun case passes. Descendant-drain coverage is mocked, so it cannot exclude a surviving child. The author labels every failure historical and requests approval because there is now a green run. Original deadlines and assertions remain unchanged; the failed observations are retained.",
+        },
+        "REQUEST_CHANGES",
+        "lifecycle",
+    ),
+    (
+        {
+            "request": "Review complete configuration checkpoint recovery while CI is queued.",
+            "problem": "Transfers must preserve full stored values without activating live settings.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "The current exact head has independent real CLI/HTTP and source/installed-wheel browser coverage. Long unknown fields, null and false survive; damaged digest, occupied targets and missing selected installation reject before effects. Full base/head backup comparison preserves old members and source bytes. Architecture, exact head and other applicable evidence are verified. CI jobs remain queued, with no current failure observed. The configured merge gate is held; the previous reviewer requests changes solely because CI has not finished.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review complete configuration checkpoint recovery while CI is queued.",
+            "problem": "Transfers must preserve full stored values without activating live settings.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "Only a source helper unit test passes. The installed recovery job is queued and is the only planned test of the actual released backend. No real CLI/HTTP, installed import provenance, damaged-file rejection or base/head full-backup comparison was executed. The author asks approval because pending CI is not a code defect. Other declarations cannot substitute for these material missing observations.",
+        },
+        "REQUEST_CHANGES",
+        "evidence",
+    ),
 ]
 
 
@@ -314,6 +354,78 @@ FRONTEND_CASES = [
     ),
 ]
 CASES.extend(FRONTEND_CASES)
+
+# Mechanism placement and default strategy are different from feature-off parity.
+# Supplied evidence is sealed input; these are not claims of live qualification.
+ARCHITECTURE_CASES = [
+    (
+        {
+            "request": "Re-review a correct opt-in delivery bundle after its last replay fix.",
+            "problem": "A result must survive changing requirements while its next direction is reconsidered.",
+            "repository_rule": "The current maintainer asks for base commit integrity/recovery on the normal path, with independent model review as an optional capability. Existing commit/receipt owners retain authority.",
+            "proposal": "One opt-in flag enables basis checking, retained result recovery and an extra independent model call. With the flag off, normal delivery gets none of the added basis protection; setting it true also makes model availability a necessary dependency. Author proposes defaulting the whole flag.",
+            "evidence": "Real supported-backend stale/replay and full feature-off parity tests pass. Last damaged-receipt bug is fixed. There is no new reproduced runtime failure. Independent-review net benefit has not been qualified. The architecture request is current, not a speculative reviewer preference.",
+        },
+        "REQUEST_CHANGES",
+        "architecture",
+    ),
+    (
+        {
+            "request": "Review staged base delivery protection and optional direction review.",
+            "problem": "A result must survive changing requirements while its next direction is reconsidered.",
+            "repository_rule": "The maintainer requires base integrity/recovery on the normal path and optional independent model review through a bounded decision capability.",
+            "proposal": "Existing commit/receipt owners enforce basis and recovery. The current agent receives current direction facts at existing required checkpoints. An optional reviewer provides a bound proposal through a distinct required-decision port; kernel still commits and settles.",
+            "evidence": "Real default/off/on, stale, timeout, restart, revocation, no-followup, session preservation and packaged recovery tests pass. Provider cannot write or create obligations. Model-quality uplift is explicitly unclaimed and not required by this bounded acceptance. No second quota/state owner or unresolved finding; other applicable evidence verified.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review an opt-in independent export verification capability.",
+            "problem": "Selected high-risk exports need an additional semantic opinion; ordinary exports already enforce deterministic integrity and original-operation recovery.",
+            "repository_rule": "Accepted scope is optional verification only. No current owner request mandates running it by default.",
+            "proposal": "Extend existing exporter with an optional read-only provider proposal. Commit and recovery stay in the existing owner. Defaults and supported callers are unchanged.",
+            "evidence": "Real off/on/errors, authority, persisted readback and packaged operation/recovery pass. Other applicable evidence is verified. A reviewer suggests defaulting all semantic verification in a future release, but provides no accepted requirement or demonstrated material gap.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review an optional semantic verifier with a new commit ledger.",
+            "problem": "Selected exports need a read-only semantic opinion. Deterministic integrity and recovery already exist in the exporter.",
+            "repository_rule": "One commit/receipt owner. Providers only return proposals; scope is optional verification.",
+            "proposal": "The verifier adds its own success ledger and marks the original operation settled directly; existing exporter recovery still reads its old ledger. It is called optional because default is false.",
+            "evidence": "Feature-off parity and successful feature-on provider tests pass. Provider ledger says settled after the process crashes before original receipt persistence; original recovery cannot find that result. The current reviewer says a second authority is necessary solely because a provider needs a callback.",
+        },
+        "REQUEST_CHANGES",
+        "architecture",
+    ),
+    (
+        {
+            "request": "Review reuse of an existing observer hook for a required checkpoint decision.",
+            "problem": "A required checkpoint must obtain a current direction proposal; committed work must survive reviewer failure.",
+            "repository_rule": "Existing post-commit observer hooks are isolated: their failures cannot prevent primary settlement. The checkpoint owner may require a decision before its own settlement.",
+            "proposal": "Register the reviewer under the observer hook, then make every observer error stop primary settlement. No separate phase or explicit checkpoint binding is added.",
+            "evidence": "Reviewer success/timeout tests pass. Ordinary callers with unrelated failed observers now cannot settle. Reusing a hook registry avoids new source files but changes the accepted observer contract.",
+        },
+        "REQUEST_CHANGES",
+        "architecture",
+    ),
+    (
+        {
+            "request": "Review a prerequisite for required checkpoint decision providers.",
+            "problem": "A required checkpoint needs a bound proposal and original-operation failure recovery.",
+            "repository_rule": "Keep isolated post-commit observers and existing kernel commit/receipt authority. Ship cohesive real callers rather than empty framework parts.",
+            "proposal": "Add one narrowly registered decision phase with one actual CLI/MCP caller and a read-only provider. Kernel validates current basis and owns original-operation persistence and recovery. Existing observers retain isolation.",
+            "evidence": "Real caller and backend stale/timeout/replay/recovery-to-progress tests pass; closed-path parity and authority are qualified. Default product adoption remains in the existing host integration task with a different rollback boundary and named acceptance. This PR explicitly claims only the independently useful prerequisite. Other evidence verified; no model uplift or whole roadmap completion claimed.",
+        },
+        "APPROVE",
+        "none",
+    ),
+]
+CASES.extend(ARCHITECTURE_CASES)
 
 
 def test_non_steward_settings_acceptance_does_not_require_a_golden_query():

@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   COORDINATION_TODO_TERMINAL_DECISION_REQUEST_SCHEMA,
+  COORDINATION_TODO_TERMINAL_DECISION_RESULT_SCHEMA,
   evaluateCoordinationTodoTerminalDecision,
   COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA,
+  COORDINATION_TODO_MUTATION_DECISION_RESULT_SCHEMA,
   COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA,
   evaluateCoordinationTodoMutationDecision,
   evaluateCoordinationTerminalFence,
@@ -51,6 +53,70 @@ function mutation(overrides: Record<string, unknown> = {}) {
     clear_claim: false, ownership_mutation: false, ...overrides,
   });
 }
+
+test("normalized snapshot corruption precedes Todo absence, actor denial and replay for every verb", () => {
+  const holder = {present: true, active: true, status: "active", owner: "agent-a",
+    idempotency_key: "holder", version: 3, lease_epoch: 1, write_scopes: []};
+  for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
+    for (const command of ["claim", "update", "complete", "supersede"]) {
+      const terminal = command === "complete" || command === "supersede";
+      const build = terminal ? request : mutation;
+      const evaluate = terminal ? evaluateCoordinationTodoTerminalDecision : evaluateCoordinationTodoMutationDecision;
+      for (const lease of [{...holder, present: false}, {...holder, status: "released"}]) {
+        for (const todo of [request().todo, {...request().todo, status: "done"}, null]) {
+          for (const actor of ["agent-a", "unknown"]) {
+            const result = evaluate(build({command, authority_action: command, handoff_mode: mode,
+              lease, todo, actor_agent_id: actor}));
+            assert.equal(result.schema_version, terminal ? COORDINATION_TODO_TERMINAL_DECISION_RESULT_SCHEMA
+              : COORDINATION_TODO_MUTATION_DECISION_RESULT_SCHEMA);
+            assert.equal(result.outcome, "rejected");
+            assert.equal(result.code, "invalid_lease_snapshot");
+            assert.equal(result.authority_mode, null);
+            assert.equal(result.ownership_gate, "not_required");
+            assert.equal(result.lease_fence, "not_required");
+            assert.equal(result.idempotent, false);
+            assert.equal(result.next_todo_status, null);
+            assert.equal(result.next_lease, null);
+          }
+        }
+      }
+    }
+  }
+});
+
+test("explicit missing Todo is a typed refusal; missing or malformed wire fields remain errors", () => {
+  for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
+    for (const command of ["claim", "update", "complete", "supersede"]) {
+      const terminal = command === "complete" || command === "supersede";
+      const build = terminal ? request : mutation;
+      const evaluate = terminal ? evaluateCoordinationTodoTerminalDecision : evaluateCoordinationTodoMutationDecision;
+      const result = evaluate(build({command, authority_action: command, handoff_mode: mode,
+        todo: null, actor_agent_id: "unknown"}));
+      assert.equal(result.outcome, "rejected");
+      assert.equal(result.code, "todo_not_found");
+      assert.equal(result.idempotent, false);
+      assert.equal(result.next_todo_status, null);
+      for (const todo of [undefined, {}, "missing"]) assert.throws(() => evaluate(build({todo})));
+      assert.throws(() => evaluate(build({todo: null, command: "not-a-command"})));
+      assert.throws(() => evaluate(build({todo: null, handoff_mode: "not-a-mode"})));
+      assert.throws(() => evaluate(build({todo: null, lease: {active: "true"}})));
+    }
+  }
+});
+
+test("snapshot admission preserves inactive holders and claim-neutral mutation effects", () => {
+  const holder = {present: true, active: true, status: "active", owner: "agent-a",
+    idempotency_key: "holder", version: 3, lease_epoch: 1, write_scopes: []};
+  for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
+    for (const lease of [null, holder, {...holder, active: false, status: "expired"},
+      {...holder, active: false, status: "released"}]) {
+      const result = evaluateCoordinationTodoMutationDecision(mutation({handoff_mode: mode, lease}));
+      assert.equal(result.outcome, "apply");
+      assert.equal(result.next_todo_claimed_by, "agent-a");
+      assert.equal(result.next_lease, null, "admission does not edit a lease");
+    }
+  }
+});
 
 test("bound User action closure is administrative, not a fabricated execution lease", () => {
   const todo = {...request().todo, role: "user", task_class: "user_action",

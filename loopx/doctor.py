@@ -22,7 +22,7 @@ from .paths import configured_runtime_route, default_runtime_route, global_regis
 from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
-from .release_manifest import load_release_manifest, release_version_tag
+from .release_manifest import load_release_manifest, release_runtime_identity, release_version_tag
 from .skill_install_readback import (
     ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
     PACKAGED_HOST_SKILL_IDS,
@@ -604,6 +604,28 @@ def installed_skill_check(
     }
 
 
+def optional_installation_script_check(
+    check_id: str,
+    *,
+    exists: bool,
+    path: Path,
+    distribution_install: bool,
+) -> dict[str, Any]:
+    """Report release scripts only where the installation includes them."""
+    applicable = not distribution_install
+    return {
+        "id": check_id,
+        "required": False,
+        "ok": exists if applicable else True,
+        "applicable": applicable,
+        "detail": (
+            str(path)
+            if applicable
+            else "not applicable: Python package installs do not include release installer scripts"
+        ),
+    }
+
+
 def latest_promotion_readiness_event(runtime_root: Path, goal_id: str | None = None) -> dict[str, Any]:
     goals_dir = runtime_root / "goals"
     runtime_index = runtime_root / PROMOTION_READINESS_RUNTIME_INDEX
@@ -997,18 +1019,18 @@ def collect_doctor(
             "ok": module_path.exists(),
             "detail": str(module_path),
         },
-        {
-            "id": "install_script_exists",
-            "required": False,
-            "ok": install_script.exists(),
-            "detail": str(install_script),
-        },
-        {
-            "id": "wrapper_script_exists",
-            "required": False,
-            "ok": wrapper_script.exists(),
-            "detail": str(wrapper_script),
-        },
+        optional_installation_script_check(
+            "install_script_exists",
+            exists=install_script.exists(),
+            path=install_script,
+            distribution_install=bool(python_distribution.get("available")),
+        ),
+        optional_installation_script_check(
+            "wrapper_script_exists",
+            exists=wrapper_script.exists(),
+            path=wrapper_script,
+            distribution_install=bool(python_distribution.get("available")),
+        ),
         {
             "id": "local_bin_on_path",
             "required": False,
@@ -1109,6 +1131,7 @@ def collect_doctor(
     payload = {
         "ok": all(check["ok"] for check in checks if check["required"]),
         "mode": "deep" if deep else "standard",
+        "service_runtime_identity": release_runtime_identity(),
         "agent_type": canonical_agent_type,
         "python": {
             "executable": sys.executable,

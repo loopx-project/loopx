@@ -288,8 +288,15 @@ def test_monitor_provider_effect_replay_does_not_advance_counters(
         }
     )
     assert newer is not None
-    with pytest.raises(ValueError, match="older than the persisted monitor effect"):
-        write_monitor_poll_todo_state(**kwargs)
+    before_replay = state_file.read_bytes()
+    historical = write_monitor_poll_todo_state(**kwargs)
+    expected = {**first, "provider_replayed": True}
+    # Post-commit shadow diagnostics are outside the immutable business receipt.
+    expected.pop("coordination_runtime_shadow", None)
+    expected["todo_update"] = {key: value for key, value in first["todo_update"].items()
+                               if key != "coordination_runtime_shadow"}
+    assert historical == expected
+    assert state_file.read_bytes() == before_replay
     monitor = _todos(state_file)[MONITOR_ID]
     assert monitor["result_hash"] == "review-v3-newer"
     assert monitor["monitor_effect_id"] == "quota-monitor-poll:newer-effect"
@@ -332,27 +339,26 @@ def test_monitor_provider_effect_replay_reuses_material_successor(
     assert state_file.read_text(encoding="utf-8").count(successor_text) == 1
 
 
-def test_overlapping_material_polls_recompute_generation_after_wait_baseline(
+def test_overlapping_material_batches_recompute_generation_after_wait_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import loopx.todos as todos_module
+    import loopx.control_plane.scheduler.legacy_monitor_poll as batch_module
 
     registry, state_file = _write_fixture(tmp_path)
-    original_update = todos_module.update_goal_todo
+    original_apply = batch_module.apply_legacy_monitor_poll
     second_poll_ready = Event()
     release_second_poll = Event()
 
     def delay_second_poll(**kwargs):
-        observation = kwargs.get("monitor_metadata")
-        result_hash = getattr(observation, "result_hash", None)
+        result_hash = kwargs["request"]["observation"]["result_hash"]
         if result_hash == "review-v4-second":
             second_poll_ready.set()
-            if not release_second_poll.wait(timeout=5):
+            if not release_second_poll.wait(timeout=30):
                 raise RuntimeError("timed out waiting to release overlapping poll")
-        return original_update(**kwargs)
+        return original_apply(**kwargs)
 
-    monkeypatch.setattr(todos_module, "update_goal_todo", delay_second_poll)
+    monkeypatch.setattr(batch_module, "apply_legacy_monitor_poll", delay_second_poll)
     with ThreadPoolExecutor(max_workers=2) as executor:
         second_poll = executor.submit(
             write_monitor_poll_todo_state,

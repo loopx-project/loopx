@@ -93,7 +93,7 @@ count can never be mistaken for an empty authority registry.
 An omitted boundary is also treated as inaccessible rather than implicitly
 public.
 
-Evidence and receipts have different semantics. A run-history or evidence-log
+Evidence and receipts have different semantics. A run-history or replan-evidence
 row may prove that an agent changed or validated an artifact, but it does not
 prove the agent consumed a material revision. Only a matching
 `material_usage_receipt_v0` can move a material from unread or stale to

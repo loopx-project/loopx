@@ -243,6 +243,30 @@ a separate readiness rule. 中文：该命令只生成卡片、不发消息；�
 `loopx extension disable loopx-finance-value-discovery --execute`；若只回退
 期次指标，删除可选字段并重新发布旧 view 即可。
 
+The Goal's **Files & Outputs** tab loads the published research only when
+opened. Chat and `serve-status` expose the same extension index and exact
+revision/hash readback. Only a public-safe view belonging to that Goal is
+rendered; refresh clears previous content when the read fails or the extension
+is disabled. Research availability does not certify an economic conclusion.
+
+`render-lark-card` includes the canonical adjudication, original evidence
+clocks, exact metric strings, counterevidence, event review conditions and
+artifact references, even when no source-period metrics exist. It rejects a
+research card exceeding 18,000 UTF-8 bytes rather than silently cutting its
+review basis. The existing source-period-only Python renderer remains available.
+For an exact published receipt, render its Core-validated `view` with
+`build_decision_research_lark_card`; rebuilding an input is not publication
+readback, and preparing a card is not sending or adopting a method.
+
+中文：Goal 的“成果”页按需读取已发布的研究，绑定当前 Goal、扩展版本和内容摘要；
+读取失败或停用时清除旧内容。通知卡保留研究结论、反证、未知、原始时点和下一步，
+没有期次指标也可显示；超过容量时拒绝裁切。卡片准备、外部送达和方法采用分别验收。
+
+Public synthetic examples: [desktop results](../../docs/assets/personal-workspace/research-results-desktop.png)
+and [mobile results](../../docs/assets/personal-workspace/research-results-mobile.png).
+The expired review warning is intentional; these screens do not represent a
+live financial account or an externally delivered notification.
+
 ## Worked Method: How PayPal Surfaced
 
 The historical PayPal exercise started with a fresh de-beta scout, not a
@@ -279,6 +303,76 @@ encodes that method as an illustrative historical packet. It is not a current
 view on PayPal or any control company.
 
 ## Install And Run
+
+### Disclosure and presentation basis (candidate 0.8.6)
+
+Same economic period does not establish the same filing version or row scope.
+The v2 period input adds declared disclosure bases and an optional evidenced
+signed decomposition. A full aggregate can project to a narrower common scope
+only when each source-bound partition closes and the selected components are
+present. Missing declarations, changed pins and nonzero residuals remain holds.
+
+```bash
+loopx-finance-value-discovery assess-period \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v2.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v2.json \
+  --execute --format json
+```
+
+Both paths use the same [Finance contract](CONTRACT.md#disclosure-identity-and-presentation-scope-extension-086).
+The synthetic example has aggregate -340 = purchase -200 + disposal 30 + other
+-170, alongside a separately declared other-only -170. It qualifies only the
+declared period and presentation relation. Parent-declared partition coverage,
+source authenticity, PIT, accuracy and financial permission remain separate.
+v1 replay is unchanged; do not strip v2 fields to manufacture eligibility.
+App/Lark projection and independent source consumer adoption remain unqualified
+for this new version. No default install, Memory or trading change is implied.
+
+Use the existing disable/enable commands below to opt out and restore. Rollback
+requires the original pinned wheel and manifest; 0.8.5 supports v1 but rejects
+v2, rather than silently interpreting it as an economic-only comparison.
+
+0.8.6 候选新增披露身份与呈列范围轴：同名、同期间不自动合并。
+显式父审分解必须绑定各自来源/版本/范围，完整带符号组成与原金额闭合，
+目标组成两侧均存在。缺证和冲突继续 hold；算术与声明检查不代表来源真实、
+首次可得时钟、金融准入或完整 App/Lark 验收，旧 v1 回放保持。
+
+### Signed cash reconciliation (candidate 0.8.5)
+
+`assess-cash` consumes six declared rows from one retained source column. It
+calculates signed gross capex plus asset-sale and government-incentive proceeds,
+then operating cash flow plus that net capex. Residuals compare the calculated
+amounts with the reported net-capex and adjusted-FCF rows. This is a deterministic
+arithmetic assessment; extraction, row classification and current source truth
+remain upstream. See [the bounded input contract](CONTRACT.md#signed-cash-reconciliation).
+
+```bash
+loopx-finance-value-discovery assess-cash \
+  --input-json packages/loopx-finance-value-discovery/examples/cash-reconciliation-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/cash-reconciliation-v1.json \
+  --execute --format json
+```
+
+Install and enable the extension using the lifecycle commands below; `--doctor`
+checks the provider. Disable it with `loopx extension disable
+loopx-finance-value-discovery --execute --format json`, then enable with the
+corresponding `extension enable` command. Roll back by installing a previously
+pinned package wheel and upgrading the runtime registration to that matching
+manifest. An older provider without this input schema rejects the cash request;
+rollback does not convert it into a successful assessment.
+
+CLI/direct and managed-runtime paths share the same function. App/Lark cash
+presentation and source-provider classification are companion work; this slice
+does not complete that user journey or authorize financial/trading operations.
+Existing period stdin dispatch is retained alongside the new cash schema.
+
+0.8.5 候选通过同一 direct/managed 入口消费六项已声明现金行，计算带符号
+gross capex + 销售及政府激励现金流入 = net capex，以及 CFO + net capex =
+adjusted FCF。缺证、冲突、错单位、错来源列和错符号明确保留；显示舍入不生成
+新的精确观察。算术一致不代表来源真实、PIT、可分配现金或金融准入。App/Lark
+展示和上游来源分类仍是配套交付，关闭及旧 wheel 回退沿现有 extension 生命周期。
 
 Install the extension package, then register its manifest with the LoopX
 extension runtime:
@@ -320,6 +414,31 @@ loopx extension run loopx-finance-value-discovery \
   --input-json packages/loopx-finance-value-discovery/examples/software-metric-pack-v1.json \
   --execute \
   --format json
+```
+
+Extension 0.8.5 also dispatches `finance_period_comparison_input_v1` to the
+existing period assessment. For the same frozen input, the managed provider
+result matches the direct `assess-period` result:
+
+```bash
+loopx-finance-value-discovery assess-period \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/period-comparison-v1.json \
+  --execute --format json
+```
+
+The example is synthetic. `period_evidence_eligible` applies only to the period
+axis; source authentication, lifecycle, financial admission and trading remain
+false. Missing declarations produce ineligible results; malformed inputs fail
+with an error packet. Version 0.8.3 supports the direct API/CLI but does not route
+these inputs through managed stdin. Qualify the exact binary/manifest/input
+pair before opting in, and retain the old pair for rollback.
+
+Run the provider dispatch regression cases from the repository root:
+
+```bash
+uv run --extra test pytest packages/loopx-finance-value-discovery/tests/test_period_dispatch.py
 ```
 
 Developers can inspect or replay a frozen evaluation directly:

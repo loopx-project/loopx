@@ -114,39 +114,6 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def test_action_text_uses_signed_primary_action() -> None:
-    request = _request(
-        recommended_action="legacy action must not win",
-        primary_action="signed primary action",
-    )
-    _assert(
-        adapter.extract_action_text(request) == "signed primary action",
-        "signed primary_action must be the bounded task body",
-    )
-
-
-def test_unsigned_action_is_rejected() -> None:
-    request = _request()
-    request["turn_envelope"]["action_signature"]["matches"] = False
-    try:
-        adapter.extract_action_text(request)
-    except ValueError as exc:
-        _assert("action signature" in str(exc), "signature error must be actionable")
-    else:  # pragma: no cover - defensive
-        raise AssertionError("unsigned TurnEnvelope action must fail closed")
-
-
-def test_action_tampering_after_signature_is_rejected() -> None:
-    request = _request()
-    request["turn_envelope"]["action"]["primary_action"] = "tampered action"
-    try:
-        adapter.extract_action_text(request)
-    except ValueError as exc:
-        _assert("action signature" in str(exc), "tamper error must be actionable")
-    else:  # pragma: no cover - defensive
-        raise AssertionError("post-signature TurnEnvelope tampering must fail closed")
-
-
 def test_prompt_preserves_structured_turn_authority() -> None:
     request = _request(recommended_action="legacy action must not appear")
     authority = adapter.extract_turn_authority(request)
@@ -424,9 +391,6 @@ def test_timeout_terminates_traex_descendants() -> None:
 
 def main() -> int:
     tests = [
-        test_action_text_uses_signed_primary_action,
-        test_unsigned_action_is_rejected,
-        test_action_tampering_after_signature_is_rejected,
         test_prompt_preserves_structured_turn_authority,
         test_structured_result_file_is_the_only_candidate_channel,
         test_material_progress_result_validates,

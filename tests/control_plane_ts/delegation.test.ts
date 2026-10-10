@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, decideDelegationWakeObservation, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -90,6 +90,77 @@ test("owner acceptance and ordinary Todo validation remain cumulative", () => {
   }
 });
 
+test("current validation provenance identifies definitions without exporting private commands", () => {
+  const args = {binding, basis: validationBasis, declaration};
+  const plan = delegationValidationPlan(args);
+  const observed = plan.observation as Record<string, unknown>;
+  assert.equal(observed.source, "todo_validation");
+  assert.equal(observed.check_count, 1);
+  assert.equal(observed.pinned_file_count, 0);
+  assert.match(String(observed.basis_sha256), /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(observed).sort(), ["basis_sha256", "check_count", "pinned_file_count", "source"]);
+  assert.deepEqual(delegationValidationPlan({...args,
+    basis: {...validationBasis, provider_revision: "fixture:2"}}).observation, observed);
+  const changed = {...declaration, validation_command_argv: ["node", "other-private-validator.ts"]};
+  const changedPlan = delegationValidationPlan({...args, declaration: changed, basis: {...validationBasis,
+    todo: {...validationTodo, completion_validation_sha256: canonicalAuthoritySha256(changed)}}});
+  assert.notEqual((changedPlan.observation as Record<string, unknown>).basis_sha256, observed.basis_sha256);
+  assert.equal(delegationValidationPlan({...args, declaration: null}).observation, undefined);
+  const criteria = [{id: "review", description: "Private owner rule", validation_argv: ["node", "private-owner.ts"],
+    validation_timeout_seconds: 5, validation_files: [{path: "private-owner.ts", sha256: "a".repeat(64)}]}];
+  const combined = delegationValidationPlan({...args, basis: {...validationBasis,
+    completion_requirements: {todo_id: binding.todo_id, criteria}}}).observation as Record<string, unknown>;
+  assert.equal(combined.source, "goal_acceptance");
+  assert.equal(combined.check_count, 2);
+  assert.equal(combined.pinned_file_count, 1);
+  assert.notEqual(combined.basis_sha256, observed.basis_sha256);
+  assert.doesNotMatch(JSON.stringify(combined), /private|Independent verification|validation_argv/);
+});
+
+test("validation plan isolates progress metadata but fences work and claim/lifecycle", () => {
+  const args = {binding, basis: validationBasis, declaration};
+  const initial = delegationValidationPlan(args);
+  assert.match(String(initial.task_basis_sha256), /^[a-f0-9]{64}$/);
+  for (const delta of [{note: "Peer checked another result"}, {updated_at: "2026-10-05T00:00:00Z"},
+    {priority: "P1"}, {evidence: "Current observation"}]) {
+    assert.deepEqual(delegationValidationPlan({...args, basis: {...validationBasis,
+      provider_revision: "fixture:99", todo: {...validationTodo, ...delta}}}), initial);
+  }
+  for (const delta of [{text: "Changed requested result"}, {future_work_field: "new obligation"},
+    {claimed_by: "other"}, {role: "user"}, {status: "blocked"}, {archive_state: "archived"},
+    {done: true, status: "done"}, {task_repository: "git:example.invalid/other/repository"}]) {
+    assert.notEqual(delegationValidationPlan({...args, basis: {...validationBasis,
+      todo: {...validationTodo, ...delta}}}).task_basis_sha256, initial.task_basis_sha256);
+  }
+});
+
+test("fresh host checks bind stable declared output versions, without attesting independence", () => {
+  const plan = delegationValidationPlan({binding, declaration, basis: {...validationBasis,
+    todo: {...validationTodo, status: "done", done: true}}});
+  const outputs = [{ref: "output.json", sha256: "a".repeat(64)}];
+  const checkedAt = "2026-01-02T03:04:05.123456Z";
+  const args = {binding, plan, before: outputs, after: outputs, checked_at: checkedAt};
+  assert.deepEqual(delegationCheckedArtifacts(args), {...plan.observation as object,
+    checked_at: checkedAt, output_versions: outputs});
+  assert.deepEqual(delegationCheckedArtifacts({...args, after: [{...outputs[0], private_log: "never export"}]}),
+    delegationCheckedArtifacts(args));
+  assert.throws(() => delegationCheckedArtifacts({...args, after: [{...outputs[0], sha256: "b".repeat(64)}]}),
+    /output changed during validation/);
+  for (const versions of [[], [outputs[0], outputs[0]], [{...outputs[0], ref: "other.json"}],
+    [{...outputs[0], ref: "/private/output.json"}], [{...outputs[0], sha256: "not a digest"}]]) {
+    assert.throws(() => delegationCheckedArtifacts({...args, after: versions}));
+    assert.throws(() => delegationCheckedArtifacts({...args, before: versions}));
+  }
+  for (const patch of [{canonical_done: false}, {state: "unbound"}, {todo_id: "other"},
+    {observation: {...plan.observation as object, check_count: 0}}])
+    assert.throws(() => delegationCheckedArtifacts({...args, plan: {...plan, ...patch}}));
+  for (const time of [null, "invalid", "2026-01-02", "2026-01-02T03:04:05+00:00"])
+    assert.throws(() => delegationCheckedArtifacts({...args, checked_at: time}), /host check time/);
+  const two = [{ref: "output.json", sha256: "a".repeat(64)}, {ref: "second.txt", sha256: "c".repeat(64)}];
+  assert.deepEqual(delegationCheckedArtifacts({...args, binding: {...binding, output_refs: ["output.json", "second.txt"]},
+    before: two, after: [...two].reverse()}).output_versions, two);
+});
+
 test("same explicit grant contract applies to a coordinator and an ordinary member", () => {
   assert.deepEqual(selectDelegationBinding(params), binding);
   assert.deepEqual(selectDelegationBinding({...params, agent_id: "analyst"}), binding);
@@ -165,6 +236,117 @@ test("only a conversation-origin accepted result leaves a wake intent for the ex
     requester: {...acceptedRequester, conversation, goal_ref: ["not", "a", "reference"]}}), /goal reference/);
   // Rejection is terminal and wakes nobody.
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "rejected"}), {status: "rejected"});
+});
+
+test("stopped is terminal and reachable only from open observations", () => {
+  for (const from of ["prepared", "running", "turn_returned"])
+    assert.deepEqual(transitionDelegationObservation({from, to: "stopped"}), {status: "stopped"});
+  assert.deepEqual(transitionDelegationObservation({from: "stopped", to: "stopped"}), {status: "stopped"});
+  for (const from of ["accepted", "rejected"])
+    assert.throws(() => transitionDelegationObservation({from, to: "stopped"}), /transition/);
+  for (const to of ["running", "turn_returned", "accepted", "rejected"])
+    assert.throws(() => transitionDelegationObservation({from: "stopped", to}), /transition/);
+  const observation = {operation_id: "op-1", request_id: "req", agent_id: "reviewer", todo_id: "todo_review",
+    status: "stopped", worker_active: false, recovery_required: false};
+  assert.equal(delegationInventoryItem({record: {record_id: "a".repeat(64), operation_id: "op-1"},
+    observation}).status, "stopped");
+});
+
+const stopRecord = (phase: string, reason: string) =>
+  ({action: "record", phase, terminal: phase === "settled" || phase === "unknown", reason});
+
+test("a stop settles only on an acknowledgement plus released holders; time alone proves nothing", () => {
+  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, worker_lane_released: false,
+    host_process: "drained", lease: "unchecked"};
+  assert.deepEqual(decideDelegationStop(open), stopRecord("requested", "awaiting_acknowledgement"));
+  assert.deepEqual(decideDelegationStop({...open, timed_out: true}),
+    stopRecord("requested", "holder_still_running_after_grace"));
+  // A lane release without a free operation lock is not a vanished holder.
+  assert.deepEqual(decideDelegationStop({...open, worker_lane_released: true, timed_out: true}),
+    stopRecord("requested", "holder_still_running_after_grace"));
+  // A free operation lock with an unattributed lane holder proves nothing yet.
+  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, timed_out: true}),
+    stopRecord("requested", "worker_lane_release_unproven"));
+  const gone = {...open, operation_lock_free: true, worker_lane_released: true};
+  assert.deepEqual(decideDelegationStop(gone), {action: "resolve_lease"});
+  assert.deepEqual(decideDelegationStop({...gone, lease: "not_owed"}),
+    stopRecord("unknown", "holder_gone_without_acknowledgement"));
+  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, worker_lane_released: false,
+    host_process: "drained", lease: "unchecked"};
+  assert.deepEqual(decideDelegationStop(acked), stopRecord("acknowledged", "operation_lock_still_held"));
+  assert.deepEqual(decideDelegationStop({...acked, worker_lane_released: true}),
+    stopRecord("acknowledged", "operation_lock_still_held"));
+  assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true}),
+    stopRecord("acknowledged", "worker_lane_release_unproven"));
+  const released = {...acked, operation_lock_free: true, worker_lane_released: true};
+  for (const patch of [{phase: "requested"}, {timed_out: true}]) {
+    assert.deepEqual(decideDelegationStop({...released, ...patch}), {action: "resolve_lease"});
+    assert.deepEqual(decideDelegationStop({...released, ...patch, lease: "not_owed"}),
+      stopRecord("settled", "acknowledged_worker_and_host_released"));
+  }
+  for (const patch of [{phase: "settled"}, {phase: "unknown"}, {phase: "noop"}, {acknowledged: "yes"},
+    {host_process: undefined}, {host_process: "exited"}, {host_process: true},
+    {operation_lock_free: 1}, {worker_lane_released: undefined}, {lane_lock_free: true, worker_lane_released: undefined},
+    {timed_out: "later"}, {phase: "acknowledged", acknowledged: false}])
+    assert.throws(() => decideDelegationStop({...open, ...patch}));
+});
+
+test("a released worker and lane never settle a stop while the native Host still drains", () => {
+  const released = {phase: "acknowledged", acknowledged: true, operation_lock_free: true, worker_lane_released: true,
+    lease: "unchecked"};
+  assert.deepEqual(decideDelegationStop({...released, host_process: "draining", timed_out: true}),
+    stopRecord("acknowledged", "host_process_still_running"));
+  // Without an attributable drain the stop stays open for a later same-identity read.
+  assert.deepEqual(decideDelegationStop({...released, host_process: "unattributable"}),
+    stopRecord("acknowledged", "host_process_drain_unproven"));
+  for (const host_process of ["drained", "not_launched"])
+    assert.deepEqual(decideDelegationStop({...released, host_process, lease: "released"}),
+      stopRecord("settled", "acknowledged_worker_and_host_released"));
+  // A held lock still dominates a drained Host.
+  assert.deepEqual(decideDelegationStop({...released, operation_lock_free: false, host_process: "drained"}),
+    stopRecord("acknowledged", "operation_lock_still_held"));
+  // A vanished holder is unknown only once its Host is no longer seen running;
+  // with a Host that cannot be attributed nothing more can be learned, and its
+  // lease is left unresolved rather than handed on beside a possible Host.
+  const vanished = {...released, phase: "requested", acknowledged: false};
+  assert.deepEqual(decideDelegationStop({...vanished, host_process: "draining"}),
+    stopRecord("requested", "host_process_still_running"));
+  assert.deepEqual(decideDelegationStop({...vanished, host_process: "unattributable"}),
+    stopRecord("unknown", "holder_gone_without_acknowledgement"));
+  for (const host_process of ["drained", "not_launched"])
+    assert.deepEqual(decideDelegationStop({...vanished, host_process, lease: "not_owed"}),
+      stopRecord("unknown", "holder_gone_without_acknowledgement"));
+});
+
+test("the lease is resolved only once the execution is gone, and only a resolved lease ends a stop", () => {
+  const facts = {operation_lock_free: true, worker_lane_released: true, host_process: "drained"};
+  const stops = [
+    {stop: {phase: "acknowledged", acknowledged: true, ...facts}, open: "acknowledged",
+      terminal: stopRecord("settled", "acknowledged_worker_and_host_released")},
+    {stop: {phase: "requested", acknowledged: false, ...facts}, open: "requested",
+      terminal: stopRecord("unknown", "holder_gone_without_acknowledgement")},
+  ];
+  for (const {stop, open, terminal} of stops) {
+    // Not checked yet is a next step, never a receipt, and never "nothing owed".
+    assert.deepEqual(decideDelegationStop({...stop, lease: "unchecked"}), {action: "resolve_lease"});
+    for (const lease of ["not_owed", "released"]) assert.deepEqual(decideDelegationStop({...stop, lease}), terminal);
+    // A held lease whose release is unproven, and an obligation canonical
+    // authority could not confirm, both keep the stop open, distinguishably.
+    assert.deepEqual(decideDelegationStop({...stop, lease: "release_unproven"}),
+      stopRecord(open, "required_lease_release_unproven"));
+    assert.deepEqual(decideDelegationStop({...stop, lease: "obligation_unproven"}),
+      stopRecord(open, "lease_obligation_unproven"));
+    // Omission no longer reads as "no lease"; the old boolean is not a lease fact.
+    for (const patch of [{}, {lease: undefined}, {lease: "held"}, {lease: true}, {lease_released: true}])
+      assert.throws(() => decideDelegationStop({...stop, ...patch}), /lease fact required/);
+  }
+  // A lease is never resolved beside an execution that may still run.
+  for (const pending of [{operation_lock_free: false}, {worker_lane_released: false},
+    {host_process: "draining"}, {host_process: "unattributable"}]) {
+    for (const lease of ["not_owed", "released", "release_unproven", "obligation_unproven"])
+      assert.throws(() => decideDelegationStop({...stops[0].stop, ...pending, lease}), /proven gone/);
+    assert.notEqual(decideDelegationStop({...stops[0].stop, ...pending, lease: "unchecked"}).action, "resolve_lease");
+  }
 });
 
 test("a false rejection can reopen only for exact validated settlement recovery", () => {

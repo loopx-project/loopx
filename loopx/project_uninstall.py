@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 import shutil
 from pathlib import Path
 from typing import Any
 
-from .control_plane.projects.registry_codec import project_registry_transaction
+from .control_plane.coordination.shadow_management import (
+    shadow_maintenance_lock_target,
+)
+from .control_plane.effect_runtime import CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS
+from .control_plane.projects.registry_codec import (
+    load_registry,
+    project_registry_transaction,
+)
 from .control_plane.runtime.time import now_local_iso, utc_timestamp
+from .file_lock import exclusive_cross_runtime_file_lock
 from .global_registry import GlobalRegistryReduction, mutate_global_registry
-from .history import load_registry
 from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import read_json, registry_goals
 from .runtime import validate_goal_id_path_segment
@@ -275,19 +283,24 @@ def uninstall_project(
     global_after = global_receipt["goal_count_after"]
 
     archive_root = registry_path.parent / "archived-project-state"
-    state_actions = (
-        [
-            _archive_state_directory(
-                goal=goal,
-                registry_path=registry_path,
-                archive_root=archive_root,
-                timestamp=timestamp,
-                dry_run=dry_run,
-            )
-            for goal in selected
-        ]
-        if archive_state
-        else [
+    state_actions: list[dict[str, Any]]
+    if archive_state:
+        state_actions = (
+            [
+                _archive_state_directory(
+                    goal=goal,
+                    registry_path=registry_path,
+                    archive_root=archive_root,
+                    timestamp=timestamp,
+                    dry_run=True,
+                )
+                for goal in selected
+            ]
+            if dry_run
+            else []
+        )
+    else:
+        state_actions = [
             {
                 "goal_id": str(goal.get("id")),
                 "action": "kept",
@@ -295,13 +308,18 @@ def uninstall_project(
             }
             for goal in selected
         ]
-    )
 
-    local_backup_path = _copy_backup(
-        registry_path, label="project-uninstall-backup", dry_run=dry_run
+    local_backup_path = (
+        _copy_backup(
+            registry_path,
+            label="project-uninstall-backup",
+            dry_run=True,
+        )
+        if dry_run
+        else None
     )
     global_backup_path = (
-        _copy_backup(global_path, label="project-uninstall-backup", dry_run=dry_run)
+        _copy_backup(global_path, label="project-uninstall-backup", dry_run=True)
         if dry_run and global_removed
         else None
     )
@@ -310,27 +328,56 @@ def uninstall_project(
     removed_local_registry_file = False
     wrote_global_registry = False
     if execute:
-        with project_registry_transaction(
-            registry_path,
-            operation="project_uninstall_local_registry",
-        ) as transaction:
-            locked_registry, local_before, local_after = _remove_local_goals(
-                transaction.payload_copy(),
-                target_goal_ids=target_goal_ids,
+        canonical_runtime_root = global_path.expanduser().resolve().parent
+        with ExitStack() as stack:
+            for goal_id in sorted(target_goal_ids):
+                stack.enter_context(
+                    exclusive_cross_runtime_file_lock(
+                        shadow_maintenance_lock_target(
+                            canonical_runtime_root,
+                            goal_id,
+                        ),
+                        operation="project_uninstall_canonical",
+                        timeout_seconds=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+                    )
+                )
+            if archive_state:
+                state_actions = [
+                    _archive_state_directory(
+                        goal=goal,
+                        registry_path=registry_path,
+                        archive_root=archive_root,
+                        timestamp=timestamp,
+                        dry_run=False,
+                    )
+                    for goal in selected
+                ]
+            local_backup_path = _copy_backup(
+                registry_path,
+                label="project-uninstall-backup",
+                dry_run=False,
             )
-            if remove_empty_registry and local_after == 0:
-                removed_local_registry_file = transaction.remove()
-            else:
-                wrote_local_registry = transaction.commit(locked_registry)
-        global_mutation = mutate_global_registry(
-            global_path,
-            "project_uninstall_global_registry",
-            lambda current: _uninstall_global_registry_reduction(
-                current,
-                source_registry=registry_path,
-                target_goal_ids=target_goal_ids,
-            ),
-        )
+            with project_registry_transaction(
+                registry_path,
+                operation="project_uninstall_local_registry",
+            ) as transaction:
+                locked_registry, local_before, local_after = _remove_local_goals(
+                    transaction.payload_copy(),
+                    target_goal_ids=target_goal_ids,
+                )
+                if remove_empty_registry and local_after == 0:
+                    removed_local_registry_file = transaction.remove()
+                else:
+                    wrote_local_registry = transaction.commit(locked_registry)
+            global_mutation = mutate_global_registry(
+                global_path,
+                "project_uninstall_global_registry",
+                lambda current: _uninstall_global_registry_reduction(
+                    current,
+                    source_registry=registry_path,
+                    target_goal_ids=target_goal_ids,
+                ),
+            )
         global_receipt = global_mutation["receipt"]
         global_removed = global_receipt["removed"]
         skipped_route_mismatch = global_receipt["skipped_route_mismatch"]

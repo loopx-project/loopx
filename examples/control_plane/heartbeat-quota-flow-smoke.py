@@ -1208,7 +1208,7 @@ def main() -> int:
         assert interaction["mode"] == "monitor_quiet_skip", interaction
         assert interaction["agent_channel"]["must_attempt"] is False, interaction
         assert interaction["agent_channel"]["delivery_allowed"] is False, interaction
-        assert "required_reads" not in interaction["agent_channel"], interaction
+        assert interaction["agent_channel"]["required_reads"] == [], interaction
         assert guard.get("replan_action_packet") is None, guard
         assert guard.get("autonomous_replan_obligation") is None, guard
 

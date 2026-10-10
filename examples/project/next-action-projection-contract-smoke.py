@@ -1,39 +1,21 @@
 #!/usr/bin/env python3
-"""Smoke-test explicit durable Next Action writeback and projection drift."""
-
+"""A bound task step survives history compaction without becoming task authority."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-import loopx.state_refresh as state_refresh
-from loopx.control_plane.scheduler.execution_context import (
-    GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
-)
-from loopx.presentation.renderers.status_markdown import render_status_markdown
-from loopx.quota import build_quota_should_run, render_quota_should_run_markdown
-from loopx.state_projection import (
-    actions_are_projection_aligned,
-    next_action_resolution_trace,
-    state_action_projection_warning,
-)
+from loopx.control_plane.scheduler.execution_context import GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
+from loopx.quota import build_quota_should_run
+from loopx.state_refresh import refresh_state_run
 from loopx.status import collect_status
 
-
 GOAL_ID = "next-action-projection-goal"
-ACTIVE_NEXT_ACTION = "Keep the durable route on the broad public PoC lane."
-PRIMARY_AGENT_ACTION = "Validate the primary public PoC control-plane lane."
-RUN_RECOMMENDATION = "Inspect the vliw suite result before changing the durable route."
-UPDATED_NEXT_ACTION = "Promote the vliw repair slice as the durable next action."
-UPDATED_RUN_RECOMMENDATION = "Validate the vliw repair slice and then write compact evidence."
-SIDE_AGENT_ACTION = "Polish the hosted frontstage public case card."
-SIDE_AGENT_RUN_RECOMMENDATION = "Continue the hosted frontstage public case card."
-
+ACTIVE_NEXT_ACTION = "Shared compatibility guidance."
+SIDE_AGENT_ACTION = "Evaluate the current artifact."
 
 def write_fixture(root: Path, *, include_next_action: bool = True) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
@@ -110,335 +92,63 @@ def assert_state_next_action(path: Path, expected: str) -> None:
     assert f"- {expected}" in text, text
 
 
-def collect_projection(registry_path: Path, runtime: Path, project: Path) -> dict[str, object]:
-    status = collect_status(
-        registry_path=registry_path,
-        runtime_root_override=str(runtime),
-        scan_roots=[project],
-        limit=5,
-    )
-    items = status["attention_queue"]["items"]
-    item = next(item for item in items if item["goal_id"] == GOAL_ID)
-    decision = build_quota_should_run(
-        status,
-        goal_id=GOAL_ID,
-        agent_id="codex-side-bypass",
-        scheduler_execution_context=(
-            GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
-        ),
-    )
-    return {"status": status, "item": item, "decision": decision}
-
-
-def run_cli_json(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from loopx.cli import main; raise SystemExit(main())",
-            *args,
-        ],
-        cwd=Path(__file__).resolve().parents[2],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def assert_state_action_projection_warning_read_model() -> None:
-    contract = {"lane": "advancement_task", "reason_codes": ["open_agent_todo"]}
-    warning = state_action_projection_warning(
-        {"active_state_next_action": ACTIVE_NEXT_ACTION},
-        agent_todo_summary=None,
-        selected_action=SIDE_AGENT_ACTION,
-        work_lane_contract=contract,
-    )
-    assert warning is not None, warning
-    assert warning["schema_version"] == "state_action_projection_warning_v0", warning
-    assert warning["requires_state_writeback"] is True, warning
-    assert warning["active_state_next_action"] == ACTIVE_NEXT_ACTION, warning
-    assert warning["selected_recommended_action"] == SIDE_AGENT_ACTION, warning
-
-    assert actions_are_projection_aligned(
-        "[P1] Agent: Validate the primary public PoC control-plane lane.",
-        "Validate the primary public PoC control-plane lane.",
-    )
-    assert actions_are_projection_aligned(
-        "todo_fe0c5551dd89: P2: Route quota execution through interaction_contract.agent_channel.primary_action",
-        "P2: Route quota execution through interaction_contract.agent_channel.primary_action",
-    )
-    assert (
-        state_action_projection_warning(
-            {"active_state_next_action": ACTIVE_NEXT_ACTION},
-            agent_todo_summary={
-                "claim_scope": {"agent_id": "codex-side-bypass"},
-                "first_executable_items": [{"claimed_by": "codex-side-bypass"}],
-            },
-            selected_action=SIDE_AGENT_ACTION,
-            work_lane_contract=contract,
-        )
-        is None
-    )
-    assert (
-        state_action_projection_warning(
-            {"active_state_next_action": ACTIVE_NEXT_ACTION},
-            agent_todo_summary=None,
-            selected_action=SIDE_AGENT_ACTION,
-            work_lane_contract={"lane": "continuous_monitor", "reason_codes": ["open_agent_todo"]},
-        )
-        is None
-    )
-
-    trace = next_action_resolution_trace(
-        primary_action=SIDE_AGENT_ACTION,
-        mode="bounded_delivery",
-        active_state_next_action=ACTIVE_NEXT_ACTION,
-        latest_run_recommended_action=RUN_RECOMMENDATION,
-        selected_recommended_action=SIDE_AGENT_ACTION,
-        agent_lane_next_action={"text": SIDE_AGENT_ACTION},
-    )
-    assert trace is not None, trace
-    assert trace["summary"] == "source=agent_lane drift=true", trace
-
 
 def main() -> None:
-    assert_state_action_projection_warning_read_model()
-    original_now_local = state_refresh.now_local
-    try:
-        with tempfile.TemporaryDirectory(prefix="loopx-next-action-projection-") as raw_tmp:
-            registry_path, runtime, project, state_path = write_fixture(Path(raw_tmp))
-
-            state_refresh.now_local = lambda: "2026-06-22T00:01:00+00:00"
-            implicit_payload = state_refresh.refresh_state_run(
-                registry_path=registry_path,
-                runtime_root_override=str(runtime),
-                goal_id=GOAL_ID,
-                project=project,
-                state_file=None,
-                classification="state_refreshed",
-                recommended_action=None,
-                agent_id="codex-main-control",
-                progress_scope="goal",
-                dry_run=True,
-                sync_global=False,
-            )
-            assert (
-                implicit_payload["recommended_action"]
-                == f"[P0] {PRIMARY_AGENT_ACTION}"
-            ), implicit_payload
-            assert (
-                implicit_payload["recommended_action_source"]
-                == "agent_lane_selected_todo"
-            ), implicit_payload
-            assert implicit_payload.get("active_state_next_action_update") is None, implicit_payload
-
-            default_payload = state_refresh.refresh_state_run(
-                registry_path=registry_path,
-                runtime_root_override=str(runtime),
-                goal_id=GOAL_ID,
-                project=project,
-                state_file=None,
-                classification="state_refreshed",
-                recommended_action=RUN_RECOMMENDATION,
-                agent_id="codex-main-control",
-                progress_scope="goal",
-                dry_run=False,
-                sync_global=False,
-            )
-            assert default_payload["recommended_action"] == RUN_RECOMMENDATION, default_payload
-            assert default_payload["recommended_action_source"] == "explicit_arg", default_payload
-            assert default_payload.get("active_state_next_action_update") is None, default_payload
-            assert_state_next_action(state_path, ACTIVE_NEXT_ACTION)
-            assert RUN_RECOMMENDATION not in state_text(state_path), state_text(state_path)
-
-            state_refresh.now_local = lambda: "2026-06-22T00:01:30+00:00"
-            lane_payload = state_refresh.refresh_state_run(
-                registry_path=registry_path,
-                runtime_root_override=str(runtime),
-                goal_id=GOAL_ID,
-                project=project,
-                state_file=None,
-                classification="agent_lane_progress",
-                recommended_action=SIDE_AGENT_RUN_RECOMMENDATION,
-                agent_id="codex-side-bypass",
-                progress_scope="agent_lane",
-                dry_run=False,
-                sync_global=False,
-            )
-            assert lane_payload["recommended_action"] == SIDE_AGENT_RUN_RECOMMENDATION, lane_payload
-
-            first_projection = collect_projection(registry_path, runtime, project)
-            first_item = first_projection["item"]
-            first_decision = first_projection["decision"]
-            assert first_item["active_state_next_action"] == ACTIVE_NEXT_ACTION, first_item
-            assert first_item["latest_run_recommended_action"] == RUN_RECOMMENDATION, first_item
-            assert first_item["next_action_projection_warning"]["requires_state_writeback"] is True, first_item
-            assert first_decision["active_state_next_action"] == ACTIVE_NEXT_ACTION, first_decision
-            assert (
-                first_decision["latest_run_recommended_action"]
-                == SIDE_AGENT_RUN_RECOMMENDATION
-            ), first_decision
-            first_agent_channel = first_decision["interaction_contract"]["agent_channel"]
-            assert SIDE_AGENT_ACTION in first_agent_channel["primary_action"], first_decision
-            first_trace = first_agent_channel["resolution_trace"]
-            assert first_trace["summary"] == "source=agent_lane drift=true", first_decision
-            first_warning = first_decision["next_action_projection_warning"]
-            assert first_warning["severity"] == "info", first_decision
-            assert first_warning["requires_state_writeback"] is False, first_decision
-            assert first_warning["agent_lane_next_action"] == "[P1] Polish the hosted frontstage public case card.", first_decision
-
-            state_refresh.now_local = lambda: "2026-06-22T00:02:00+00:00"
-            explicit_payload = state_refresh.refresh_state_run(
-                registry_path=registry_path,
-                runtime_root_override=str(runtime),
-                goal_id=GOAL_ID,
-                project=project,
-                state_file=None,
-                classification="state_refreshed",
-                recommended_action=UPDATED_RUN_RECOMMENDATION,
-                next_action=UPDATED_NEXT_ACTION,
-                agent_id="codex-main-control",
-                progress_scope="goal",
-                dry_run=False,
-                sync_global=False,
-            )
-            update = explicit_payload["active_state_next_action_update"]
-            assert explicit_payload["recommended_action_source"] == "explicit_arg", explicit_payload
-            assert update["updated"] is True, explicit_payload
-            assert update["next_action"] == UPDATED_NEXT_ACTION, explicit_payload
-            assert_state_next_action(state_path, UPDATED_NEXT_ACTION)
-            assert ACTIVE_NEXT_ACTION not in state_text(state_path), state_text(state_path)
-
-            second_projection = collect_projection(registry_path, runtime, project)
-            second_status = second_projection["status"]
-            second_item = second_projection["item"]
-            second_decision = second_projection["decision"]
-            status_markdown = render_status_markdown(second_status)
-            quota_markdown = render_quota_should_run_markdown(second_decision)
-
-            assert second_item["active_state_next_action"] == UPDATED_NEXT_ACTION, second_item
-            assert second_item["latest_run_recommended_action"] == UPDATED_RUN_RECOMMENDATION, second_item
-            assert second_decision["active_state_next_action"] == UPDATED_NEXT_ACTION, second_decision
-            assert (
-                second_decision["latest_run_recommended_action"]
-                == SIDE_AGENT_RUN_RECOMMENDATION
-            ), second_decision
-            second_agent_channel = second_decision["interaction_contract"]["agent_channel"]
-            assert SIDE_AGENT_ACTION in second_agent_channel["primary_action"], second_decision
-            second_trace = second_agent_channel["resolution_trace"]
-            assert second_trace["summary"] == "source=agent_lane drift=true", second_decision
-            lane = second_decision["agent_lane_next_action"]
-            assert lane["todo_id"] == "todo_side", second_decision
-            assert lane["title"] == SIDE_AGENT_ACTION, second_decision
-            assert SIDE_AGENT_ACTION in lane["text"], second_decision
-            warning = second_decision["next_action_projection_warning"]
-            assert warning["severity"] == "info", second_decision
-            assert warning["requires_state_writeback"] is False, second_decision
-            assert (
-                warning["reason"]
-                == "current agent lane action differs from the durable goal route while explicitly preserving the active-state Next Action"
-            ), second_decision
-            assert (
-                warning["recommended_action"]
-                == "run the agent-lane action without mutating active-state Next Action; only the primary/goal route should write a new durable Next Action"
-            ), second_decision
-            assert (
-                warning["agent_lane_next_action"] == lane["text"]
-            ), second_decision
-            assert "active_state_next_action" in status_markdown, status_markdown
-            assert "latest_run_recommended_action" in status_markdown, status_markdown
-            assert "active_state_next_action" in quota_markdown, quota_markdown
-            assert "latest_run_recommended_action" in quota_markdown, quota_markdown
-            assert "interaction_agent_action" in quota_markdown, quota_markdown
-            assert "interaction_agent_resolution" in quota_markdown, quota_markdown
-
-            cli_ok = run_cli_json(
-                [
-                    "--format",
-                    "json",
-                    "--registry",
-                    str(registry_path),
-                    "--runtime-root",
-                    str(runtime),
-                    "refresh-state",
-                    "--goal-id",
-                    GOAL_ID,
-                    "--project",
-                    str(project),
-                    "--classification",
-                    "cli_goal_scope_dry_run",
-                    "--recommended-action",
-                    UPDATED_RUN_RECOMMENDATION,
-                    "--agent-id",
-                    "codex-main-control",
-                    "--progress-scope",
-                    "goal",
-                    "--dry-run",
-                    "--no-global-sync",
-                ]
-            )
-            assert cli_ok.returncode == 0, cli_ok.stderr or cli_ok.stdout
-            cli_ok_payload = json.loads(cli_ok.stdout)
-            assert cli_ok_payload["ok"] is True, cli_ok_payload
-            assert cli_ok_payload["progress_scope"] == "goal", cli_ok_payload
-            assert cli_ok_payload["agent_id"] == "codex-main-control", cli_ok_payload
-
-            cli_fail = run_cli_json(
-                [
-                    "--format",
-                    "json",
-                    "--registry",
-                    str(registry_path),
-                    "--runtime-root",
-                    str(runtime),
-                    "refresh-state",
-                    "--goal-id",
-                    GOAL_ID,
-                    "--project",
-                    str(project),
-                    "--classification",
-                    "cli_unscoped_dry_run",
-                    "--recommended-action",
-                    SIDE_AGENT_ACTION,
-                    "--dry-run",
-                    "--no-global-sync",
-                ]
-            )
-            assert cli_fail.returncode == 1, cli_fail.stdout
-            cli_fail_payload = json.loads(cli_fail.stdout)
-            assert cli_fail_payload["ok"] is False, cli_fail_payload
-            assert "requires --agent-id" in cli_fail_payload["error"], cli_fail_payload
-
-        with tempfile.TemporaryDirectory(prefix="loopx-next-action-fallback-") as raw_tmp:
-            registry_path, runtime, project, _state_path = write_fixture(
-                Path(raw_tmp),
-                include_next_action=False,
-            )
-
-            fallback_payload = state_refresh.refresh_state_run(
-                registry_path=registry_path,
-                runtime_root_override=str(runtime),
-                goal_id=GOAL_ID,
-                project=project,
-                state_file=None,
-                classification="state_refreshed",
-                recommended_action=None,
-                agent_id="codex-main-control",
-                progress_scope="goal",
-                dry_run=True,
-                sync_global=False,
-            )
-            assert (
-                fallback_payload["recommended_action"]
-                == f"[P0] {PRIMARY_AGENT_ACTION}"
-            ), fallback_payload
-            assert (
-                fallback_payload["recommended_action_source"]
-                == "agent_lane_selected_todo"
-            ), fallback_payload
-    finally:
-        state_refresh.now_local = original_now_local
-
+    with tempfile.TemporaryDirectory(prefix="loopx-bound-recommendation-") as directory:
+        registry, runtime, project, state = write_fixture(Path(directory))
+        before = state.read_bytes()
+        common = dict(registry_path=registry, runtime_root_override=str(runtime),
+            goal_id=GOAL_ID, project=project, state_file=None, classification="state_refreshed",
+            recommended_action=None, dry_run=False, sync_global=False)
+        step = "Evaluate a smaller experiment, retaining the incumbent."
+        result = refresh_state_run(**common, agent_id="codex-side-bypass", next_action=step)
+        assert result["recommended_action_resolution"]["todo_id"] == "todo_side"
+        assert state.read_bytes() == before
+        # Later observation-only runs must not evict the actor's current bound
+        # receipt from the semantic history retained outside the recent window.
+        index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+        with index.open("a") as stream:
+            for number in range(80):
+                stream.write(json.dumps({"goal_id": GOAL_ID, "agent_id": "codex-side-bypass",
+                    "generated_at": f"2090-01-01T00:00:{number % 60:02d}+00:00",
+                    "classification": "quota_slot_spent"}) + "\n")
+        status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
+            scan_roots=[project], limit=2)
+        decision = build_quota_should_run(status, goal_id=GOAL_ID, agent_id="codex-side-bypass",
+            scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
+        assert decision["should_run"] is True
+        lane = decision["agent_lane_next_action"]
+        assert lane["todo_id"] == "todo_side" and lane["next_step"] == step
+        assert lane["text"] == "[P1] " + SIDE_AGENT_ACTION
+        assert decision["recommended_action"] == step
+        assert step in decision["interaction_contract"]["agent_channel"]["primary_action"]
+        from loopx.extensions.lark.presentation.projection_rows import projection_rows_from_payload
+        _, rows, warnings = projection_rows_from_payload(decision,
+            goal_id=GOAL_ID, agent_id="codex-side-bypass", source_id="quota",
+            include_done=False, limit=100)
+        assert not warnings
+        assert any(row["text"] == step and row["original_todo_id"] == "todo_side" for row in rows)
+        from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
+        assert "agent_lane_next_step: " + step in render_quota_should_run_markdown(decision)
+        command = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json", "status",
+            "--goal-id", GOAL_ID, "--agent-id", "codex-side-bypass"]
+        readback = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        assert readback.returncode == 0, readback.stdout + readback.stderr
+        item = next(item for item in json.loads(readback.stdout)["attention_queue"]["items"] if item["goal_id"] == GOAL_ID)
+        projected = item.get("agent_lane_next_action") or item["project_asset"]["agent_lane_next_action"]
+        assert projected["next_step"] == step
+        assert projected["next_action_basis"] == lane["next_action_basis"]
+        assert "next_action_basis" not in item  # the selected route owns the basis
+        markdown = subprocess.run([*command[:command.index("--format")], "--format", "markdown",
+            *command[command.index("--format") + 2:]], capture_output=True, text=True, timeout=30)
+        assert markdown.returncode == 0 and "next_step: " + step in markdown.stdout
+        # A different selected task does not inherit the old experiment.
+        state.write_text(state.read_text().replace("todo_side status=open", "todo_side status=done"))
+        changed = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[project], limit=2)
+        next_decision = build_quota_should_run(changed, goal_id=GOAL_ID, agent_id="codex-side-bypass",
+            scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT)
+        assert step not in next_decision["interaction_contract"]["agent_channel"]["primary_action"]
     print("next-action-projection-contract-smoke ok")
 
 

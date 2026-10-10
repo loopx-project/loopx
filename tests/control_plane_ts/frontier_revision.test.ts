@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {createHash} from "node:crypto";
 import {deflateSync} from "node:zlib";
 import {projectAdvancementFrontier, evaluateLongTodoChain, claimedAdvancementCountFromIndex} from "../../loopx/control_plane/todos/frontier_revision.ts";
 
@@ -18,6 +19,33 @@ function observe(overrides: Record<string, unknown> = {}) {
     frontier_counts: {current_agent_claimed_advancement_count: 15, unclaimed_advancement_count: 0},
     rows: [row("todo_a", "worker-a")], ...overrides});
 }
+
+test("summary classification shares claim scope and keeps visibility floors separate", () => {
+  const fact = (claim: string | null = null, excluded: string[] = [], actionable = true) =>
+    ({claim, excluded, actionable, advancement: true});
+  const request = {schema_version: "todo_frontier_revision_request_v0", operation: "classify",
+    agent_id: "worker-a", claimed_count_floor: "12", diagnostic_peers: [fact(), fact()],
+    sources: {executable_backlog_items: [fact("worker-a"), fact(), fact("worker-b"),
+      fact("worker-a", ["worker-a"]), fact(null, [], false)],
+      unclaimed_priority_open_items: [fact()], claimed_advancement_open_items: [fact("worker-a")]}};
+  assert.deepEqual(projectAdvancementFrontier(request), {groups: {
+    current_agent_claimed_items: {source: "executable_backlog_items", indices: [0]},
+    unclaimed_items: {source: "executable_backlog_items", indices: [1]},
+    other_agent_claimed_items: {source: "executable_backlog_items", indices: [2]},
+  }, counts: {current_agent_claimed_advancement_count: 12,
+    unclaimed_advancement_count: 1, other_agent_claimed_advancement_count: 2}});
+  const empty = projectAdvancementFrontier({...request, sources: {...request.sources, executable_backlog_items: []}});
+  assert.deepEqual((empty.groups as Record<string, unknown>).unclaimed_items,
+    {source: "executable_backlog_items", indices: []});
+  const fallback = projectAdvancementFrontier({...request, sources: {...request.sources, executable_backlog_items: null}});
+  assert.deepEqual((fallback.groups as Record<string, unknown>).current_agent_claimed_items,
+    {source: "claimed_advancement_open_items", indices: [0]});
+  for (const value of ["-1", "0.5", "01", 1, false, "bad"]) assert.throws(() => projectAdvancementFrontier({...request, claimed_count_floor: value}));
+  const large = projectAdvancementFrontier({...request, claimed_count_floor: "9007199254740993"});
+  assert.equal((large.counts as Record<string, unknown>).current_agent_claimed_advancement_count, "9007199254740993");
+  assert.throws(() => projectAdvancementFrontier({...request,
+    sources: {...request.sources, executable_backlog_items: [{...fact(null, [], false), advancement: "true"}]}}));
+});
 
 test("lossless compressed rows preserve index and ACK semantics and reject malformed transport", () => {
   const rows = [row("todo_a", "worker-a"), row("todo_b", null, ["worker-a"])];
@@ -282,4 +310,18 @@ test("historical open-count long-chain checkpoints retain predecessor recovery",
   assert.deepEqual(result.bindings, [{kind: "predecessor", todo_id: "todo_9",
     frontier_revision: project(rows.slice(0, 9), "worker-a").frontier_revision,
     obligation_identity_revision: project(rows.slice(0, 9), "worker-a").frontier_owned_identity}]);
+});
+
+
+test("retained v0 wire preserves ASCII Unicode bytes and microsecond chronology", () => {
+  // Literal persisted material, independent of the summary producer/codec.
+  const open = String.raw`{"status":"open","task_class":"advancement_task","text":"\u8fb9\u754c \ud83e\udded","todo_id":"todo_a"}`;
+  const done = String.raw`{"status":"done","task_class":"advancement_task","todo_id":"todo_b"}`;
+  const rows = [{...row("todo_b"), updated: "2026-09-01T08:00:00.000001+08:00", serialized: done},
+    {...row("todo_a"), updated: "2026-09-01T00:00:00.000002Z", serialized: open}];
+  const expected = `todo_frontier_revision_v0:${createHash("sha256").update(`[${open},${done}]`).digest("hex").slice(0, 24)}`;
+  const checkpoint = project(rows);
+  assert.equal(checkpoint.complete, true);
+  assert.equal(checkpoint.frontier_revision, expected);
+  assert.equal(checkpoint.frontier_updated_at, "2026-09-01T00:00:00.000002Z");
 });

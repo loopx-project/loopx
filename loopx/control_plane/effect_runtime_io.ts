@@ -1,4 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -487,12 +496,38 @@ export async function appendJsonLine(
   payload: JsonObject,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const handle = await open(path, "a", 0o600);
+  const handle = await open(path, "a+", 0o600);
   try {
+    const { size } = await handle.stat();
+    if (size > 0) {
+      const finalByte = new Uint8Array(1);
+      await handle.read(finalByte, 0, 1, size - 1);
+      if (finalByte[0] !== 0x0a) await handle.writeFile("\n", "utf8");
+    }
     await handle.writeFile(`${JSON.stringify(payload)}\n`, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+export function appendJsonLineSync(
+  path: string,
+  payload: JsonObject,
+): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, "a+", 0o600);
+  try {
+    const { size } = fstatSync(fd);
+    if (size > 0) {
+      const finalByte = Buffer.alloc(1);
+      readSync(fd, finalByte, 0, 1, size - 1);
+      if (finalByte[0] !== 0x0a) writeFileSync(fd, "\n", "utf8");
+    }
+    writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 

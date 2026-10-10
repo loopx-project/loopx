@@ -146,20 +146,6 @@ def _apply_transition(
     return materialized_result
 
 
-def bind_next_action_to_todo(lines: list[str], *, todo_id: str) -> bool:
-    """Bind one generated durable Next Action to its stable Todo identity."""
-
-    normalized_todo_id = normalize_todo_id(todo_id)
-    if not normalized_todo_id:
-        raise ValueError("next-action binding requires a valid todo_id")
-    result = _apply_transition(
-        lines,
-        operation="bind",
-        params={"todo_id": normalized_todo_id},
-    )
-    return bool(result["changed"])
-
-
 def reconcile_added_todo_next_action(
     lines: list[str],
     *,
@@ -221,3 +207,15 @@ def settle_completed_todo_next_action(
         },
     )
     return bool(result["changed"])
+
+
+def bound_next_action_todo_ids(state_text: str) -> set[str]:
+    """Decode the existing typed binding, without inferring IDs from prose."""
+    if "loopx:next-action" not in state_text:
+        return set()
+    lines = state_text.splitlines()
+    bounds = _next_action_projection_bounds(lines)
+    if bounds is None:
+        return set()
+    result = effect_runtime_result("todo.next_action.binding", {"lines": lines[bounds[0]:bounds[1]]})
+    return {result["todo_id"]} if result.get("todo_id") else set()

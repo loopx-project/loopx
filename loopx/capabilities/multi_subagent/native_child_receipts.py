@@ -34,7 +34,6 @@ SKIP_REASONS = frozenset({
     "parent_work_priority", "scope_not_admitted", "capacity_deferred",
 })
 FAILURE_REASONS = frozenset({"host_unavailable", "host_rejected", "host_failed"})
-REVIEW_REASONS = frozenset({"evidence_incomplete", "source_unverified", "contradicted", "not_needed"})
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _MAX_VISIBLE = 8
 
@@ -101,8 +100,12 @@ def native_child_activity(
             row["recorded_at"] = event.get("recorded_at")
         elif kind == EVENT_KINDS["result"]:
             row["result"] = details.get("outcome")
+            if "reason_code" in details:
+                row["result_reason_code"] = details["reason_code"]
         elif kind == EVENT_KINDS["review"]:
             row["parent_review"] = details.get("outcome")
+            if "reason_code" in details:
+                row["review_reason_code"] = details["reason_code"]
             if details.get("outcome") == "accepted":
                 row["evidence_ref"] = details.get("evidence_ref")
                 row["validation_ref"] = details.get("validation_ref")
@@ -263,24 +266,31 @@ def _normalized_fields(
         return {"entrypoint_id": host, "observation_source": "coordinator_reported",
                 "operation": op, "outcome": result,
                 **({"reason_code": reason} if reason else {})}
-    if operation or entrypoint_id:
-        raise ValueError("result/review reuse the decision's operation and entrypoint_id")
+    # Optional identity echoes are checked against the immutable decision under
+    # the append lock; they do not become duplicate result/review authority.
+    if operation is not None:
+        _choice(operation, field="operation", choices=OPERATIONS)
+    if entrypoint_id is not None:
+        _id(entrypoint_id, field="entrypoint_id")
     if stage == "result":
         result = _choice(outcome, field="outcome", choices=RESULT_OUTCOMES)
-        if reason_code or evidence_ref or validation_ref:
-            raise ValueError("result accepts only a typed outcome")
-        return {"outcome": result}
+        if evidence_ref is not None or validation_ref is not None:
+            raise ValueError("evidence refs belong to an accepted parent review")
+        return {"outcome": result, **({"reason_code": _id(reason_code, field="reason_code")}
+                                     if reason_code is not None else {})}
     if stage == "review":
         result = _choice(outcome, field="outcome", choices=REVIEW_OUTCOMES)
         if result == "accepted":
-            if reason_code:
+            if reason_code is not None:
                 raise ValueError("accepted review must not include a reason_code")
             return {"outcome": result, "evidence_ref": _id(evidence_ref, field="evidence_ref"),
                     "validation_ref": _id(validation_ref, field="validation_ref")}
-        if evidence_ref or validation_ref:
+        if evidence_ref is not None or validation_ref is not None:
             raise ValueError("deferred/rejected review must not adopt evidence")
-        return {"outcome": result, "reason_code":
-                _choice(reason_code, field="reason_code", choices=REVIEW_REASONS)}
+        # Diagnostic codes explain nonadoption, never authorize it. Keep them
+        # optional and public-safe rather than imposing a provider vocabulary.
+        return {"outcome": result, **({"reason_code": _id(reason_code, field="reason_code")}
+                                     if reason_code is not None else {})}
     raise ValueError("stage must be decision, result or review")
 
 
@@ -334,6 +344,22 @@ def _record_native_child(
         turn_instance_id=turn_instance_id,
         goal_ref=goal_ref,
     )
+
+    def started_decision(current: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        decision = next((item for item in current if item.get("case_id") == operation_id
+                         and item.get("event_kind") == EVENT_KINDS["decision"]), None)
+        if decision is None or _details(decision).get("outcome") != "started":
+            raise ValueError("result/review requires a started native child decision")
+        details = _details(decision)
+        for key, echo in (("operation", operation), ("entrypoint_id", entrypoint_id)):
+            if echo is not None and echo != details.get(key):
+                raise ValueError(f"{key} conflicts with the native child decision identity")
+        return decision
+
+    if stage != "decision":
+        # Exact replays skip append preconditions, but an echoed identity must
+        # still match; normalization must not silently discard a contradiction.
+        started_decision(prior)
     existing = next((event for event in prior
                      if event.get("case_id") == operation_id
                      and event.get("event_kind") == EVENT_KINDS[stage]
@@ -407,14 +433,14 @@ def _record_native_child(
             return
         if admission["report_permission"] == "not_admitted":
             raise ValueError("native child report requires a work-admitted Turn guard")
-        decision = decisions.get(operation_id)
-        if decision is None or _details(decision).get("outcome") != "started":
-            raise ValueError("result/review requires a started native child decision")
+        started_decision(current)
         if stage == "review":
             result = next((item for item in current if item.get("case_id") == operation_id
                            and item.get("event_kind") == EVENT_KINDS["result"]), None)
-            if result is None or _details(result).get("outcome") != "completed":
-                raise ValueError("parent review requires a completed native child result")
+            if result is None or _details(result).get("outcome") not in RESULT_OUTCOMES:
+                raise ValueError("parent review requires a terminal native child result")
+            if fields["outcome"] == "accepted" and _details(result).get("outcome") != "completed":
+                raise ValueError("accepted parent review requires a completed native child result")
 
     if not execute:
         if existing is None:

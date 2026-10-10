@@ -126,7 +126,8 @@ def append_research_observation(
                     registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
                     role="agent", todo_id=lineage["successor_todo_id"],
                 )
-                todos = context.get("todos") or []
+                exact_todo = context.get("todo")
+                todos = [exact_todo] if context.get("matched") is True and isinstance(exact_todo, dict) else []
             todo = todos[0] if len(todos) == 1 else {}
             _research_result("explore.research.validate_execution", {
                 "goal_id": goal_id, "agent_id": agent_id, "observation": canonical,

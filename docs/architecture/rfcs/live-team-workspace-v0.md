@@ -389,21 +389,50 @@ second assignment. This strengthens the optional request/intervention entry;
 real dual-card click-through remains post-install acceptance. It does not prove
 execution, result return or whole-team stopping.
 `consume_return` alone still means consumption, not version-bound adoption.
-Implementation checkpoint (2026-09-24): an on-demand correction path can
-cross-check the original, review response, revised output and downstream
-adoption against current version-bound delegation reads. It exposes actor
-identities and opens each accepted artifact; an unavailable adoption or rejected
-review clears the previously verified path. This is a presentation and
-readback slice, not L1 completion: the relation `responds_to` does not certify
-that the response is an objection, and current acceptance lacks an explicit
-verifier identity in this read model. The packaged browser scenario is
-synthetic; the existing real correction run must still be exercised through
-the packaged UI and independently read back, with the missing and lost-observation
-cases in Section 9.
+Implementation checkpoint ([#5587](https://github.com/loopx-project/loopx/pull/5587), merged): the correction reader cross-checks the original, review response, revised output and requester adoption against current version-bound delegation reads. Opening linked evidence preserves a stepwise return path. Leaving evidence rereads the current execution page once, retains that page and returns keyboard focus; revoked output withdraws its earlier accepted row/count. A failed inventory read clears earlier success and offers refresh recovery. A failed downstream read or withdrawn adoption keeps freshly checked original, response and revision evidence readable, with adoption marked unavailable. The follow-on reader correction shares that checked observation with the surrounding adoption details and report, so they cannot retain an earlier success alongside a failed check. Core version loss clears the whole evidence view; explicit recheck restores it only against current version-bound reads. Consumer unavailability is a read-only presentation observation, not a persisted receipt change. Rechecking unchanged version bindings preserves the selected source, output and reading mode, including after artifact reordering. Changed identity, missing or ambiguous bindings, revoked source versions and changed selected hashes withdraw the comparison; unrelated artifact or adoption observations do not erase valid reading context.
+
+This remains a presentation/readback slice. `responds_to` does not certify an objection. Current native acceptance validates the canonical task and configured validators, but its readback does not expose an independent verifier identity and exact-version receipt. The revision therefore shows that missing evidence explicitly, even beside a valid requester adoption. The evidence reader separately exposes the current validation source, definition digest and check/file-pin counts from the existing typed validation plan. CLI and HTTP readback carry the same path-free observation after the original checks pass; failed validation or changed pins withdraw it with the report. This rule identity is not a persisted success or independent-verifier receipt. The frontend must consume such evidence from the existing acceptance owner when available; it cannot infer it from the reviewer name, relationship or artifact hash.
+
+The current host-check observation additionally names its UTC completion time and the declared output versions that remained unchanged before and after those checks. A changed output withdraws even the first return; the evidence detail displays matching records and leaves older or mismatched records unavailable. Stability reuses the acceptance owner's task work digest plus current claim/lifecycle and selected rules/pins/workspace: unrelated canonical commits and observation metadata do not revoke a stable check, while changed work, authorization or validators still reject it. This replaces whole-Goal revision comparison only on this read path; mutation CAS remains intact. The delegation TS owner and read-only Chat/CLI projection add no verifier configuration or independent semantic verdict, and do not close Section 9's independent exact-version acceptance gap.
+
+Packaged desktop, 390px, keyboard/reduced-motion and pagination checks cover these returns and recovery. An isolated production SQLite/HTTP/CLI fixture also rejects changed output, withdraws its list acceptance and restores the original version without launching additional work. [Public-safe fixture views](../../reference/local-delegation.md#inspect-accepted-evidence-and-return) make these states reviewable. These checks do not establish a real objection, independent semantic acceptance, installed native behavior or L1 completion. The existing real correction episode must still be exercised through the packaged UI and independently read back with Section 9's missing/lost-observation cases.
+Task inspectors read the original request on demand through the existing Todo
+authority. Status/list summaries and thin reads retain their bounded budget;
+an exact non-thin CLI read now returns the complete source text. The packaged
+drawer distinguishes loading, unavailable source and display-only legacy ids,
+offers retry, and discards stale selection responses. A failed read never
+reuses an earlier full body. File/SQLite CLI and loopback HTTP checks cover
+active/retained requests and recovery; packaged desktop/390px checks cover a
+988-character request, mismatched identity, late response and keyboard return.
+Map entries outside the bounded status summary now retain their exact Todo reference
+for this request-only read. The drawer does not treat graph metadata as current
+state or expose mutation actions; a current status entry restores the ordinary
+inspector. Packaged desktop/390px checks use the actual isolated SQLite/HTTP
+reader, remove its registry to withdraw the earlier body, and restore it for an
+explicit retry. Canonical task state remains unchanged. These read-only checks
+do not certify semantic acceptance, installed native behavior or L1 completion.
 Motion is retained
 only when it clarifies these transitions;
 remove effects that obscure absent execution, absent acceptance or source loss.
 Broader semantic zoom, extra actors and renderer experiments follow this exit.
+
+Evidence feedback retains its original submission identity, text and observed
+versions in tab-local recovery state before inbox dispatch. Following a linked
+report or reloading restores that attempt without sending it; an explicit retry
+uses the same envelope even when the current artifact read becomes unavailable.
+The existing inbox still owns admission and deduplication. A current receipt is
+shown as pending read or delivered, never applied; another feedback intent is
+available only after the prior delivery is confirmed. Unavailable or malformed
+recovery storage prevents a fresh dispatch instead of silently losing its retry
+identity. This affects the packaged evidence reader; CLI and Lark effect rules
+are unchanged. The packaged recovery smoke uses synthetic team evidence and the
+production HTTP/inbox store to prove one durable input after acknowledgement
+loss, navigation, reload and retry, plus paused-coordinator refusal. It does not
+qualify an independent verifier, live adoption or installed native behavior.
+
+Public-safe fixture views: [unconfirmed feedback on desktop](../../reference/images/team-feedback-recovery/unconfirmed-desktop.png)
+and [reconciled feedback at 390px](../../reference/images/team-feedback-recovery/recovered-mobile.png).
+These show synthetic report content and the packaged reader, not a live team.
 
 ### Qualification matrix
 

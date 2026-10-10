@@ -11,17 +11,18 @@ candidate-store transaction whose ``operation_id`` is the entry id.
 Prepare failures return typed evidence for the transaction owner to reject an
 active-lineage write before changing primary bytes. Marker failures preserve
 prepared evidence; candidate delivery happens after releasing primary locks.
+The native drain owns cursor publication and receipt-proven cleanup; Python
+retains source capture and read-only historical inventory/decoding.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
 import re
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,7 +62,6 @@ ENTRY_ID_PREFIX = "local-shadow-tx-"
 _ENTRY_FILE = re.compile(
     r"^(?P<seq>\d{10})-(?P<entry_id>local-shadow-tx-[0-9a-f]{64})\.(?P<phase>prepared|committed)\.json$"
 )
-_LEASE_FILE = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
 
 
 class OutboxError(RuntimeError):
@@ -370,31 +370,6 @@ def retired_residue(directory: Path) -> list[Path]:
     return sorted(residue)
 
 
-def raw_bytes_digest(value: bytes) -> str:
-    return "sha256:" + hashlib.sha256(value).hexdigest()
-
-
-def verify_observed_files(files: Iterable[tuple[Path, str]]) -> None:
-    """Recheck the complete observed byte batch before checkpoint or unlink effects."""
-    for path, expected_digest in files:
-        if raw_bytes_digest(path.read_bytes()) != expected_digest:
-            raise OutboxError("outbox_file_changed", "verified outbox bytes changed")
-
-
-def reclaim_verified_files(files: Iterable[tuple[Path, str]]) -> int:
-    """Remove only exact receipt-proven bytes under maintenance/primary locks.
-
-    A watermark alone never authorizes deletion. Recheck the whole batch before
-    the first unlink, including when the caller just wrote its checkpoint.
-    """
-    batch = list(files)
-    verify_observed_files(batch)
-    for path, _digest in batch:
-        path.unlink()
-        _fsync_directory(path.parent)
-    return len(batch)
-
-
 def list_entries(
     directory: Path, *, allow_committed_only: bool = False
 ) -> list[OutboxEntry]:
@@ -534,34 +509,6 @@ def decode_cursor(value: object, *, partition: str) -> dict[str, Any]:
     if parsed.utcoffset() != timedelta(0):
         raise invalid()
     return {**value, "last_seq": int(seq)}
-
-
-def write_cursor(
-    directory: Path,
-    *,
-    partition: str,
-    last_seq: int,
-    last_entry_id: str,
-    last_partition_digest: str | None,
-    last_cursor: str | None,
-    last_provider_revision: str | None,
-) -> None:
-    durable_write_json(
-        cursor_path(directory),
-        decode_cursor(
-            {
-                "schema_version": DRAIN_CURSOR_SCHEMA,
-                "partition": partition,
-                "last_seq": last_seq,
-                "last_entry_id": last_entry_id,
-                "last_partition_digest": last_partition_digest,
-                "last_cursor": last_cursor,
-                "last_provider_revision": last_provider_revision,
-                "updated_at": utc_now_text(),
-            },
-            partition=partition,
-        ),
-    )
 
 
 def _require_binding_goal_ref(
@@ -704,25 +651,6 @@ def record_source_ref(record: Mapping[str, Any]) -> str | None:
     if isinstance(digest, str) and digest:
         return f"seed:{digest}"
     return None
-
-
-def read_lease_records(directory: Path) -> list[tuple[str, dict[str, Any]]]:
-    """Top-level lease records of a goal; lifecycle receipts are excluded."""
-
-    if not directory.is_dir():
-        return []
-    records: list[tuple[str, dict[str, Any]]] = []
-    for path in sorted(directory.iterdir()):
-        if (
-            not path.is_file()
-            or not _LEASE_FILE.match(path.name)
-            or path.name.startswith(".")
-        ):
-            continue
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            records.append((path.stem, raw))
-    return records
 
 
 def _writer(
@@ -1002,15 +930,6 @@ class TodoPartitionCapture:
             self._fail("outbox_commit_marker_failed", error)
 
 
-def entries_by_partition(
-    runtime_root: Path, goal_id: str
-) -> dict[str, list[OutboxEntry]]:
-    return {
-        partition: list_entries(partition_directory(runtime_root, goal_id, partition))
-        for partition in PARTITIONS
-    }
-
-
 def outbox_summary(runtime_root: Path, goal_id: str) -> dict[str, Any]:
     """Counts per partition for operator readback; never raises on an empty outbox."""
 
@@ -1042,10 +961,6 @@ def outbox_summary(runtime_root: Path, goal_id: str) -> dict[str, Any]:
     return summary
 
 
-def iter_committed(entries: Iterable[OutboxEntry]) -> list[OutboxEntry]:
-    return [entry for entry in entries if entry.is_committed]
-
-
 __all__ = [
     "DRAIN_CURSOR_SCHEMA",
     "OUTBOX_COMMIT_SCHEMA",
@@ -1060,10 +975,8 @@ __all__ = [
     "TodoPartitionProjector",
     "drain_lock_target",
     "durable_write_json",
-    "entries_by_partition",
     "entry_file_name",
     "entry_identity",
-    "iter_committed",
     "lease_directory",
     "list_entries",
     "next_seq",
@@ -1071,12 +984,8 @@ __all__ = [
     "outbox_summary",
     "partition_directory",
     "read_cursor",
-    "read_lease_records",
-    "reclaim_verified_files",
-    "raw_bytes_digest",
     "record_source_ref",
     "retired_residue",
     "runtime_root_digest",
     "utc_now_text",
-    "write_cursor",
 ]

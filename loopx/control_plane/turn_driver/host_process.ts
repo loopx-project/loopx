@@ -9,7 +9,7 @@ export interface HostProcessRequest {
   argv: string[];
   cwd: string;
   input: string;
-  timeout_ms: number;
+  timeout_ms: number | null;
   drain_timeout_ms: number;
   stdout_limit_bytes: number | null;
 }
@@ -23,6 +23,9 @@ export interface HostProcessResult {
   group_signal_sent: boolean;
 }
 export type HostProcessOutput = {kind: "stdout" | "stderr"; text: string};
+/** The group this owner will clean up, reported once the Host is spawned.
+ * ``process_group`` is null where cleanup is tree best effort (Windows). */
+export type HostProcessSpawned = {kind: "spawned"; pid: number; process_group: number | null};
 export const HOST_PROCESS_TERMINATE_GRACE_MS = 300;
 
 /** Restrict transport size separately from the caller's public result budget. */
@@ -33,7 +36,7 @@ export function decodeHostProcessRequest(value: unknown): HostProcessRequest {
   if (Object.keys(v).length !== fields.length || fields.some(k => !Object.hasOwn(v, k)) ||
       !Array.isArray(v.argv) || !v.argv.length || !v.argv[0] || v.argv.some(x => typeof x !== "string" || x.includes("\0")) ||
       typeof v.cwd !== "string" || !v.cwd || v.cwd.includes("\0") || typeof v.input !== "string" ||
-      typeof v.timeout_ms !== "number" || !Number.isFinite(v.timeout_ms) || v.timeout_ms <= 0 || v.timeout_ms > 2147483647 ||
+      (v.timeout_ms !== null && (typeof v.timeout_ms !== "number" || !Number.isFinite(v.timeout_ms) || v.timeout_ms <= 0 || v.timeout_ms > 2147483647)) ||
       typeof v.drain_timeout_ms !== "number" || !Number.isFinite(v.drain_timeout_ms) || v.drain_timeout_ms < 0 || v.drain_timeout_ms > 30000 ||
       (v.stdout_limit_bytes !== null && (typeof v.stdout_limit_bytes !== "number" ||
         !Number.isSafeInteger(v.stdout_limit_bytes) || v.stdout_limit_bytes < 1))) throw new TypeError("invalid Host request fields");
@@ -47,10 +50,16 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
 }
 
+/** Optional caller hooks: record the spawned group, or keep stdin open for framed input. */
+export type HostProcessHooks = {
+  spawned?: (item: HostProcessSpawned) => Promise<void>;
+  openInput?: (write: (text: string) => Promise<void>) => void;
+};
+
 export async function runHostProcess(request: HostProcessRequest,
   output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
   terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
-  openInput?: (write: (text: string) => Promise<void>) => void): Promise<HostProcessResult> {
+  {spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -91,7 +100,7 @@ export async function runHostProcess(request: HostProcessRequest,
   };
   const abort = () => stop("cancelled");
   signal?.addEventListener("abort", abort, {once: true});
-  const deadline = setTimeout(() => stop("timeout"), request.timeout_ms);
+  const deadline = request.timeout_ms === null ? undefined : setTimeout(() => stop("timeout"), request.timeout_ms);
   let drainTimer: ReturnType<typeof setTimeout> | undefined;
   const exited = new Promise<void>(resolve => {
     child.once("error", () => { outcome = "spawn_failed"; resolve(); });
@@ -125,6 +134,12 @@ export async function runHostProcess(request: HostProcessRequest,
   };
   const reads = Promise.all([read("stdout"), read("stderr")]);
   child.stdin.on("error", () => {}); // A Host may close stdin before consuming it.
+  if (child.pid && spawned) {
+    // A caller that cannot record the owned group cancels rather than run unaccounted.
+    try { await spawned({kind: "spawned", pid: child.pid,
+      process_group: process.platform === "win32" ? null : child.pid}); }
+    catch { complete = false; stop("cancelled"); }
+  }
   if (openInput) {
     // The private preflight transport retains stdin between read-only requests.
     // It owns framing/backpressure, not child lifetime or process-group cleanup.
@@ -145,7 +160,7 @@ export async function runHostProcess(request: HostProcessRequest,
     await clean();
     return {...base, outcome, output_complete: complete};
   } finally {
-    clearTimeout(deadline);
+    if (deadline) clearTimeout(deadline);
     if (drainTimer) clearTimeout(drainTimer);
     signal?.removeEventListener("abort", abort);
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();

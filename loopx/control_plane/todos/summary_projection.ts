@@ -5,6 +5,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {projectTodoSummaryLanes, type TodoSummaryLane} from "./summary_lanes.ts";
+import {projectSummaryFrontierIndex} from "./frontier_revision.ts";
 import {projectTodoClosure, projectTodoSuccession, SUCCESSION_FACT_COLUMNS, SUCCESSION_EVALUATION_COLUMNS} from "./succession.ts";
 
 type Format = "raw" | "compact" | "active" | "recent" | "gap";
@@ -68,7 +69,8 @@ function validateSummarySuccession(request: JsonObject, rows: readonly JsonObjec
     const evaluation = Object.fromEntries(SUCCESSION_EVALUATION_COLUMNS.map((name, column) => [name, evaluations[index][column]]));
     if (row.todo_id !== fact.todo_id || row.status !== fact.status || row.no_followup !== fact.no_followup ||
         (row.task_class === "advancement_task") !== fact.advancement ||
-        row.successor_gap !== evaluation.successor_gap || row.handoff_state !== evaluation.handoff_state) {
+        row.successor_gap !== evaluation.successor_gap || row.handoff_state !== evaluation.handoff_state ||
+        row.replan !== evaluation.route_continuation_replan_required) {
       throw new EffectRuntimeRequestError("summary facts disagree with validated succession evidence");
     }
   }
@@ -99,7 +101,8 @@ function claimedVisibility(indices: readonly number[], rows: readonly JsonObject
 export function projectTodoSummary(value: unknown): SummaryProjection {
   const request = requireJsonObject(value, "Todo summary request");
   if (request.schema_version !== "todo_summary_projection_request_v1" &&
-      request.schema_version !== "todo_summary_projection_request_v2") {
+      request.schema_version !== "todo_summary_projection_request_v2" &&
+      request.schema_version !== "todo_summary_projection_request_v3") {
     throw new EffectRuntimeRequestError("Todo summary request schema mismatch");
   }
   const role = request.role === null ? null : requireStringLiteral(request.role, ["user", "agent"], "role");
@@ -141,6 +144,13 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
     monitor_schedule_gap_count: selected.monitor_schedule_gap_items.length,
   };
   const lanes: Record<string, DisplayLane> = {};
+  if (request.schema_version === "todo_summary_projection_request_v3") {
+    if (role === "agent") {
+      fields.advancement_frontier_revision_index = projectSummaryFrontierIndex(request.frontier_rows, rows, source);
+    } else if (request.frontier_rows !== null) {
+      throw new EffectRuntimeRequestError("non-Agent summary must omit frontier source facts");
+    }
+  }
   const lane = (name: string, indices: readonly number[], cap: number | null = null, format: Format = "compact") => {
     lanes[name] = {indices: cap === null ? [...indices] : indices.slice(0, cap), format};
   };
@@ -177,6 +187,16 @@ export function projectTodoSummary(value: unknown): SummaryProjection {
   const gaps = source.filter(index => rows[index].successor_gap === true).sort(byTime(false));
   if (gaps.length) {
     fields.completed_without_successor_count = gaps.length;
+    // A missing lineage edge is a review prompt, not authority to terminate an
+    // ordinary completed stage. Replan and settlement retain their own gates.
+    fields.todo_succession_warning = {
+      schema_version: "todo_succession_warning_v0",
+      reason_code: "completed_advancement_without_successor",
+      count: gaps.length,
+      recommended_action: "Review remaining authorized Goal acceptance and the runnable frontier. " +
+        "Continue existing work or replan while scope remains; ordinary Todo completion needs no artificial successor. " +
+        "Use --no-follow-up only for final scope closeout allowed by the current settlement contract.",
+    };
     lane("completed_without_successor_items", gaps, 5, "gap");
   }
   if (selected.watch_only_monitor_items.length) {

@@ -76,7 +76,7 @@ Capability 描述调用者可依赖的 outcome contract，Provider 提供实现�
 | 精确查看 Todo | `loopx todo list --goal-id <goal-id> --todo-id <todo-id>` | 不从缺少显示推断不存在 |
 | 压缩工作列表 | `loopx todo list --goal-id <goal-id> --thin --format json` | 有界显示不等于完整候选集 |
 | 查看当前 lease | `loopx task-lease inspect` | 读回不是获取新执行证明 |
-| 查看 Agent 证据 | `loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30` | 历史与当前事实分开 |
+| 查看 Agent 证据 | `loopx history --goal-id <goal-id> --agent-id <agent-id> --limit 30` | 历史与当前事实分开 |
 | 请求当前准入 | `loopx quota should-run` | 读完整 contract；相关 Host 路径可能记 receipt |
 | 查看受管 Turn journal | `loopx turn inspect-journal` | 保留原 Turn key；诊断不执行恢复 |
 | 配置与能力发现 | `loopx capability list/show`、`loopx configure-goal` | 无设置 flag 的读取与 execute 分开 |

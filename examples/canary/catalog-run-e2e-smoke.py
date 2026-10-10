@@ -114,6 +114,7 @@ def assert_git_required_smoke_skips_without_git_worktree() -> None:
         runner_module.REPO_ROOT = temp_root
         try:
             payload = build_catalog_canary_run(
+                catalog_path=REPO_ROOT / "docs/concepts/interaction-pattern-catalog.md",
                 profiles=["repo-architecture-budget"],
                 max_checks_per_profile=1,
                 check_limit=1,

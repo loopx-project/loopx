@@ -2,9 +2,19 @@ import fixture from "../public/benchmark-study.example.json" with { type: "json"
 import {
   parseBenchmarkStudyDashboard,
   resolveBenchmarkStudyDashboardUrl,
+  selectBenchmarkStudyRun,
 } from "../src/data/benchmark-study.js";
 
 const packet = parseBenchmarkStudyDashboard(fixture);
+const first = packet.runs[0]!;
+const second = { ...first, case_id: "another-case" };
+if (selectBenchmarkStudyRun([first, second], first.run_id, second.case_id) !== second) throw new Error("run selection lost its case");
+if (selectBenchmarkStudyRun([first, second], first.run_id, "") !== undefined) throw new Error("ambiguous legacy link selected a run");
+if (selectBenchmarkStudyRun([first], first.run_id, "") !== first) throw new Error("unique legacy link stopped resolving");
+if (selectBenchmarkStudyRun([first], first.run_id, "missing-case") !== undefined) throw new Error("stale case link selected another case");
+if (selectBenchmarkStudyRun([first], "missing-run", "") !== undefined) throw new Error("stale run link selected another run");
+if (selectBenchmarkStudyRun([first, first], first.run_id, first.case_id) !== undefined) throw new Error("duplicate full identity selected a run");
+if (selectBenchmarkStudyRun([first], "", "") !== first) throw new Error("unselected runs view lost its default");
 if (packet.status !== "provisional") throw new Error("fixture must expose provisional coverage");
 if (packet.campaign.intended_cell_denominator !== 8) throw new Error("campaign denominator drifted");
 if (packet.campaign.selected_score_countable_cell_count !== 6) throw new Error("countable numerator drifted");
@@ -15,6 +25,27 @@ if (packet.contrasts.loopx_plain?.primary_metric_directions.flat !== 1) throw ne
 if (packet.contrasts.goal_hint?.binary_metric_transitions.reward?.same !== 2) throw new Error("binary transition drifted from run metrics");
 if (packet.cases[1]?.largest_eligible_primary_contrast?.metric_deltas.feature?.delta !== 2) throw new Error("case-level eligible contrast missing");
 if (packet.cases[0]?.arms.some((cell) => cell.score_countable && !cell.metrics.preservation)) throw new Error("countable cell guardrail missing");
+
+const ratioFixture = structuredClone(fixture);
+const ratioMetric = ratioFixture.cases[1]!.largest_eligible_primary_contrast!.metric_deltas.feature;
+Object.assign(ratioMetric, { delta: -41, delta_rate: 0.4, direction: "improved" });
+const ratioPacket = parseBenchmarkStudyDashboard(ratioFixture);
+if (ratioPacket.cases[1]?.largest_eligible_primary_contrast?.metric_deltas.feature?.delta_rate !== 0.4) throw new Error("ratio comparison scale lost");
+const unavailable = structuredClone(ratioPacket);
+const unavailableMetrics = unavailable.cases[1]!.largest_eligible_primary_contrast!.metric_deltas;
+unavailableMetrics.preservation = {
+  baseline_value: 1, candidate_value: 2, comparison_unavailable_reason: "unit_mismatch",
+};
+unavailable.runs[0]!.metrics.feature!.total = 0;
+parseBenchmarkStudyDashboard(unavailable);
+unavailableMetrics.preservation.delta = 1;
+if (parseUnexpectedComparison(unavailable)) throw new Error("unavailable comparison exposed a numeric conclusion");
+Object.assign(ratioMetric, { delta_rate: Number.POSITIVE_INFINITY });
+if (parseUnexpectedComparison(ratioFixture)) throw new Error("non-finite ratio accepted");
+
+function parseUnexpectedComparison(value: unknown) {
+  try { parseBenchmarkStudyDashboard(value); return true; } catch { return false; }
+}
 
 const resolved = resolveBenchmarkStudyDashboardUrl("/study.json", "http://127.0.0.1:5173/benchmarks/study");
 if (resolved !== "http://127.0.0.1:5173/study.json") throw new Error("local readback URL drifted");

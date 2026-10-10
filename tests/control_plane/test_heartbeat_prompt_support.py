@@ -67,7 +67,7 @@ def test_interface_budget_uses_visible_goal_mode() -> None:
     assert budget["within_budget"] is True
 
 
-@pytest.mark.parametrize("mode,limit", [("thin", 2500), ("visible_goal", 4000)])
+@pytest.mark.parametrize("mode,limit", [("thin", 3000), ("visible_goal", 4000)])
 def test_prompt_body_limit_remains_independent_of_json_envelope(mode: str, limit: int) -> None:
     for size in (limit, limit + 1):
         budget = build_interface_budget(
@@ -230,9 +230,35 @@ def test_public_facade_still_builds_and_renders_prompts() -> None:
     assert render_heartbeat_prompt_markdown(payload)
 
 
+def test_thin_markdown_diagnostics_only_show_the_selected_prompt_command() -> None:
+    payload = build_heartbeat_prompt(goal_id="loopx-meta", thin=True)
+    rendered = render_heartbeat_prompt_markdown(payload)
+
+    assert payload["task_body"] in rendered
+    assert "- thin_prompt_command:" in rendered
+    assert "- expanded_prompt_command:" not in rendered
+    assert "- compact_prompt_command:" not in rendered
+    assert "- brief_prompt_command:" not in rendered
+
+
+def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
+    payload = build_heartbeat_prompt(goal_id="loopx-meta", brief=True)
+    rendered = render_heartbeat_prompt_markdown(payload)
+
+    assert payload["brief_prompt_command"]
+    assert "compact_prompt_command" not in payload
+    assert "expanded_prompt_command" not in payload
+    assert "thin_prompt_command" not in payload
+    assert "heartbeat-prompt --compact" in payload["task_body"]
+    assert "- brief_prompt_command:" in rendered
+    assert "- expanded_prompt_command:" not in rendered
+    assert "- compact_prompt_command:" not in rendered
+    assert "- thin_prompt_command:" not in rendered
+
+
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 12000), ("compact", 6500), ("brief", 4300), ("thin", 2500)],
+    [("full", 12000), ("compact", 6500), ("brief", 4300), ("thin", 3000)],
 )
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
     mode: str, base_budget: int

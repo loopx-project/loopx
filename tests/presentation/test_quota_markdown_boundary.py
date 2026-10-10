@@ -20,6 +20,21 @@ def test_public_quota_renderers_are_presentation_exports() -> None:
     assert render_quota_scheduler_ack_markdown is render_quota_scheduler_ack_markdown_direct
 
 
+def test_cli_renders_every_shared_requirement_read_and_preserves_historical_fallback() -> None:
+    reads = [{"command": f"cat -- '/tmp/goal requirements/source {index}.md'"} for index in range(6)]
+    payload = {"required_reads": [{"command": "obsolete-fallback"}],
+        "interaction_contract": {"agent_channel": {"required_reads": reads}}}
+    original = deepcopy(payload)
+    rendered = render_quota_should_run_markdown(payload)
+    assert all(read["command"] in rendered for read in reads)
+    assert "obsolete-fallback" not in rendered
+    assert payload == original
+    payload["interaction_contract"]["agent_channel"]["required_reads"] = []
+    assert "obsolete-fallback" not in render_quota_should_run_markdown(payload)
+    del payload["interaction_contract"]["agent_channel"]["required_reads"]
+    assert "obsolete-fallback" in render_quota_should_run_markdown(payload)
+
+
 def test_quota_rendering_preserves_the_decision_payload() -> None:
     payload = {
         "ok": True,

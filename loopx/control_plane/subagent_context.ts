@@ -174,7 +174,7 @@ function boundedDelegationContext(value: unknown): JsonObject | null {
   const operationReceipts: JsonObject = {};
   if (rawReceipts) {
     for (const key of ["observed", "prepared", "running", "turn_returned", "accepted",
-      "rejected", "unavailable", "recovery_required"]) {
+      "rejected", "stopped", "unavailable", "recovery_required"]) {
       if (Number.isInteger(rawReceipts[key]) && Number(rawReceipts[key]) >= 0) {
         operationReceipts[key] = Math.min(Number(rawReceipts[key]), 10_000);
       }

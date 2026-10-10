@@ -8,7 +8,8 @@ import pytest
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TURN_ID,
-    _configure_selected_todo_replan_fixture, _projected_cli_args,
+    _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
+    _projected_cli_args,
     _run_cli, _spend_run_count, _write_fixture,
 )
 
@@ -100,6 +101,10 @@ def test_projected_vision_replan_settles_without_a_meta_successor(tmp_path: Path
     assert [trigger["kind"] for trigger in original["triggers"]] == ["long_todo_chain"]
     assert original["triggers"][0]["count_kind"] == "claimed_advancement_todos"
     assert before["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    assert before["heartbeat_receipt"]["settlement_binding_owed"] is True
+    before = _bind_selected_replan_guard(
+        registry, runtime, project, TURN_ID,
+    )
     actions = before["interaction_contract"]["cli_channel"]["next_cli_actions"]
     contract = before["interaction_contract"]["cli_channel"]["replan_settlement_contract"]
     assert contract["settlement_binding"] == {

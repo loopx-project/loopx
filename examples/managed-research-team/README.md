@@ -26,8 +26,9 @@ uv pip install --python .venv/bin/python -e packages/loopx-ark-turn
 Set `ARK_API_KEY`, `ARK_MODEL_ID` and `ARK_ENVIRONMENT_ID` in the process
 environment. DSH reuses the machine operator credential; `DEEPSEEK_API_KEY`
 is an explicit environment override. The Ark Environment must already belong to the operator;
-this launcher never creates or deletes it. The local model defaults to
-`deepseek-v4-flash@high`; select another profile with `--dsh-model`.
+this launcher never creates or deletes it. The local model defaults to the
+managed profile `deepseek-flash@high` (DeepSeek-V4.1-Flash); select another
+profile with `--dsh-model`.
 
 Choose a **new private disposable directory**. Never point this example at an
 active Goal or research workspace. The canonical Goal quota governs admission;

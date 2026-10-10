@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -24,6 +25,7 @@ from ._validation import (
 from .ranking import build_material_rerank_proposal
 
 MATERIAL_EXPLORE_INTENT_SCHEMA_VERSION = "material_explore_intent_v0"
+_CURRENT_FRESHNESS_VALUES = frozenset({"current", "fresh"})
 
 _EXPLORE_TOPIC_FIELDS = {
     "evidence_refs",
@@ -227,11 +229,11 @@ def build_material_explore_intent(
     return intent
 
 
-def _decision_evidence_ref(
+def _validated_decision_evidence(
     decision_evidence: Mapping[str, Any],
     *,
     goal_id: str,
-) -> str:
+) -> dict[str, Any]:
     if not isinstance(decision_evidence, Mapping):
         raise TypeError("decision_evidence must be an object")
     check_record_keys(
@@ -269,10 +271,8 @@ def _decision_evidence_ref(
         raise ValueError(
             "decision_evidence packet_ref or canonical payload does not match"
         )
-    return compact_token(
-        rebuilt["packet_ref"],
-        field="decision_evidence.packet_ref",
-    )
+    compact_token(rebuilt["packet_ref"], field="decision_evidence.packet_ref")
+    return rebuilt
 
 
 def _fallback_planning(
@@ -312,6 +312,115 @@ def _fallback_planning(
     )
 
 
+def _validate_action_evidence_refs(
+    *,
+    decision_evidence: Mapping[str, Any],
+    actions: Sequence[tuple[str, Sequence[Mapping[str, Any]]]],
+) -> None:
+    """Reject known refs whose fact or exact source revision is not current.
+
+    Evidence refs remain opaque when they do not identify a record in this
+    packet. For recognized packet refs, freshness and source-revision linkage
+    are checked before a caller policy's action is accepted.
+    """
+
+    source_revision_statuses: dict[tuple[str, str], list[bool]] = {}
+    source_pairs: dict[str, set[tuple[str, str]]] = {}
+    revision_pairs: dict[str, set[tuple[str, str]]] = {}
+    supported_source_revisions: set[tuple[str, str]] = set()
+    known_source_refs: set[str] = set()
+    known_revision_refs: set[str] = set()
+    recognized_statuses: dict[str, list[bool]] = {}
+
+    def record(ref: Any, current: bool) -> None:
+        if isinstance(ref, str) and ref:
+            recognized_statuses.setdefault(ref, []).append(current)
+
+    source_revisions = decision_evidence["source_revisions"]
+    for source_revision in source_revisions:
+        source_ref = source_revision["source_ref"]
+        revision = source_revision["revision"]
+        current = source_revision["freshness"] in _CURRENT_FRESHNESS_VALUES
+        source_revision_statuses.setdefault((source_ref, revision), []).append(
+            current
+        )
+        pair = (source_ref, revision)
+        source_pairs.setdefault(source_ref, set()).add(pair)
+        revision_pairs.setdefault(revision, set()).add(pair)
+        known_source_refs.add(source_ref)
+        known_revision_refs.add(revision)
+
+    def source_revision_is_current(source_ref: Any, revision: Any) -> bool:
+        if not isinstance(source_ref, str) or not isinstance(revision, str):
+            return False
+        statuses = source_revision_statuses.get((source_ref, revision), ())
+        return bool(statuses) and all(statuses)
+
+    def record_supported_revision(source_ref: Any, revision: Any) -> bool:
+        pair = (source_ref, revision)
+        if not source_revision_is_current(*pair):
+            return False
+        supported_source_revisions.add(pair)
+        return True
+
+    for fact in decision_evidence["changed_facts"]:
+        fact_is_current = (
+            fact.get("freshness") in _CURRENT_FRESHNESS_VALUES
+            and record_supported_revision(
+                fact.get("source_ref"), fact.get("source_revision")
+            )
+        )
+        record(
+            fact["fact_id"],
+            fact_is_current,
+        )
+
+    for claim in decision_evidence["recalled_claims"]:
+        claim_is_current = (
+            claim.get("exact_read_verified") is True
+            and record_supported_revision(
+                claim.get("source_ref"), claim.get("source_revision")
+            )
+        )
+        record(
+            claim["claim_id"],
+            claim_is_current,
+        )
+
+    for claim in decision_evidence["stale_or_rejected_claims"]:
+        record(claim["claim_id"], False)
+
+    for source_ref in known_source_refs:
+        pairs = source_pairs[source_ref]
+        record(
+            source_ref,
+            all(
+                source_revision_is_current(*pair)
+                and pair in supported_source_revisions
+                for pair in pairs
+            ),
+        )
+    for revision in known_revision_refs:
+        pairs = revision_pairs[revision]
+        record(
+            revision,
+            all(
+                source_revision_is_current(*pair)
+                and pair in supported_source_revisions
+                for pair in pairs
+            ),
+        )
+
+    for action_field, records in actions:
+        for index, action in enumerate(records):
+            for evidence_ref in action["evidence_refs"]:
+                statuses = recognized_statuses.get(evidence_ref)
+                if statuses is not None and not all(statuses):
+                    raise ValueError(
+                        f"{action_field}[{index}] references stale or unverified evidence"
+                    )
+
+
 def plan_material_decision_actions(
     *,
     policy: MaterialDecisionPolicy,
@@ -341,10 +450,11 @@ def plan_material_decision_actions(
     )
     if actual_policy_id != expected_policy_id:
         raise ValueError("material decision policy identity does not match")
-    evidence_ref = _decision_evidence_ref(
+    evidence_snapshot = _validated_decision_evidence(
         decision_evidence,
         goal_id=normalized_goal_id,
     )
+    evidence_ref = evidence_snapshot["packet_ref"]
 
     window = positive_int(target_window_size, field="target_window_size")
     max_moved = positive_int(max_moved_items, field="max_moved_items")
@@ -376,7 +486,7 @@ def plan_material_decision_actions(
     try:
         result = policy.evaluate(
             goal_id=normalized_goal_id,
-            decision_evidence=decision_evidence,
+            decision_evidence=deepcopy(evidence_snapshot),
             inventory_ref=inventory_ref,
             observed_at=observed_at,
             target_window_size=window,
@@ -447,6 +557,16 @@ def plan_material_decision_actions(
             )
             if result.explore_topics
             else None
+        )
+        _validate_action_evidence_refs(
+            decision_evidence=evidence_snapshot,
+            actions=(
+                ("moves", proposal["moves"]),
+                (
+                    "topics",
+                    explore_intent["topics"] if explore_intent is not None else (),
+                ),
+            ),
         )
     except (TypeError, ValueError):
         return _fallback_planning(

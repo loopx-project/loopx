@@ -6,9 +6,12 @@ import io
 import json
 import os
 import shlex
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
@@ -326,20 +329,17 @@ def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
 
 @contextlib.contextmanager
 def _stable_budget_fixture_root(root: Path):
-    """Keep absolute-path fields stable across pytest and xdist temp layouts."""
+    """Keep lexical and resolved fixture paths independent of runner layout."""
 
-    root.mkdir(parents=True, exist_ok=True)
     suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    alias = Path("/tmp") / f"loopx-cli-budget-{suffix}"
-    if alias.exists() or alias.is_symlink():
-        if not alias.is_symlink():
-            raise RuntimeError(f"refusing to replace non-symlink fixture root: {alias}")
-        alias.unlink()
-    alias.symlink_to(root, target_is_directory=True)
+    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
+    if fixture.exists() or fixture.is_symlink():
+        raise RuntimeError(f"refusing to replace existing fixture root: {fixture}")
+    fixture.mkdir()
     try:
-        yield alias
+        yield fixture
     finally:
-        alias.unlink(missing_ok=True)
+        shutil.rmtree(fixture)
 
 
 def _surface_commands(
@@ -466,21 +466,6 @@ def _surface_commands(
         + ["todo", "list", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]],
         "history_limited": common
         + ["history", "--goal-id", GOAL_ID, "--limit", "5"],
-        "evidence_log_thin": common
-        + [
-            "evidence-log",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--limit",
-            "5",
-            "--history-limit",
-            "10",
-            "--rollout-limit",
-            "20",
-            "--thin",
-        ],
     }
 
 
@@ -775,7 +760,6 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_thin",
         "todo_list",
         "history_limited",
-        "evidence_log_thin",
     }
     manifest = public_manifest()
     assert set(CLI_OUTPUT_BUDGET_BY_ID) == expected
@@ -823,6 +807,34 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
             assert classification.surface_id is None
 
 
+def test_stable_budget_fixture_uses_an_owned_physical_short_root(tmp_path: Path) -> None:
+    outer = tmp_path / ("nested-runner-" + "p" * 128)
+    with _stable_budget_fixture_root(outer) as fixture:
+        assert not fixture.is_symlink()
+        assert fixture.resolve().parent == Path("/tmp").resolve()
+        (fixture / "owned.json").write_text("{}", encoding="utf-8")
+    assert not fixture.exists()
+    assert not outer.exists()
+
+
+def test_stable_budget_fixture_preserves_an_existing_directory(tmp_path: Path) -> None:
+    root = tmp_path / "foreign-directory"
+    suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
+    fixture.mkdir()
+    marker = fixture / "foreign.json"
+    marker.write_text("preserve", encoding="utf-8")
+    try:
+        try:
+            with _stable_budget_fixture_root(root):
+                raise AssertionError("existing fixture must not be replaced")
+        except RuntimeError:
+            pass
+        assert marker.read_text(encoding="utf-8") == "preserve"
+    finally:
+        shutil.rmtree(fixture)
+
+
 def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
     tmp_path: Path,
 ) -> None:
@@ -831,6 +843,126 @@ def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
         for scenario in SCENARIOS
     }
     _assert_scenario_matrix(scenarios)
+
+
+def test_diagnose_keeps_selected_reads_once_and_out_of_the_goal_overview(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "diagnose-selected-read") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[0])
+        command = _surface_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["diagnose"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    payload = json.loads(text)
+    assert payload["selected"]["interaction_contract"]["agent_channel"]["required_reads"]
+    assert "required_reads" not in payload["goals"][0]["interaction_contract"]["agent_channel"]
+
+
+def test_quota_packet_drops_transient_path_but_keeps_verified_todo_reference(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "quota-goal-read") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[0])
+        command = _surface_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["quota_should_run"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    payload = json.loads(text)
+    assert "goal_state_file" not in payload
+    assert payload["interaction_contract"]["agent_channel"]["work_context"]["selected_todo_ref"] == "selected_todo"
+
+
+def test_turn_envelope_references_selected_todo_without_duplicate_context(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "turn-envelope-selected-read") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[0])
+        command = _mode_variant_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["quota_should_run_turn_envelope"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    payload = json.loads(text)
+    assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
+    work_context = payload["work_context"]
+    assert work_context["selected_todo_ref"] == "selected_todo"
+    assert work_context["selected_todo_authority"].startswith("markdown_active_state@sha256:")
+    assert "sources" not in work_context
+
+
+@pytest.mark.parametrize("surface_id", ["quota_should_run", "quota_should_run_turn_envelope"])
+def test_compact_selected_todo_markdown_preserves_work_context_instruction(
+    tmp_path: Path,
+    surface_id: str,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / surface_id) as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root,
+            SCENARIOS[0],
+        )
+        if surface_id == "quota_should_run":
+            json_command = _surface_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="json",
+            )[surface_id]
+            markdown_command = _surface_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="markdown",
+            )[surface_id]
+        else:
+            json_command = _mode_variant_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="json",
+            )[surface_id]
+            markdown_command = _mode_variant_commands(
+                project=project,
+                runtime=runtime,
+                registry_path=registry_path,
+                state_file=state_file,
+                output_format="markdown",
+            )[surface_id]
+
+        json_exit_code, json_text = _invoke_cli(json_command)
+        markdown_exit_code, markdown_text = _invoke_cli(markdown_command)
+
+    assert json_exit_code == 0, json_text
+    assert markdown_exit_code == 0, markdown_text
+    payload = json.loads(json_text)
+    work_context = (
+        payload["interaction_contract"]["agent_channel"]["work_context"]
+        if surface_id == "quota_should_run"
+        else payload["work_context"]
+    )
+    instruction = work_context["instruction"]
+    assert instruction
+    assert markdown_text.count(instruction) == 1
 
 
 def _assert_scenario_matrix(scenarios: dict[str, dict[str, dict[str, dict]]]) -> None:
@@ -913,6 +1045,8 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
+    assert '"content_revision"' not in default_text
+    assert '"content_revision"' not in detail_text
     default_payload = json.loads(default_text)
     detail_payload = json.loads(detail_text)
     default_summary = default_payload["agent_todo_summary"]
@@ -1062,7 +1196,9 @@ def test_quota_cli_bounds_real_scale_vision_audit_and_keeps_cold_detail(
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    assert len(default_text) <= 40_000
+    # Pinned base/head emit 41,503 chars on the same 36-Todo / 12-run vision
+    # fixture. Keep complete decision semantics; 42k leaves 497 chars.
+    assert len(default_text) <= 42_000
     default_payload = json.loads(default_text)
     detail_payload = json.loads(detail_text)
     compact_audit = default_payload["vision_continuation_audit"]
@@ -1124,13 +1260,16 @@ def test_quota_cli_bounds_real_scale_vision_audit_and_keeps_cold_detail(
     )
 
 
+@pytest.mark.parametrize("include_agent_vision", [False, True])
 def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
     tmp_path: Path,
+    include_agent_vision: bool,
 ) -> None:
     with _stable_budget_fixture_root(tmp_path / "turn-plan-vision") as stable_root:
         project, runtime, registry_path, state_file = _write_fixture(
             stable_root,
             SCENARIOS[1],
+            include_agent_vision=include_agent_vision,
         )
         command = _surface_commands(
             project=project,
@@ -1153,7 +1292,35 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
     # This fixed executable schema legitimately crosses the old 12k/320
     # ceiling; retain bounded headroom without relaxing Todo-scale growth.
     assert 12_000 < len(text) <= CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_chars["crowded"]["json"]
-    assert len(text.splitlines()) <= 400
+    assert len(text.splitlines()) <= CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_lines["crowded"]["json"]
+
+
+@pytest.mark.parametrize("include_agent_vision", [False, True])
+def test_crowded_quota_preserves_long_chain_decision_clauses(
+    tmp_path: Path, include_agent_vision: bool,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "long-chain-guidance") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root, SCENARIOS[1], include_agent_vision=include_agent_vision,
+        )
+        command = _surface_commands(
+            project=project, runtime=runtime, registry_path=registry_path,
+            state_file=state_file, output_format="json",
+        )["quota_should_run"]
+        code, text = _invoke_cli(command)
+    assert code == 0, text
+    payload = json.loads(text)
+    # Independently required semantics: replan before continuing a long lane,
+    # evidence-linked authoring and conditional reuse. Stable fields alone
+    # would not detect the instruction loss in the earlier compact wording.
+    recommendation = payload["autonomous_replan_obligation"]["recommended_action"]
+    assert "replan before continuing a 15+" in recommendation
+    assert "evidence-linked vision path" in recommendation
+    assert "retain existing runnable work when appropriate" in recommendation
+    guidance = " ".join(payload["replan_action_packet"]["planning_guidance"])
+    assert "a reasonable in-scope next step" in guidance
+    assert "Otherwise explain why no such step remains" in guidance
+    assert "do not invent work, exceed authority or consume budget merely to stay active" in guidance
 
 
 def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
@@ -1444,7 +1611,17 @@ def _assert_collection_growth_and_bootstrap_duplication(
             - small[spec.surface_id]["json"]["chars"]
         )
         fixed_semantic_growth = spec.max_json_fixed_semantic_growth_chars
-        if fixed_semantic_growth:
+        if fixed_semantic_growth and spec.surface_id == "quota_should_run":
+            context = crowded[spec.surface_id]["json"]["payload"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+            assert len(context["coverage_ledger"]) <= 24
+            assert context["from_full_index"] is True
+            assert len(context["evidence"]) == SCENARIOS[1].run_count
+            assert all("--evidence-ref" in row["read_action"] for row in context["evidence"])
+        elif fixed_semantic_growth and spec.surface_id == "diagnose":
+            context = crowded[spec.surface_id]["json"]["payload"]["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+        elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
             small_packet = small[spec.surface_id]["json"]["payload"][
                 "turn_envelope"
@@ -1751,10 +1928,18 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
 
     assert exit_code == 0, text
     payload = json.loads(text)
-    assert payload["detail_ref"]["full_decision"] == (
-        "loopx --format json quota should-run "
-        f"--goal-id {GOAL_ID} --agent-id {AGENT_IDS[0]} --codex-app"
-    )
+    full_decision = shlex.split(payload["detail_ref"]["full_decision"])
+    # A cold read must preserve the originating source as well as the host
+    # profile, rather than silently switching to the operator's default Goal.
+    for option, value in (
+        ("--registry", str(registry_path)), ("--runtime-root", str(runtime)),
+        ("--goal-id", GOAL_ID), ("--agent-id", AGENT_IDS[0]), ("--format", "json"),
+    ):
+        assert full_decision[full_decision.index(option) + 1] == value
+    assert full_decision[0] == "loopx" and "--codex-app" in full_decision
+    read_rc, read_text = _invoke_cli(full_decision[1:])
+    assert read_rc == 0, read_text
+    assert json.loads(read_text)["goal_id"] == GOAL_ID
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
@@ -1790,19 +1975,28 @@ def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
 
     assert exit_code == 0, text
     payload = json.loads(text)
-    command_prefix = f"loopx --runtime-root {runtime}"
     cli_channel = payload["interaction_contract"]["cli_channel"]
+
+    def assert_selected_runtime_root(command: str) -> None:
+        argv = shlex.split(command)
+        assert argv[0] == "loopx"
+        assert "--runtime-root" in argv
+        assert argv[argv.index("--runtime-root") + 1] == str(runtime)
+        assert "--registry" in argv
+        assert argv[argv.index("--registry") + 1] == str(registry_path)
+
     assert cli_channel["next_cli_actions"]
-    assert all(
-        action.startswith(command_prefix)
-        for action in cli_channel["next_cli_actions"]
-    )
+    for action in cli_channel["next_cli_actions"]:
+        assert_selected_runtime_root(action)
     settlement_plan = cli_channel["settlement_plan"]
-    assert all(
-        step["command_template"].startswith(command_prefix)
+    settlement_commands = [
+        step["command_template"]
         for step in settlement_plan["ordered_steps"]
         if "command_template" in step
-    )
+    ]
+    assert settlement_commands
+    for command in settlement_commands:
+        assert_selected_runtime_root(command)
 
 
 def test_first_class_runtime_profiles_fit_thin_prompt_budget_and_cli_round_trip(

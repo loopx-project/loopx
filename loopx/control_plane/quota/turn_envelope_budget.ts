@@ -15,7 +15,7 @@ const SECTION_FIELDS: Record<string, Section> = {
   replan_action_packet: "action", response_plan: "action",
   boundary: "boundary", execution_policy: "boundary", writeback: "writeback",
   scheduler: "scheduler", contract_capsule: "contracts",
-  agent_context: "context", task_orchestration_contract: "context",
+  agent_context: "context", work_context: "context", task_orchestration_contract: "context",
 };
 
 function sectionBytes(envelope: JsonObject): Record<Section, number> {

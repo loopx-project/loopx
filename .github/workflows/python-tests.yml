@@ -6,6 +6,9 @@ on:
   # Inert until the main ruleset enables a merge queue; queue runs are full.
   merge_group:
   workflow_dispatch:
+  schedule:
+    # Complete default-branch qualification and next-Node probe, independent of pushes.
+    - cron: "17 20 * * *"
   push:
     branches:
       - main
@@ -29,8 +32,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: python-tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 env:
   LOOPX_USAGE_PING: "0"
@@ -41,6 +44,7 @@ jobs:
     timeout-minutes: 3
     outputs:
       core_tests: ${{ steps.classify.outputs.core_tests }}
+      backend_tests: ${{ steps.classify.outputs.backend_tests }}
       change_kind: ${{ steps.classify.outputs.change_kind }}
       python_tests: ${{ steps.classify.outputs.python_tests }}
       stage2c_tests: ${{ steps.classify.outputs.stage2c_tests }}
@@ -80,7 +84,7 @@ jobs:
               summary.write("## CI job exemptions\n\n")
               summary.write(f"Change kind: **{plan['change_kind']}**; Python shards: **{plan['python_shards']}**.\n\n")
               summary.write(plan['reason'] + ".\n\n")
-              summary.write(f"Python: {plan['python_tests']}; Stage2c: {plan['stage2c_tests']}; frontend: {plan['presentation_tests']}.\n\n")
+              summary.write(f"Backend: {plan['backend_tests']}; Python: {plan['python_tests']}; Stage2c: {plan['stage2c_tests']}; frontend: {plan['core_tests']}; freshness: {plan['presentation_tests']}.\n\n")
               summary.write(plan["coverage_scope"] + ". Unknown/mixed changes and main run full. Label ci:full forces full qualification.\n")
           PY
       - uses: actions/upload-artifact@v7
@@ -146,7 +150,7 @@ jobs:
 
   kernel-static-checks:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.backend_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -197,13 +201,16 @@ jobs:
 
       - name: Qualify agent-facing CLI output
         env:
-          LOOPX_CLI_OUTPUT_BASE_REF: origin/${{ github.event.pull_request.base.ref || 'main' }}
+          # Compare the tested revision to its event base, even after main moves
+          # while this run is queued. Pin the selector's main ref as well.
+          LOOPX_CLI_OUTPUT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          LOOPX_CLI_OUTPUT_MAIN_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
         run: python examples/control_plane/cli-output-budget-regression-smoke.py
 
   typescript-core:
     name: typescript-core (${{ matrix.shard }}/3)
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.backend_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -259,7 +266,7 @@ jobs:
 
   typescript-coverage:
     needs: [changes, typescript-core]
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.backend_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -300,7 +307,7 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -355,21 +362,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Require kernel and Dashboard qualification
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Require the planned backend and Dashboard qualification
         env:
-          BROWSER_RESULT: ${{ needs.chat-bundle-browser.result }}
-          DASHBOARD_RESULT: ${{ needs.dashboard-acceptance.result }}
-          KERNEL_RESULT: ${{ needs.kernel-static-checks.result }}
-          TYPESCRIPT_RESULT: ${{ needs.typescript-coverage.result }}
-        run: |
-          test "$KERNEL_RESULT" = success
-          test "$TYPESCRIPT_RESULT" = success
-          test "$DASHBOARD_RESULT" = success
-          test "$BROWSER_RESULT" = success
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python scripts/ci/review_gate.py verify-core
 
   node-minimum-compatibility:
     needs: changes
-    if: needs.changes.outputs.core_tests == 'true'
+    if: needs.changes.outputs.backend_tests == 'true'
     runs-on: ubuntu-latest
     # The full suite runs under this exact Node version in typescript-core.
     timeout-minutes: 10
@@ -394,9 +398,9 @@ jobs:
 
   node-forward-compatibility:
     needs: changes
-    # The unsharded full suite outlasts a PR's qualification window, so the
-    # non-blocking probe runs on main and on demand where it can finish.
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.core_tests == 'true'
+    # Probe the future runtime once per night or on demand, outside the PR/main
+    # critical path. The supported runtime still runs on every full candidate.
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.backend_tests == 'true'
     continue-on-error: true
     runs-on: ubuntu-latest
     # This runs the full core conformance suite. Allow forward-runtime/runner
@@ -419,7 +423,10 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # All four shards were still progressing at 83-94% when the 45m job
+    # deadline cancelled run 37916979857. Reserve setup/reporting headroom
+    # without changing test-level deadlines, collection or worker count.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -468,7 +475,7 @@ jobs:
         # Without timing history least_duration alternates equal-weight tests.
         # Each runner retains the measured two-worker pool.
         run: >-
-          python -m pytest -q -n 2 -m "not stage2c_e2e"
+          python -m pytest -v -n 2 -m "not stage2c_e2e"
           --splits 4 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1

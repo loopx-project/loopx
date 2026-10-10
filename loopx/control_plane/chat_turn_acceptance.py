@@ -16,6 +16,10 @@ CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA = "loopx_chat_turn_acceptance_v0"
 TERMINAL_TURN_STATUSES = {"completed", "interrupted", "timed_out", "failed"}
 
 
+class ManagedTurnReplayConflictError(ValueError):
+    """A replay conflicts with the durably accepted turn identity or state."""
+
+
 def _sha256(value: str) -> str:
     return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
 
@@ -192,7 +196,7 @@ def _raise_rejection(result: dict[str, Any]) -> None:
     if code in {"session_not_found", "session_closed"}:
         raise KeyError("chat session was not found")
     if code == "request_conflict":
-        raise ValueError(
+        raise ManagedTurnReplayConflictError(
             "client_turn_id already belongs to a different request"
         )
     if code == "active_turn_conflict":
@@ -203,7 +207,9 @@ def _raise_rejection(result: dict[str, Any]) -> None:
     if code == "original_request_unavailable":
         raise ValueError("client_turn_id original request is unavailable")
     if code == "durable_state_conflict":
-        raise ValueError("chat turn acceptance state is inconsistent")
+        raise ManagedTurnReplayConflictError(
+            "chat turn acceptance state is inconsistent"
+        )
     raise ValueError("chat turn acceptance returned an unsupported rejection")
 
 

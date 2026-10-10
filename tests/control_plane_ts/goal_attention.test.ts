@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {boundGoalAttention, projectGoalAttention} from "../../loopx/control_plane/presentation/goal_attention.ts";
 
 const gate = {todo_id: "todo_gate", role: "user", task_class: "user_gate",
@@ -40,8 +41,8 @@ test("separate identities survive same titles; redaction and overflow stay expli
   ], blockers: []});
   assert.equal(result.items.length, 4);
   assert.equal(result.items[2].request, null);
-  assert.equal(result.items[2].incomplete[0].reason_code, "content_redacted");
-  assert.equal(result.items[3].incomplete[0].reason_code, "content_overflow");
+  assert.equal((result.items[2].incomplete as JsonObject[])[0].reason_code, "content_redacted");
+  assert.equal((result.items[3].incomplete as JsonObject[])[0].reason_code, "content_overflow");
 });
 
 test("bounds preserve known omitted work and never let a foreign Goal supply terms", () => {
@@ -74,4 +75,40 @@ test("the whole Turn is bounded and later owner decisions outrank earlier inform
   assert.deepEqual((result.goals[1].attention as typeof goals[0]["attention"]).coverage,
     {known: 10, included: 0, omitted: 10});
   assert.throws(() => boundGoalAttention({goals, limit: 0}));
+});
+
+test("directory previews bound nested bodies while exact identities and full input survive", () => {
+  const long = "📚".repeat(5000) + " Do not authorize the release before review";
+  const full = {...blocked, task: {...blocked.task, text: long, note: long},
+    cause: long, impact: long, recovery_condition: {satisfied: false, detail: long},
+    delivery: {state: "pending", receipt: long}};
+  const goal = {goal_id: "alpha", quality: "stale", agents: [{agent_id: "worker"}],
+    attention: {status: "read", items: [{todo_id: "todo_gate", owner_must_act: true,
+      blocker: full, request: {request_id: "todo_gate", text: gate.text, reason: long}}],
+    coverage: {known: 3, included: 1, omitted: 2}}};
+  const original = structuredClone(goal);
+  const preview = boundGoalAttention({goals: [goal], preview: true}).goals[0];
+  const attention = preview.attention as JsonObject;
+  const item = (attention.items as JsonObject[])[0];
+  assert.deepEqual(item.read_reference, {view: "todos", goal_id: "alpha", todo_id: "todo_gate"});
+  assert.equal(item.owner_must_act, true);
+  assert.equal((item.blocker as JsonObject).blocker_revision, full.blocker_revision);
+  assert.equal((item.blocker as JsonObject).responsible_party, "owner");
+  assert.equal(((item.blocker as JsonObject).task as JsonObject).content_truncated, true);
+  assert.equal(attention.details_omitted, true);
+  assert.deepEqual(attention.coverage, goal.attention.coverage);
+  assert.equal(preview.quality, "stale");
+  assert.deepEqual(preview.agents, goal.agents);
+  assert.ok(JSON.stringify(preview).length < 1600);
+  assert.ok(!JSON.stringify(preview).includes("Do not authorize"));
+  assert.deepEqual(goal, original);
+  assert.deepEqual(boundGoalAttention({goals: [goal]}).goals[0], original);
+});
+
+test("preview retains unknown source status and omitted work without claiming a read", () => {
+  const attention = {status: "unavailable", reason: "source_missing", items: [],
+    coverage: {known: 4, included: 0, omitted: 4}};
+  const result = boundGoalAttention({goals: [{goal_id: "alpha", attention}], preview: true});
+  assert.deepEqual(result.goals[0].attention, {...attention, details_omitted: true});
+  assert.throws(() => boundGoalAttention({goals: [], preview: "true"}));
 });

@@ -1,14 +1,23 @@
 ---
 name: loopx-project
-description: Use when connecting a repository or project goal document to LoopX, maintaining project-local goal state, refreshing stale dashboard status, syncing local projects into the shared global registry, or diagnosing LoopX CLI/PATH/status/history issues across multiple repos. For registering durable project materials such as Lark/wiki/design docs, prefer the narrower loopx-doc-registry skill.
+description: "Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. Ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry."
 ---
 
 # LoopX Project Workflow
 
-Use this skill when the task mentions LoopX, loopx, a project goal
-document, multi-project dashboard/status, stale latest run,
-`.loopx/registry.json`, `.codex/goals`, `refresh-state`,
-`sync-global`, or connecting a new repo. If the task is mainly about reading,
+Use this skill when the requested operation changes or diagnoses the project
+lifecycle, Goal configuration, registry routing, or status projection. A LoopX
+mention, registry path, or routine `refresh-state` command in an admitted task
+does not by itself select the project lifecycle workflow.
+
+For ordinary task execution, follow the current `interaction_contract`, its
+required reads and ordered settlement commands. Do not repeat onboarding,
+registry synchronization, or lifecycle discovery merely to execute that packet.
+This routing rule does not replace fresh admission, lease checks, required
+reads, or repair instructions. A missing or contradictory contract still needs
+the relevant diagnosis; an explicit request to use this skill still applies.
+
+If the task is mainly about reading,
 remembering, recording, indexing, or registering a durable project material,
 load `loopx-doc-registry` and use that narrower workflow first.
 
@@ -578,7 +587,11 @@ scheduling policy, not delivery permission. Codex CLI TUI and Claude Code loops
 should run the final quota/replan check from `scheduler_hint` before applying
 their `after_limit`; if the guard changes or returns `run_now`, follow the new
 quota contract instead of stopping. App-hosted heartbeat workers should
-search/use `automation_update` when available. If
+search/use `automation_update` when available. A bootstrap RRULE is the initial
+host cadence; `min_interval_minutes` is a floor, not a fixed recurring interval.
+Keep ACTIVE while applying the current wait/backoff recommendation. Only an
+explicit current fixed-cadence instruction overrides that recommendation; record
+the conflict rather than silently treating a bootstrap preference as an override. If
 `scheduler_hint.action=stop_until_explicit_resume` and
 `scheduler_hint.app_automation.host_action=pause_or_delete_current_heartbeat`, call
 `automation_update` once to pause the current heartbeat (delete only when the

@@ -471,8 +471,9 @@ def test_registered_source_tokens_survive_owned_native_prepare_and_store_readbac
         assert refused["ok"] is False
 
 
+@pytest.mark.parametrize("deadline", [None, 5])
 def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(
-    tmp_path: Path,
+    tmp_path: Path, deadline,
 ) -> None:
     executable = tmp_path / "fake-codex-operation"
     executable.write_text(FAKE_SERVER)
@@ -485,7 +486,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
         "model": "test-model",
         "reasoning_effort": "xhigh",
         "source_route": {"host_surface": "codex-app", "thread_id": "source-one"},
-        "timeout_seconds": 5,
+        "timeout_seconds": deadline,
     }
     first = run_codex_operation_host(_request(), **options)
     assert first["result_kind"] == "wait"

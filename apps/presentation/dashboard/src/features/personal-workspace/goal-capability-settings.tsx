@@ -10,13 +10,14 @@ import {
   type GoalConfigurationPreview,
   type GoalConfigurationPartialWrite,
 } from "../../data/chat";
-import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../../data/capability-configuration";
+import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
+import { ContentReferenceWorkbench } from "./content-reference-workbench";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoalNotification } from "./personal-workspace-model";
 
 type CapabilityCatalogProps = Readonly<{
@@ -34,6 +35,23 @@ type CapabilityMutationState = Readonly<{
   partialWrite: GoalConfigurationPartialWrite | null;
   preview: GoalConfigurationPreview | null;
 }>;
+
+function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>) {
+  const writable = projectEditableCapabilityConfiguration(selected.configuration_editor, draft, selected.default);
+  if (selected.capability_id === "pull_request_review" && !Object.hasOwn(selected.current ?? {}, "owner_logins")
+    && JSON.stringify(writable.owner_logins ?? []) === JSON.stringify(selected.effective_configuration?.configuration?.owner_logins ?? [])) {
+    delete writable.owner_logins;
+  }
+  if (selected.capability_id === "pull_request_review"
+    && !Object.hasOwn(selected.current ?? {}, "wait_for_ci") && !Object.hasOwn(selected.current ?? {}, "review_order")) {
+    const effective = selected.effective_configuration?.configuration;
+    if (effective && writable.wait_for_ci === effective.wait_for_ci && writable.review_order === effective.review_order) {
+      delete writable.wait_for_ci;
+      delete writable.review_order;
+    }
+  }
+  return writable;
+}
 
 function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   goalId: string;
@@ -59,13 +77,13 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   useLayoutEffect(() => {
     setEditorMode("guided");
     setJsonDraft("");
+    const current = (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
+      ?? selected?.effective_configuration?.configuration ?? selected?.default;
     setMutation({
       busy: null,
       draft: projectEditableCapabilityConfiguration(
         selected?.configuration_editor ?? { fields: [] },
-        selected?.current
-        ?? selected?.effective_configuration?.configuration
-        ?? selected?.default,
+        selected?.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current) : current,
         selected?.default,
       ),
       partialWrite: null,
@@ -79,7 +97,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
     setError(null);
     try {
-      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration);
+      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration));
       setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
@@ -93,11 +111,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
-      const writableDraft = projectEditableCapabilityConfiguration(
-        selected.configuration_editor,
-        mutation.draft,
-        selected.default,
-      );
+      const writableDraft = goalWriteDraft(selected, mutation.draft);
       const result = await applyGoalConfiguration(
         goalId,
         selected.capability_id,
@@ -256,10 +270,10 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
       />
 
       <article aria-label={localizedSelected.display_name} className="personal-capability-detail" tabIndex={0}>
-        <CapabilityDetailHeader capability={selected} locale={locale}
-          source={localizedSelected.effective_configuration?.source} />
-        <CapabilityEditorStatus available={editorAvailable} t={t}
-          description={readOnlyReason} />
+        {localizedSelected.capability_id === "content_ops" ? <h2>{localizedSelected.display_name}</h2> : <CapabilityDetailHeader capability={selected} locale={locale}
+          source={localizedSelected.effective_configuration?.source} />}
+        {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
+          description={readOnlyReason} />}
 
         {localizedSelected.capability_id === "lark_event_inbox" ? (
           <section className="personal-capability-linked-setting">
@@ -301,7 +315,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
           {editorMode === "guided" ? <section className="personal-capability-field-summary">
             <CapabilityConfigurationFields
               disabled={Boolean(busy)}
-              copy={localizedCapabilityFieldCopy(locale)}
+              copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
               editor={localizedSelected.configuration_editor}
               onChange={changeDraft}
               value={draft}
@@ -330,10 +344,10 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
             </button>
           </footer>
         ) : null}
-        <CapabilityConfigurationSummary key={selected.capability_id} values={[
+        {localizedSelected.capability_id !== "content_ops" ? <CapabilityConfigurationSummary key={selected.capability_id} values={[
           { label: t("capabilities.goalValue"), value: localizedSelected.current },
           { label: t(localizedSelected.machine_current ? "capabilities.machineValue" : "capabilities.defaultValue"), value: localizedSelected.machine_current ?? localizedSelected.default },
-        ]} t={t} />
+        ]} t={t} /> : null}
       </article>
     </div>
   );

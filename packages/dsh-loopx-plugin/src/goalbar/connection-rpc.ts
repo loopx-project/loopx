@@ -20,6 +20,11 @@ export const GOALBAR_SHARED_API_CHANNEL = '/api' as const
 const GOALBAR_SHARED_API_ENDPOINT = 'loopx.goalbar' as const
 
 type ConnectionRpcResult = Awaited<ReturnType<ConnectionRpcHandler>>
+// The business adapter consumes no Peer identity. Connection owns admission;
+// its 0.2 RPC carrier may supply a fourth Peer argument to this same callback.
+type GoalBarConnectionHandler = (
+  endpoint: string, payload: unknown, signal: AbortSignal,
+) => ReturnType<ConnectionRpcHandler>
 
 function badRequestCarrier(): ConnectionRpcResult {
   return {
@@ -57,7 +62,7 @@ function invalidEnvelope(rpcId = 'invalid-request'): Response {
 
 async function handleSharedApiRequest(
   request: Request,
-  handler: ConnectionRpcHandler,
+  handler: GoalBarConnectionHandler,
 ): Promise<Response> {
   if (request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
     !== 'application/json') {
@@ -107,7 +112,7 @@ async function handleSharedApiRequest(
  */
 export function createGoalBarConnectionHandler(
   service: GoalBarServiceHandle,
-): ConnectionRpcHandler {
+): GoalBarConnectionHandler {
   return async (endpoint, payload, signal) => {
     let request: GoalBarRequestV1 | undefined
     try {

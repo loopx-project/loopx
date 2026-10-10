@@ -1093,6 +1093,15 @@ def append_attention_queue_item_header_markdown(
     active_state_action = markdown_scalar(item.get("active_state_next_action") or "")
     if active_state_action:
         lines.append(f"  - active_state_next_action: {active_state_action}")
+    routes = item.get("agent_next_actions")
+    for route in routes if isinstance(routes, list) else []:
+        if isinstance(route, dict):
+            lines.append(
+                f"  - agent_next_action: {markdown_scalar(route.get('agent_id') or '')} "
+                f"{markdown_scalar(route.get('todo_id') or '')} {markdown_scalar(route.get('text') or '')}"
+            )
+            if route.get("next_step"):
+                lines.append(f"    - next_step: {markdown_scalar(route['next_step'])}")
     latest_run_action = markdown_scalar(item.get("latest_run_recommended_action") or "")
     if latest_run_action:
         lines.append(f"  - latest_run_recommended_action: {latest_run_action}")
@@ -1165,6 +1174,8 @@ def _append_project_asset_agent_lane_markdown(
             f"agent={agent} todo_id={todo_id} selected_by={selected_by} "
             f"confidence={confidence} source=agent_lane_next_action action={action}"
         )
+        if agent_lane_next_action.get("next_step"):
+            lines.append(f"      - next_step: {markdown_scalar(agent_lane_next_action['next_step'])}")
     if agent_lane_frontier_hint:
         lines.append(
             "    - agent_lane_frontier_hint: "

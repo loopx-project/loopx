@@ -52,6 +52,10 @@ def shadow_management_directory(runtime_root: Path, goal_id: str) -> Path:
     return runtime_root / "authority-transition" / "file-v0" / f"shadow-management-{digest}"
 
 
+def runtime_artifact_lock_target(runtime_root: Path, goal_id: str) -> Path:
+    return shadow_management_directory(runtime_root, goal_id) / "runtime-artifacts"
+
+
 def shadow_maintenance_lock_target(runtime_root: Path, goal_id: str) -> Path:
     return shadow_management_directory(runtime_root, goal_id) / "maintenance"
 

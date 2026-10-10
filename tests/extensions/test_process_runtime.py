@@ -52,6 +52,87 @@ def test_zero_grace_reaps_leader_when_owned_group_is_already_gone(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize("grace_seconds", [0, 1])
+def test_darwin_empty_group_permission_error_is_confirmed_before_acceptance(
+    monkeypatch: pytest.MonkeyPatch, grace_seconds: float,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = 0
+    signals = []
+
+    def killpg(pid: int, sig: int) -> None:
+        signals.append(sig)
+        if sig == signal.SIGKILL:
+            raise PermissionError("group gone")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "killpg", killpg)
+    snapshot = Mock(return_value=subprocess.CompletedProcess([], 0, "1\n6789\n", ""))
+    monkeypatch.setattr(subprocess, "run", snapshot)
+    terminate_process_tree(process, grace_seconds)
+    assert signals[-1] == signal.SIGKILL
+    snapshot.assert_called_once()
+    process.kill.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize("platform,leader_status,returncode,groups", [
+    ("darwin", None, 0, "1\n"),
+    ("darwin", 0, 0, "1\n12345\n"),
+    ("darwin", 0, 1, "1\n"),
+    ("darwin", 0, 0, ""),
+    ("darwin", 0, 0, "invalid\n"),
+    ("linux", 0, 0, "1\n"),
+])
+def test_permission_error_stays_failure_when_owned_group_exit_is_unproven(
+    monkeypatch: pytest.MonkeyPatch, platform: str,
+    leader_status: int | None, returncode: int, groups: str,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = leader_status
+
+    def denied(_pid: int, _sig: int) -> None:
+        raise PermissionError("cannot signal owned group")
+
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(os, "killpg", denied)
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=
+        subprocess.CompletedProcess([], returncode, groups, "")))
+    with pytest.raises(PermissionError, match="cannot signal"):
+        terminate_process_tree(process, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+def test_timeout_force_kills_descendant_that_ignores_term(tmp_path: Path) -> None:
+    ready = tmp_path / "ready"
+    marker = tmp_path / "descendant-effect"
+    child_code = (
+        "from pathlib import Path; import signal,time; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        f"Path({str(ready)!r}).touch(); time.sleep(3); "
+        f"Path({str(marker)!r}).touch()"
+    )
+    provider_code = (
+        "import subprocess,sys,time; from pathlib import Path; "
+        f"subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
+        f"ready=Path({str(ready)!r})\n"
+        "while not ready.exists(): time.sleep(.01)\n"
+        "print('ready',flush=True); time.sleep(5)"
+    )
+    result = run_capped_process(
+        [sys.executable, "-c", provider_code], stdin=b"{}",
+        timeout_seconds=2, output_limit_bytes=1024,
+        termination_grace_seconds=.1,
+    )
+    assert ready.exists()
+    assert result.failure_kind == "timeout"
+    time.sleep(1.5)
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
 def test_timeout_terminates_provider_descendants(tmp_path: Path) -> None:
     marker = tmp_path / "descendant-effect"
     child_code = (
@@ -196,3 +277,18 @@ def test_a_spewing_provider_on_stderr_is_its_own_failure() -> None:
 
     assert result.failure_kind == "stderr_too_large"
     assert result.stdout == b""
+
+
+def test_no_execution_deadline_preserves_completion_and_output_budget():
+    result = run_capped_process(
+        [sys.executable, "-c", "import time;time.sleep(.1);print('done')"],
+        stdin=b"", timeout_seconds=None, output_limit_bytes=1024,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == b"done"
+    assert result.failure_kind is None
+    limited = run_capped_process(
+        [sys.executable, "-c", "import sys,time;print('x'*2000,flush=True);time.sleep(30)"],
+        stdin=b"", timeout_seconds=None, output_limit_bytes=1024,
+    )
+    assert limited.failure_kind == "response_too_large"

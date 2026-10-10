@@ -12,7 +12,7 @@ from ...paths import (
     resolve_runtime_root,
     select_default_runtime_root,
 )
-from ..todos.active_state_editing import atomic_write_state_text as _atomic_write_text
+from ..runtime.document_io import atomic_write_state_text as _atomic_write_text
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from ..goals.source_session_services import (
     FreshSourceSessionRegistration,

@@ -158,6 +158,12 @@ Agent-labelled Topic for each route. Users send requests inside the matching
 Topic. A group-level message with more than one eligible Agent route is
 deliberately rejected as ambiguous instead of guessing an Agent from prose.
 
+For interactive replacement and busy-listener qualification, use the
+[native realtime conversation readiness guide](realtime-conversation-readiness.md).
+The long-lived listener is independent of a Goal's periodic heartbeat;
+independent conversations can progress concurrently, while a busy conversation
+still waits for its current answer before admitting a follow-up.
+
 For a periodic-report request, semantic activation belongs to the Agent. After
 reading an exact item, the Agent calls `loopx periodic-report request` with its
 `message_id`. The Lark adapter validates binding and addressing evidence only;
@@ -252,6 +258,24 @@ messages; use `configured_chat_all` for complete collaboration threads:
 }
 ```
 
+Native owner-bound private Chat enables `Get`/`OnIt` by default and retains the
+received receipt. Use `loopx chat --no-private-reactions` to disable new private
+feedback writes. Native Core admission and active Turn observations drive these
+provider effects. Successful received feedback avoids a duplicate admission
+message; an observed queued Turn still gets a concise waiting notice. Missing
+reaction permission or explicit opt-out retains a text receipt. Existing attempts
+recover their original text. Intermediate replies pass `finalize_reactions=False`; their
+verified delivery does not clean processing feedback. Final delivery, including
+recovery of a prior verified answer, still owns cleanup.
+
+Native private replies use the shared Markdown `post` renderer, preserving lists,
+links, quotes and code. Recovery verifies the original attempt's format, including
+plain-text replies sent before this default changed, without another send. Local
+inline links keep their readable labels rather than linking to redaction tokens;
+machine paths remain private. This does not deliver local files or images.
+This presentation default does not change model configuration, upstream thread,
+audience, sandbox grant or manager configuration.
+
 For every reply-enabled Inbox, a missing `reply.received_reaction_emoji`
 defaults to `Get`. Set it explicitly to the empty string to disable this
 provider write. The reaction belongs to the same explicit sender boundary as
@@ -267,11 +291,13 @@ classification remain independent scheduling and response decisions.
 The hook records its first read in owner-private state independently of this
 optional provider write. Thus a message captured earlier by the realtime
 collector still requires Agent reading even when reactions are explicitly
-disabled. Failed reactions are retried from this durable pending-read set while
-the message remains unsettled, including after the bounded history cursor has
-moved beyond the message timestamp. Provider failure increments compact
-failure accounting but does not discard the Inbox event or grant execution
-authority. Replay uses one aggregate bounded attempt budget per turn-start
+disabled. The durable pending-read set remains recoverable after the bounded
+history cursor moves beyond the message timestamp. A known provider reaction id
+recovers its local receipt without another create; an uncertain provider outcome
+keeps its prepared operation and blocks duplicate creation. Previously unattempted
+messages can still advance through the bounded round-robin selection. Provider
+failure increments compact accounting but does not discard the Inbox event or
+grant execution authority. Replay uses one aggregate bounded attempt budget per turn-start
 dispatch. A collector-scoped private cursor rotates route priority across
 dispatches, while each route keeps its own private round-robin message cursor.
 The public receipt exposes only attempt and deferred counts, never cursor or

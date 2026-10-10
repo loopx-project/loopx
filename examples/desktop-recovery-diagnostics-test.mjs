@@ -42,35 +42,7 @@ test('installer failure is actionable and clipboard denial leaves selectable tex
   await elements.get('#copy-diagnostics').onclick();
   assert.equal(elements.get('#diagnostics').selected, true);
 });
-test('a different installed runtime asks before anything is replaced', () => {
-  const {context, elements} = page();
-  const decision = {
-    phase: 'runtime_pairing_required',
-    details: {
-      code: 'runtime_pairing_required',
-      installed_revision: 'a'.repeat(40),
-      bundled_revision: 'b'.repeat(40),
-      installed_identity_available: true,
-      revision_matches: false,
-    },
-  };
-  runInNewContext('render(packet)', Object.assign(context, {packet: decision}));
-  assert.equal(elements.get('#pairing').hidden, false);
-  assert.equal(elements.get('#pairing-installed').textContent, 'a'.repeat(12));
-  assert.equal(elements.get('#pairing-bundled').textContent, 'b'.repeat(12));
-  assert.match(elements.get('#pairing-status').textContent, /本地服务需要两者一致/);
-  // Neither choice is a background install: both stay available and neither
-  // runs before the operator picks one.
-  assert.equal(elements.get('#pairing-update').disabled, false);
-  assert.equal(elements.get('#pairing-align').disabled, false);
-  // The chooser stays up while the chosen action runs, and retires only when
-  // services connect.
-  runInNewContext('render({phase:"installing_runtime",details:{}})', context);
-  assert.equal(elements.get('#pairing').hidden, false);
-  runInNewContext('render({phase:"connecting",details:{service:"chat"}})', context);
-  assert.equal(elements.get('#pairing').hidden, true);
-});
-test('the pairing decision reaches diagnostics without private detail', () => {
+test('legacy pairing state reaches diagnostics without private detail', () => {
   const {context, elements} = page();
   context.packet = {
     app_version: '1.0.5',
@@ -93,4 +65,43 @@ test('the pairing decision reaches diagnostics without private detail', () => {
   assert.equal(value.failure_phase, 'runtime_pairing_required');
   assert.equal(value.revision_matches, false);
   assert.ok(!JSON.stringify(value).includes('PRIVATE'));
+});
+
+test('terminal runtime identity failure stops waiting and opens recovery immediately', () => {
+  const {context, elements} = page();
+  const packet = {state:{phase:'runtime_required',details:{code:'runtime_identity_unavailable',bundled_repair_available:false}}};
+  runInNewContext('render(packet.state); renderStartup(packet); escalateFromSnapshot(packet.state)', Object.assign(context,{packet}));
+  assert.equal(elements.get('main').dataset.state,'error');
+  assert.equal(elements.get('#boot-elapsed').textContent,'等待恢复');
+  assert.equal(elements.get('.recovery').open,true);
+  assert.equal(elements.get('#repair').disabled,true);
+  assert.match(elements.get('#status').textContent,/App 保留当前安装/);
+});
+test('forgetting a discovery preference reconnects without installing a runtime', async () => {
+  const {context, elements} = page();
+  const calls=[];
+  context.window.__TAURI__={core:{invoke:async(command,args)=>{calls.push({command,args});return {phase:'connecting'};}}};
+  const packet={phase:'runtime_required',details:{bundled_repair_available:false}};
+  runInNewContext('render(packet)',Object.assign(context,{packet}));
+  assert.equal(elements.get('#repair').disabled,true);
+  assert.equal(calls.length,0,'rendering never installs or selects a runtime');
+  await elements.get('#forget-selection').onclick();
+  await Promise.resolve();
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].command,'desktop_update');
+  assert.equal(calls[0].args.action,'forget_runtime_selection');
+});
+
+test('an environment pin cannot be cleared by forgetting a preference', async () => {
+  const {context, elements} = page();
+  context.window.__TAURI__ = {core:{invoke:async () => ({
+    state:{phase:'runtime_required',details:{code:'runtime_identity_unavailable'}},
+    app_version:'1.2.4', runtime_selection:{explicit:true,remembered:true,bundled_repair_available:false},
+  })}};
+  await runInNewContext('refresh()', context);
+  assert.equal(elements.get('#forget-selection').hidden, true);
+  assert.match(elements.get('#update-status').textContent, /移除、修正 LOOPX_BIN 后重新打开 App/);
+  runInNewContext('render({phase:"error",details:{code:"update_network_failed"}})', context);
+  assert.equal(elements.get('#repair').disabled, true, 'an action response cannot discard known runtime ownership');
+  assert.equal(elements.get('#repair').disabled, true);
 });

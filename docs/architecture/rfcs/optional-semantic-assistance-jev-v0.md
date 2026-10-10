@@ -3,7 +3,7 @@
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Research proposal; a separate D1-only optional shadow implementation is proposed in Appendix A. No model qualification or automatic correction is established. The default-off sentinel capability and its recorded differential live in [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.md); those numbers do not prove implementation qualification or product adoption.
-- **Created:** 2026-09-19. **Last normative revision:** 2026-09-20.
+- **Created:** 2026-09-19. **Last normative revision:** 2026-10-08.
 - **Implementation baseline:** `9f1916960306b3650d795895b89f331eeae2516e`; source ownership and trigger behavior rechecked at PR revision `27812bd0fb437f831a541b564bcb5be8a96ff77e`. Historical upstream inspection is recorded in Appendix A, not a whole-system certification.
 - **Authors / owners:** Proposal author; existing domain maintainers own any direction selected. No new runtime authority or assigned implementation owner.
 - **Language mirror:** [中文版](optional-semantic-assistance-jev-v0.zh-CN.md)
@@ -193,6 +193,69 @@ Bind the approved goal/acceptance revision, attributable work identity, host-rea
 For D1, study goal relationship and evidence increment separately. Preserve necessary prerequisites, legitimate blocked waiting and insufficient evidence without forcing them into drift. These need not be a single mutually exclusive enum: waiting describes work state, while alignment describes a relation. Missing prior evidence requires an unknown novelty result. New unrelated work may have increment while remaining off goal.
 
 Use artifact-based input as the primary comparison. Keep author claims separate and evaluate absent/neutral/praising/critical self-description as an ablation on the same artifacts. Measure classification and probability shifts; do not assert that labeling claims untrusted eliminates influence, or that removing all explanations is universally best. Any context needed to explain a prerequisite must have attributable support. Source text remains untrusted even after author summaries are removed.
+
+#### Detection result and handoff to the owning rule
+
+An assessment must identify a falsifiable question: which declared criterion,
+claim or dependency is challenged, on which revision, and what observation would
+resolve the challenge. A run that uses valid tools, changes identifiers and
+passes unrelated tests can still preserve a wrong assumption. Conversely, a
+negative experiment or necessary prerequisite can advance the Goal. Tool success,
+activity, novelty and author confidence cannot decide between those cases.
+
+Keep three responsibilities separate:
+
+1. **Acquire evidence.** Bind the current Goal/criterion basis, attributable
+   Turn and artifact versions, the relevant before/after observations and
+   verifier identity/result. Declare selected files, omitted dependencies,
+   truncation and missing history. A manually written assessment basis is not
+   automatically the canonical Goal acceptance revision. An exact read proves
+   provenance; a hash cannot prove content true or coverage complete.
+2. **Assess the bounded question.** Report the actual dimensions and unresolved
+   evidence. Goal relationship and evidence increment remain separate: work can
+   be off Goal and produce new evidence. A combined drift signal of `false`
+   means that signal's intervention condition did not hold, not that all work
+   was correct or on Goal. Missing or stale evidence remains unevaluated or
+   uncertain under the existing receipt contract; it is not a negative finding
+   and cannot clear a confirmed domain failure.
+3. **Let the existing owner decide the consequence.** Shadow assessment is
+   advisory; an explicitly enabled `assist` policy may require the existing
+   replan obligation from a qualified signal. That policy decision does not
+   establish that a business criterion failed. A current domain validator or
+   authorized review may establish that
+   a named criterion is violated; it must retain its evidence, scope and
+   authority. The existing acceptance, replan, dependency or effect owner then
+   decides refusal, repair, replan or reconciliation. No assessment score grants
+   stop, mutation, rollback or completion authority.
+
+For an authorized caller, evaluate at the smallest useful boundary before a
+consequential result is accepted, consumed by another task or admitted as a
+protected effect. A final-only review cannot contain all earlier effects; a
+per-token/per-tool model reviewer is not required. Declare the evidence window,
+deadline, cost budget and missed-boundary behavior. Keep mandatory deterministic
+checks effective when optional assessment is unavailable. Measure detection
+delay, false intervention against legitimate work and missed failures. Sample
+cases that never generated an alert as well as alerted cases; alert-only review
+cannot estimate missed failures.
+
+Source recheck at `44931b6d22a50b949d43354e6ea498fb6b68d231`:
+the optional `packages/loopx-jev` capture reads a declared file set and its net
+change; it does not observe every intermediate assertion. Core
+[`external_progress_review_trigger`](../../../loopx/control_plane/work_items/external_progress_review.py)
+consumes attributable receipts at a pinned assessment revision. In `assist`, a
+qualified streak can open the existing replan obligation; a newer completed
+non-triggering verdict can end that streak. This is the current signal policy,
+not a business-correctness certificate. The
+[`progress-review` contract](../../../loopx/capabilities/progress_review/README.md)
+and its owner retain off/shadow/assist compatibility. Any change to the combined
+signal or its clearing policy needs explicit disclosure and counterexamples;
+this design does not silently change it.
+
+The downstream contract is [evidence invalidation in shared work](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers)
+and [recovery qualification](composable-state-machines-recovery-verification-v0.md#detection-containment-and-recovery-evidence).
+First connect existing verifier results and dependency readback to those owners.
+Additional model inference is conditional on the comparison in section 6; it is
+not a prerequisite for fixing a demonstrated deterministic gap.
 
 ### 5.3 Provider facts and deferred mechanisms
 

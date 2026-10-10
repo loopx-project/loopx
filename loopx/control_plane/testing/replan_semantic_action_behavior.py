@@ -534,7 +534,50 @@ def _is_replan_successor_create(command: str) -> bool:
     )
 
 
+def _required_explore_read_command(packet: Mapping[str, Any]) -> str | None:
+    """Accept only this fixture's current, scoped turn-start read contract."""
+    interaction = packet.get("interaction_contract")
+    agent_channel = (
+        interaction.get("agent_channel")
+        if isinstance(interaction, Mapping)
+        else None
+    )
+    raw_reads = (
+        agent_channel.get("required_reads")
+        if isinstance(agent_channel, Mapping)
+        else None
+    )
+    if not isinstance(raw_reads, list):
+        raw_reads = packet.get("required_reads")
+    reads = [
+        read for read in raw_reads or []
+        if isinstance(read, Mapping) and read.get("kind") == "explore_turn_context"
+    ]
+    if not reads:
+        return None
+    if not isinstance(reads, list) or len(reads) != 1:
+        raise ValueError("unexpected_command")
+    read = reads[0]
+    if not isinstance(read, Mapping) or (
+        read.get("kind") != "explore_turn_context"
+        or read.get("source") != "turn_start_capability_hook"
+        or read.get("ordering") != "before_work"
+    ):
+        raise ValueError("unexpected_command")
+    command = str(read.get("command") or "")
+    tokens = loopx_command_tokens(command) or []
+    if "explore" not in tokens or (
+        tokens[tokens.index("explore"):tokens.index("explore") + 2]
+        != ["explore", "turn-context"]
+        or argument_value(tokens, "--goal-id") != _FIXTURE_GOAL_ID
+        or argument_value(tokens, "--agent-id") != _FIXTURE_AGENT_ID
+    ):
+        raise ValueError("unexpected_command")
+    return command
+
+
 def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
+    _required_explore_read_command(packet)
     signature = quota_action_signature_document(packet)
     action = dict(signature.get("action") or {})
     user = dict(signature.get("user") or {})
@@ -550,9 +593,8 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
         or replan_action.get("decision") != "replan_required"
         or replan_action.get("obligation_id") != obligation.get("obligation_id")
         or context.get("delivery") != "host_projected"
-        or context.get("evidence_source") != "agent_scoped_evidence_log"
+        or context.get("evidence_source") != "compact_run_history"
         or dict(context.get("delivery_receipt") or {}).get("status") != "delivered"
-        or packet.get("required_reads") not in (None, [])
     ):
         raise ValueError("quota does not expose the semantic replan contract")
     if not (
@@ -1119,6 +1161,22 @@ def _dispatch_behavior_command(
 ) -> tuple[str, str, bool]:
     if _is_quota_guard(command):
         return _handle_quota_command(command, state), "quota_should_run", False
+    if state.quota_packet is not None and (
+        required := _required_explore_read_command(state.quota_packet)
+    ):
+        observed = any(step["kind"] == "explore_turn_context" for step in state.steps)
+        if shlex.split(command) == shlex.split(required):
+            if observed:
+                raise ValueError("repeated_explore_turn_context")
+            output = _execute_loopx(
+                command, fixture=state.fixture, turn_instance_id=state.turn_instance_id
+            )
+            context = json.loads(output)
+            if context.get("goal_id") != _FIXTURE_GOAL_ID or context.get("agent_id") != _FIXTURE_AGENT_ID:
+                raise ValueError("unexpected_command")
+            return output, "explore_turn_context", False
+        if not observed:
+            raise ValueError("required_explore_turn_context_missing")
     if (clock_output := _clock_output(command)) is not None:
         return _handle_clock_command(clock_output, state), "clock", False
     if _bounded_workspace_read_plan(command, fixture=state.fixture) is not None:
@@ -1137,7 +1195,7 @@ def _dispatch_behavior_command(
             "semantic_replan_writeback",
             True,
         )
-    if "evidence-log" in command:
+    if "history" in shlex.split(command):
         raise ValueError("manual_evidence_read_is_not_replan")
     raise ValueError("unexpected_command")
 
@@ -1150,6 +1208,10 @@ def _behavior_command_kind(
 
     if _is_quota_guard(command):
         return "quota_should_run"
+    if state.quota_packet is not None and (
+        required := _required_explore_read_command(state.quota_packet)
+    ) and shlex.split(command) == shlex.split(required):
+        return "explore_turn_context"
     if _clock_output(command) is not None:
         return "clock"
     if _bounded_workspace_read_plan(command, fixture=state.fixture) is not None:
@@ -1166,6 +1228,8 @@ def _behavior_command_kind(
 
 _EXPECTED_BEHAVIOR_FAILURES = frozenset(
     {
+        "repeated_explore_turn_context",
+        "required_explore_turn_context_missing",
         "repeated_quota_should_run",
         "repeated_clock",
         "semantic_action_before_quota",

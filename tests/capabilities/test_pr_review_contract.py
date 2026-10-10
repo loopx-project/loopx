@@ -125,6 +125,12 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
     ]
     assert "same normalized failing identity" in attribution["rule"]
     assert "merge readiness remains on hold" in attribution["rule"]
+    assert "not the union of all historical" in attribution["evidence_scope"]
+    assert "A later green run alone does not resolve intermittency" in attribution["evidence_scope"]
+    assert "explicit accepted contract" in attribution["evidence_scope"]
+    assert "without making completion" in requirements["validation_matrix"]["validation_source"]
+    assert "required means review evidence" in requirements["validation_matrix"]["validation_source"]
+    assert "only decisive coverage" in requirements["validation_matrix"]["validation_source"]
     assert "APPROVE when a required red check" in contract["verdict_policy"][
         "unrelated_validation_failure"
     ]
@@ -494,6 +500,12 @@ def test_public_cli_delivers_state_review_without_claiming_it_was_performed(caps
     ):
         assert obligation in budget_rule
     assert packet["pull_requests"]
+    instruction_rule = requirements["observable_semantics"]["decision_text_assessment"]
+    assert "decision_text_assessment" in requirements["observable_semantics"]["fields"]
+    assert instruction_rule["blocking_verdicts"] == ["unintended_drift", "not_yet_proven"]
+    for obligation in ("temporal ordering", "evidence provenance", "scope qualifiers",
+                       "Equal enums", "independent obligation", "limit increase"):
+        assert obligation in instruction_rule["rule"]
     reviewed_code = False
     for item in packet["pull_requests"]:
         if not item["review_action_kind"]:

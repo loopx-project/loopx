@@ -56,6 +56,20 @@ installing a deliberately different host profile. A later ambient `CODEX_HOME`
 does not overwrite it. Restore the original home to recover a home-mismatch
 gate; changing this variable is not a session-migration command.
 
+The LaunchAgent keeps service execution `CODEX_HOME` separate from
+`LOOPX_CHAT_CODEX_HOME`. Set both when a coordinator's workers resume in a
+different existing home from its Chat app-server. Install/restart preserves the
+recorded execution home when `CODEX_HOME` is omitted; an explicit value changes
+only that service setting. A fresh install without an execution selection uses
+the Chat home. Changing the Chat override no longer overwrites an existing
+worker profile. This affects macOS-managed Chat/delegation launches, leaves
+session-profile checks in force, and neither migrates sessions nor copies auth.
+
+中文：macOS 登录服务分别保存执行端 `CODEX_HOME` 与聊天端
+`LOOPX_CHAT_CODEX_HOME`。需要沿用不同的原会话时同时指定两者；升级或重启时未指定
+`CODEX_HOME` 就保留已安装的执行目录，新安装未指定则沿用聊天目录。只修改聊天目录
+不再覆盖已有 worker 配置；会话检查仍会拒绝不一致的恢复，不迁移历史或复制凭据。
+
 Sharing a host home does not by itself prove a SQLite lock failure. A desktop
 launcher should separate ordinary open (read-only identity/configuration checks)
 from offline account switching, migration, or rollback (exclusive ownership).

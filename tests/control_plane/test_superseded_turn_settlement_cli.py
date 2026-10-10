@@ -5,12 +5,33 @@ from pathlib import Path
 
 import pytest
 import test_declared_terminal_settlement_cli as declared
+import test_goal_handoff_mode as legacy
 import test_quota_settlement_cli as cli
 
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+from loopx.todos import supersede_goal_todo
 
 
-def _future_monitor(run, lease):
+@pytest.mark.parametrize("successors", [None, [], ["todo_existing_successor"]])
+def test_unpromoted_supersede_preserves_omitted_links_and_rejects_existing_links(
+    tmp_path: Path, successors: list[str] | None,
+) -> None:
+    registry, state = legacy._write_workspace(tmp_path)
+    todo = legacy._add_todo(registry, claimed_by=legacy.AGENT_A)
+    before = state.read_bytes()
+    arguments = dict(registry_path=registry, goal_id=legacy.GOAL_ID,
+                     todo_id=todo["todo_id"], agent_id=legacy.AGENT_A,
+                     reason="Retire the original approach.", successor_todo_ids=successors)
+    if successors:
+        with pytest.raises(ValueError, match="requires promoted canonical Todo authority"):
+            supersede_goal_todo(**arguments)
+        assert state.read_bytes() == before
+    else:
+        result = supersede_goal_todo(**arguments)
+        assert result["ok"] is True and result["superseded"] is True
+
+
+def _future_monitor(run, lease, *, link=True):
     due = "2099-01-01T00:00:00Z"
     code, added = run(
         "todo", "add", "--goal-id", cli.GOAL_ID, "--role", "agent",
@@ -19,9 +40,13 @@ def _future_monitor(run, lease):
         "--target-key", "existing-future-window", "--cadence", "1h",
         "--next-due-at", due, "--expires-at", "2099-01-02T00:00:00Z",
         "--claimed-by", cli.AGENT_ID, "--operation-id", "existing-future-monitor",
+        "--required-capability", "filesystem_read",
+        "--required-write-scope", "src/next.py", "--required-write-scope", "src/checks.py",
     )
     assert code == 0, added
     monitor_id = added["todo_id"]
+    if not link:
+        return monitor_id, due
     code, linked = run(
         "todo", "update", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--agent-id", cli.AGENT_ID, "--successor-todo-id", monitor_id, *lease,
@@ -34,14 +59,15 @@ def _future_monitor(run, lease):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("unscoped_first", [False, True])
+@pytest.mark.parametrize("direct_link", [False, True])
 def test_supersede_existing_future_monitor_settles_only_original_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
-    unscoped_first: bool,
+    unscoped_first: bool, direct_link: bool,
 ) -> None:
     project, _, runtime, _, run, lease, marker, _, original = declared._fixture(
         tmp_path, monkeypatch, provider,
     )
-    monitor_id, due = _future_monitor(run, lease)
+    monitor_id, due = _future_monitor(run, lease, link=not direct_link)
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                "--turn-instance-id", cli.TURN_ID)
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
@@ -53,6 +79,8 @@ def test_supersede_existing_future_monitor_settles_only_original_turn(
     retirement = ("todo", "supersede", "--goal-id", cli.GOAL_ID,
                   "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                   "--reason", "The original window expired; retain its existing future monitor.", *lease)
+    if direct_link:
+        retirement += ("--successor-todo-id", monitor_id)
     if unscoped_first:
         code, unscoped = run(*retirement)
         assert code == 0, unscoped
@@ -103,7 +131,10 @@ def test_supersede_existing_future_monitor_settles_only_original_turn(
     assert source["status"] == "done" and source["successor_todo_ids"] == [monitor_id]
     assert source["completion_continuation"] == "active_goal"
     assert source["completion_validation_sha256"] == original["completion_validation_sha256"]
+    assert source["required_write_scopes"] == original["required_write_scopes"]
     assert monitor["status"] == "open" and monitor["next_due_at"] == due
+    assert monitor["required_write_scopes"] == ["src/next.py", "src/checks.py"]
+    assert monitor["required_capabilities"] == ["filesystem_read"]
     readback = read_heartbeat_settlement(
         runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
         todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID,
@@ -135,4 +166,26 @@ def test_supersede_foreign_turn_rejects_before_canonical_mutation(
     assert "matching quota should-run heartbeat receipt is missing" in rejected["error"]
     code, listed = run("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
     assert code == 0 and listed["todo"]["status"] == "open", listed
+    assert not marker.exists() and cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("successor", ["todo_missing_successor", cli.TODO_ID])
+def test_supersede_invalid_existing_link_preserves_task_and_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, successor: str,
+) -> None:
+    _, _, runtime, _, run, lease, marker, _, original = declared._fixture(tmp_path, monkeypatch, provider)
+    code, before = run("task-lease", "inspect", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+    assert code == 0, before
+    code, rejected = run(
+        "todo", "supersede", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
+        "--agent-id", cli.AGENT_ID, "--successor-todo-id", successor,
+        "--reason", "Replace with existing work.", *lease,
+    )
+    assert code == 1, rejected
+    assert rejected["error_code"] == ("todo_successor_cycle" if successor == cli.TODO_ID else "todo_successor_not_found")
+    code, after = run("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+    assert code == 0 and after["todo"] == original, after
+    code, after_lease = run("task-lease", "inspect", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+    assert code == 0 and after_lease["lease"] == before["lease"], after_lease
     assert not marker.exists() and cli._spend_run_count(runtime) == 0

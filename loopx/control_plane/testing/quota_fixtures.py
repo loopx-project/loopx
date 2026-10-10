@@ -207,8 +207,7 @@ def quota_status_payload(
     }
     if coordination:
         goal["coordination"] = coordination
-    if latest_runs is not None:
-        goal["latest_runs"] = latest_runs
+    goal["latest_runs"] = latest_runs if latest_runs is not None else []
     if goal_extra:
         goal.update(goal_extra)
 

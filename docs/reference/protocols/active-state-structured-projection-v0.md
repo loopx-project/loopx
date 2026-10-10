@@ -226,10 +226,14 @@ title still fails parity, even when its first 500 characters match. This is not
 permission to accept malformed records or to shorten an already committed Todo
 to repair its display.
 
-Status, `todo list` (including an exact ID), dashboard and chat attention views
-keep their existing bounded summaries. The canonical provider and regenerated
-active state retain the complete source; a display summary is not an input to
-source serialization. No new frontend setting, Lark command or parallel state
+Status, unfiltered `todo list`, `todo list --thin` without an exact ID,
+dashboard and chat attention views keep their existing bounded summaries.
+An exact `todo list --todo-id ID` without `--thin` returns the complete current
+or retained request text through the existing Task detail reader. The canonical
+provider and regenerated active state retain the complete source; a display
+summary is not an input to source serialization. Combining `--thin` with an
+exact Todo ID is rejected so a bounded inventory projection cannot replace a
+full requirement read. No new frontend setting, Lark command or parallel state
 store is introduced. This change stays in the permanent Python Markdown/legacy
 I/O adapter; the TypeScript authority, admission and delivery-confirmation
 owners are unchanged.
@@ -246,9 +250,11 @@ their existing closed diagnostics.
 源解码与读写一致性校验保留已接受 Todo 的完整文本和优先级派生标题，包括多行续文
 和归档记录；沿用 Markdown 编解码器的空白规范化，不套用 500 字符的注意力摘要
 上限。显式标题冲突仍拒绝，即使前 500 字符相同；不能靠缩短已提交任务来修显示。
-`todo list`（含精确 ID）、状态、前端及聊天继续使用原有有界摘要，canonical provider
-及重建后的活动状态保留完整源文本，不新增设置、Lark 命令或第二状态库。本次仅修
-既有 Python Markdown／兼容 I/O，TS 的权威、准入和交付确认 owner 不变。
+状态、未过滤的 `todo list`、未指定精确 ID 的 `todo list --thin`、前端及聊天继续使用原有
+有界摘要。`todo list --todo-id ID` 返回完整的当前或保留请求文本；同时指定 `--thin` 时会
+拒绝请求，避免有界摘要替代完整需求读取。canonical provider 及重建后的活动状态保留完整
+源文本，不新增设置、Lark 命令或第二状态库。本次仅修既有 Python Markdown／兼容 I/O，TS
+的权威、准入和交付确认 owner 不变。
 
 若业务已提交、长文本一致性失败导致显示 pending，先读取当前 provider revision，
 再用原有 `project-markdown` 恢复；不重复业务、不改短任务、不复用旧版本。恢复与
@@ -354,6 +360,14 @@ renderer/write failure leaves typed `pending` delivery
 evidence without reversing or hiding the canonical commit. A later successful
 mutation, committed `refresh-state` (including same-Turn replay), or
 `todo project-markdown --execute` replays the current head idempotently. This is projection recovery, not a second authority path.
+Canonical creation selects that route from the existing durable writer fence;
+it does not prefetch the entire Todo source into Python before the native create
+transaction. The fence grants no write authority: the transaction still checks
+the complete current head, source and actor. Original-operation replay remains
+a historical receipt, and validated-create recovery still checks the current
+validator digest before publishing its private declaration. Post-commit display
+delivery retains its complete-source read and durable confirmation. Unpromoted
+creation keeps the existing Markdown writer.
 The ordinary state writer and projection writer share durable atomic publication.
 Missing-display recovery uses create-only publication and cannot overwrite a
 concurrently restored document. When bytes already match, execution still syncs

@@ -21,6 +21,11 @@ async function entries(directory: string): Promise<string[]> {
 
 async function upgradeSqlite(directory: string, goal: string, execute: boolean): Promise<JsonObject> {
   const path = sqliteAuthorityPath(directory, goal);
+  const observed = migrateSqliteAuthorityStoreV1ToV2(directory, goal);
+  if (observed.status === "failed") throw new Error(observed.reason);
+  // The converter's current-format inspection is read-only. Only an actual
+  // upgrade needs the mutation lock, backup and a fresh locked inspection.
+  if (observed.status !== "planned" || !execute) return {...observed, provider: "sqlite"};
   return await withFileMutationLock(`${path}.upgrade`, async () => {
     const planned = migrateSqliteAuthorityStoreV1ToV2(directory, goal);
     if (planned.status === "failed") throw new Error(planned.reason);

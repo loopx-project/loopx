@@ -73,7 +73,34 @@ test("open completion commits in one reduction with a stable local identity", ()
   });
   assert.deepEqual(result.metadata_updates, {
     completion_continuation: "active_goal",
+    completion_receipt_id: result.metadata_updates.completion_receipt_id,
   });
+  assert.match(String(result.metadata_updates.completion_receipt_id), /^tcw_[0-9a-f]{64}$/);
+});
+
+test("committed completion receipt ids separate phases and retain stable scope", () => {
+  const ordinaryRequest = request({requested_completion_turn_key: "turn-a",
+    requested_completion_identity_source: "turn_settlement"});
+  const ordinary = reduceTodoCompletionTransaction(ordinaryRequest);
+  const repeated = reduceTodoCompletionTransaction(ordinaryRequest);
+  const closeout = reduceTodoCompletionTransaction(request({
+    todo: {...baseTodo, status: "done", completion_continuation: "active_goal",
+      completion_turn_key: "turn-a"},
+    requested_completion_turn_key: "turn-a",
+    requested_completion_identity_source: "turn_settlement",
+    requested_no_followup: true,
+  }));
+  const anotherTurn = reduceTodoCompletionTransaction({...ordinaryRequest,
+    requested_completion_turn_key: "turn-b"});
+  const anotherGoal = reduceTodoCompletionTransaction({...ordinaryRequest, goal_id: "goal-b"});
+  for (const result of [ordinary, repeated, closeout, anotherTurn, anotherGoal]) {
+    assert.equal(result.decision, "commit");
+    assert.match(String(result.metadata_updates.completion_receipt_id), /^tcw_[0-9a-f]{64}$/);
+  }
+  assert.equal(ordinary.metadata_updates.completion_receipt_id,
+    repeated.metadata_updates.completion_receipt_id);
+  assert.equal(new Set([ordinary, closeout, anotherTurn, anotherGoal].map(
+    result => result.metadata_updates.completion_receipt_id)).size, 4);
 });
 
 test("declared validation is one external effect between two reductions", () => {
@@ -290,6 +317,7 @@ test("lifecycle reentry returns the explicit terminal recovery state", () => {
   assert.deepEqual(result.metadata_updates, {
     completion_continuation: "no_followup",
     completion_recovery: "lifecycle_reentry_terminal_closeout",
+    completion_receipt_id: result.metadata_updates.completion_receipt_id,
   });
 });
 

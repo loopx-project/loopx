@@ -28,6 +28,11 @@ class PullRequestReviewPriority(str, Enum):
 DEFAULT_REVIEW_PRIORITY = PullRequestReviewPriority.OTHER_DEVELOPERS_FIRST
 
 
+def is_owner_authored(item: Mapping[str, Any]) -> bool:
+    """Read the typed queue identity; old packets retain login-only semantics."""
+    return item.get("owner_authored", item.get("author_owned")) is True
+
+
 _OWNER_FIRST_LANE_TIERS = {
     PullRequestSchedulingLane.AUTHENTICATED_DEVELOPER_OWNED: 0,
     PullRequestSchedulingLane.COMMUNITY_FEEDBACK: 1,
@@ -74,7 +79,7 @@ def classify_scheduling_lane(
         return PullRequestSchedulingLane.CLOSED
     if not str(item.get("review_action_kind") or "").strip():
         return PullRequestSchedulingLane.CURRENT_HEAD_CONCLUDED
-    if item.get("author_owned") is True:
+    if is_owner_authored(item):
         return PullRequestSchedulingLane.AUTHENTICATED_DEVELOPER_OWNED
     if item.get("community_feedback_ready") is True:
         return PullRequestSchedulingLane.COMMUNITY_FEEDBACK
@@ -176,6 +181,8 @@ def build_scheduling_policy(
     *,
     authenticated_developer_login: str | None,
     review_priority: object = DEFAULT_REVIEW_PRIORITY,
+    review_order: str | None = None,
+    owner_logins: Sequence[str] = (),
 ) -> dict[str, Any]:
     login = str(authenticated_developer_login or "").strip() or None
     priority = normalize_review_priority(review_priority)
@@ -231,18 +238,26 @@ def build_scheduling_policy(
                 ],
             },
         ]
+    if review_order == "reverse":
+        ordered_actionable_tiers.reverse()
+    if review_order is not None:
+        for tier in ordered_actionable_tiers:
+            tier.pop("fast_feedback_slots_per_material_transition", None)
     return {
         "schema_version": SCHEDULING_POLICY_SCHEMA_VERSION,
         "authority": "pull-request-review capability",
-        "identity_basis": "request.reviewer_login",
+        "identity_basis": "request.reviewer_login + configured owner_logins" if owner_logins else "request.reviewer_login",
+        **({"owner_logins": list(owner_logins)} if owner_logins else {}),
         "authenticated_developer_login": login,
-        "review_priority": priority.value,
-        "owner_first_active": priority is PullRequestReviewPriority.OWNER_FIRST,
+        "review_priority": "owner-first" if review_order == "reverse" else priority.value,
+        **({"review_order": review_order, "direction_rule": "reverse the complete forward actionable queue; retain inactive inventory order", "age_order": "newest-first" if review_order == "reverse" else "oldest-first"} if review_order is not None else {}),
+        "owner_first_active": review_order == "reverse" if review_order is not None else priority is PullRequestReviewPriority.OWNER_FIRST,
         "other_developers_first_active": (
-            priority is PullRequestReviewPriority.OTHER_DEVELOPERS_FIRST
+            review_order == "forward" if review_order is not None else priority is PullRequestReviewPriority.OTHER_DEVELOPERS_FIRST
         ),
         "other_developer_definition": (
-            "actionable PR whose author differs from request.reviewer_login; "
+            ("actionable PR whose author is outside owner_logins; " if owner_logins else
+             "actionable PR whose author differs from request.reviewer_login; ") +
             "the capability does not infer organization membership or trust"
         ),
         "community_backlog_age_hours": COMMUNITY_BACKLOG_AGE_HOURS,
@@ -270,7 +285,7 @@ def build_scheduling_policy(
             },
         ],
         "manual_override_rule": (
-            "Only an explicit request-scoped PR selection may override this order; "
+            "Only capability configuration or an explicit request-scoped override may change this order; "
             "Todo or monitor prose and one-off author filters must not replace it."
         ),
     }

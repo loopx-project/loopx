@@ -5,6 +5,7 @@ import {
   buildVisionCheckpoint,
   VISION_REFRESH_PREPARED_SCHEMA_VERSION,
   VISION_REFRESH_REQUEST_SCHEMA,
+  visionAuthoringContract,
 } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 
 function finalizeRequest(overrides: Record<string, unknown> = {}) {
@@ -412,9 +413,46 @@ test("semantic closeout retains the strict material vision checkpoint", () => {
   assert.equal(result.required, true);
   assert.equal(result.satisfied, false);
   assert.equal(result.decision, "missing_required");
+  assert.equal(result.missing_baseline, true);
+  assert.deepEqual(result.required_resolution, ["write_vision_patch"]);
   assert.deepEqual(result.triggers, [
     { kind: "material_delivery_outcome", delivery_outcome: "outcome_progress" },
   ]);
+});
+
+test("missing checkpoint offers unchanged only with a persisted vision", () => {
+  const baseline = {state: "vision_active", generated_at: "2026-09-01T10:00:00Z"};
+  const missing = buildVisionCheckpoint(finalizeRequest({
+    existing_agent_vision: baseline,
+  }));
+  assert.equal(missing.satisfied, false);
+  assert.deepEqual(missing.required_resolution, [
+    "write_vision_patch", "record_unchanged_reason",
+  ]);
+  assert.equal("missing_baseline" in missing, false);
+  assert.equal(buildVisionCheckpoint(finalizeRequest({
+    existing_agent_vision: baseline,
+    vision_unchanged_reason: "The verified scope is still current.",
+  })).satisfied, true);
+  const rejected = buildVisionCheckpoint(finalizeRequest({
+    vision_unchanged_reason: "The verified scope is still current.",
+  }));
+  assert.equal(rejected.satisfied, false);
+  assert.equal(rejected.missing_baseline, true);
+  assert.deepEqual(rejected.required_resolution, ["write_vision_patch"]);
+});
+
+test("advertised Todo delta limits match retained items and item validation", () => {
+  const fields = visionAuthoringContract().fields as Record<string, unknown>;
+  assert.deepEqual(fields.todo_delta, {max_retained_items: 8, max_item_chars: 80});
+  const packet = (todo_delta: string[]) => prepareRequest({
+    agent_vision_packet: {vision_summary: "Deliver the scoped result.", todo_delta},
+  });
+  const deltas = Array.from({length: 9}, (_, index) => String(index).repeat(80));
+  const vision = buildVisionCheckpoint(packet(deltas)).agent_vision as Record<string, unknown>;
+  assert.deepEqual(vision.todo_delta, deltas.slice(0, 8));
+  assert.throws(() => buildVisionCheckpoint(packet(["x".repeat(81)])),
+    /todo_delta uses 81 chars; limit is 80/);
 });
 
 test("a bounded blocked retry does not invent a vision change", () => {

@@ -131,10 +131,12 @@ def assert_unchanged_monitor_attempt_yields_to_advancement() -> None:
 def assert_work_lane_context_matches_quota_state_machine_cases() -> None:
     due_todo = "[P0] Monitor the overdue update-note draft PR before feature work."
     executable_todo = "[P1] Implement the bounded runtime repair slice."
+    dependency_payload = status_payload(status="side_bypass_dependency_observation")
+    dependency_payload["attention_queue"]["items"][0]["project_asset"]["progress_scope"] = "dependency_observation"
     cases = [
         (
             "dependency_observation",
-            status_payload(status="side_bypass_dependency_observation"),
+            dependency_payload,
         ),
         (
             "surface_only_followthrough",
@@ -191,16 +193,18 @@ def assert_work_lane_context_matches_quota_state_machine_cases() -> None:
 def assert_work_lane_context_progress_scope_sources() -> None:
     dependency_payload = status_payload(status="side_bypass_dependency_observation")
     dependency_item = dependency_payload["attention_queue"]["items"][0]
-    assert item_progress_scope(dependency_item) == "dependency_observation"
+    assert item_progress_scope(dependency_item) == "primary_goal"
     assert latest_run_progress_scope(
         {"classification": "runner_dependency_observed"}
-    ) == "dependency_observation"
+    ) == "primary_goal"
     assert latest_run_progress_scope(
         {
             "classification": "runner_dependency_observed",
             "progress_scope": "primary_goal",
         }
     ) == "primary_goal"
+    dependency_item["progress_scope"] = "dependency_observation"
+    assert item_progress_scope(dependency_item) == "dependency_observation"
 
 
 def main() -> int:

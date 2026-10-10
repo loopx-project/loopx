@@ -321,7 +321,8 @@ def test_goal_configuration_merges_live_machine_defaults_without_goal_override()
 
 def test_machine_inheritable_goal_capabilities_can_clear_their_overrides() -> None:
     assert _goal_capability_options("todo_replan_cadence", None) == {
-        "clear_execution_replan_after_todos": True
+        "clear_execution_replan_after_todos": True,
+        "clear_execution_replan_after_turns": True,
     }
     assert _goal_capability_options("change_quality_qualification", None) == {
         "clear_change_quality_configuration": True
@@ -456,8 +457,8 @@ def test_research_policy_api_applies_and_reads_real_source_and_shared_registry(t
             return []
 
     for configuration in [
-        {"enabled": True, "composition_mode": "explicit_only", "composition_scope_id": "joint-scope"},
-        {"enabled": True, "composition_mode": "disabled", "composition_scope_id": "joint-scope"},
+        {"mode": "planning", "composition_mode": "explicit_only", "composition_scope_id": "joint-scope"},
+        {"mode": "planning", "composition_mode": "disabled", "composition_scope_id": "joint-scope"},
     ]:
         body = {"goal_id": "goal-example", "capability_id": "explore_harness", "configuration": configuration}
         before = registry.read_bytes()
@@ -473,9 +474,14 @@ def test_research_policy_api_applies_and_reads_real_source_and_shared_registry(t
         assert receipt["status_code"] == 200, receipt
         assert receipt["readback_verified"] is True
         assert {key: receipt["goal_configuration"][key] for key in configuration} == configuration
-        source = json.loads(registry.read_text())["goals"][0]["spawn_policy"]["explore_harness"]
+        stored_goal = json.loads(registry.read_text())["goals"][0]
+        source = stored_goal["spawn_policy"]["explore_harness"]
         mirror = json.loads((shared / "registry.global.json").read_text())["goals"][0]["spawn_policy"]["explore_harness"]
-        assert {key: source[key] for key in configuration} == configuration
+        assert source["enabled"] is True
+        assert stored_goal["explore_graph"]["enabled"] is True
+        assert {key: source[key] for key in ("composition_mode", "composition_scope_id")} == {
+            key: configuration[key] for key in ("composition_mode", "composition_scope_id")
+        }
         assert mirror == source
         stale = RealHandler({**body, "expected_plan_revision": plan["plan_revision"]})
         stale.path = CHAT_GOAL_CONFIGURATION_APPLY_PATH

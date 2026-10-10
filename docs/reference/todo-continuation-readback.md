@@ -60,6 +60,17 @@ Public parser rows keep their existing dictionary schema. Final list/status
 responses copy plain dictionaries, retaining decision fields without exposing
 the internal evaluation or expanding the hot-path payload.
 
+When choosing between Agent and User frontier waits, compare UTC instants,
+not the original ISO spelling retained by a projected deadline. Equal instants
+retain source order; due/expired exclusion and pre-compaction evidence are
+unchanged. An earlier deadline cannot be postponed by a different UTC offset.
+
+The existing Python deadline rule remains until it can join an already-needed
+whole-consumer typed batch. A separate projection RPC adds hot-path latency;
+retiring a small rule alone does not justify that cost. This correction grants
+no Todo, lease, settlement or host-schedule authority and does not qualify
+provider defaults or actual host backoff adoption.
+
 Legacy archive/recreate can retain one archived and one active record with the
 same logical Todo ID. The active record owns that ID's inferred edges regardless
 of source order; archived metadata cannot supply stale edges for the replacement.

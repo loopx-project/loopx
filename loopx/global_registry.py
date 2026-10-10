@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .authority import compact_authority_registry
+from .control_plane.coordination.shadow_management import (
+    shadow_maintenance_lock_target,
+)
+from .control_plane.effect_runtime import CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS
 from .control_plane.projects.contract import validate_project_record_bindings
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.time import now_local_iso
@@ -578,16 +582,29 @@ def retire_global_registry_goals(
                 "recommended_action": writability.get("recommended_action"),
             }
 
-        mutation = mutate_global_registry(
-            global_path,
-            "retire_global_registry_goals",
-            lambda current: _retire_global_registry_reduction(
-                current,
-                requested_ids=requested_ids,
-                global_path=global_path,
-                updated_at=updated_at,
-            ),
-        )
+        canonical_runtime_root = global_path.expanduser().resolve().parent
+        with ExitStack() as stack:
+            for goal_id in sorted(requested_ids):
+                stack.enter_context(
+                    exclusive_cross_runtime_file_lock(
+                        shadow_maintenance_lock_target(
+                            canonical_runtime_root,
+                            goal_id,
+                        ),
+                        operation="retire_global_registry_goal_canonical",
+                        timeout_seconds=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+                    )
+                )
+            mutation = mutate_global_registry(
+                global_path,
+                "retire_global_registry_goals",
+                lambda current: _retire_global_registry_reduction(
+                    current,
+                    requested_ids=requested_ids,
+                    global_path=global_path,
+                    updated_at=updated_at,
+                ),
+            )
         receipt = mutation["receipt"]
         backup_path = mutation["backup_path"]
 

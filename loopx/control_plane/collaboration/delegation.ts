@@ -4,7 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
+import {acceptanceValidationEffects, goalAcceptanceTodoDigest, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
@@ -55,9 +55,65 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
       "Todo without canonical validation authority cannot supply a declaration");
     if (requirements === null) return unavailable("independent_delegation_validation_required");
   }
-  return {todo_id: todo.todo_id, state: "ready",
-    source: requirements === null ? "todo_validation" : "goal_acceptance",
+  const source = requirements === null ? "todo_validation" : "goal_acceptance";
+  // Definition identity, not a stored success or independent-verifier receipt.
+  // Host validation must pass before exposing this path-free current observation.
+  const observation = {source,
+    basis_sha256: canonicalAuthoritySha256({todo_id: todo.todo_id, requirements, effects}),
+    check_count: effects.length,
+    pinned_file_count: effects.reduce((count, effect) => count
+      + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0)};
+  // Reuse the acceptance owner's work classification. Scheduling/progress
+  // metadata and unrelated provider commits are not a new task declaration;
+  // current claim/lifecycle still fence this particular validation attempt.
+  const task_basis_sha256 = canonicalAuthoritySha256({work: goalAcceptanceTodoDigest(todo),
+    claimed_by: todo.claimed_by ?? null, role: todo.role ?? null,
+    status: todo.status, done: todo.done, archive_state: todo.archive_state ?? null});
+  return {todo_id: todo.todo_id, state: "ready", source, observation, task_basis_sha256,
     effects, canonical_done: todo.done === true && todo.status === "done"};
+}
+
+/** Fresh host check observation, not an independent-verifier or persisted receipt.
+ * Host IO brackets the actual checks; only stable declared output versions return. */
+export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
+  const binding = requireJsonObject(params.binding, "delegation binding");
+  const plan = requireJsonObject(params.plan, "current validation plan");
+  requireThat(plan.todo_id === binding.todo_id && plan.state === "ready" && plan.canonical_done === true,
+    "delegation requires current canonical completion");
+  const observation = requireJsonObject(plan.observation, "current validation observation");
+  requireThat((observation.source === "goal_acceptance" || observation.source === "todo_validation")
+    && typeof observation.basis_sha256 === "string" && BARE_SHA256_PATTERN.test(observation.basis_sha256)
+    && Number.isInteger(observation.check_count) && Number(observation.check_count) > 0
+    && Number.isInteger(observation.pinned_file_count) && Number(observation.pinned_file_count) >= 0,
+  "current validation basis required");
+  requireThat(typeof params.checked_at === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(params.checked_at)
+    && Number.isFinite(Date.parse(params.checked_at)), "host check time required");
+  const refs = binding.output_refs;
+  requireThat(Array.isArray(refs) && refs.length > 0
+    && refs.length <= 20 && new Set(refs).size === refs.length,
+  "declared output refs required");
+  const versions = (value: unknown) => {
+    requireThat(Array.isArray(value) && value.length === refs.length,
+      "declared output versions required");
+    const rows = value.map(item => {
+      const row = requireJsonObject(item, "output version");
+      requireThat(text(row.ref) && !row.ref.startsWith("/") && !row.ref.includes("\\")
+        && !row.ref.split("/").includes("..") && refs.includes(row.ref)
+        && typeof row.sha256 === "string" && BARE_SHA256_PATTERN.test(row.sha256),
+      "valid declared output version required");
+      return {ref: row.ref, sha256: row.sha256};
+    });
+    requireThat(new Set(rows.map(row => row.ref)).size === rows.length, "duplicate output version");
+    return rows.sort((a, b) => a.ref.localeCompare(b.ref));
+  };
+  const before = versions(params.before);
+  const after = versions(params.after);
+  requireThat(canonicalAuthoritySha256(before) === canonicalAuthoritySha256(after),
+    "delegation output changed during validation; recheck the original output");
+  return {source: observation.source, basis_sha256: observation.basis_sha256,
+    check_count: observation.check_count, pinned_file_count: observation.pinned_file_count,
+    checked_at: params.checked_at, output_versions: after};
 }
 export function selectDelegationBinding(params: JsonObject): JsonObject {
   const config = requireJsonObject(params.config, "delegation configuration");
@@ -81,7 +137,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   return binding;
 }
 
-type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected";
+type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected" | "stopped";
 
 function boundedReason(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
@@ -279,8 +335,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   };
 }
 const transitions: Record<Observation, readonly Observation[]> = {
-  prepared: ["running", "rejected"], running: ["turn_returned", "rejected"],
-  turn_returned: ["accepted", "rejected"], accepted: [], rejected: [],
+  prepared: ["running", "rejected", "stopped"], running: ["turn_returned", "rejected", "stopped"],
+  turn_returned: ["accepted", "rejected", "stopped"], accepted: [], rejected: [], stopped: [],
 };
 
 /** Page only the caller's existing journal. A cursor is not a fleet snapshot. */
@@ -344,6 +400,92 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
     return {status: to, wake_intent: delegationWakeIntent(params)};
   }
   return {status: to};
+}
+
+type StopPhase = "requested" | "acknowledged" | "settled" | "unknown";
+const openStopPhases: readonly StopPhase[] = ["requested", "acknowledged"];
+/** What the Host transport read back about everything the operation's Turn launched. */
+type HostProcessDrain = "not_launched" | "drained" | "draining" | "unattributable";
+const hostProcessDrains: readonly HostProcessDrain[] = ["not_launched", "drained", "draining", "unattributable"];
+/** What canonical authority proved about the hard lease the stopped execution may hold.
+ *
+ * `unchecked` until the stop resolves it, which happens only once the execution
+ * is proven gone; it never means that no lease was owed. `not_owed` is proven
+ * by canonical authority for the execution's own identity, not by its record.
+ */
+type StopLease = "unchecked" | "not_owed" | "released" | "release_unproven" | "obligation_unproven";
+const stopLeases: readonly StopLease[] = ["unchecked", "not_owed", "released", "release_unproven", "obligation_unproven"];
+/** The next step for the host: resolve the lease from canonical authority, or record a receipt phase. */
+type DelegationStopStep =
+  | {action: "resolve_lease"}
+  | {action: "record"; phase: StopPhase; terminal: boolean; reason: string};
+
+function stopRecord(phase: StopPhase, reason: string): DelegationStopStep {
+  return {action: "record", phase, terminal: !openStopPhases.includes(phase), reason};
+}
+
+/** Advance one stop request from host release facts; a receipt is never inferred from time.
+ *
+ * The stopped execution is gone once the operation lock is free, the member's
+ * Turn lane was released by the stopped worker's process group, and the Host
+ * transport reads everything the Turn launched as drained or never launched.
+ * A worker and its lane can let go while the Host supervisor is still
+ * terminating the Host, so their release proves nothing about the Host. The
+ * host reads the lane from its holder record and never takes it, so a
+ * legitimate Turn is not refused, and a holder it cannot attribute is not
+ * released.
+ *
+ * Only then may the host resolve the execution's hard lease: its release hands
+ * the member's Todo on, so it waits for the execution, and a receipt never
+ * becomes terminal before that lease is resolved. ``settled`` needs the
+ * acknowledgement of a process that held the operation lock, the execution
+ * gone and the lease released or proven not owed. Everything released without
+ * an acknowledgement means the named holder vanished before recording what it
+ * observed, which is ``unknown`` rather than a fake settlement; with a Host
+ * that cannot be attributed nothing more can be learned, so it is ``unknown``
+ * without touching the lease. An acknowledged stop whose Host cannot be
+ * attributed stays open for a later read with the same identity. A grace
+ * timeout on its own moves nothing: a worker still holding a lock still runs.
+ */
+export function decideDelegationStop(params: JsonObject): DelegationStopStep {
+  const phase = params.phase as StopPhase;
+  requireThat(openStopPhases.includes(phase), "delegation stop decision requires an open stop phase");
+  requireThat(typeof params.acknowledged === "boolean", "delegation stop acknowledgement fact required");
+  requireThat(typeof params.operation_lock_free === "boolean" && typeof params.worker_lane_released === "boolean",
+    "delegation stop release facts required");
+  requireThat(hostProcessDrains.includes(params.host_process as HostProcessDrain),
+    "delegation stop host process drain fact required");
+  requireThat(stopLeases.includes(params.lease as StopLease), "delegation stop lease fact required");
+  requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
+    "delegation stop timeout fact must be boolean");
+  requireThat(phase !== "acknowledged" || params.acknowledged === true,
+    "an acknowledged stop cannot lose its acknowledgement");
+  const operationFree = params.operation_lock_free === true;
+  const host = params.host_process as HostProcessDrain;
+  const lease = params.lease as StopLease;
+  const executionPending = !operationFree ? "operation_lock_still_held"
+    : params.worker_lane_released !== true ? "worker_lane_release_unproven"
+    : host === "draining" ? "host_process_still_running"
+    : host === "unattributable" ? "host_process_drain_unproven"
+    : null;
+  requireThat(executionPending === null || lease === "unchecked",
+    "a delegation stop resolves its lease only after its execution is proven gone");
+  const leaseStep = (open: StopPhase, terminal: StopPhase, reason: string): DelegationStopStep =>
+    lease === "unchecked" ? {action: "resolve_lease"}
+      : lease === "release_unproven" ? stopRecord(open, "required_lease_release_unproven")
+      : lease === "obligation_unproven" ? stopRecord(open, "lease_obligation_unproven")
+      : stopRecord(terminal, reason);
+  if (params.acknowledged === true) {
+    return executionPending === null
+      ? leaseStep("acknowledged", "settled", "acknowledged_worker_and_host_released")
+      : stopRecord("acknowledged", executionPending);
+  }
+  if (executionPending === null) return leaseStep("requested", "unknown", "holder_gone_without_acknowledgement");
+  if (executionPending === "host_process_drain_unproven") {
+    return stopRecord("unknown", "holder_gone_without_acknowledgement");
+  }
+  return stopRecord("requested", operationFree ? executionPending
+    : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement");
 }
 
 /** Whether an accepted result may produce a wake intent at all.

@@ -12,6 +12,7 @@ from loopx.capabilities.manager_context import (
 )
 from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
 from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_manager_context import manager_authorization_scope_id_for_registry
 from loopx.chat_store import ChatSessionStore
 from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
 
@@ -23,7 +24,14 @@ def test_short_reply_handoff_preserves_source_and_returns_once(
     # Model/provider and portfolio evidence are fixtures; ingress, protocol subprocess,
     # source provenance, request publication, receiver assessment and return run.
     target = {"goal_id": "research", "agent_id": "worker"}
-    handoff_target = target
+    handoff_target = {**target, "brief": {
+        "schema_version": "collaboration_brief_v0",
+        "purpose": "Check the referenced public draft.",
+        "context": "The worker owns draft review; preserve the exact quoted correction.",
+        "constraints": ["Do not publish."], "inputs": [],
+        "acceptance": ["Return checked findings."],
+        "return_requirement": "Return here without another status question.",
+    }}
     if context_state == "near_record_limit":
         handoff_target = {**target, "brief": {
             "schema_version": "collaboration_brief_v0", "purpose": "p" * 2000,
@@ -47,19 +55,26 @@ def test_short_reply_handoff_preserves_source_and_returns_once(
         store=store, codex_bin=str(executable), registry_path=registry,
         manager_scope_resolver=lambda _session: ["research"],
     )
-    monkeypatch.setattr("loopx.chat_manager_context.collect_manager_turn_context",
-                        lambda *_args, **_kwargs: {
-                            "coverage": {}, "goals": [], "authorization_scope_id": "fixture-research",
-                        })
     try:
         session, _ = controller.open_session(
             goal_id="loopx-manager", agent_id="codex", work_dir=tmp_path,
             objective="Inspect the referenced material.", mode="resume_latest",
             channel_id="manager.external.public_fixture",
         )
+        scope_id = manager_authorization_scope_id_for_registry(
+            registry,
+            ["research"],
+            runtime_root=controller.coordination_runtime_root,
+            channel_id=session["channel_id"],
+        )
+        assert scope_id is not None
+        monkeypatch.setattr("loopx.chat_manager_context.collect_manager_turn_context",
+                            lambda *_args, **_kwargs: {
+                                "coverage": {}, "goals": [], "authorization_scope_id": scope_id,
+                            })
         _write(_root(tmp_path) / "policy.json", {
             "schema_version": POLICY_SCHEMA,
-            "sources": {session["channel_id"]: {"sender_ids": ["owner"], "targets": [target]}},
+            "sources": {session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}},
         })
         parent_text = "Public cash-flow draft: separate cash payments from finance leases."
         quoted = {"message_id": "om_parent", "conversation_id": "room", "content": parent_text}
@@ -106,8 +121,16 @@ def test_short_reply_handoff_preserves_source_and_returns_once(
         options = dict(route=route, text=request_text,
                        work_dir=tmp_path, objective="Inspect the draft.", runtime_controller=controller)
         answer = answer_lark_goal_topic(**options)
-        assert "worker" in answer
+        assert "**已转交给 `worker`。**" in answer
+        assert "是否已开始处理尚未核实" in answer
+        if context_state == "near_record_limit":
+            assert "完整简报已投递" in answer
+        else:
+            assert handoff_target["brief"]["purpose"] in answer
+            assert handoff_target["brief"]["context"] not in answer
+            assert "Do not publish." in answer
         entry, = pending(tmp_path, **target)["items"]
+        assert entry["brief"] == handoff_target["brief"]
         forwarded = entry["message"]
         if context_state in {"not_a_reply", "near_record_limit"}:
             assert forwarded == request_text

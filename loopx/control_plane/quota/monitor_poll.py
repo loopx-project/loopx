@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ...agent_registry import registered_agent_ids_from_registry
 from ...turn_identity import normalize_turn_instance_id
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import now_local_iso
@@ -24,6 +25,7 @@ from ..todos.contract import (
 from ..todos.external_wait_contract import (
     build_monitor_advancement_authoring_contract,
 )
+from ..todos.authoring_scope import plan_todo_authoring_scope
 from ..todos.todo_semantics import todo_item_task_class
 from .decision_summary import compact_quota_decision, quota_decision_agent_id
 from .accounting_admission import quota_accounting_admission
@@ -694,6 +696,7 @@ def _provider_writeback(
         task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
         task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
         gate_scope_guard=plan.get("gate_scope_guard") is True,
+        legacy_batch_version=plan.get("legacy_batch_version"),
     )
     if not isinstance(result, dict):
         raise TypeError("monitor Todo provider returned no writeback receipt")
@@ -870,6 +873,18 @@ def record_quota_monitor_poll_for_decision(
         provider_needed = bool(safe_todo_id or safe_target_key)
         if not provider_needed:
             return _native_result(_request(phase="commit", **common)), after_status
+
+        # Validate explicit claim routing before quota reserves a pending effect.
+        # Exact retries keep their frozen admission if registry membership changed.
+        receipt_path = (runtime_root / "goals" / goal_id / "runs" / ".transactions" /
+                        "quota-monitor-poll" / f"{hashlib.sha256(effect_id.encode()).hexdigest()[:24]}.json")
+        if next_claimed_by and registry_path is not None and not receipt_path.exists():
+            plan_todo_authoring_scope(
+                command="create", role="agent", goal_id=goal_id,
+                registered_agents=registered_agent_ids_from_registry(registry_path, goal_id),
+                intent={"task_class": "advancement_task", "status": "open",
+                        "actor_agent_id": decision_agent_id, "claimed_by": next_claimed_by},
+            )
 
         native = _native_result(_request(phase="preflight", **common))
         if native.get("status") != "provider_required":

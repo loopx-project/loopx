@@ -22,6 +22,30 @@ The protocol is host-neutral. A Codex CLI adapter is the first target, but the
 driver lifecycle must not depend on Codex-specific session files, transcript
 formats, or benchmark task schemas.
 
+### Execution deadline defaults
+
+`turn run-once` now has no default single-turn wall-time limit (previously
+120 seconds). The built-in Codex hosts and generic managed host transport wait
+for natural completion or cancellation. `--timeout-seconds` remains an explicit
+operator-selected deadline for bounded execution or recovery tests.
+
+The external heartbeat scheduler likewise has no default wake-command deadline
+(previously 600 seconds); `--wake-timeout-seconds` opts into one. Quota probes,
+provider request/idle liveness checks, validation commands, output budgets,
+lease fencing and process-group cleanup retain their own boundaries. Cancellation
+still terminates the owned process tree; disabling an execution timer does not
+authorize continued effects after cancellation or lease loss.
+
+Benchmark adapters retain their declared total trial deadline. The shared Harbor
+adapter defaults a call to the remaining trial allowance, including its existing
+startup/cleanup reserve, instead of imposing an independent 4700-second wake cap.
+Explicit per-call settings in existing experiment configurations remain explicit
+protocol choices; omit them for natural continuation.
+
+单轮执行默认不再计时终止：Turn 的原 120 秒上限和外部 heartbeat 的原 600 秒
+wake 上限均改为显式选择。取消、租约失效、输出限制、请求存活检查和进程清理
+仍生效。benchmark 仍遵守整场总预算，默认不另设 4700 秒的单轮上限。
+
 ## Mental Model
 
 LoopX Turn is a four-stage control loop, not another agent runtime:
@@ -133,11 +157,11 @@ then the product default.
 | execution profile field | product default | operator override | legacy lower-precedence override |
 | --- | --- | --- | --- |
 | provider | `deepseek-official` | `LOOPX_TURN_PROVIDER` | `DSH_PROVIDER` |
-| model | `deepseek-v4-flash` | `LOOPX_TURN_MODEL` | `DSH_MODEL` |
+| model | `deepseek-flash` | `LOOPX_TURN_MODEL` | `DSH_MODEL` |
 | reasoning effort | `high` | `LOOPX_TURN_REASONING_EFFORT` | — |
 
 The managed `managed_executor` readback reports the resolved profile as one line,
-`<model>@<reasoning_effort>` (the shipped shape is `deepseek-v4-flash@high`).
+`<model>@<reasoning_effort>` (the shipped shape is `deepseek-flash@high`).
 The provider is prepended as `<provider>/…` only when the resolved provider is
 not the shipped one, because dropping it for a deviating provider would make the
 line claim a profile the Turn would not use. Whichever values the line names are
@@ -633,6 +657,32 @@ Every attempted tick returns one result kind:
 | `validation_failed` | Host output exists but task validation failed or is inconclusive. | Preserve failure evidence and route to repair/replan. |
 | `writeback_failed` | Validated work could not be durably recorded. | Do not spend; retry idempotent writeback before more delivery. |
 
+Managed host adapters carry the existing path-delta fields through the typed
+result unchanged: `path_delta_mode`, `agent_vision_json`, and
+`vision_unchanged_reason`. A material path change uses
+`path_delta_mode: "material_replan"`, `result_kind: "replan_required"`, and a
+JSON-encoded `goal_vision_replan_contract_v0` packet whose
+`goal_path_delta_v0.outcome` is `replan`; it must not also claim an unchanged
+reason. An unchanged path uses `path_delta_mode: "unchanged"`, no vision
+packet, and a bounded `vision_unchanged_reason`. The Turn executor remains the
+owner of packet parsing, bounds, and semantic validation. These declarations do
+not grant write or Goal authority, and legacy hosts that omit both path-delta
+fields retain their prior compatibility behavior. For material results, an
+explicit null or other non-string value for either path-delta field is invalid;
+omitting the field remains distinct from supplying null. Stop results
+(`wait`, `user_action_required`, and `iteration_failed`) do not declare a path
+delta. Managed dsh and optional-cloud prompts may omit both fields; the Codex
+CLI output schema requires both strings, so empty strings express the same
+no-declaration result. The executor accepts those empty strings and rejects
+non-empty stop-result declarations. The shared material validation applies to
+generic CLI, Codex CLI, dsh, and optional-cloud host results.
+
+The existing TypeScript Vision normalizer owns packet interpretation and emits
+the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility
+behavior does not verify the submitted packet's top-level `schema_version`;
+the nested `path_delta.schema_version` remains optional, and when present the
+existing owner requires `goal_path_delta_v0`.
+
 ### Settlement identity decoding / 结算身份解码
 
 Executable settlement decodes exactly one Todo or autonomous-replan binding in
@@ -793,7 +843,22 @@ The Codex exec binding includes the exact Goal lifetime where available and a
 profile digest for agent scope: workspace, Codex home/settings, executable,
 model, effort, sandbox and MCP configuration. A corrupt/incompatible binding,
 missing native history or unexpected resumed ID fails closed; it cannot silently
-fork. Explicit `fresh` is the recovery operation. Current Turn selection, task
+fork. A read-only agent-scoped exec session may resume with workspace-write
+when that is the only profile change and the current registry records an
+unexpired operator checkpoint approving the entire working directory. The
+Agent must remain registered in the active Goal; file-only, sibling, expired,
+malformed-expiry or projection-only approval is insufficient. Expiration is
+optional: omitted, null or blank `expires_at`/`fresh_until` retains no expiry.
+The first nonblank `expires_at`, or its `fresh_until` compatibility alias, must
+be an ISO timestamp string with a representable UTC instant. Invalid supplied
+expiration makes the checkpoint inactive in the shared normalization owner;
+it cannot authorize a write resume or add projected write scope. A valid
+`expires_at` takes precedence over the alias. Other profile changes retain the
+explicit `fresh` gate. Configure the approval through `configure-goal
+--boundary-authority-scope DIRECTORY/** --boundary-authority-source SOURCE`
+and preview before `--execute`; it grants neither publication nor production
+actions. This transition preserves the native Session and updates its profile
+digest only after the same native ID is observed. Current Turn selection, task
 lease, validation and settlement remain Todo-bound. Session scope grants no
 additional tool or effect authority. Managed operation-equipped app-server
 sessions retain their existing Todo-bound approval/handoff contract; this CLI

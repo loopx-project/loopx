@@ -27,6 +27,8 @@ from ...file_lock import (
 from ...history import load_registry
 from ...registry import atomic_write_json, read_json
 from ...registry_writability import probe_registry_write_path
+from ..coordination.shadow_management import shadow_maintenance_lock_target
+from ..effect_runtime import CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS
 from ..runtime.time import now_local_iso
 from .activation import GoalActivationState, goal_activation_state
 from .activation_service import (
@@ -265,6 +267,11 @@ def _recovery_receipt_path(registry_path: Path, goal_id: str) -> Path:
     return registry.with_name(
         f".{registry.name}.goal-delete-{goal_digest}.recovery.json"
     )
+
+
+def _canonical_writer_guard_path(target_registry: Path, goal_id: str) -> Path:
+    runtime_root = target_registry.expanduser().resolve().parent
+    return shadow_maintenance_lock_target(runtime_root, goal_id)
 
 
 def _fsync_parent(path: Path) -> None:
@@ -633,6 +640,13 @@ def _execute_recovery(record: Mapping[str, Any]) -> dict[str, Any]:
         source_registry if source_available else declared_source_registry
     )
     with ExitStack() as stack:
+        stack.enter_context(
+            exclusive_cross_runtime_file_lock(
+                _canonical_writer_guard_path(target_registry, str(record["goal_id"])),
+                operation="recover_delete_stopped_goal_canonical",
+                timeout_seconds=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+            )
+        )
         source_transaction = None
         if not _same_path(locked_source_registry, target_registry):
             if source_available and not same_registry:
@@ -1094,6 +1108,13 @@ def _execute_deletion(
         source_registry if source_available else declared_source_registry
     )
     with ExitStack() as stack:
+        stack.enter_context(
+            exclusive_cross_runtime_file_lock(
+                _canonical_writer_guard_path(target_registry, goal_id),
+                operation="delete_stopped_goal_canonical",
+                timeout_seconds=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+            )
+        )
         source_transaction = None
         if not _same_path(locked_source_registry, target_registry):
             if source_available and not same_registry:

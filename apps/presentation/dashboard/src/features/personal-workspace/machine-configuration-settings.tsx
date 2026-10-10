@@ -17,7 +17,7 @@ import {
   type MachineConfigurationRollbackPlan,
   type MachineConfigurationTransaction,
 } from "../../data/chat";
-import { projectEditableCapabilityConfiguration } from "../../data/capability-configuration";
+import { goalStorageEditorValue, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
@@ -51,12 +51,19 @@ function completeMachineConfiguration(
     ...configurationObject(current),
     ...draft,
   };
+  if (capability.capability_id === "pull_request_review" && Object.hasOwn(draft, "review_order")) {
+    delete complete.review_priority;
+  }
   // The guided steward editor owns the v1 selection-policy fields. Opening an
   // installed v0 preference in that form is an explicit migration preview;
   // JSON mode can still submit the legacy shape unchanged when needed.
-  if (capability.capability_id === "steward_executor"
-    && (Object.hasOwn(draft, "selection_policy") || Object.hasOwn(draft, "eligible_endpoints"))) {
+  if (capability.capability_id === "goal_storage" || (capability.capability_id === "steward_executor"
+    && (Object.hasOwn(draft, "selection_policy") || Object.hasOwn(draft, "eligible_endpoints")))) {
     complete.schema_version = configurationObject(capability.default).schema_version;
+  }
+  if (capability.capability_id === "todo_replan_cadence" && Object.hasOwn(draft, "count_unit")) {
+    complete.schema_version = configurationObject(capability.default).schema_version;
+    delete complete.completed_todos;
   }
   return complete;
 }
@@ -188,7 +195,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     const current = currentConfiguration(inspection, selected);
     const editable = projectEditableCapabilityConfiguration(
       selected.configuration_editor,
-      current ?? selected.default,
+      selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current ?? selected.default)
+        : selected.capability_id === "goal_storage" ? goalStorageEditorValue(current ?? selected.default) : current ?? selected.default,
       selected.default,
     );
     const complete = completeMachineConfiguration(selected, current, editable);
@@ -220,7 +228,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     } else if (parsedJsonDraft) {
       setDraft(projectEditableCapabilityConfiguration(
         selected.configuration_editor,
-        parsedJsonDraft,
+        selected.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(parsedJsonDraft)
+          : selected.capability_id === "goal_storage" ? goalStorageEditorValue(parsedJsonDraft) : parsedJsonDraft,
         selected.default,
       ));
     } else {
@@ -373,8 +382,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />
               <div><strong>{locale === "zh-CN" ? "仅影响此后创建的 Goal" : "Future Goals only"}</strong><p>{locale === "zh-CN"
-                ? "创建时固定选择，审核晋升后生效。已有 Goal 不变；迁移需单独备份、停止写入并结算租约。"
-                : "Fixed at creation and used after reviewed promotion. Existing Goals are unchanged; migration requires a separate backup, stopped writers and settled leases."}</p></div>
+                ? "启用 canonical 创建后，新 Goal 直接建立权威存储，并采用所选执行策略；失败时须重试原创建操作。关闭时仅固定晋升后的目标存储。已有 Goal 的升级仍需备份、停止写入和结算租约；这里不授予工具权限。"
+                : "With canonical creation enabled, new Goals establish authority with the selected execution policy; retry the original operation after failure. Disabled only freezes the post-promotion target. Existing Goals still require backup, stopped writers and settled leases for upgrade; this setting grants no tool permissions."}</p></div>
             </section>
           ) : null}
 

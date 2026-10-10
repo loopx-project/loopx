@@ -163,7 +163,7 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     archived = cli("todo", "archive-completed", "--goal-id", GOAL, "--role", "agent",
                    "--max-active-done", "0", "--execute")
     assert archived["moved_count"] == 1
-    assert cli("todo", "list", "--goal-id", GOAL, "--todo-id", created["todo_id"])["todos"][0]["archive_state"] == "archive"
+    assert cli("todo", "list", "--goal-id", GOAL, "--todo-id", created["todo_id"])["todo"]["archive_state"] == "archive"
     from loopx.capabilities.explore.composition_frontier import project_live_explore_composition_frontier
     frontier = project_live_explore_composition_frontier(runtime_root=runtime, goal_id=GOAL, agent_id=AGENT,
         status_payload={"run_history": {"goals": json.loads(registry.read_text())["goals"]}})
@@ -392,7 +392,7 @@ def test_retirement_cannot_hide_a_runnable_bound_task_and_keeps_that_task_open(f
     assert contract["blocking_todo_ids"] == [task["todo_id"]]
     progress = contract["progress_observation"]
     cli(*base, "--progress-blocker-id", progress["blocker_id"], "--progress-evidence-id", progress["evidence_ids"][0], success=False)
-    assert cli("todo", "list", "--goal-id", GOAL, "--todo-id", task["todo_id"])["todos"][0]["status"] == "open"
+    assert cli("todo", "list", "--goal-id", GOAL, "--todo-id", task["todo_id"])["todo"]["status"] == "open"
     # An explicit lifecycle pause keeps work and evidence visible; retirement
     # still closes only the original duty, never the Todo or its Goal.
     cli("todo", "update", "--goal-id", GOAL, "--todo-id", task["todo_id"], "--agent-id", AGENT,
@@ -401,4 +401,4 @@ def test_retirement_cannot_hide_a_runnable_bound_task_and_keeps_that_task_open(f
         "--vision-summary", "Reassess the bounded research question.", "--vision-acceptance", "Current evidence must satisfy the question.",
         "--vision-replan-trigger", "Keep the acceptance and paused work visible.")
     assert retired["settlement_progress"]["closeout_kind"] == "capability_duty_retired_no_spend"
-    assert cli("todo", "list", "--goal-id", GOAL, "--todo-id", task["todo_id"])["todos"][0]["status"] == "blocked"
+    assert cli("todo", "list", "--goal-id", GOAL, "--todo-id", task["todo_id"])["todo"]["status"] == "blocked"

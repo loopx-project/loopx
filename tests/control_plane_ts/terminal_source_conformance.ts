@@ -1,6 +1,7 @@
 /** One mixed production-scale graph; independent expectations for review,
  * validation, lease retirement and receipt recovery on every real provider. */
 import assert from "node:assert/strict";
+import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import test from "node:test";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -25,6 +26,82 @@ const validation = {schema_version: "issue_fix_validation_command_v0", command_l
 
 export function registerTerminalSourceConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
   for (const schema of ["legacy", "native"] as const) {
+    test(`${provider}: supersede links existing work and retires its original lease atomically (${schema})`, async t => {
+      const {store, contender} = await factory(t);
+      const goal = "terminal-existing-successor";
+      const fixture = productionScaleCoordinationFixture(goal, schema);
+      await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+        next_projection: fixture.projection, events: [], receipts: []});
+      const before = await loaded(store);
+      const todos = before.head.todos as JsonObject[];
+      const successor = todos.find(todo => todo.todo_id !== fixture.completion_todo_id && todo.status === "open")!;
+      const originalLease = (before.head.leases as JsonObject[]).find(lease => lease.todo_id === fixture.completion_todo_id)!;
+      const request: CoordinationTodoTerminalLifecycleInput = {
+        goal_id: goal, todo_id: fixture.completion_todo_id, expected_role: "agent", command: "supersede",
+        actor_agent_id: "agent-a", registered_agents: fixture.registered_agents, lifecycle_grants: [],
+        authority_reason: null, decision_outcome: null, operation_identity: {kind: "explicit", operation_id: "replace-with-existing"},
+        lease_idempotency_key: String(originalLease.idempotency_key), lease_expected_version: Number(originalLease.version),
+        allow_user_gate_auto_acquire: false, requested_no_followup: false, requested_completion_turn_key: null,
+        requested_completion_identity_source: null, linked_successor_todo_ids: [String(successor.todo_id)],
+        successor_intents: [], note: "superseded", evidence: null, reason: "Continue the existing declared work.",
+        clear_claim: false, validation_declaration: null, validation_receipt: null, completion_policy_request: null,
+        dry_run: false, now: new Date(String(fixture.semantic_cases.terminal_source!.observed_at)),
+      };
+      const foreign = await factory(t);
+      const foreignFixture = productionScaleCoordinationFixture("another-goal", schema);
+      const foreignTodo = (foreignFixture.projection.todos as JsonObject[]).find(todo => todo.status === "open")!;
+      foreignTodo.todo_id = "todo_foreign_successor";
+      await foreign.store.commitAuthority({operation_id: "seed-foreign", expected_provider_revision: null,
+        next_projection: foreignFixture.projection, events: [], receipts: []});
+      const foreignBefore = await loaded(foreign.store);
+      for (const [changes, reason] of [
+        [{linked_successor_todo_ids: [request.todo_id]}, "todo_successor_cycle"],
+        [{linked_successor_todo_ids: ["todo_missing_successor"]}, "todo_successor_not_found"],
+        [{linked_successor_todo_ids: ["todo_foreign_successor"]}, "todo_successor_not_found"],
+        [{lease_expected_version: Number(originalLease.version) + 1}, "version_mismatch"],
+        [{actor_agent_id: "unregistered"}, "actor_not_registered"],
+      ] as const) {
+        const rejected = await execute(store, {...request, ...changes});
+        assert.equal(rejected.reason_code, reason, JSON.stringify(rejected));
+        assert.deepEqual(await loaded(store), before);
+      }
+      assert.deepEqual(await loaded(foreign.store), foreignBefore);
+      const refusedSource = await execute(store, request, async () => false);
+      assert.equal(refusedSource.reason_code, "authority_source_changed", JSON.stringify(refusedSource));
+      assert.deepEqual(await loaded(store), before);
+      const preview = await execute(store, {...request, dry_run: true});
+      assert.equal(preview.status, "planned");
+      assert.deepEqual(await loaded(store), before);
+      const lostResponse = new Proxy(store, {get(target, key) {
+        if (key === "commitAuthority") return async (...args: Parameters<AuthorityStore["commitAuthority"]>) => {
+          await target.commitAuthority(...args);
+          throw new Error("Synthetic lost retirement response");
+        };
+        const member = Reflect.get(target, key);
+        return typeof member === "function" ? member.bind(target) : member;
+      }});
+      const accepted = await execute(lostResponse, request);
+      assert.ok(["recovered", "replayed"].includes(String(accepted.status)), JSON.stringify(accepted));
+      const after = await loaded(store);
+      const source = (after.head.todos as JsonObject[]).find(todo => todo.todo_id === request.todo_id)!;
+      assert.equal(source.status, "done");
+      assert.deepEqual(source.successor_todo_ids, [successor.todo_id]);
+      assert.equal(source.superseded_by, successor.todo_id);
+      assert.deepEqual((after.head.todos as JsonObject[]).filter(todo => todo.todo_id !== request.todo_id),
+        todos.filter(todo => todo.todo_id !== request.todo_id));
+      assert.deepEqual((after.head.leases as JsonObject[]).find(lease => lease.todo_id === request.todo_id),
+        {...originalLease, status: "released", updated_at: request.now.toISOString().replace(".000Z", "Z")});
+      const replay = await execute(contender, request, async () => {throw new Error("Replay precedes fresh source checks");});
+      assert.equal(replay.status, "replayed");
+      assert.deepEqual(await loaded(store), after);
+      assert.equal((await execute(store, {...request, linked_successor_todo_ids: []})).reason_code,
+        "coordination_operation_identity_mismatch");
+      const another = todos.find(todo => todo.todo_id !== request.todo_id && todo.todo_id !== successor.todo_id)!;
+      const late = await execute(store, {...request, operation_identity: {kind: "explicit", operation_id: "late-link"},
+        linked_successor_todo_ids: [String(another.todo_id)]});
+      assert.equal(late.reason_code, "todo_terminal_successor_intent_after_completion", JSON.stringify(late));
+      assert.deepEqual(await loaded(store), after);
+    });
     test(`${provider}: terminal review and validation bind one complete ${schema} source`, async t => {
       const {store, contender} = await factory(t);
       const goal = "terminal-source";
@@ -116,6 +193,50 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
         assert.equal((await execute(store, {...commit, ...changes})).reason_code, "coordination_operation_identity_mismatch");
       }
       assert.deepEqual(await loaded(store), after);
+      assert.deepEqual(await store.readReceipt(commit.operation_identity.operation_id), receipt);
+      const lateLink = await execute(store, {...commit, requested_no_followup: false,
+        review_basis: {...fresh.review_basis, provider_revision: after.provider_revision},
+        validation_source_provider_revision: after.provider_revision,
+        validation_receipt: null,
+        operation_identity: {kind: "explicit", operation_id: "late-completion-link"},
+        linked_successor_todo_ids: [String(other.todo_id)]});
+      assert.equal(lateLink.reason_code, "todo_terminal_successor_intent_after_completion", JSON.stringify(lateLink));
+      assert.deepEqual(await loaded(store), after);
+      // A result association may follow ordinary completion without reopening
+      // the work or renewing its retired lease. Exercise the same provider/CAS
+      // path as normal updates, including a second provider instance on replay.
+      const attach = {goal_id: goal, todo_id: request.todo_id, expected_role: "agent",
+        actor_agent_id: "agent-a", registered_agents: fixture.registered_agents,
+        operation_id: "attach-terminal-evidence", patch: {}, clear_fields: [],
+        planning_intent: {append_explore_result_node_refs: ["bounded-question"]},
+        lease_idempotency_key: String(oldLease.idempotency_key),
+        lease_expected_version: Number(oldLease.version), dry_run: false,
+        now: new Date(String(scenario.after_expiry))};
+      for (const changes of [
+        {actor_agent_id: "agent-b"},
+        {lease_expected_version: Number(oldLease.version) + 1},
+        {lease_idempotency_key: "different-execution"},
+        {patch: {note: "Unrelated edit"}},
+      ]) {
+        assert.equal((await executeCoordinationTodoUpdate(store, {...attach, ...changes})).status, "failed");
+        assert.deepEqual(await loaded(store), after);
+      }
+      const associated = await executeCoordinationTodoUpdate(store, attach);
+      assert.equal(associated.status, "applied", JSON.stringify(associated));
+      const linked = await loaded(contender);
+      assert.deepEqual(linked.head.leases, after.head.leases);
+      const source = (after.head.todos as JsonObject[]).find(todo => todo.todo_id === request.todo_id)!;
+      const linkedSource = (linked.head.todos as JsonObject[]).find(todo => todo.todo_id === request.todo_id)!;
+      assert.equal(linkedSource.status, "done");
+      assert.deepEqual(linkedSource.completion_continuation, source.completion_continuation);
+      assert.ok((linkedSource.explore_result_node_refs as string[]).includes("bounded-question"));
+      assert.deepEqual((linked.head.todos as JsonObject[]).filter(todo => todo.todo_id !== request.todo_id),
+        (after.head.todos as JsonObject[]).filter(todo => todo.todo_id !== request.todo_id));
+      assert.equal((await executeCoordinationTodoUpdate(contender, attach)).status, "replayed");
+      assert.deepEqual(await loaded(store), linked);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...attach,
+        planning_intent: {append_explore_result_node_refs: ["changed-question"]}})).status, "failed");
+      assert.deepEqual(await loaded(store), linked);
       assert.deepEqual(await store.readReceipt(commit.operation_identity.operation_id), receipt);
     });
   }

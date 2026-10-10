@@ -1,6 +1,6 @@
 # 合并后的本地权威退役节奏
 
-- 当前计划：2026-10-02，`9b0486dc1`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 当前计划：2026-10-07，`06b6caa07`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
@@ -19,9 +19,9 @@
 | #5170 | App 委派结果连续性；不代表全部 Turn／实例消费者完成 |
 | #4931 | TS 私有状态重放降低 SQLite／archive 历史重建成本；未切默认、未完成 D2 |
 
-采用后续核对时，#5106（collaboration GoalRef）、#5130
+在 9 月 28 日采用后续核对时，#5106（collaboration GoalRef）、#5130
 （session GoalRef）、#5139（App Turn 接受恢复）、#4915（本地状态路径迁移）仍开放。
-复用和推进这些 owner，不重复实现；只对确实受影响的调用方建立依赖，本地默认切换
+这是历史清单，不是今天的合并队列。重新核对这些 owner，不重复实现；只对确实受影响的调用方建立依赖，本地默认切换
 不等待无关云端或百 Agent 工作。
 
 **File 是默认 store factory，不等于所有新旧 Goal 默认以 File 为权威。**
@@ -44,6 +44,23 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 内部删除必要但不充分，不能忽略公开 CLI/import 和序列化契约。保留公共行为测试，
 只删没有消费者的旧实现专属 characterization。删的是代码，不是用户状态、回执和备份。
 
+### 永久文档 IO 解耦
+
+原 `todos/active_state_editing.py` 的三个持久化文本函数原样移入
+`runtime/document_io.py`。这保留 Python Host IO，不新增语义 owner，也不计入
+Python 退役收益。调用方清单如下：
+
+| 调用家族 | 保留义务 |
+| --- | --- |
+| Canonical Todo 投影、completion validation store、team plan | 完整文档／声明落盘、排他重建和持久化重试；权威决策仍由 typed owner 负责 |
+| Project registry、source-session registration／registry／Turn effects、supervisor 日志 | 原身份／重试契约下的原子发布及文件／目录持久化 |
+| Bootstrap、runtime shadow writer、feedback、旧状态迁移 | 现有源／叙述写入和升级恢复；受支持的源 writer 仍可达 |
+
+故障注入转向新 owner，包括嵌入的真实恢复 probe。真实 File／SQLite 投影／重放
+和源 writer 测试继续保留权威、崩溃和副作用不重复的断言。删除三个旧定义不删除
+编辑模块仍活跃的读取／编辑函数。回退本包只改变代码归属，无需数据转换。
+最后源 writer／outbox 退出、安装采用、D2 和发布默认资格仍分别验收。
+
 ### 已合入的 T4 切片：已无调用方的 Python lease／handoff facade
 
 在 `e240730ec` 核对调用方后，#5395 已于 `8474c8d86` 合入，退役了下列
@@ -56,16 +73,45 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 | `task_lease.acquire.decide`、`task_lease.lifecycle.decide`、`coordination.handoff_mode.plan` RPC 注册 | 只剩这些旧 facade／handler 测试；原生事务直接复用同一 TS 规则 | 废弃私有 RPC 明确拒绝；保留仍有 Python 调用方的 `task_lease.owner_eligibility` 和 write-scope overlap。 |
 | `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | 保留真实 Todo mutation authorization 使用的 `todo_snapshot_from_mapping`；不删 store、回执、备份或迁移 reader。 |
 
-`authority_core.py` 仍是活跃 Todo bridge。`LeaseAction`、`LeaseModeGateCommand`
-也保留：semantic-vocabulary 注册表明确将该输入契约保留到 M4 评审。本切片不通过
-降低语义覆盖下限丢弃已有兼容义务。仅服务旧 facade 的测试随实现退役，公共／原生
+`authority_core.py` 仍是活跃 Todo bridge；#5395 当时将
+`LeaseAction`／`LeaseModeGateCommand` 保留到 M4 评审。有界 M4 包现退役无人
+使用的私有输入及其 union，加入定义／import 回生守卫，明确内部 import 不兼容。
+有价值的原生 lifecycle 子集证明改为引用实际 TS request owner；26／51／9
+覆盖下限及其他预算保持。安装态 File／SQLite lease／恢复测试在旧接口真正
+不存在时执行。回退旧代码包即可恢复私有 import，无需状态转换。公共 lease
+事务、source writer／outbox、legacy 策略、历史备份／格式／回执 reader 和永久
+Host IO 保留。这是最后调用方切片，不代表整项 C1／M4、D2 或发布默认资格完成。
+仅服务旧 facade 的测试随实现退役，公共／原生
 行为测试保留。回退该切片可恢复内部跨界，无需转换数据。本机 CLI 已采用
 `db3672f3c`，验证了干净源码清单、具备资格的 SQLite runtime、已知权威格式均为
 当前版本及健康的 canonical 合同读回。这不证明所有已安装 Host 或 D2 已验收。
 
-## 当前收尾：验证、迁移与删除（2026-10-02）
+### Todo snapshot 拒绝：保留语义，统一原生 owner
 
-按 main `8b5335a72` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
+下一批有界 T4 切片把活跃 Todo bridge 的两项 snapshot 拒绝迁入
+`coordination/todo_lifecycle_decision.ts`。claim／update 和 complete／supersede
+共享拒绝顺序：`invalid_lease_snapshot`、`todo_not_found`，然后才是 actor
+准入和终态重放。active lease 不能同时 absent 或 released；显式 null Todo
+属于领域拒绝。缺失／格式错误的 wire 字段仍严格解码失败。直接 native
+调用获得此前只在 Python bridge 中生效的保护；合法归一化 Python 输入的
+结果和拒绝优先级保持。
+
+| 退役符号 | 调用方／替代 owner | 保留义务与回退 |
+| --- | --- | --- |
+| Python `_invalid_lease_snapshot`、`_result` 及 bridge 的缺失 Todo 提前判断 | `authority_core.decide`／`_typescript_todo_decision`；既有 terminal／mutation RPC 到同一 TS owner | 保留错误码、无写入／释放提案、actor／delegation／CAS 规则和合法 holder 行为。`todos/mutation_authority.py` 使用的 Python snapshot／结果适配及 native 结果形状验证保留；回退代码包即可，无需转换状态。 |
+
+独立负例覆盖四个 verb、三种 handoff mode，以及缺失 Todo、done 重放和未授权
+actor。基线 Python bridge 已拒绝这些状态，直接基线 TS 尚未如此。
+验收还在隔离源码和 wheel 安装中运行真实 File／SQLite 创建、修改、终态效果、
+原操作恢复、provider 不可用拒绝和租约结算。这是合成入口验收，不代表 attached
+App 或持续成本资格。未退役 store、writer、outbox、历史格式／回执 reader 或永久
+Host IO；C1、D2 和发布默认采用仍是独立验收边界。
+
+<a id="当前收尾验证迁移与删除2026-10-02"></a>
+
+## 当前收尾：验证、迁移与删除（2026-10-07）
+
+按 main `06b6caa07` 和所列已合并 PR 重新核对。本节是 **R5 / D1–D3 / T0–T4**
 的当前执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
 存储格式、权威选择、所有权策略是三种不同迁移：有 SQLite 数据库，不代表新 Goal
 已经默认使用 canonical authority，也不代表 `legacy` handoff 策略已经退役。
@@ -79,13 +125,14 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 | 已合并：#5436 | 委派 Host 原租约续期；最终 Todo 验收和停止确认仍是不同边界。 |
 | 已合并：[#5413](https://github.com/loopx-project/loopx/pull/5413)，head `2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。保留原 CLI 恢复证据。没有自动迁移存量 legacy Goal，成功生成计划也不代表执行消费者已验收。 |
 | 已合并：[#5466](https://github.com/loopx-project/loopx/pull/5466)，merge `066b5bf26` | 原租约保持到最终验收；安装态消费者验收与合并分开记录。 |
-| 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`1012d37f3` | preflight 优化仍在评审；冷 CLI 资格失败行保留，功能投影等价不等于性能通过。合成故障不证明历史瞬态打开失败的根因。 |
-| 已批准，待维护者合并：[#5500](https://github.com/loopx-project/loopx/pull/5500)，`a9e3d722c` | App 重试恢复原 canonical Goal 创建操作；这是创建／默认接入的前置修复，不退役存量所有权策略。 |
-| 按实际路径建立依赖 | [#5308](https://github.com/loopx-project/loopx/pull/5308) 要证明子进程停止后才报告已结算；[#5398](https://github.com/loopx-project/loopx/pull/5398) 保留 UI 历史和 inspector 完整事实。只对纳入试用的相关消费者建依赖，不将其说成 SQLite 引擎前置，也不能发布已知损坏的用户路径。 |
+| 已合并：[#5283](https://github.com/loopx-project/loopx/pull/5283)，merge `fd65e71f4` | 复用 preflight 优化；冷 CLI 资格失败行保留，功能投影等价或合并均不等于性能通过。合成故障不证明历史瞬态打开失败的根因。 |
+| 已合并：[#5500](https://github.com/loopx-project/loopx/pull/5500)，merge `9c8961076` | App 重试恢复原 canonical Goal 创建操作；这条已交付恢复边界不退役存量所有权策略。 |
+| 已合并：[#5805](https://github.com/loopx-project/loopx/pull/5805)，merge `3a1a92ebd` | 未配置的新 Goal 在源码中默认创建 canonical SQLite／`hard_lease`。存量选择和显式关闭／v0 行为保持固定；安装采用、D2/D3 与发布默认资格仍分别验收。 |
+| 已合并的相关路径 owner：[#5308](https://github.com/loopx-project/loopx/pull/5308)，merge `7b13f88e8`；[#5398](https://github.com/loopx-project/loopx/pull/5398)，merge `3870aa12d` | 复用子进程停止后才结算的控制，以及完整 UI 历史／inspector 事实。验收实际纳入试用的消费者；合并既不是 SQLite 引擎资格，也不能用于发布已知损坏的用户路径。 |
 
-上述开放 head 分别解决 preflight 与创建恢复，不代表固定“剩余 PR 数”。
-剩余实现包仍是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
-捕获退役。仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
+10 月 2 日的 preflight／创建恢复队列已合并，不重做这些修复。剩余交付包是安装态
+canonical 创建／默认与升级采用、策略迁移与 legacy 策略删除、旧 writer／捕获退役。
+仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
 不再制造固定“剩余 PR 数”，也不为维持这个数字重做已完成的工作。
 
 Goal 设置的策略迁移已复用 CLI 的同一 TS 备份迁移 owner：读取当前策略、预览
@@ -123,10 +170,10 @@ Goal 的 provider 或所有权策略；继续保留这些已有出口。恢复�
 
 | 交付包／既有 owner | 要做什么、凭什么完成 | 依赖／删除机会／节奏 |
 | --- | --- | --- |
-| 现有 head 收尾；R3/R5 | 修完上述开放 PR 的 exact-head finding，处理相关失败与冲突，提交已评审 head 给维护者合并；区分已合并和已安装。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
+| 已合并消费者与当前 finding 验收；R3/R5 | 复用上述已合并 owner，核对当前相关失败和开放 PR，只分配已证实的剩余修复；区分已合并和已安装。 | 旧合并队列已关闭，进入有界安装态矩阵；不重开已合并工作，也不把无关消费者当成统一前置。 |
 | 安装态恢复候选；D1/D3、整 Goal 晋升任务 | 固定合并源码和 CLI/App/Effect 实际 Node/SQLite 身份；独立恢复并验证备份，用隔离真实快照及合成负例执行下表，完成 File→SQLite→新增写入→File。之后按授权逐 Goal 采用并日常回读。 | 相关 PR 合并后立即开始，有界矩阵目标 1–2 个工作日；保留兼容的恢复版本和 archive，不对活跃 Goal 注入崩溃／损坏。 |
 | 有界自愿试用；D2/D3 | 安装态恢复及相关执行控制通过后，邀请不超过 20 位核心开发者。公开负载／平台范围、备份迁移关闭步骤、已知缺口、停止条件与反馈入口；观察真实日常使用和失败。 | 不必等待全部正式 D2 轴或一份新的十天证书；携带新写入回退未通过前不邀请。试用不认证发布默认值。 |
-| Canonical 创建／默认接入；D3/T3 | 复用 `machine_configuration/goal_storage.py` 和 `local_authority_defaults.ts`。当前设置只选择**晋升后的目标**，返回 `promotion_performed: false`。补齐新建初始化／重试、升级、设置及打包 App/CLI/Lark 读回，已有显式 selector 保持固定。 | 有界候选可用后实现，发布默认启用仍服从下方决策；同包删除被替代的创建／选择决策。只把设置里的 file 改成 sqlite 不够。 |
+| 安装态 canonical 创建／默认采用；D3/T3 | 复用 #5500/#5805、`machine_configuration/goal_storage.py` 和 `coordination/local_authority_defaults.ts`。未配置的新 Goal 已初始化 canonical SQLite／`hard_lease`；v0 与 v1 `canonical_creation=false` 保留晋升后目标行为。验收安装态初始化／重试、设置、升级及打包 App/CLI 读回，纳入相关调用方时验证 Lark；存量 Goal 选择保持固定。 | 不实现第二份创建／默认值 owner。遵循[配置／关闭契约](../../../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)；移除偏好会恢复源码候选默认值，不会关闭创建。存量 Goal 采用和发布默认资格仍有独立出口。 |
 | 两种所有权策略；R3/R5/T4 | 复用 #5413 的 backup/plan/migrate owner。清点旧／缺省 mode，结清适用的 claim／lease 和 Host 效果，逐个迁移获授权 Goal，再将正常运行类型及默认值收敛为 soft_claim / hard_lease。复用既有 Goal 设置入口和同一 owner，提供预览、获授权执行、结果及失败／恢复；只有 CLI 的迁移阶段标为部分交付。 | 与试用观察并行；不和 File↔SQLite 转换绑定。受支持升级路径和调用方通过后删除 legacy 执行，不能默默把 legacy 当成 soft。 |
 | 旧 writer／跨界删除；T3/T4 | 最后真实调用方切到 TS owner 后验证下表，同时删除 Python 决策／私有 dispatch 和旧 Markdown 写入；清理 capture producer 前对账 outbox。在旧路径已不存在的包上验证 CLI。 | 已证明无消费者的内部删除现在就做；业务 writer 删除随对应迁移接入，不等 R6 全部完成或所有 Python 消失。每批有具体清单和回退方式。 |
 | 发布默认决策；R5/D2/D3 | 对账受支持安装、当前 release 对照、代表性持续读写／恢复、资源增长和既有 soak 适用性；发布明确 profile、failed/missing、升级说明及关闭路径，显式披露默认变化。 | 不按测试／PR 数推算日期；正式十天／100k 资格保留各自证据要求。已有 File 选择继续受支持并固定；SQLite 不可用不能静默唤回旧 writer。 |
@@ -200,6 +247,21 @@ PR 不构成重复开工的理由。现有收尾 monitor 归并相关 head／rev
 不进入公共文档。
 
 ## 删除 writer 前，本机可以积极做的验证
+
+安装态 CLI 的连续性已有一个真实 provider 综合旅程：
+`tests/control_plane/test_local_provider_settlement_journey.py` 验证 canonical
+File → SQLite → 已确认的 Todo 新增／修改／完成 → 新进程读回 → File。逐项比较
+完整领域 journal、原操作回执和当前 Todo，重试 add/update/completion/spend 不再
+提交业务效果或扣费；未结算的 active lease 阻止切换。新写入后，旧备份只能匹配
+保留前缀，不能充当当前 head 的回退。checkpoint 缺少合格路径决策时，新一轮仍
+须重规划；provider 恢复不能抹掉这项义务，也不能把 Todo 完成当作 Goal 验收。
+
+这补齐了有界 CLI 组合验收，不是完整安装态产品验收。App 的任务所有权编辑器
+只迁移执行策略，尚无已有 Goal 的 File/SQLite 切换交互。下一配套仍复用同一 TS
+migration owner：在现有 Goal 设置中提供不接收调用者路径的 preview/apply，
+失响应／重启后恢复原预览，明确拒绝原因，并单独读回当前选中来源。须用真实
+packaged UI 和后端核验 pending projection/outbox、Host 停止及结算。旧 Markdown
+完整捕获、隔离 checkpoint 导入、全 Goal 恢复、D2 与发布默认决策仍各自验收。
 
 以下是冻结候选版本后的工程窗口，不是承诺发布日期。故障注入只用可丢弃 runtime
 和经过验证的隔离副本，不能为了测试杀掉或改写活跃 Goal。
@@ -292,8 +354,51 @@ Quota 观察复用既有 should-run 摘要：捕获的单 Goal 行序列化由 1
 另一项 148 秒隔离演练通过新进程为两种 provider 各追加 12 笔提交，跨越 checkpoint，
 逐轮验证原回执重放、变更意图拒绝及 projection／hash 一致性。它证明这段有界存储
 流程，**不代表** Host 执行、活跃 Goal 采用或 D2 的十天 soak 已完成。本次不改变活跃
-authority、发布默认值或旧 writer 删除决定。B 仍缺持续负载／平台／容量证据；C 仍需
-consumer／新建入口及受支持升级验收。
+authority、发布默认值或旧 writer 删除决定。C 仍需 consumer／新建入口及受支持升级验收。
+
+原封不动的 `matched-64k` capacity runner 在 `5f51559dc` 源码上完成独立的
+10k／100k 历史：macOS arm64、Node 24.21.0／SQLite 3.53.4、WAL/FULL，
+两轴使用相同且非空的 1,341 文件公共扫描根。正式 ledger 为
+**13 passed／1 failed／11 missing**，进程退出 1，`full_d2_qualified=false`。
+部分 p95 测量如下：
+
+| 测量 | 10k | 100k | 冻结预算／结果 |
+| --- | ---: | ---: | --- |
+| Warm head | 2.360 ms | 4.860 ms | 增长 2.059 倍 > 2 倍：**失败**；绝对值 < 50 ms 通过 |
+| Commit | 4.654 ms | 7.022 ms | 增长 1.509 倍、绝对值 < 100 ms 通过 |
+| Receipt | 5.043 ms | 6.952 ms | 增长 1.379 倍、绝对值 < 50 ms 通过 |
+| 新进程 CLI status | 1,133.177 ms | 1,143.820 ms | < 2,000 ms 通过 |
+| 新进程 CLI mutation | 671.668 ms | 865.628 ms | 增量 193.960 ms < 200 ms 通过 |
+
+真实 CLI 操作、head／receipt 校验和临时存储清理均完成，没有正确性断言失败。
+这两条存储轴不证明完整八 agent／四 writer 负载、稳定 RSS、大历史恢复、consumer
+lag、升级／回退、十日 soak、受支持 runtime 矩阵、promotion、1 MiB payload、
+300k 余量或 60 秒 burst；没有清空 OS 文件缓存。
+[D2 issue #4224](https://github.com/loopx-project/loopx/issues/4224) 已记录 soak 启动，
+须先与既有负责人核实完成报告及其对当前候选的适用性，再决定是否授权替代运行。
+
+在 `9d7680a34` 上完成受控诊断：provider／log／codec 与 `5f51559dc` 字节一致，
+使用真实 64 KiB FULL/WAL 存储及独立 10k／100k 历史。三组未插桩的新进程测量
+保持 3 次 head／2 次 receipt 的读取比例，每组每轴 3,000 个 head 样本。head p95
+范围分别为 2.91–4.84 ms 和 4.96–10.38 ms，说明存在波动，不能记为新的正式通过：
+夹具填充没有穿插读取，测量时历史不增长；未测完整 CLI、并发负载或 OS 冷文件缓存。
+
+真实 head 路径的 SQL 计时和查询字节码定位到随历史增长的成本：连续性聚合通过
+SQLite 的 `Count` opcode 读取覆盖索引，执行均值由 0.145 增至 0.837 ms；head
+其余未分解工作为 0.474／0.419 ms。独立的保留连接对照仍有 count 增长，索引极值
+查询则保持较小。这些是插桩组件对照，不能相加当 p95 预算，也不是替换生产连接的
+方案。V8 capture 指向 `current` 和 `identity`，但不证明 kernel／IO 成本或原来
+2.059 倍越线的精确归因。JS 返回行数有界不代表 SQLite 工作量恒定。回归同时验证
+live proof 窗口外的非尾部 hole：完整极值／head／parent 不能代替连续性校验。
+本次不据此提权威缓存、删 proof、切换 provider 或运行时性能修复。
+
+原失败和预算继续保留；绝对值通过不抵消增长失败行，但按 §7.2 的消费者影响决策，
+这一行也不能单独否决发布默认值。#5805 已让新建默认采用 canonical SQLite／
+`hard_lease`，重复修改此归属不是剩余工作。按源码和支持 profile 对齐已有安装态
+创建、重试、升级及新增写入回退通过证据。十一项缺失属于这份容量报告，不是十一项
+产品功能缺失，也不否定独立恢复证据。B 剩余发布决策应聚焦声明的支持范围、适用的
+持续运行证据、真实消费者回归和未解决的恢复缺口；复用当前 File 对照与既有 soak，
+不要把全部验收重新归零。
 
 ### 合同健康检查的权威归属
 

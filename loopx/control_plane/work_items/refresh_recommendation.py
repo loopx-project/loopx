@@ -44,8 +44,8 @@ def load_refresh_planning_source(
 ) -> RefreshPlanningSource:
     """Read one shared planning snapshot without repairing its display.
 
-    Canonical Todo availability permits observation without Markdown, not an
-    edit of missing Next Action narrative. Provider failures propagate.
+    Canonical Todos remain available without a Markdown display; steps bind to
+    that task snapshot. Provider failures propagate rather than using prose.
     """
     events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
@@ -136,6 +136,10 @@ def resolve_refresh_recommendation(
     state_path: Path | None = None,
     rollout_events: list[dict[str, Any]] | None = None,
     todo_fields: dict[str, Any] | None = None,
+    next_step: str | None = None,
+    next_step_basis: str | None = None,
+    source_context: dict[str, Any] | None = None,
+    runs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Adapt canonical Todo facts into the TS-owned refresh read reducer."""
 
@@ -144,7 +148,7 @@ def resolve_refresh_recommendation(
     shared_action: str | None = None
     summary: dict[str, Any] | None = None
     lane_candidate: dict[str, Any] | None = None
-    if not explicit_action:
+    if not explicit_action or next_step:
         settlement_todo_id = normalize_todo_id(
             settlement_identity.get("todo_id")
             if isinstance(settlement_identity, Mapping)
@@ -171,12 +175,18 @@ def resolve_refresh_recommendation(
             active_next_action=next_action_entries,
             receipt_bound_todo_id=settlement_todo_id,
         )
+    if next_step and not agent_id:
+        raise ValueError("--next-action requires a registered --agent-id")
+    if next_step and explicit_action and next_step != explicit_action:
+        raise ValueError("--next-action and --recommended-action must agree when supplied together")
     try:
         result = effect_runtime_result(
             "work_item.refresh_recommendation.resolve",
             {
                 "schema_version": REFRESH_RECOMMENDATION_REQUEST_SCHEMA_VERSION,
-                "explicit_action": explicit_action,
+                # A step decorates the selected task; its text must not bypass
+                # task selection via the unbound explicit recommendation arm.
+                "explicit_action": None if next_step else explicit_action,
                 "agent_id": agent_id,
                 "settlement_identity": (
                     dict(settlement_identity)
@@ -197,6 +207,22 @@ def resolve_refresh_recommendation(
     ):
         raise RuntimeError("TypeScript refresh recommendation shape mismatch")
     resolved = dict(result)
+    if source_context is not None and agent_id and summary is not None:
+        from .recommendation_source_io import lane_recommendation_context, latest_bound_recommendation
+        task = _exact_todo(summary, resolved.get("todo_id"))
+        selected = lane_candidate
+        if resolved.get("recommended_action_source") == RECOMMENDED_ACTION_SOURCE_SETTLEMENT_BOUND_TODO:
+            selected = task
+        context = lane_recommendation_context(source_context, agent_id=agent_id,
+            selected_todo=selected, task=task,
+            prior_resolution=latest_bound_recommendation(runs or [], agent_id),
+            write={"text": next_step, "expected_basis": next_step_basis} if next_step else None)
+        if next_step:
+            resolved = context["resolution"]
+        elif isinstance(context.get("selected_todo"), dict) and context["selected_todo"].get("next_step"):
+            # A derived refresh may reuse the bound step but never mint a new
+            # step receipt or silently change its original read basis.
+            resolved = {**resolved, "recommended_action": context["selected_todo"]["next_step"]}
     validate_local_control_text(
         "recommended_action",
         str(resolved.get("recommended_action") or ""),

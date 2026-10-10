@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+
 import pytest
 
 from loopx.heartbeat_prompt import (
@@ -8,6 +12,60 @@ from loopx.heartbeat_prompt import (
     build_heartbeat_prompt_error_payload,
     project_heartbeat_agent_input,
 )
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+@pytest.mark.parametrize("agents", [["agent-a"], ["agent-a", "agent-b"]])
+def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract(mode, agents):
+    # Registration count alone cannot describe repository or task admission.
+    # The task body must not create a second, unconditional workspace policy.
+    payload = build_heartbeat_prompt(
+        goal_id="workspace-guidance", agent_id="agent-a", registered_agents=agents,
+        runtime_profile="codex_app_heartbeat", **{mode: True},
+    )
+    body = payload["task_body"]
+    assert "agent_channel.work_context" in body
+    assert "required_reads (or envelope) before work" in body
+    assert "quota claim/lease and workspace contract plus repository rules" in body
+    assert "use an independent worktree for repository writes" not in body
+    assert "independent repo worktree" not in body
+    if mode != "full":
+        assert payload["interface_budget"]["within_budget"] is True
+
+
+@pytest.mark.parametrize("agents", [["worker-a"], ["worker-a", "worker-b"]])
+@pytest.mark.parametrize("scope", ["Codex App heartbeat automation", "x" * 320])
+def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp_path, agents, scope):
+    state = tmp_path / "state.md"
+    state.write_text("# Synthetic guidance\n", encoding="utf-8")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": "synthetic-goal-validationx", "repo": str(tmp_path),
+                   "state_file": "state.md",
+                   "coordination": {"registered_agents": agents}}],
+    }), encoding="utf-8")
+    command = [sys.executable, "-m", "loopx.cli", "--format", "json",
+               "--registry", str(registry), "heartbeat-prompt", "--goal-id",
+               "synthetic-goal-validationx", "--agent-id", "worker-a", "--codex-app",
+               "--thin", "--agent-scope", scope]
+    for capability in ("filesystem_read", "filesystem_write", "shell"):
+        command.extend(["--available-capability", capability])
+    packet = json.loads(subprocess.check_output(command, text=True))
+    assert packet["ok"] is True
+    budget = packet["interface_budget"]
+    assert budget["max_chars"] == 3000
+    assert budget["budget_char_count"] <= budget["max_chars"]
+    assert budget["within_budget"] is True
+    body = packet["task_body"]
+    assert "Equal peer `worker-a` (peer_v1)" in body
+    assert f"scope: {scope}" in body
+    assert "quota claim/lease and workspace contract plus repository rules" in body
+    assert "Follow todo continuation policy" in body
+    assert "Task-scoped coordination grants no authority over other agents" in body
+    assert "Keep scope in this prompt, not todo metadata" in body
+    for capability in ("filesystem_read", "filesystem_write", "shell"):
+        assert capability in body
 
 
 def test_thin_agent_input_excludes_generator_and_embedded_command_duplicates() -> None:

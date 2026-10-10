@@ -12,6 +12,7 @@ from .paths import (
     resolve_runtime_root,
     shell_selected_global_registry,
 )
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     SchedulerRuntimeProfile,
@@ -47,10 +48,13 @@ def render_cli_command_prefix(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
 ) -> str:
     prefix = shell_arg(cli_bin)
     if runtime_root is not None:
         prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+    if registry_path is not None:
+        prefix += f" --registry {shell_arg(str(registry_path))}"
     return prefix
 
 
@@ -168,6 +172,7 @@ def render_quota_guard_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
     runtime_profile: str | None = None,
@@ -204,10 +209,10 @@ def render_quota_guard_command(
     else:
         turn_arg = ""
     registry_arg = (
-        _render_global_registry_arg(runtime_root) if include_shared_registry else ""
+        _render_global_registry_arg(runtime_root) if include_shared_registry and registry_path is None else ""
     )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
         f"{registry_arg}"
         f"quota should-run --goal-id {shell_arg(goal_id)}{agent_arg}"
         f"{capability_args}{scheduler_args}{turn_arg}"
@@ -220,14 +225,15 @@ def render_quota_spend_command(
     source: str = "adapter",
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
 ) -> str:
     agent_arg = f" --agent-id {shell_arg(agent_id)}" if agent_id else ""
     capability_args = render_available_capability_args(available_capabilities)
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
-        f"{_render_global_registry_arg(runtime_root)}"
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
+        f"{_render_global_registry_arg(runtime_root) if registry_path is None else ''}"
         "quota spend-slot "
         f"--goal-id {shell_arg(goal_id)} "
         f"--slots 1 --source {shell_arg(source)} --execute{agent_arg}{capability_args}"
@@ -239,6 +245,7 @@ def render_refresh_state_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     project: str | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
@@ -265,7 +272,7 @@ def render_refresh_state_command(
         else ""
     )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} "
         f"refresh-state --goal-id {shell_arg(goal_id)}"
         f"{project_arg}{classification_arg}{scale_arg}{outcome_arg}{agent_arg}{scope_arg}"
     )
@@ -276,6 +283,7 @@ def render_accountable_progress_refresh_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
     classification: str = "<PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
@@ -286,6 +294,7 @@ def render_accountable_progress_refresh_command(
         goal_id,
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         agent_id=agent_id,
         progress_scope=progress_scope,
         classification=classification,
@@ -570,13 +579,13 @@ def build_codex_cli_bootstrap_message(
         resolved_goal_id,
         cli_bin=cli_bin,
         agent_id=agent_id,
-        progress_scope="agent_lane" if agent_id else None,
+        progress_scope=AGENT_LANE_PROGRESS_SCOPE if agent_id else None,
     )
     progress_refresh_command = render_accountable_progress_refresh_command(
         resolved_goal_id,
         cli_bin=cli_bin,
         agent_id=agent_id,
-        progress_scope="agent_lane" if agent_id else None,
+        progress_scope=AGENT_LANE_PROGRESS_SCOPE if agent_id else None,
     )
     first_run_validation_checklist = [
         f"{cli_bin} doctor passed after PyPI install repair or an existing install",

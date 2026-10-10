@@ -148,10 +148,20 @@ def project_coordination_source(request: dict[str, Any]) -> dict[str, Any]:
     """One bounded call for a complete capture, never one call per record."""
     from ..effect_runtime import EffectRuntimeRejected
 
-    _reject_floats(request, "$")
+    canonical_request = dict(request)
+    todos = canonical_request.get("todos")
+    if isinstance(todos, list):
+        # content_revision is selection metadata computed from full source
+        # text, not part of the canonical Todo authority record contract.
+        canonical_request["todos"] = [
+            {key: value for key, value in item.items() if key != "content_revision"}
+            if isinstance(item, Mapping) else item
+            for item in todos
+        ]
+    _reject_floats(canonical_request, "$")
     try:
         result = source_effect_runtime_result("coordination.source.project", {
-            "schema_version": "coordination_source_projection_request_v0", **request,
+            "schema_version": "coordination_source_projection_request_v0", **canonical_request,
         })
     except EffectRuntimeRejected as error:
         raise ProjectionValueError(str(error)) from error
@@ -184,23 +194,6 @@ def todo_partition_projection(
     return project_coordination_source({
         "kind": "todo_partition", "handoff_mode": handoff_mode, "todos": list(todos),
     })
-
-
-def lease_partition_projection(
-    records: Iterable[tuple[str, object]],
-    *,
-    goal_id: str,
-) -> dict[str, Any]:
-    """The state guarded by the goal's task-lease lock.
-
-    ``records`` pairs each lease file stem with its decoded JSON object.
-    """
-
-    leases = [
-        compact_lease(raw, goal_id=goal_id, file_stem=stem)
-        for stem, raw in sorted(records, key=lambda pair: pair[0])
-    ]
-    return {"leases": leases}
 
 
 def _stable_todos(value: object) -> object:
@@ -266,7 +259,6 @@ __all__ = [
     "compact_lease",
     "head_comparison_view",
     "head_digest",
-    "lease_partition_projection",
     "partition_comparison_view",
     "partition_digest",
     "sha256_digest",

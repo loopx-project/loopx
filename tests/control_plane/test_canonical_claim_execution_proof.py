@@ -72,7 +72,7 @@ def test_claim_replay_uses_current_execution(tmp_path, monkeypatch, provider, re
         assert not state.exists(), "rejected recovery cannot revive a legacy writer"
         readback = cli(["todo", "list"])
         assert first["source_authority"] == provider + "_v0"
-        assert readback["todos"][0]["claimed_by"] == ("agent-b" if retirement == "transfer" else "agent-a")
+        assert readback["todo"]["claimed_by"] == ("agent-b" if retirement == "transfer" else "agent-a")
         assert not (runtime / "goals" / goal / "task-leases" / f"{target}.json").exists()
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],

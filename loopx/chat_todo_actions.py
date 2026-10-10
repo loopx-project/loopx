@@ -8,7 +8,7 @@ from .todos import complete_goal_todo, update_goal_todo
 from .control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
-from .control_plane.coordination.local_authority_shadow_adapter import effective_runtime_root
+from .paths import effective_runtime_root
 from .control_plane.todos.provider_projection import projection_delivery_requires_ack
 
 

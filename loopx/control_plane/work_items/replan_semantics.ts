@@ -1,7 +1,8 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { optionalNonEmptyString, requireJsonObject } from "../runtime_decode.ts";
+import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -35,6 +36,10 @@ const REPLAN_PLANNING_GUIDANCE = [
     "honor user scope, authority, budget and stops.",
   "Claim achieved only with current authoritative evidence for every requirement. " +
     "Empty Todos/replan closure is not proof; unproven/blocked/exhausted/superseded is not achieved.",
+  "Before no_followup, review unmet acceptance against the original authorized goal and evidence. " +
+    "If a reasonable in-scope next step remains, continue or replan without waiting for an assigned successor. " +
+    "An empty Todo queue is not a scope limit. Otherwise explain why no such step remains; " +
+    "do not invent work, exceed authority or consume budget merely to stay active.",
 ];
 
 function object(value: unknown): JsonObject {
@@ -119,6 +124,9 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       : "The original Turn has a revalidated canonical successor transition. Finish its writeback before any quota debit; do not repeat planning or execute the successor.";
     return {obligation: {
       ...(original ?? {}), required: true, obligation_id: selected,
+      // The validated receipt belongs to this lane. After writeback the live
+      // trigger may disappear; do not assign its remaining settlement to a peer.
+      ...(request.agent_id ? {agent_id: requireNonEmptyString(request.agent_id, "agent_id")} : {}),
       selection_binding: "heartbeat_receipt", recommended_action: reason,
       resolution_mode: "receipt_bound_replan_settlement", todo_actions: [], guidance_actions: [reason],
       settlement_action_packet: {
@@ -164,12 +172,13 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
   }
   if (acceptanceHold) return ["new_runnable_successor", "new_concrete_blocker"];
   if (kinds.some(kind => VISION_TRIGGERS.has(kind))) return [...VISION_OUTCOMES];
-  // Reviewing a long chain may retain existing runnable work. Its projected
+  // Periodic and long-chain reviews may retain existing runnable work. The
   // vision decision must close the checkpoint without manufacturing another
   // successor or progress identifier. Keep previously legal progress exits.
   // An external progress review likewise lets the Agent keep its plan on
   // evidence (a fresh vision path) or pivot with a typed progress delta.
-  return kinds.includes("long_todo_chain") || kinds.some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind))
+  return kinds.some(kind => kind === "long_todo_chain" ||
+    kind === "periodic_review_due" || EXTERNAL_REVIEW_TRIGGERS.has(kind))
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 
@@ -198,15 +207,40 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
         vision_authoring: visionAuthoringContract(),
         required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS],
-        rule: "Author the JSON file from observed evidence, then execute the bound refresh and spend. This path requires an acceptance summary and evidence-linked path outcome; an unchanged reason alone is insufficient. Other required_any_of exits remain subject to their typed contracts.",
+        rule: "First reuse observed evidence valid for current source/acceptance; probe missing, stale or insufficient evidence. Write a JSON file with acceptance summary and evidence-linked path outcome, then run bound refresh and spend. An unchanged reason alone is insufficient. Explicit validation gates and other required_any_of contracts apply.",
       },
     };
   }
   return {cli_semantic_args: PROGRESS_CLI_ARGS, writeback_contract: {}};
 }
 
+/** Vision gaps use their durable run or completed-chain source timestamp.
+ * A patch label proves no relationship to a later run; equal timestamps cover
+ * the atomic writeback without granting a permanent waiver for new gaps.
+ */
+function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
+  if (!Array.isArray(request.acceptance_gaps)) {
+    throw new EffectRuntimeRequestError("vision ACK requires acceptance_gaps");
+  }
+  const ack = object(request.ack);
+  const delta = object(ack.semantic_delta);
+  const timestamp = (value: unknown): bigint | null => typeof value === "string" &&
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? parseTodoTimestampMicros(value) : null;
+  const acknowledgedAt = timestamp(ack.generated_at);
+  const gaps = request.acceptance_gaps.map(value => {
+    const gap = object(value);
+    return timestamp(gap.generated_at ?? (gap.kind === "vision_outcome_checkpoint_required" &&
+      gap.source === "recent_completed_advancement_todo" ? gap.completed_at : null));
+  });
+  return {acknowledged: ack.recorded === true && delta.accepted === true &&
+    strings(delta.outcomes).some(outcome => VISION_OUTCOMES.some(known => known === outcome)) &&
+    acknowledgedAt !== null &&
+    gaps.length > 0 && gaps.every(time => time !== null && time <= acknowledgedAt)};
+}
+
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation === "vision_ack") return acknowledgeVisionEvidence(request);
   if (request.operation === "turn_transition") return projectTurnTransition(request);
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");

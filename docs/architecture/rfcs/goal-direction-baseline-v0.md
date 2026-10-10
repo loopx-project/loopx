@@ -415,7 +415,10 @@ materials.
 | M1 | Optional pure builder over full Goal authority plus receipts; no consumer or writer. | Approval of Section 12 decisions and schema limits. | Deterministic fixtures, mutation checks, Python/TypeScript parity if both runtimes consume it, and public-boundary scan. | Remove the default-off builder and projection. |
 | M2 | One read-only Agent-scoped Vision-gap consumer. | M1 conformance plus explicit maintainer approval of the consumer and recovery UX. | End-to-end proof that drift is surfaced, same-revision replay is quiet, and no Vision/Todo/route mutation occurs. | Disable the consumer; retain canonical registry and receipts. |
 
-Later milestones are not authorized by merging M0.
+Later milestones are not authorized by merging M0. The Appendix D F2 fixture
+is checked in ahead of M1 as a conformance harness
+([examples/goal-direction-baseline-f2-smoke.py](../../../examples/goal-direction-baseline-f2-smoke.py));
+it does not authorize M1 and adds no runtime builder, writer, or consumer.
 
 ## 12. Open decisions
 
@@ -445,6 +448,18 @@ Later milestones are not authorized by merging M0.
   qualification
 - **Effect on normative design:** initial proposal
 
+### 2026-10-04 — F2 synthetic fixture (pre-M1)
+
+- **Baseline:** `99839ae`
+- **Delivered:** the Appendix D F2 row as a checked-in public-safe smoke with
+  its mutation arm (`examples/goal-direction-baseline-f2-smoke.py`); the
+  Section 11 note records why M1 stays closed
+- **Evidence:** the smoke passes locally and `loopx check --scan-path
+  docs/architecture/rfcs` is clean; PR validation pending
+- **Known gaps:** no runtime builder, writer, or consumer; F1 and F3-F8
+  remain unchecked
+- **Effect on normative design:** none — pins Appendix D F2 only
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
@@ -458,6 +473,7 @@ Later milestones are not authorized by merging M0.
 | E1 | Current Material Frontier semantics were audited. | `41a95d9` | [Agent Material Frontier](../../reference/protocols/agent-material-frontier-v0.md) | documented | Public contract only; no live materials. |
 | E2 | Route-change ownership remains existing. | `41a95d9` | [Goal Vision and Replan](../../reference/protocols/goal-vision-replan-contract-v0.md) | documented | Does not prove the proposed baseline. |
 | E3 | M0 repository docs remain public-safe. | PR validation | `loopx check --scan-path docs/architecture/rfcs --scan-path docs/development/contributor-tasks.md` | pending | Documentation scope only. |
+| E4 | The F2 revision-drift invariant is executable and mutation-checked. | `99839ae` | `python3 examples/goal-direction-baseline-f2-smoke.py` | pending | Synthetic ids only; no runtime builder or live materials. |
 
 ## Appendix D: Synthetic drift fixture plan
 
@@ -480,7 +496,9 @@ effect.
 Before M1, turn this table into a checked-in public-safe fixture and mutation
 test. The mutation arm must deliberately relax Agent or revision matching and
 prove that F2 or F3 fails, so the test cannot pass merely because the happy
-path was never exercised.
+path was never exercised. F2 is checked in at
+`examples/goal-direction-baseline-f2-smoke.py` with its mutation arm; the
+remaining cases stay open until M1.
 
 ## Appendix E: Rejected or superseded alternatives
 

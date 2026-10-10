@@ -67,7 +67,10 @@ def validate(service, binding: dict) -> dict:
         validation_workspace_path=Path(binding["workspace"]),
     ) for effect in before["plan"]["effects"]]
     after = capture(service, binding)
-    if after != before:
+    # The TS plan binds this task's work, claim/lifecycle and current rules.
+    # A whole-Goal provider revision may advance for unrelated peer progress.
+    if (after["plan"] != before["plan"] or not after["files_current"]
+            or after["delivery_workspace"] != before["delivery_workspace"]):
         raise ValueError("delegation task acceptance changed during validation")
     if not all(result["passed"] for result in results):
         raise ValueError("delegation task acceptance rejected")

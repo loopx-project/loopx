@@ -321,7 +321,11 @@ def _projection_row(
     fallback_text: str,
     projection_agent_id: str | None = None,
 ) -> dict[str, Any]:
-    text = _projection_item_text(item, fallback=fallback_text)
+    text = (
+        _compact_text(item["next_step"], limit=260)
+        if kind == "next_action" and item.get("next_step")
+        else _projection_item_text(item, fallback=fallback_text)
+    )
     task_class = normalize_explicit_todo_task_class(item.get("task_class")) or (
         TODO_TASK_CLASS_USER_GATE if role == "user" else TODO_TASK_CLASS_ADVANCEMENT
     )

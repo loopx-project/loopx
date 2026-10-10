@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from .mutation_response import serialize_todo_update_result
 from .authoring_scope import todo_authoring_facts
 from .external_wait_contract import TodoExternalWaitAuthoringError, build_monitor_advancement_authoring_contract
 from .update_source import todo_update_snapshot
@@ -19,32 +20,13 @@ from .active_state_editing import (
 from .contract import (
     merge_todo_id_lists,
     metadata_line_for_todo_block,
-    normalize_explore_result_node_refs,
-    normalize_required_capabilities,
-    normalize_target_capabilities,
-    normalize_todo_blocks_agent,
-    normalize_todo_bound_agent,
-    normalize_todo_claimed_by,
-    normalize_todo_continuation_policy,
-    normalize_todo_decision_scope,
-    normalize_todo_decision_scope_outcomes,
-    normalize_todo_excluded_agents,
-    normalize_todo_global_gate,
-    normalize_todo_goal_bound,
     normalize_todo_id,
     normalize_todo_id_list,
-    normalize_todo_no_followup,
-    normalize_todo_required_decision_scopes,
-    normalize_todo_resume_when,
-    normalize_todo_task_domain,
-    normalize_todo_task_repository,
     parse_todo_metadata_line,
     require_supported_todo_resume_when,
 )
 from .completion_state import (
     TodoCompletionContinuation,
-    normalize_todo_completion_continuation,
-    normalize_todo_completion_recovery,
 )
 from .contract import TODO_MONITOR_METADATA_FIELDS
 
@@ -179,6 +161,7 @@ def _field_update_plan(
                         "no_followup",
                         "completion_continuation",
                         "successor_todo_ids",
+                        "explore_result_node_refs",
                         "resume_monitor_generation",
                         "task_class",
                         *TODO_MONITOR_METADATA_FIELDS,
@@ -238,6 +221,7 @@ def apply_todo_update_to_lines(
     required_capabilities: list[str] | None = None,
     target_capabilities: list[str] | None = None,
     explore_result_node_refs: list[str] | None = None,
+    append_explore_result_node_refs: list[str] | None = None,
     decision_scope: Any = None,
     required_decision_scopes: Any = None,
     decision_outcome: str | None = None,
@@ -307,6 +291,7 @@ def apply_todo_update_to_lines(
             "required_capabilities": required_capabilities,
             "target_capabilities": target_capabilities,
             "explore_result_node_refs": explore_result_node_refs,
+            "append_explore_result_node_refs": append_explore_result_node_refs,
             "decision_scope": decision_scope,
             "required_decision_scopes": required_decision_scopes,
             "decision_outcome": decision_outcome,
@@ -370,93 +355,11 @@ def apply_todo_update_to_lines(
         metadata_line = metadata_line_for_todo_block(block, updates)
     metadata_updated = upsert_todo_metadata(lines, block, metadata_line)
     effective_metadata = parse_todo_metadata_line(metadata_line or "") or {}
-    return {
-        **({"monitor_poll_transition": plan["monitor_poll_transition"]}
-           if "monitor_poll_transition" in plan else {}),
-        **({"external_wait_transition": plan["external_wait_transition"]}
-           if "external_wait_transition" in plan else {}),
-        "role": resolved_role,
-        "section": section,
-        "todo": block.get("text"),
-        "todo_id": normalized_todo_id,
-        "status": target_status,
-        "status_changed": status_changed,
-        "text_changed": text_changed,
-        "priority": updated_priority,
-        "metadata_updated": metadata_updated,
-        "changed": status_changed or text_changed or metadata_updated,
-        "claimed_by": normalize_todo_claimed_by(effective_metadata.get("claimed_by")),
-        "bound_agent": normalize_todo_bound_agent(
-            effective_metadata.get("bound_agent")
-        ),
-        "goal_bound": normalize_todo_goal_bound(effective_metadata.get("goal_bound")),
-        "task_class": effective_metadata.get("task_class"),
-        "action_kind": effective_metadata.get("action_kind"),
-        "task_domain": normalize_todo_task_domain(
-            effective_metadata.get("task_domain")
-        ),
-        "capability_binding_ref": effective_metadata.get("capability_binding_ref"),
-        "task_repository": normalize_todo_task_repository(
-            effective_metadata.get("task_repository")
-        ),
-        "continuation_policy": normalize_todo_continuation_policy(
-            effective_metadata.get("continuation_policy")
-        ),
-        "required_capabilities": normalize_required_capabilities(
-            effective_metadata.get("required_capabilities")
-        ),
-        "target_capabilities": normalize_target_capabilities(
-            effective_metadata.get("target_capabilities")
-        ),
-        "explore_result_node_refs": normalize_explore_result_node_refs(
-            effective_metadata.get("explore_result_node_refs")
-        ),
-        "decision_scope": normalize_todo_decision_scope(
-            effective_metadata.get("decision_scope")
-        ),
-        "required_decision_scopes": normalize_todo_required_decision_scopes(
-            effective_metadata.get("required_decision_scopes")
-        ),
-        "decision_outcome": effective_metadata.get("decision_outcome"),
-        "decision_scope_outcomes": normalize_todo_decision_scope_outcomes(
-            effective_metadata.get("decision_scope_outcomes")
-        ),
-        "blocks_agent": normalize_todo_blocks_agent(
-            effective_metadata.get("blocks_agent")
-        ),
-        "excluded_agents": normalize_todo_excluded_agents(
-            effective_metadata.get("excluded_agents")
-        ),
-        "global_gate": normalize_todo_global_gate(
-            effective_metadata.get("global_gate")
-        ),
-        "unblocks_todo_id": normalize_todo_id(
-            effective_metadata.get("unblocks_todo_id")
-        ),
-        "successor_todo_ids": normalize_todo_id_list(
-            effective_metadata.get("successor_todo_ids")
-        ),
-        "completion_continuation": normalize_todo_completion_continuation(
-            effective_metadata.get("completion_continuation")
-        ),
-        "completion_recovery": normalize_todo_completion_recovery(
-            effective_metadata.get("completion_recovery")
-        ),
-        "resume_when": normalize_todo_resume_when(
-            effective_metadata.get("resume_when")
-        ),
-        "resume_monitor_generation": effective_metadata.get(
-            "resume_monitor_generation"
-        ),
-        "no_followup": normalize_todo_no_followup(
-            effective_metadata.get("no_followup")
-        ),
-        "target_key": effective_metadata.get("target_key"),
-        "cadence": effective_metadata.get("cadence"),
-        "next_due_at": effective_metadata.get("next_due_at"),
-        "expires_at": effective_metadata.get("expires_at"),
-        "watch_only": effective_metadata.get("watch_only"),
-        "material_change_generation": effective_metadata.get(
-            "material_change_generation"
-        ),
-    }
+    return serialize_todo_update_result(
+        role=resolved_role, section=section, todo=block.get("text"),
+        todo_id=normalized_todo_id, status=target_status, priority=updated_priority,
+        status_changed=status_changed, text_changed=text_changed,
+        metadata_updated=metadata_updated, metadata=effective_metadata,
+        monitor_poll_transition=plan.get("monitor_poll_transition"),
+        external_wait_transition=plan.get("external_wait_transition"),
+    )

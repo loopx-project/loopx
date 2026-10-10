@@ -72,6 +72,18 @@ def _composition_failure_dispatch(
     }
 
 
+def post_writeback_source_failure(
+    hooks: Sequence[PostWritebackHookRegistration],
+) -> dict[str, Any]:
+    """Report a stale or unavailable source without invoking any hook."""
+
+    return _composition_failure_dispatch(
+        hooks,
+        error_code="source_projection_failed",
+        receipt_ref=None,
+    )
+
+
 def _recorded_composition_failure(
     journal_path: Path,
     *,
@@ -142,6 +154,7 @@ def dispatch_committed_cli_post_writeback_hooks(
     committed_at: str,
     hooks: Sequence[PostWritebackHookRegistration],
     projection_builder: PostWritebackProjectionBuilder | None,
+    receipt_id: str | None = None,
 ) -> dict[str, Any]:
     """Bridge one committed CLI mutation into the TS-owned hook lifecycle.
 
@@ -216,6 +229,7 @@ def dispatch_committed_cli_post_writeback_hooks(
                     "effect_id": str(identity.get("effect_id") or ""),
                 },
                 "state_version": state_version,
+                **({"receipt_id": receipt_id} if receipt_id is not None else {}),
                 "committed_at": committed_at,
                 "projection": projection,
             },
@@ -257,4 +271,5 @@ def dispatch_committed_cli_post_writeback_hooks(
 __all__ = [
     "PostWritebackProjectionBuilder",
     "dispatch_committed_cli_post_writeback_hooks",
+    "post_writeback_source_failure",
 ]

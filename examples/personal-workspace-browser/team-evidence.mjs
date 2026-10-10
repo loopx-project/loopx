@@ -26,8 +26,10 @@ export const teamEvidenceScenario = {
           ? {items: [{record_id: "a".repeat(64), operation_id: "accepted-analysis", agent_id: "local-analyst",
             status: "accepted", recovery_required: false, artifacts: [{ref: "report.md", sha256: "9".repeat(64)}]}],
             has_more: false, next_cursor: null, page_readback_complete: true}
-          : {items: [{record_id: "0".repeat(64), operation_id: null, status: "unavailable", recovery_required: null}],
-            has_more: true, next_cursor: "0".repeat(64), page_readback_complete: false}});
+          : {items: [{record_id: "0".repeat(64), operation_id: null, status: "unavailable", recovery_required: null},
+            {record_id: "1".repeat(64), operation_id: "stopped-analysis", agent_id: "local-analyst",
+              status: "stopped", worker_active: false, recovery_required: false}],
+            has_more: true, next_cursor: "1".repeat(64), page_readback_complete: false}});
       };
       await page.route("**/api/chat/sessions/*/loopx", laterAcceptedPage);
       Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn", native: {status: "active", tokenBudget: 100000}});
@@ -39,6 +41,12 @@ export const teamEvidenceScenario = {
       assert.equal(await results.getByLabel("当前报告").evaluate(el => el === document.activeElement), false, "Automatic readback must not steal focus");
       assert.equal(inspectedRequests, 2,
         "Accepted work after an unreadable first page should still be discovered without another click");
+      await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
+      const executionDetails = page.getByRole("dialog", {name: "团队执行情况", exact: true});
+      await executionDetails.getByText("local-analyst · 停止已登记", {exact: true}).waitFor();
+      assert(!(await executionDetails.innerText()).includes("执行已释放"),
+        "A stopped operation row alone must not claim its Host group is drained");
+      await executionDetails.getByRole("button", {name: "关闭", exact: true}).click();
       const goalNav = page.getByRole("navigation", {name: "Goal 视图"});
       await goalNav.getByRole("button", {name: "成果", exact: true}).click();
       const fileResults = page.getByRole("region", {name: "团队成果", exact: true});
@@ -229,10 +237,15 @@ export const teamEvidenceScenario = {
       };
       await page.route("**/api/chat/sessions/*/loopx", rejectedSource);
       await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
-      await episode.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
-      assert.equal(await episode.getByText("independent-reviewer", {exact: true}).count(), 0,
-        "A rejected review clears the previously verified path");
+      await evidence.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
+      assert.equal(await episode.count(), 0, "A rejected review withdraws the correction path");
+      assert.equal(await content.count(), 0, "A rejected review also withdraws the earlier report");
+      assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0,
+        "Rejected core evidence cannot retain accepted adoption details");
       await page.unroute("**/api/chat/sessions/*/loopx", rejectedSource);
+      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
+      await episode.getByText("independent-reviewer", {exact: true}).waitFor();
       let revisionRechecks = 0;
       const changedRevision = async route => {
         const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
@@ -246,10 +259,14 @@ export const teamEvidenceScenario = {
       };
       await page.route("**/api/chat/sessions/*/loopx", changedRevision);
       await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
-      await episode.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
+      await evidence.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
       assert.equal(revisionRechecks, 1, "The selected revision is revalidated instead of trusting its earlier display");
-      assert.equal(await episode.getByText("newer revision").count(), 0);
+      assert.equal(await episode.count(), 0, "A changed revision withdraws the earlier correction path");
+      assert.equal(await content.count(), 0, "A changed revision withdraws the earlier report");
+      assert.equal(await evidence.getByText("newer revision").count(), 0);
       await page.unroute("**/api/chat/sessions/*/loopx", changedRevision);
+      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await content.waitFor();
       assert.equal(api.turnRequests.length, 0, "Evidence reading must not start a model");
       await page.screenshot({path: resolve(outputDir, "team-evidence-desktop.png"), animations: "disabled"});
       // Lose the first acknowledgement; retry must preserve identity and content.

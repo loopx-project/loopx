@@ -12,24 +12,9 @@ import pytest
 import test_quota_settlement_cli as cli
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
-from loopx.cli_commands.todo import _completion_hook_state_version
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.control_plane.todos.markdown import render_todo_markdown
-
-
-def test_same_second_todo_closeout_has_distinct_replay_stable_hook_version():
-    committed_at = "2026-09-30T13:33:32-07:00"
-    ordinary = _completion_hook_state_version(
-        {"completion_continuation": "active_goal"}, committed_at,
-    )
-    terminal = _completion_hook_state_version(
-        {"completion_continuation": "no_followup"}, committed_at,
-    )
-    assert ordinary != terminal
-    assert terminal == _completion_hook_state_version(
-        {"completion_continuation": "no_followup"}, committed_at,
-    )
 
 
 def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
@@ -138,6 +123,22 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     assert completed["validation_receipt"]["validation_declaration_sha256"] == original["completion_validation_sha256"]
     assert marker.read_text() == "run\n"
     assert not completed.get("successor_todo_ids")
+    assert cli._spend_run_count(runtime) == 0
+    # Ordinary completion leaves a genuine lineage gap. Shared read guidance
+    # must not convert that diagnostic into mandatory terminal mutation.
+    code, ordinary = run("todo", "list", "--goal-id", cli.GOAL_ID)
+    assert code == 0, ordinary
+    warning = ordinary["agent_todos"]["todo_succession_warning"]
+    assert warning["count"] == 1
+    assert "ordinary Todo completion needs no artificial successor" in warning["recommended_action"]
+    assert "terminal_closure_proof" not in ordinary["agent_todos"]
+    code, continuing_guard = run(*guard_args)
+    assert code == 0, continuing_guard
+    assert continuing_guard["agent_todo_summary"]["todo_succession_warning"]["recommended_action"] == warning["recommended_action"]
+    code, unchanged = run("todo", "list", "--goal-id", cli.GOAL_ID)
+    assert code == 0, unchanged
+    assert unchanged["todos"] == ordinary["todos"]
+    assert marker.read_text() == "run\n"
     assert cli._spend_run_count(runtime) == 0
     readback = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
                                        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID)

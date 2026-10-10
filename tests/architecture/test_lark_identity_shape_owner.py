@@ -11,7 +11,7 @@ Three questions, in the order a reviewer will ask them:
    makes the decision is still an offender.
 3. Are the two *uses* of a shape kept apart?  A whole-value check and a search
    for an id inside larger text are different questions, so the owner states
-   both spellings: four anchored patterns and three unanchored ones.  Either
+   both spellings: five anchored patterns and three unanchored ones.  Either
    spelling anywhere else is an offender, and so is converting a declared site
    without retiring its declaration.
 """
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 from types import ModuleType
 
 import pytest
@@ -50,6 +51,7 @@ WHOLE_VALUE_BODIES = {
     "message_id": r"om_[A-Za-z0-9_-]+",
     "chat_id": r"oc_[A-Za-z0-9_-]+",
     "operator_id": r"ou_[A-Za-z0-9_-]+",
+    "app_id": r"cli_[A-Za-z0-9_-]+",
 }
 # A module has to import the regex machinery before it can decide a shape, and
 # both spellings this scan accepts (``re.X(...)`` and a name from
@@ -58,13 +60,16 @@ WHOLE_VALUE_BODIES = {
 # single body, which is one of the probe cases below.
 PRESCREEN_TOKENS = ("import re", "from re import")
 # Only these three bodies have a search spelling.  An event id is never looked
-# for inside larger text.
+# for inside larger text, and neither is an application id: every ``cli_`` site
+# this slice gathered applies ``fullmatch``, so the whole-value spelling alone is
+# the complete contract there.
 SEARCH_IDENTIFIERS = {"chat_id", "message_id", "operator_id"}
 ANCHORED_EXPORTS = {
     "event_id": "LARK_EVENT_ID_PATTERN",
     "message_id": "LARK_MESSAGE_ID_PATTERN",
     "chat_id": "LARK_CHAT_ID_PATTERN",
     "operator_id": "LARK_OPEN_ID_PATTERN",
+    "app_id": "LARK_APP_ID_PATTERN",
 }
 SEARCH_EXPORTS = {
     "message_id": "LARK_MESSAGE_ID_SEARCH",
@@ -98,13 +103,19 @@ IDENTIFIER_RELEVANCE_TOKENS = (
     "message_id",
     "operator_id",
     "event_id",
+    # The application id is gated on its field name, not on the ``cli_`` prefix:
+    # ``cli_`` also occurs in this package as a binary name in data (``lark-cli``,
+    # ``cli_bin``), which drags in regexes built from URLs and markdown headings
+    # and turns the declaration layer into the noise its comment warns about.
+    "app_id",
 )
 
 DECLARED_INDIVIDUAL_SITES: dict[str, int] = {
-    # ``re.fullmatch(r"[A-Za-z0-9._:-]{1,240}", ...)`` against an event id.  The
-    # in-flight goal-channel claim work restructures this file, so the site is
-    # declared here instead of racing that branch.
-    "loopx/extensions/lark/event_collector_runtime.py": 1,
+    # ``re.fullmatch(r"[A-Za-z0-9._:-]{1,240}", ...)`` against an event id, plus
+    # this file's own ``cli_`` compile.  The in-flight goal-channel claim work
+    # restructures this file, so both sites are declared here instead of racing
+    # that branch; converting either one deletes its share of the count.
+    "loopx/extensions/lark/event_collector_runtime.py": 2,
 }
 
 SHAPE_CONSUMERS: dict[str, tuple[ModuleType, str]] = {
@@ -134,7 +145,7 @@ HUB_REEXPORTS: dict[str, tuple[ModuleType, tuple[str, ...]]] = {
     INBOX_HUB: (event_inbox, ("CHAT_ID_PATTERN", "MESSAGE_ID_PATTERN")),
     TRANSPORT_HUB: (
         goal_channel_transport,
-        ("CHAT_ID_PATTERN", "MESSAGE_ID_PATTERN", "OPEN_ID_PATTERN"),
+        ("APP_ID_PATTERN", "CHAT_ID_PATTERN", "MESSAGE_ID_PATTERN", "OPEN_ID_PATTERN"),
     ),
 }
 _RE_MODULE = "re"
@@ -497,6 +508,9 @@ def test_owner_states_each_shape_as_the_recorded_whole_value_body() -> None:
     assert identity_shapes.LARK_OPEN_ID_PATTERN.pattern == (
         "^" + WHOLE_VALUE_BODIES["operator_id"] + "$"
     )
+    assert identity_shapes.LARK_APP_ID_PATTERN.pattern == (
+        "^" + WHOLE_VALUE_BODIES["app_id"] + "$"
+    )
 
 
 def test_the_owner_is_the_only_module_that_defines_any_of_them() -> None:
@@ -573,6 +587,66 @@ def test_inbox_callers_still_receive_one_object_through_the_chain() -> None:
     for name in ("manager_reply_delivery", "turn_start_sync", "inbox_reply"):
         module = __import__(f"loopx.extensions.lark.{name}", fromlist=["MESSAGE_ID_PATTERN"])
         assert module.MESSAGE_ID_PATTERN is identity_shapes.LARK_MESSAGE_ID_PATTERN, name
+
+
+# The application id reaches most of its callers through the transport hub, so the
+# identity assertion is the wiring proof that none of them kept a private copy.
+APP_ID_CALLERS = (
+    "bot_scopes",
+    "goal_channel_setup",
+    "goal_channel_runtime",
+    "goal_channel_blocked_notice",
+    "goal_channel_targets",
+    "goal_topic_connections",
+    "private_conversations",
+    "event_inbox",
+)
+
+
+@pytest.mark.parametrize("name", sorted(APP_ID_CALLERS))
+def test_every_app_id_caller_holds_the_owners_object(name: str) -> None:
+    # Identity is the wiring proof: an alias import hands on the owner's object,
+    # while a module that recompiled the body would hold a distinct one even though
+    # the pattern text matched.
+    module = __import__(f"loopx.extensions.lark.{name}", fromlist=["APP_ID_PATTERN"])
+    assert module.APP_ID_PATTERN is identity_shapes.LARK_APP_ID_PATTERN, name
+
+
+def test_the_delivery_contract_holds_the_owners_object_too() -> None:
+    # It had its own anchored compile of the same body rather than a hub import.
+    assert (
+        goal_channel_delivery_contract.LARK_APP_ID_PATTERN
+        is identity_shapes.LARK_APP_ID_PATTERN
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "cli_ok1",
+        "cli_ok1\n",
+        "\ncli_ok1",
+        "cli_a\nb",
+        "",
+        "cli_",
+        "cli_\u00e9",
+        "cli_a b",
+        "xcli_a",
+        "cli_a-b_1.C",
+        "cli_a" + "z" * 200,
+    ],
+)
+def test_the_app_id_answer_is_the_same_anchored_or_not(value: str) -> None:
+    """Why gathering these sites cannot change a product answer.
+
+    All three defining sites applied ``fullmatch`` to an unanchored body, and the
+    fourth applied an anchored one; ``re.fullmatch`` already requires the whole
+    string, so both spellings accept and reject exactly the same values.
+    """
+
+    anchored = bool(identity_shapes.LARK_APP_ID_PATTERN.fullmatch(value))
+    unanchored = bool(re.fullmatch(r"cli_[A-Za-z0-9_-]+", value))
+    assert anchored == unanchored, value
 
 
 def test_callback_validators_do_not_restate_the_identity_table() -> None:
@@ -756,6 +830,14 @@ OFFENDING_SNIPPETS: tuple[tuple[str, str], ...] = (
         'import re\n\nOPERATOR = re.compile(r"^ou_[A-Za-z0-9_-]+$")\n',
     ),
     (
+        "app id restated unanchored, the spelling three sites used",
+        'import re\n\nAPP = re.compile(r"cli_[A-Za-z0-9_-]+")\n',
+    ),
+    (
+        "app id restated anchored, the spelling the fourth site used",
+        'import re\n\nAPP = re.compile(r"^cli_[A-Za-z0-9_-]+$")\n',
+    ),
+    (
         "event id inside a function body, not at module level",
         'import re\n\n\ndef pick(value):\n'
         '    pattern = re.compile(r"^ou_[A-Za-z0-9_-]+$")\n'
@@ -772,12 +854,12 @@ NON_OFFENDING_SNIPPETS: tuple[tuple[str, str], ...] = (
         'import re\n\nROUTE = re.compile(r"^route:oc_[A-Za-z0-9_-]+:v1$")\n',
     ),
     (
-        "an app id, which this slice does not own",
-        'import re\n\nAPP = re.compile(r"^cli_[A-Za-z0-9_-]+$")\n',
-    ),
-    (
         "a pattern built from runtime data, which cannot be folded",
         'import re\n\nCHAT = re.compile(prefix + "[A-Za-z0-9_-]+")\n',
+    ),
+    (
+        "a sender profile shape, which is a different decision",
+        'import re\n\nPROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")\n',
     ),
     (
         "a module constant rebound locally before use, which is not trusted",
@@ -818,7 +900,7 @@ def test_declared_site_count_is_enforced_in_both_directions() -> None:
     assert offender_rows(rows) == []
     retired = [item for item in rows if item["file"] != declared_file]
     assert offender_rows(retired) == [
-        f"{declared_file} declares 1 individual shape site(s), found 0"
+        f"{declared_file} declares 2 individual shape site(s), found 0"
     ]
 
 
@@ -829,6 +911,15 @@ def test_a_converted_declared_site_is_not_silently_reintroduced() -> None:
             "file": declared_file,
             "line": 145,
             "identifier": "event_id",
+            "anchored": False,
+        },
+        # The declared budget is two sites here (the event-id match plus this file's
+        # own ``cli_`` compile), so a fixture that clears the budget has to carry
+        # both; dropping either one is the failure this test is about.
+        {
+            "file": declared_file,
+            "line": 33,
+            "identifier": "app_id",
             "anchored": False,
         },
         {

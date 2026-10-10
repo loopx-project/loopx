@@ -51,7 +51,8 @@ export const capabilityScopeScenario = {
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
       if (api.goalConfigurationRequests.at(-1)?.goal_id !== "research-monitor") throw new Error("Changed Goal was not used by preview");
       await catalog.getByRole("button", { name: /探索 Harness/ }).click();
-      await page.getByRole("switch", { name: /^启用/u }).check();
+      const explorationMode = page.getByRole("combobox", { name: /^探索模式/u });
+      await explorationMode.selectOption("planning");
       const composition = page.getByRole("combobox", { name: /^组合策略/u });
       await composition.selectOption("explicit_only");
       await page.getByLabel(/^研究覆盖范围/u).fill("joint-scope");
@@ -59,7 +60,7 @@ export const capabilityScopeScenario = {
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
       const preview = api.goalConfigurationRequests.at(-1);
       if (preview?.goal_id !== "research-monitor" || preview?.configuration?.composition_mode !== "explicit_only"
-        || preview?.configuration?.composition_scope_id !== "joint-scope" || preview?.configuration?.enabled !== true) throw new Error("Composition preview lost its Goal, activation or typed scope");
+        || preview?.configuration?.composition_scope_id !== "joint-scope" || preview?.configuration?.mode !== "planning") throw new Error("Composition preview lost its Goal, activation or typed scope");
       await composition.selectOption("disabled");
       if (await page.locator(".personal-capability-preview").count()) throw new Error("Composition edit retained a stale preview");
       await composition.selectOption("explicit_only");
@@ -71,7 +72,7 @@ export const capabilityScopeScenario = {
       ]);
       await catalog.getByRole("button", { name: /探索 Harness/ }).click();
       if (await composition.inputValue() !== "explicit_only" || await page.getByLabel(/^研究覆盖范围/u).inputValue() !== "joint-scope"
-        || !await page.getByRole("switch", { name: /^启用/u }).isChecked()) throw new Error("Applied composition configuration did not read back from its Goal");
+        || await explorationMode.inputValue() !== "planning") throw new Error("Applied composition configuration did not read back from its Goal");
       await composition.selectOption("disabled");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
@@ -81,7 +82,7 @@ export const capabilityScopeScenario = {
       ]);
       await catalog.getByRole("button", { name: /探索 Harness/ }).click();
       if (await composition.inputValue() !== "disabled" || await page.getByLabel(/^研究覆盖范围/u).inputValue() !== "joint-scope"
-        || !await page.getByRole("switch", { name: /^启用/u }).isChecked()) throw new Error("Disabling composition changed its Goal activation or scope");
+        || await explorationMode.inputValue() !== "planning") throw new Error("Disabling composition changed its Goal activation or scope");
       const applied = api.goalConfigurationRequests.filter((request) => request.phase === "apply");
       if (applied.length !== 2 || applied.some((request) => request.goal_id !== "research-monitor"
         || request.capability_id !== "explore_harness" || request.expected_plan_revision !== "sha256:goal-plan-explore_harness")

@@ -177,7 +177,9 @@ def build_turn_scoped_cli_settlement_plan(
         if delivery_boundary == "in_flight_continuation"
         else ""
     )
-    cli_prefix = command_prefix.strip() or "loopx"
+    # Returned settlement commands are machine-readable without caller surgery.
+    # Keep this global option before every subcommand, including quota spend-slot.
+    cli_prefix = f"{command_prefix.strip() or 'loopx'} --format json"
     ordinary_completion = (
         f"{cli_prefix} todo complete --goal-id {shlex.quote(goal_id)}{binding_arg}"
         f"{lifecycle_actor_args}{turn_arg}{goal_ref_arg} --evidence '<validated evidence>'"

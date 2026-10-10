@@ -10,7 +10,7 @@ from typing import Any
 
 from ...registry import atomic_write_json, read_json
 from ...file_lock import exclusive_cross_runtime_file_lock
-from .active_state_editing import fsync_state_directory
+from ..runtime.document_io import fsync_state_directory
 from .completion_validation_projection import (
     completion_validation_declaration,
     completion_validation_declaration_sha256,

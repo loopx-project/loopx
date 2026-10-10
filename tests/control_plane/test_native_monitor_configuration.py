@@ -27,9 +27,9 @@ def setup(tmp_path, provider):
 
 
 def _row(registry, todo_id):
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID, todo_id=todo_id)["todos"]
-    assert len(todos) == 1, todos
-    return todos[0]
+    todo = list_goal_todos(registry_path=registry, goal_id=GOAL_ID, todo_id=todo_id)["todo"]
+    assert isinstance(todo, dict), todo
+    return todo
 
 
 def _observe(registry, runtime, monitor, result_hash="observed-before-configuration"):

@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 7 vocabularies: 6 kernel and 1 outside the kernel tier. The 19 cross_runtime vocabularies outside Producers(V) are unverified.",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 20 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,24 +73,24 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 7 vocabularies: 6 kernel and 1 outside the kernel tier. The 19 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 20 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
-          "verified": 7,
+          "verified": 6,
           "registered": 26,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 7 vocabularies: 6 kernel and 1 outside the kernel tier. The 19 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 20 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
         "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
-          "verified": 7,
+          "verified": 6,
           "registered": 26,
           "evidence_bound": "producer_scan_reach"
         }
@@ -369,44 +369,29 @@
         ]
       }
     },
-    "lease_action": {
-      "meaning": "Authority-core lease mutation verb.",
-      "tier": "kernel",
-      "status": "legacy",
+    "task_lease_lifecycle_operation": {
+      "meaning": "Operation accepted by the shipped native lease lifecycle request decoder; acquisition has its own transaction.",
+      "tier": "cross_runtime",
+      "status": "canonical",
       "owners": {
-        "python": "loopx/control_plane/coordination/authority_core.py::LeaseAction",
-        "typescript": null
+        "python": null,
+        "typescript": "loopx/control_plane/work_items/task_lease_lifecycle_request.ts::TASK_LEASE_LIFECYCLE_OPERATIONS"
       },
       "values": [
-        "acquire",
         "renew",
         "transfer",
-        "release"
+        "release",
+        "terminal_verify",
+        "holder_verify",
+        "fence_close"
       ],
-      "producers": [],
-      "compatibility_only": {
-        "acquire": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
-          "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
-        },
-        "renew": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
-          "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
-        },
-        "transfer": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
-          "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
-        },
-        "release": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
-          "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
-        }
-      },
       "value_notes": {
-        "acquire": "Compatibility-only input member; no observed in-repository producer. Preserve the typed caller interface until its M4 retirement review.",
-        "renew": "Compatibility-only input member; no observed in-repository producer. Preserve the typed caller interface until its M4 retirement review.",
-        "transfer": "Compatibility-only input member; no observed in-repository producer. Preserve the typed caller interface until its M4 retirement review.",
-        "release": "Compatibility-only input member; no observed in-repository producer. Preserve the typed caller interface until its M4 retirement review."
+        "renew": "Chosen by native renewal callers to extend an existing holder execution with the expected version.",
+        "transfer": "Chosen by native transfer callers to move an existing holder execution to another eligible owner.",
+        "release": "Chosen by native release callers to retire an existing holder execution; cleanup remains legal after a policy transition.",
+        "terminal_verify": "Chosen by Todo terminal callers to verify the current holder fence before completing or superseding work.",
+        "holder_verify": "Chosen by ownership mutation callers to verify the current holder without performing a lease mutation.",
+        "fence_close": "Chosen by terminal cleanup callers to close the held execution fence after accepted work."
       }
     },
     "effective_action": {
@@ -1038,15 +1023,17 @@
       },
       {
         "name": "task_lease_lifecycle_decision_operation",
-        "superset": "lease_action",
+        "superset": "task_lease_lifecycle_operation",
         "excluded": [
-          "acquire"
+          "terminal_verify",
+          "holder_verify",
+          "fence_close"
         ],
         "owners": {
           "python": null,
           "typescript": "loopx/control_plane/work_items/task_lease_lifecycle_decision.ts::TASK_LEASE_LIFECYCLE_DECISION_OPERATIONS"
         },
-        "note": "TypeScript-only decision operations are the lease verbs minus acquire."
+        "note": "The native mutation decision owner handles renewal, transfer and release. Verification/fence operations remain with the request/transaction owner; acquisition is separate."
       }
     ]
   },
@@ -1126,15 +1113,15 @@
   },
   "inventory_ratchets": {
     "meaning": "Counts read from the generated inventory. A same-runtime fork is one constant name with one value defined in two or more modules of the same runtime; a conflicting value is one name with different values. Both the number of affected names and the number of definitions are budgets, so a third spelling of an already-conflicting name is still a regression.",
-    "same_runtime_forks": 10,
-    "same_runtime_fork_definitions": 23,
+    "same_runtime_forks": 2,
+    "same_runtime_fork_definitions": 5,
     "conflicting_values": 16,
-    "conflicting_definitions": 55,
-    "schema_version_same_runtime_forks": 1,
+    "conflicting_definitions": 54,
+    "schema_version_same_runtime_forks": 0,
     "multi_value_twins": 8,
     "multi_value_forks": 2,
     "multi_value_fork_definitions": 6,
-    "same_runtime_forks_semantic": 8,
+    "same_runtime_forks_semantic": 2,
     "conflicting_values_semantic": 0,
     "multi_value_meaning": "Enums, named closed sets, Literal aliases, and TypeScript as-const arrays are vocabulary exactly as a NAME = \"value\" constant is, so they get the same collision rule. One name defined in two modules with identical values is a twin; with different values it is a fork. The semantic multi-value-fork budget excludes only names declared in scope_declarations.",
     "multi_value_forks_note": "The 4 counted forks include SOURCE_SURFACES, whose four definitions are four CLI commands each listing its own data sources; that is bounded-context reuse of one name, not drift. It stays in the budget until M0.5 adds a scope field (RFC Section 5) and must not be removed by renaming.",

@@ -34,6 +34,7 @@ def action_portfolio_selection_command_template(
     scheduler_args: str,
     turn_instance_id: str | None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> str | None:
     if not action_portfolio_requires_explicit_selection(payload):
         return None
@@ -45,9 +46,9 @@ def action_portfolio_selection_command_template(
         if turn_instance_id
         else ""
     )
-    command_prefix = "loopx"
-    if runtime_root:
-        command_prefix += f" --runtime-root {shlex.quote(str(runtime_root))}"
+    command_prefix = render_cli_command_prefix(
+        runtime_root=runtime_root, registry_path=registry_path,
+    )
     return (
         f"{command_prefix} --format json quota should-run"
         f" --goal-id {shlex.quote(goal_id)}"

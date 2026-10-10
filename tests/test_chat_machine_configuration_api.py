@@ -149,7 +149,7 @@ def test_real_chat_http_catalog_and_machine_write_boundary(tmp_path: Path) -> No
         assert {item["capability_id"] for item in catalog} >= {
             "periodic_report",
             "multi_subagent",
-            "explore_graph",
+            "explore_harness",
         }
         connection.request(
             "POST",
@@ -350,8 +350,9 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "timezone": "UTC",
     }
     assert namespace_catalog["todo_replan_cadence"]["configuration_template"] == {
-        "schema_version": "todo_replan_cadence_machine_defaults_v0",
-        "completed_todos": 5,
+        "schema_version": "todo_replan_cadence_machine_defaults_v1",
+        "count_unit": "effective_turns",
+        "count": 5,
     }
     assert namespace_catalog["change_quality_qualification"][
         "configuration_template"
@@ -363,7 +364,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     }
     assert namespace_catalog["pull_request_review"]["configuration_template"] == {
         "schema_version": "pull_request_review_machine_defaults_v0",
-        "review_priority": "other-developers-first",
+        "review_order": "forward",
         "wait_for_ci": True,
     }
     assert namespace_catalog["manager_runtime"]["configuration_template"] == {
@@ -444,7 +445,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     assert [
         field["key"]
         for field in machine["pull_request_review"]["configuration_editor"]["fields"]
-    ] == ["wait_for_ci", "review_priority"]
+    ] == ["wait_for_ci", "owner_logins", "review_order"]
     assert "multi_subagent" in machine
     for capability_id, item in machine.items():
         assert "current" not in item

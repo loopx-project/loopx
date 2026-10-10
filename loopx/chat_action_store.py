@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 import uuid
 
 from .file_lock import exclusive_file_lock
+from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .registry import atomic_write_json
 
 
@@ -54,7 +55,6 @@ OPERATION_LIFECYCLE_STATES = {
     "outcome_observed",
 }
 
-_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 _LOCAL_PATH = re.compile(
     r"(?:^|[\s\"'])(?:/Users/|/home/|/private/|/var/folders/|/tmp/|~[/\\]|file://)",
     re.IGNORECASE,

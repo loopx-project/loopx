@@ -121,9 +121,10 @@ export function DeliveryReview({ goal, items, userTodos, onSelect, active }: Del
       const item = scopedAttention.find(todo => todo.todoId === id);
       return item ? { kind: "attention", item } : null;
     }
-    // History outside the status window still opens with the projected facts only.
+    // The status window is bounded; its absence cannot revoke exact request reading.
     const todo = goal.agentTodos.find(item => item.todoId === id) ?? {
-      todoId: id, text: node.title, done: node.state === "done", claimedBy: node.owner_agent ?? null,
+      todoId: id, sourceTodoId: id, detailMode: "request_only" as const,
+      text: node.title, done: node.state === "done", claimedBy: node.owner_agent ?? null,
       status: node.state === "waiting" ? "deferred" : node.state === "blocked" || node.state === "done" ? node.state : "open",
       taskDomain: node.task_domain ?? null, taskClass: node.kind === "monitor" ? "continuous_monitor" : null,
     };

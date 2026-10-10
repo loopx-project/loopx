@@ -10,8 +10,8 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 14500` | `nested_keys <= 360` | `top_level_keys <= 52` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 22500` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 15500` | `nested_keys <= 360` | `top_level_keys <= 52` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 23000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -34,18 +34,41 @@ Use Markdown output for human generator diagnostics or a non-thin JSON mode
 for the richer generator packet; neither is the recurring Agent hot path.
 
 The heartbeat envelope ceiling covers the unbound and representative agent/scope-bound
-Codex App thin fixtures. It includes generator metadata and repeated bound commands,
-not only the execution prompt. On the same scoped fixture, current main uses
-4,791 JSON characters and the language-aware body uses 5,167 while retaining
-static safety, repair routing, work obligation, and settlement instructions.
-The 5,400-character ceiling leaves 233 characters of fixture headroom, without
-relaxing the independent **2,500-character thin task body**,
-4,000-character native Goal body, structural limits, or emitted CLI ceilings.
-It is not a token count, execution quota, or allowance to append more instructions.
-Arbitrary-length caller paths/scopes are not promised to fit this fixed fixture
-envelope; their emitted output is qualified separately by the CLI matrix.
-Do not remove safety or settlement semantics to fit the envelope, and do not copy
-dynamic quota decisions into the static prompt. The brief body allowance rises
+Codex App thin fixtures. Its 5,400-character JSON ceiling remains independent of
+the **3,000-character thin task body**, 4,000-character native Goal body,
+structural limits, and emitted CLI ceilings. These are presentation regression
+budgets, not external host limits, token counts, execution quota, or permission.
+Do not abbreviate admission, continuation, scope, safety or settlement instructions
+solely to fit a historical character count, or copy dynamic quota decisions into
+the static prompt.
+
+The thin body ceiling rises from 2,500 to 3,000 to retain readable peer guidance.
+On the same real CLI fixture with a host scope and three runtime capabilities,
+latest main measured 2,515 normalized body characters, the earlier compressed
+PR measured 2,495, and readable guidance measures 2,632. With the supported
+320-character scope, the same measurements are 2,805, 2,785 and 2,922; the new
+ceiling leaves 78 characters on that bounded case. Single- and two-peer fixtures
+give the same measurements. The normalized metric substitutes Goal/state paths,
+not caller identity, scope or capabilities. This accepts useful text growth and
+keeps overflow reporting and boundary tests; it does not promise arbitrary caller
+paths/scopes fit every JSON or emitted-output envelope. Peer requirements defer
+to current quota admission plus repository rules, without granting cross-agent
+authority. Other mode, envelope and execution budgets remain unchanged.
+
+The emitted CLI differential measures +117 characters on all three thin fixtures
+in JSON and Markdown. The complete readable peer instruction block attributes a
+one-time 160-character/byte/compact-character allowance to thin rows only;
+missing or altered authority wording, other surfaces, and subsequent edits after
+this block is in the base use the ordinary growth budget. Absolute emitted
+ceilings, line limits and semantic anchors remain enforced.
+
+thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
+CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
+2,515／2,495／2,632 字符；320 字符 scope 时为 2,805／2,785／2,922，新预算余量
+78 字符。单 peer 与双 peer 结果相同。计量只替换 Goal 与 state 路径，不缩短身份、
+范围或能力。仍检查超限并保留独立 JSON 和其它模式预算；字符余量不授予执行权限。
+
+The brief body allowance rises
 from 3,500 to 4,300 characters. Translating its fixed Chinese instructions to
 English grows the Codex App brief body from 3,282 to 3,980 characters (3,494 to
 4,192 with two agent-profile scopes) while its `o200k_base` token count falls
@@ -60,18 +83,42 @@ route, pending-selection qualification, and hard-lane preemption evidence. The
 budget retains modest headroom for those enforceable semantics; repeated action
 details and command prefixes still belong in compact references or cold paths.
 
-The work-count projection adds scope and completeness facts that a bounded Todo
-list cannot supply. Its observed-row count is derived from `open - hidden`,
-rather than repeated in the wire object. The quota ceiling moves from 14,000
-to 14,500 characters and from 350 to 360 nested keys to retain modest headroom
-for this useful semantic growth; the top-level ceiling stays 52. Existing
-repeated Todo bodies across named lanes have distinct consumers and cannot be
-removed without a separately validated caller migration.
+The work-count projection retains scope and completeness facts. The current
+quota ceiling rises from 14,500 to 15,500 characters to include full Goal and
+selected-work required-read commands, carried once in the Agent channel. On the
+same fixture, main measured 14,065 and the unified projection measured 14,916
+characters; a preceding longer-reason draft measured 15,084. The 584-character
+headroom accommodates useful source coordinates without truncating requirements.
+Nested and top-level ceilings remain 360 and 52 (observed 357 and 51). This is a
+presentation regression budget, not a token, permission or compute allowance.
+Exact Todo detail removes redundant bodies through an explicit caller migration;
+other quota lane projections remain separately owned.
 
-工作计数增加了展示列表无法提供的完整性与作用域信息；已观察行数由 `open - hidden`
-推导，不重复传输。quota 字符预算从 14,000 调至 14,500，嵌套键从 350 调至 360，
-保留适量余量；顶层键上限仍为 52。不同 lane 重复携带的 Todo 有既有消费者，后续
-去重应配合调用方迁移，不能仅为通过尺寸测试而删除。
+The dashboard/status character ceiling rises from 22,500 to 23,000. On the
+unchanged hot-path fixture, commit `8bb21ac5d40f6db679475495800157e20fc11c2f`
+added selected-work content revisions: its parent measured 21,895 characters,
+and that commit, current main and the handoff acknowledgment candidate all
+measure 22,560. Seven digest fields account for the full 665-character growth.
+The separate item lanes and Todo index carry those revisions into quota's
+selected-work freshness checks; removing them from internal status would change
+admission semantics. Existing CLI compaction still omits this metadata from the
+quota Agent input. Retain the source fields and unchanged fixture, leaving 440
+characters of headroom; nested/top-level ceilings remain 350/27 (observed 336/26).
+This adjusts a measured regression budget, not an external limit, execution
+quota, permission, transport SLO or unrestricted payload allowance.
+
+dashboard/status 字符预算从 22,500 调至 23,000。同一 fixture 在所选任务正文
+revision 引入前为 21,895 字符，引入后、当前 main 与交接回复候选均为 22,560；
+七处 digest 字段解释全部 665 字符增长。各任务 lane 和 Todo 索引向 quota 传递
+准入新鲜度依据，不能从内部 status 删除；现有 quota CLI 投影仍隐藏这些元数据。
+保留原 fixture 和字段，余量 440 字符；嵌套键/顶层键上限仍为 350/27，实测
+336/26。此调整仅为有测量依据的回归预算，不扩大权限、计算额度或传输 SLO。
+
+quota 字符预算从 14,500 调至 15,500，容纳完整 Goal 与所选工作项的必读命令，
+只在 Agent channel 携带一份。同一 fixture 的 main／统一后分别为 14,065／14,916
+字符；此前较长说明草稿为 15,084。当前余量 584 字符；嵌套键与顶层键上限仍为
+360／52，实测 357／51。该预算不授予权限或计算额度。精确 Todo 通过调用方迁移
+移除重复正文，完整要求不截断，其它 quota lane 保留各自用途。
 
 | Emitted Surface | Default Qualification | Scale / Limit Contract | Cold Path |
 | --- | --- | --- | --- |
@@ -84,7 +131,6 @@ removed without a separately validated caller migration.
 | `heartbeat-prompt --thin` | absolute hot path | agent scope, multi-agent fixture matrix, and exact Agent-input field allowlist | Markdown diagnostics, `--compact`, `--full` |
 | `todo list` | baseline and growth | todo-count growth and agent filtering semantics | `--thin`, `--limit N`, role/status filters, direct todo-id lifecycle commands |
 | `history --limit 5` | explicit-limit cold path | returned-run bound | individual run JSON/Markdown artifacts |
-| `evidence-log --thin --limit 5` | explicit-limit cold path | returned-evidence bound | referenced run-history and rollout-event artifacts |
 
 `quota should-run` uses one repeatable cold-path selector:
 `--include-detail scheduler`, `agent-todos`, `user-todos`, `vision`, or
@@ -164,7 +210,10 @@ structural refactor does not become a permanent CI red light.
 The receipts contain counts, shape paths, headings, and digests only; they do
 not persist raw CLI output. Candidate-only surfaces are allowed after their
 absolute characterization passes, while removing a qualified base row fails
-closed.
+closed. The intentional evidence-command retirement is recognized only with a
+qualified replacement replan-context projection and remains a review signal.
+Coverage-only to dense replan context has a measured, one-time allowance on its
+three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
 Both budget layers are intentionally about projections, not the full archival
 facts. When a surface needs more detail, put that detail behind a queryable
@@ -172,6 +221,21 @@ cold-path command or a linked run-history artifact instead of making the
 recurring heartbeat prompt carry it. `nested_keys` counts dictionary keys
 through three payload levels and samples at most 20 list items per level; it is
 a hot-path structure budget, not an archival record-size budget.
+
+Required replan is a decision phase with a separate information need. Its
+`replan_context` carries the core Goal and up to 24 distinct observations from
+the full compact index, reducing repetitions before selection. On the unchanged
+crowded public CLI fixture, emitted JSON grows from 26,844 to 33,523 characters
+and 718 to 806 lines. The replan scenario ceiling moves from 30,000/750 to
+34,000/830, with 6,000 fixed semantic growth characters; ordinary and multi-Agent
+non-replan guards retain their previous output and ceilings. Handoff forwarding
+keeps a brief evidence pointer and the full review packet owns the structured
+context, removing duplicate JSON. The explicit cold-path diagnosis retains its
+existing selected-packet plus Goal-array contract; its replan fixture measures
+43,132 characters / 804 lines and uses 44,000 / 850 ceilings with 7,000 fixed
+semantic growth characters. These are output measurements, not model-token,
+latency or long-horizon quality qualifications. Settlement checks use complete
+available history even when the readable context omits older observations.
 
 Restraint rules for new fields:
 

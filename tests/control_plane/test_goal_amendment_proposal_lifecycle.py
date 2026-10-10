@@ -32,6 +32,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tests.control_plane.test_quota_settlement_cli import (
+    _bind_selected_replan_guard,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOAL_ID = "amendment-lifecycle-fixture"
 AGENT_ID = "codex-amendment-lifecycle"
@@ -225,6 +229,16 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
     assert guard["decision"] == "autonomous_replan_required", guard
     obligation_id = guard["replan_action_packet"]["obligation_id"]
     assert obligation_id, guard
+    assert guard["heartbeat_receipt"]["settlement_binding_owed"] is True
+    guard = _bind_selected_replan_guard(
+        registry_path,
+        runtime,
+        project,
+        TURN_ID,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+    )
     settlement_identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert settlement_identity["turn_instance_id"] == TURN_ID
     assert settlement_identity["todo_id"] == TODO_ID

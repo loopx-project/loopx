@@ -12,6 +12,34 @@ from loopx.quota import build_quota_should_run as facade_build_quota_should_run
 GOAL_ID = "quota-parity-fixture"
 
 
+def test_absent_boundary_keeps_delivery_and_capability_decisions() -> None:
+    """No declared scopes must not crash or invent a capability grant."""
+    from loopx.control_plane.scheduler.execution_context import (
+        GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+    )
+
+    for capabilities, expected in [([], "run"), (["network"], "repair_bridge")]:
+        payload = quota_status_payload(
+            goal_id=GOAL_ID, status="active", recommended_action="Check the route.",
+            agent_todo_items=[{
+                "todo_id": "todo_missing_boundary", "role": "agent", "status": "open",
+                "task_class": "advancement_task", "priority": "P1",
+                "text": "Check the route.", "required_capabilities": capabilities,
+            }],
+        )
+        goal = payload["run_history"]["goals"][0]
+        goal.pop("adapter_kind")
+        goal.pop("adapter_status")
+        payload["attention_queue"]["items"][0]["project_asset"].pop("stop_condition")
+        packet = bounded_build_quota_should_run(
+            payload, goal_id=GOAL_ID, available_capabilities=["shell"],
+            scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+        )
+        assert packet["goal_boundary"] is None
+        assert packet["decision"] == expected
+        assert not (packet.get("delivery_workspace") or {}).get("allowed_write_scopes")
+
+
 def test_facade_builds_through_bounded_should_run_module() -> None:
     todo_text = "[P1] Advance the bounded slice."
     payload = quota_status_payload(

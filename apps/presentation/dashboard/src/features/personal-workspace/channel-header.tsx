@@ -1,4 +1,4 @@
-import { Bot, Eye, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { GoalActivityChip } from "./goal-activity-view";
 
 import { localizedGoalState, useWorkspaceI18n } from "./i18n";
@@ -8,6 +8,7 @@ import { WorkspaceSelect } from "./workspace-select";
 
 export function ChannelHeader({
   agents,
+  conversationScope,
   managerChannelBinding,
   managerChatOpen,
   managerRuntime,
@@ -25,8 +26,13 @@ export function ChannelHeader({
   selectedAgentId,
   selectedGoal,
   selectedGoalTab,
+  workspaceGrantLabel,
 }: {
   agents: WorkspaceAgentOption[];
+  /** Steward conversation scope; absent when the host grants no workspace. */
+  conversationScope?: { options: { disabled?: boolean; label: string; value: string }[]; value: string; onChange: (value: string) => void } | null;
+  /** Set while the steward conversation is scoped to a workspace. */
+  workspaceGrantLabel?: string | null;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerChatOpen?: boolean;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
@@ -144,13 +150,29 @@ export function ChannelHeader({
     {onOpenManagerSettings ? <SlidersHorizontal aria-hidden size={12} /> : null}
   </> : null;
 
+  // The steward channel binding describes the steward executor; a workspace
+  // conversation runs on the selected runtime instead.
+  const stewardBindingVisible = !selectedGoal && !workspaceGrantLabel;
+  const scopeControl = !selectedGoal && managerChatOpen && conversationScope && !readOnlySourceLabel ? (
+    <WorkspaceSelect
+      ariaLabel={t("header.conversationScope")}
+      className="personal-agent-select personal-scope-select"
+      icon={<FolderOpen size={16} />}
+      onChange={conversationScope.onChange}
+      options={conversationScope.options}
+      prefixLabel={t("header.conversationScope")}
+      value={conversationScope.value}
+    />
+  ) : null;
+
   return (
-    <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)}>
+    <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
         <h1>{selectedGoal?.title ?? t("header.manager")}</h1>
         {selectedGoal && !selectedGoal.loadState ? <p className="personal-channel-activity"><GoalActivityChip goal={selectedGoal} /></p> : null}
-        {!selectedGoal && managerChannelBinding ? (
+        {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
+        {stewardBindingVisible && managerChannelBinding ? (
           <p className="personal-manager-execution">
             {onOpenManagerSettings ? <button aria-label={t("header.managerModelSettings")} title={t("header.managerModelSettings")}
               className={executionChipClass} onClick={onOpenManagerSettings} type="button">{executionChipContent}</button>
@@ -165,7 +187,7 @@ export function ChannelHeader({
             ) : null}
           </p>
         ) : null}
-        {!selectedGoal && (managerRuntime || managerExecutionDefaultReason) ? <details className="personal-runtime-details" open={managerRuntime != null && managerRuntime.status !== "ready" ? true : undefined}><summary>{locale === "zh-CN" ? "运行环境" : "Execution environment"}</summary>
+        {stewardBindingVisible && (managerRuntime || managerExecutionDefaultReason) ? <details className="personal-runtime-details" open={managerRuntime != null && managerRuntime.status !== "ready" ? true : undefined}><summary>{locale === "zh-CN" ? "运行环境" : "Execution environment"}</summary>
         {!selectedGoal && managerRuntime ? (
           <p>{managerRuntime.status === "ready"
             ? t("header.managerRuntime", {
@@ -211,6 +233,7 @@ export function ChannelHeader({
         {selectedGoal && onOpenGoalCapabilities ? (
           <button aria-label={t("header.goalSettings")} title={t("header.goalSettingsDescription")} className="personal-icon-button personal-goal-settings-action" onClick={onOpenGoalCapabilities} type="button"><SlidersHorizontal aria-hidden size={17} /></button>
         ) : null}
+        {scopeControl}
         {!selectedGoal ? runtimeControl : null}
         {onRefresh ? (
           <span className={`personal-refresh-control is-${refreshState ?? "idle"}`}>

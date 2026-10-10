@@ -9,6 +9,7 @@ from typing import Any
 from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ..effect_runtime import effect_runtime_result
+from ..goals.activation import goal_is_stopped
 from ..goals.source_session_registry_state import exact_goal_ref, guard_path
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
@@ -44,6 +45,13 @@ class CollaborationGoalScope:
         return result
 
 
+def goal_accepts_collaboration(goal: dict[str, Any]) -> bool:
+    return not goal_is_stopped(goal) and goal.get("status") not in {
+        "stopped",
+        "archived",
+    }
+
+
 def _registered_goal(
     registry: dict[str, Any],
     *,
@@ -63,7 +71,7 @@ def _registered_goal(
         agent not in registered_agent_ids_for_goal(goal) for agent in agents
     ):
         raise ValueError("collaboration requires registered Agents of the same Goal")
-    if require_active and goal.get("status") in {"stopped", "archived"}:
+    if require_active and not goal_accepts_collaboration(goal):
         raise ValueError("collaboration Goal is stopped or archived")
     return goal
 

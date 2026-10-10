@@ -94,6 +94,143 @@ def test_context_scopes_before_read_and_missing_registry_is_unknown(
     assert missing["warnings"] == ["registry_unavailable"]
 
 
+@pytest.mark.parametrize("include_details", [False, True])
+def test_current_agent_work_reaches_prompt_without_extra_detail_reads(
+    monkeypatch, tmp_path, include_details
+):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME, manager_index
+
+    todos = [{"todo_id": f"todo_{i}", "title": f"Implement task {i}",
+              "status": "in-progress", "priority": "P0", "claimed_by": "worker",
+              "readiness": "runnable", "raw_receipt": "excluded"} for i in range(5)]
+    todos[0]["title"] += " with a long constraint" * 100
+    source = {"revision": "sha256:fixture", "latest_recorded_at": "2026-01-01T00:00:00Z"}
+    monkeypatch.setattr(context, "build_goal_portfolio", lambda **_: {
+        "snapshot_id": "fixture", "coverage": {"complete": False},
+        "goals": [{"goal_id": "alpha", "activation_state": "active", "quality": "stale",
+                   "source": source, "agent_coverage": {"attempted": 8, "omitted": 2},
+                   "agents": [{"agent_id": "worker", "source_verified": True, "todos": todos},
+                              {"agent_id": "unread", "source_verified": False, "todos": todos}]}],
+    })
+
+    reads = []
+
+    def details(*args, **kwargs):
+        reads.append("todos")
+        return {"status": "read", "todos": []}
+
+    def history(*args, **kwargs):
+        reads.append("history")
+        return {"status": "read", "deliveries": []}
+
+    monkeypatch.setattr(context, "read_manager_goal_details", details)
+    monkeypatch.setattr(context, "read_manager_delivery_history", history)
+    result = context.manager_turn_context(tmp_path / "registry.json", {"channel_id": "manager"},
+                                         tmp_path, include_details=include_details)
+    assert reads == (["history", "todos"] if include_details else [])
+    index = manager_index(result)
+    row = index["goals"][0]
+    assert row["source"] == source and row["quality"] == "stale"
+    assert row["agent_coverage"] == {"attempted": 8, "omitted": 2}
+    worker, unread = row["agents"]
+    assert worker["todo_count_in_projection"] == 5 and worker["todos_omitted"] == 2
+    assert [t["todo_id"] for t in worker["todos"]] == ["todo_0", "todo_1", "todo_2"]
+    assert all(t["claimed_by"] == "worker" for t in worker["todos"])
+    assert worker["todos"][0]["content_truncated"] is True
+    assert unread["todos"] == [] and unread["todo_count_in_projection"] is None
+    assert "raw_receipt" not in json.dumps(index)
+    assert result["goals"][0]["current_todos"]["status"] == (
+        "read" if include_details else "not_read"
+    )
+    page = ManagerInspection(context=result, registry_path=tmp_path / "registry.json",
+                             runtime_root=tmp_path, owner_scope=True,
+                             scope_valid=lambda: True, record=lambda _: None).read(TOOL_NAME, {"view": "portfolio"})
+    assert page["ok"] and page["rows"][0]["agents"] == row["agents"]
+
+
+def test_external_context_binds_scope_and_evidence_to_goal_instance(
+    monkeypatch, tmp_path
+):
+    import loopx.goal_portfolio as portfolio
+    from loopx.capabilities.manager_context.inspection import manager_index
+
+    goal_ref = {
+        "goal_id": "authorized",
+        "goal_instance_id": "ginst_" + "a" * 32,
+    }
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": goal_ref["goal_id"],
+                        "goal_instance_id": goal_ref["goal_instance_id"],
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(
+        portfolio,
+        "_read_goal",
+        lambda goal, **_kwargs: {
+            "goal_id": goal["id"],
+            "quality": "verified",
+            "warnings": [],
+        },
+    )
+
+    result = context.manager_turn_context(
+        registry,
+        {"channel_id": "manager.external.fixture"},
+        tmp_path,
+        authorized_goal_ids=[goal_ref["goal_id"]],
+        include_details=False,
+    )
+
+    assert result["goals"][0]["goal_instance_id"] == goal_ref["goal_instance_id"]
+    assert result["authorization_scope_id"] == (
+        context.manager_authorization_scope_id([goal_ref])
+    )
+    assert manager_index(result)["goals"][0]["goal_instance_id"] == (
+        goal_ref["goal_instance_id"]
+    )
+    owner = context.manager_turn_context(
+        registry,
+        {"channel_id": "manager"},
+        tmp_path,
+        include_details=False,
+    )
+    assert "authorization_scope_id" not in owner
+
+
+def test_external_context_fails_closed_without_a_trusted_inventory_revision(
+    monkeypatch, tmp_path
+):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{"id": "authorized"}]}))
+    monkeypatch.setattr(
+        context,
+        "build_goal_portfolio",
+        lambda **_kwargs: {
+            "goals": [{"goal_id": "authorized", "quality": "verified"}],
+            "coverage": {"discovered": 1, "verified": 1, "complete": True},
+        },
+    )
+
+    result = context.manager_turn_context(
+        registry,
+        {"channel_id": "manager.external.fixture"},
+        tmp_path,
+        authorized_goal_ids=["authorized"],
+        include_details=False,
+    )
+
+    assert "authorization_scope_id" not in result
+    assert result["warnings"] == ["external_authorization_changed"]
+
+
 def test_manager_evidence_carries_the_goal_lifecycle_readback(tmp_path, monkeypatch):
     """Milestones and phase reach the manager, or arrive as a named gap.
 
@@ -1104,6 +1241,124 @@ def test_external_authority_is_rechecked_after_collection(monkeypatch, tmp_path)
     assert result["warnings"] == ["external_authorization_changed"]
 
 
+def test_external_authority_is_rechecked_after_same_alias_replacement(
+    monkeypatch, tmp_path
+):
+    registry = tmp_path / "registry.json"
+    payload = {
+        "goals": [
+            {
+                "id": "same-alias",
+                "goal_instance_id": "ginst_" + "a" * 32,
+            }
+        ]
+    }
+    registry.write_text(json.dumps(payload))
+
+    def replace_goal(*_args, **_kwargs):
+        payload["goals"][0]["goal_instance_id"] = "ginst_" + "b" * 32
+        registry.write_text(json.dumps(payload))
+        return {"goals": [{"goal_id": "same-alias"}]}
+
+    monkeypatch.setattr(context, "manager_turn_context", replace_goal)
+    result = context.collect_manager_turn_context(
+        registry,
+        {"channel_id": "manager.external.fixture"},
+        tmp_path,
+        lambda _session: ["same-alias"],
+    )
+
+    assert result["goals"] == []
+    assert result["warnings"] == ["external_authorization_changed"]
+
+
+@pytest.mark.parametrize("change", ["metadata_once", "metadata_always", "replacement", "revocation"])
+def test_external_context_recollects_only_with_unchanged_exact_authority(
+    monkeypatch, tmp_path, change
+):
+    """A snapshot race can recover; churn and changes during recovery cannot."""
+    registry = tmp_path / "registry.json"
+    payload = {"goals": [{"id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]}
+    registry.write_text(json.dumps(payload))
+    collect = context.build_goal_portfolio
+    calls = []
+    authorized = ["authorized"]
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        calls.append(result["inventory_revision"])
+        if len(calls) == 1 or change == "metadata_always":
+            payload["observation_generation"] = len(calls)
+        elif change == "replacement":
+            payload["goals"][0]["goal_instance_id"] = "ginst_" + "b" * 32
+        elif change == "revocation":
+            authorized.clear()
+        registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    result = context.collect_manager_turn_context(
+        registry, {"channel_id": "manager.external.fixture"}, tmp_path,
+        lambda _session: list(authorized), include_details=False,
+    )
+    if change == "metadata_once":
+        assert result["authorization_scope_id"] == context.manager_authorization_scope_id([
+            {"goal_id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}
+        ])
+        assert result["goals"][0]["goal_instance_id"] == "ginst_" + "a" * 32
+    else:
+        assert result["goals"] == []
+        assert result["warnings"] == ["external_authorization_changed"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("continued_churn", [False, True])
+def test_external_inventory_recovery_never_repeats_inline_remote_reads(
+    monkeypatch, tmp_path, continued_churn
+):
+    from loopx.capabilities.manager_context.ssh_evidence import configure
+
+    registry = tmp_path / "registry.json"
+    payload = {"goals": [{"id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]}
+    registry.write_text(json.dumps(payload))
+    channel = "manager.external." + "e" * 24
+    config = tmp_path / "ssh_config"
+    config.write_text("Host research-host\n  HostName research-host.invalid\n")
+    configure(tmp_path, channel=channel, host="research-host", goal_ids=["remote-goal"],
+              execute=True, config_path=config)
+    collect = context.build_goal_portfolio
+    remote = context._remote_evidence
+    collections = []
+    dials = []
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        collections.append(result["inventory_revision"])
+        if len(collections) == 1 or continued_churn:
+            payload["observation_generation"] = len(collections)
+            registry.write_text(json.dumps(payload))
+        return result
+
+    def read_with_fixture_config(*args, **kwargs):
+        kwargs["config_path"] = config
+        return remote(*args, **kwargs)
+
+    def failed_ssh(argv, **kwargs):
+        dials.append(argv)
+        return SimpleNamespace(returncode=255, stdout="", stderr="Connection refused")
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    monkeypatch.setattr(context, "_remote_evidence", read_with_fixture_config)
+    result = context.collect_manager_turn_context(
+        registry, {"channel_id": channel}, tmp_path, lambda _: ["authorized"],
+        include_details=False, remote_evidence=True, remote_runner=failed_ssh,
+    )
+    assert len(dials) == 1
+    assert len(collections) == 1
+    assert result["goals"] == []
+    assert result["warnings"] == ["external_authorization_changed"]
+
+
 def test_empty_external_authority_never_reaches_the_model(monkeypatch, tmp_path):
     store = ChatSessionStore(tmp_path / "runtime")
     runtime = ChatRuntimeController(
@@ -1150,16 +1405,24 @@ def test_changed_external_scope_rotates_upstream_before_model_call(
     replacement = Adapter()
     replacement.upstream_thread_id = "replacement-upstream"
     starts = []
+    old_goal_ref = {
+        "goal_id": "same-alias",
+        "goal_instance_id": "ginst_" + "a" * 32,
+    }
+    new_goal_ref = {
+        "goal_id": "same-alias",
+        "goal_instance_id": "ginst_" + "b" * 32,
+    }
     monkeypatch.setattr(
         context,
         "collect_manager_turn_context",
         lambda *_args, **_kwargs: {
             "schema_version": "manager_turn_context_v1",
             "authorization_scope_id": context.manager_authorization_scope_id(
-                ["newly-authorized"]
+                [new_goal_ref]
             ),
             "coverage": {"discovered": 1, "verified": 1, "complete": True},
-            "goals": [{"goal_id": "newly-authorized"}],
+            "goals": [new_goal_ref],
         },
     )
 
@@ -1169,7 +1432,7 @@ def test_changed_external_scope_rotates_upstream_before_model_call(
 
     monkeypatch.setattr(runtime, "_start_adapter", start)
     session = store.create_session(
-        goal_id="previously-authorized",
+        goal_id="same-alias",
         agent_id="codex",
         adapter_kind="codex_app_server",
         upstream_thread_id="old-upstream",
@@ -1180,7 +1443,7 @@ def test_changed_external_scope_rotates_upstream_before_model_call(
     store.update_session(
         session["session_id"],
         manager_authorization_scope_id=context.manager_authorization_scope_id(
-            ["previously-authorized"]
+            [old_goal_ref]
         ),
     )
     runtime.adapters[session["session_id"]] = old_adapter
@@ -1200,11 +1463,11 @@ def test_changed_external_scope_rotates_upstream_before_model_call(
         assert len(starts) == 1
         assert starts[0]["resume_thread_id"] is None
         assert starts[0]["history"] is None
-        assert "newly-authorized" in replacement.messages[0]
+        assert new_goal_ref["goal_instance_id"] in replacement.messages[0]
         persisted = store.load_session(session["session_id"])
         assert persisted["upstream_thread_id"] == "replacement-upstream"
         assert persisted["manager_authorization_scope_id"] == (
-            context.manager_authorization_scope_id(["newly-authorized"])
+            context.manager_authorization_scope_id([new_goal_ref])
         )
         retry, _ = runtime.submit_turn(
             session_id=session["session_id"],
@@ -1219,6 +1482,101 @@ def test_changed_external_scope_rotates_upstream_before_model_call(
         assert retried["status"] == "completed"
         assert len(starts) == 1
         assert len(replacement.messages) == 2
+    finally:
+        runtime.close()
+
+
+def test_external_handoff_rechecks_the_exact_goal_scope_after_model_return(
+    monkeypatch, tmp_path
+):
+    from loopx.capabilities.manager_context import execution
+
+    registry = tmp_path / "registry.json"
+    payload = {
+        "goals": [
+            {
+                "id": "same-alias",
+                "goal_instance_id": "ginst_" + "a" * 32,
+            }
+        ]
+    }
+    registry.write_text(json.dumps(payload))
+    scope_id = context.manager_authorization_scope_id_for_registry(
+        registry,
+        ["same-alias"],
+        runtime_root=tmp_path,
+        channel_id="manager.external.fixture",
+    )
+    assert scope_id is not None
+
+    store = ChatSessionStore(tmp_path / "runtime")
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="codex",
+        registry_path=registry,
+        manager_scope_resolver=lambda _session: ["same-alias"],
+    )
+    checks: list[bool] = []
+
+    class HandoffAdapter(Adapter):
+        def start_turn(self, message, sink):
+            self.messages.append(message)
+            payload["goals"][0]["goal_instance_id"] = "ginst_" + "b" * 32
+            registry.write_text(json.dumps(payload))
+            return {
+                "message": "handoff",
+                "context_handoff": {"goal_id": "same-alias"},
+            }
+
+    def handoff_response(*_args, source_authorized, **_kwargs):
+        checks.append(source_authorized())
+        return {"message": "blocked"}
+
+    monkeypatch.setattr(execution, "handoff_response", handoff_response)
+    monkeypatch.setattr(
+        context,
+        "collect_manager_turn_context",
+        lambda *_args, **_kwargs: {
+            "authorization_scope_id": scope_id,
+            "coverage": {"discovered": 1, "verified": 1, "complete": True},
+            "goals": [
+                {
+                    "goal_id": "same-alias",
+                    "goal_instance_id": "ginst_" + "a" * 32,
+                }
+            ],
+        },
+    )
+    adapter = HandoffAdapter()
+    session = store.create_session(
+        goal_id="same-alias",
+        agent_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="old-upstream",
+        channel_id="manager.external.fixture",
+        upstream_mode="chat",
+        codex_home=str(runtime.codex_home),
+    )
+    store.update_session(
+        session["session_id"],
+        manager_authorization_scope_id=scope_id,
+    )
+    runtime.adapters[session["session_id"]] = adapter
+    try:
+        turn, _ = runtime.submit_turn(
+            session_id=session["session_id"],
+            client_turn_id="same-alias-handoff",
+            message="Delegate this",
+            work_dir=tmp_path,
+            objective="manager",
+        )
+        done = runtime.wait_for_turn(
+            session_id=session["session_id"],
+            turn_id=turn["turn_id"],
+            timeout_sec=5,
+        )
+        assert done["status"] == "completed"
+        assert checks == [False]
     finally:
         runtime.close()
 

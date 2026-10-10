@@ -122,6 +122,13 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
       schema_version: "loopx_local_coordination_operation_receipt_request_v0",
       operation_id: "open-failure",
     }],
+    readLocalCoordinationTodoSource: [{
+      runtime_root: directory,
+      goal_id: "goal-a",
+      schema_version: "loopx_local_coordination_todo_source_request_v0",
+      source: {source_authority: "file_v0", store_identity: "file:synthetic",
+        provider_revision: revision, cursor: "1"},
+    }],
     createLocalCoordinationTodo: [
       {...input, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, todo: {}},
       {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA, todo: {}}],

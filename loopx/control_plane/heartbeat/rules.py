@@ -6,10 +6,11 @@ DEFAULT_PERMISSION_RULE = "Do not ask for permissions when the current host sess
 OPERATOR_LANGUAGE_RULE = "Language=user; fallback=English; mix only if asked/scoped-bilingual."
 OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
-    "Within authority/budget, deliver verifiable results sized by "
-    "task/evidence/risk, not ops/files/wakes. Calls/writeback aren't "
-    "completion; obey stop/replan."
+    "Read agent_channel.work_context and required_reads (or envelope) before work. "
+    "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
+    "calls/writeback ≠ completion; obey stop/replan."
 )
+
 USER_TODO_FINAL_MESSAGE_RULE = (
     f"{OPERATOR_LANGUAGE_RULE} "
     "`interaction_contract.user_channel.notify` controls output: "
@@ -30,10 +31,11 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     "DONT_NOTIFY repair internally."
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
-    "Exact monitor-poll settlement->no refresh/spend; else "
-    "no-change=surface_only/no spend; writeback material=outcome+vision. "
-    "Missing vision: same-turn checkpoint-context recheck, add only evidenced "
-    "vision; stale->reread; unchanged->truthful --vision-unchanged-reason."
+    "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work. "
+    "Admitted work: settlement_plan even if artifacts unchanged. "
+    "Writeback=outcome+vision. "
+    "After committed writeback: same-turn checkpoint-context for missing vision, add "
+    "evidence; stale->reread; unchanged->truthful --vision-unchanged-reason."
 )
 REWARD_MEMORY_OUTCOME_RULE = (
     "`reward_memory_recall.experiment.automatic_ingest=true`: reusable Todo outcomes "
@@ -50,6 +52,7 @@ REWARD_MEMORY_OUTCOME_COMPACT_RULE = (
     "provider calls; no raw/private content."
 )
 SCHEDULER_HINT_APPLICATION_RULE = (
+    "Bootstrap/min interval is a floor; follow current backoff. "
     "`scheduler_hint` no-spend. host_action=pause_or_delete_current_heartbeat -> "
     "automation_update stop once, verify, end; else apply_needed -> RRULE via "
     "automation_update; unavailable -> use fallback_hint.cli_args only when projected "
@@ -58,11 +61,13 @@ SCHEDULER_HINT_APPLICATION_RULE = (
     "ack_needed -> ack."
 )
 SCHEDULER_HINT_COMPACT_RULE = (
+    "Bootstrap/min interval is a floor; follow current backoff. "
     "host_action=pause_or_delete_current_heartbeat: automation_update stop; "
     "else RRULE apply via automation_update, projected fallback_hint when unavailable, "
     "then ack/fail. No spend."
 )
 SCHEDULER_HINT_THIN_RULE = (
+    "Bootstrap/min=floor; backoff. "
     "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend); "
     "else RRULE/projected-fallback_hint/ack/fail."
 )

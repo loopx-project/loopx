@@ -914,10 +914,29 @@ silently pooled. Unknown fields and path-like references fail closed.
 Every non-baseline row names an exact `comparison_anchor_run_id`. Standard control
 or treatment rows anchor to a baseline. Explore rows use `diagnostic_only` claim
 scope and may anchor to the baseline or fixed standard arm they are examining.
+Run identity is `(benchmark_id, study_id, case_id, run_id)`; an anchor inherits
+the candidate's benchmark, study, and case. Run ids may be reused across those
+scopes. Duplicate full identities must be reconciled before board readback.
+Study provenance and case insights bind to this same identity. Dashboard run
+links retain the case; a legacy run-id-only link resolves only when unambiguous.
 Matched comparisons require compatible benchmark, study, case, model, primary
 metric, comparison protocol, score countability, and treatment fidelity. Exact
 protocol revisions remain visible as a warning even when a declared comparison
 protocol says an older credible score remains semantically comparable.
+
+Metric comparisons preserve the raw `delta` (candidate value minus baseline
+value). When both metrics have positive totals, `delta_rate` determines improvement
+and the dashboard's largest eligible contrast; Markdown and dashboard labels show
+this change in percentage points (`pp`). Scalar metrics use the raw delta.
+Units, improvement direction, and the presence of a denominator must agree.
+A mismatch, zero denominator, or non-finite difference retains the endpoint values
+with `comparison_unavailable_reason`, without a delta or direction. An unavailable
+primary metric excludes the matched pair; an unavailable auxiliary metric does
+not invalidate an otherwise eligible primary comparison. Optional unit and
+direction metadata may remain absent on both sides of historical board rows.
+Factorial interactions use the same scale across all four cells and retain the
+existing fixed-total requirement for their primary metric. The study dashboard
+does not rank a mixture of scalar and ratio contrasts against one another.
 
 Full post-run analysis stays in private `benchmark_case_insight_v0` storage. The
 board records only its compact status or handle, so reading the board cannot widen

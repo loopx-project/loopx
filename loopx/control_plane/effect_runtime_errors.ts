@@ -79,14 +79,14 @@ function boundedMessage(value: string, fallback: string): string {
 
 function nodeErrorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null) return null;
-  const code = (error as NodeJS.ErrnoException).code;
+  const code = (error as {code?: unknown}).code;
   return typeof code === "string" ? code : null;
 }
 
 function isNodeSystemError(error: unknown): boolean {
   return typeof error === "object" &&
     error !== null &&
-    typeof (error as NodeJS.ErrnoException).syscall === "string";
+    typeof (error as {syscall?: unknown}).syscall === "string";
 }
 
 export function effectRuntimeErrorPayload(

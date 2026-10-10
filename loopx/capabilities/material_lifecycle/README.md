@@ -76,6 +76,8 @@ flowchart LR
   index.
 - The ranked set may extend beyond a visible Top-N through an explicit ranked
   backlog.
+- A visible Top-N is not an implicit protected prefix. Only explicitly declared
+  pinned entries or stable prefixes constrain a rerank.
 - Recall is advisory; ranking evidence must be promoted by exact read.
 - Proposal and apply receipt are separate.
 - Apply and rollback require explicit owner gates and revision checks.
@@ -95,6 +97,62 @@ flowchart LR
 Ordinary one-off reading, summarization, or web research does not require this
 capability unless the project has explicitly activated a managed material
 store.
+
+## Revising An Existing Candidate
+
+When a short preview is later fully read, revise the existing candidate instead
+of adding a duplicate. `build_material_candidate_revision_proposal` binds the
+current authority revision, previous record reference, replacement record
+reference and exact-read content digest. `apply_material_candidate_revision`
+uses the existing source owner's authorization, immutable staging, readback and
+CAS; `rollback_material_candidate_revision` restores the previous authority
+only while the applied revision is still current.
+
+The source implements `MaterialCandidateRevisionProvider` beside its existing
+intake methods. Reconciliation must preserve all stable identities, record
+counts, other records, lifecycle states, rankings and previous content. A
+revision cannot reactivate an archive. Metadata changes must be bound by the
+replacement record reference; source adapters must invalidate public-field
+reviews that no longer match the revised record/content. Ranking changes still
+use a separate Decision Context-backed settlement and receipt.
+
+This extends the existing Python material source apply boundary, without a new
+authority, scheduler, ranking policy or generic CLI writer. An SDK proposal
+does not authorize a write. Product/project adapters must expose the operation,
+publish the readable queues, persist receipts and verify their readback before
+reporting the user's workflow complete. Existing intake stays append-only.
+
+## Single-Material Reranking
+
+`plan_material_single_move(ordered_material_refs, material_ref, to_rank)`
+previews a move within the **complete** ranked set, including its backlog. It
+returns the new order and constraints for `build_material_rerank_proposal`.
+The moved-item and displacement bounds describe exactly the affected interval;
+every other material keeps its relative order. It rejects duplicate identities,
+out-of-range targets and unranked materials, which must use candidate intake.
+Pass `protected_material_refs` explicitly: moving or displacing an anchor fails.
+Grouped reading units still require the project's existing semantic review;
+this helper does not flatten a catalog or alter source records.
+
+The SDK helpers remain previews. The source adapter must verify the inventory
+and Decision Context backing, recompute the exact preview on apply, and retain
+the existing owner gate, CAS, readback, publication and rollback boundary. No
+helper authorizes a write or changes an older proposal's constraints.
+
+For moves affecting more than 100 materials, use
+`material_rerank_receipt_chunks(affected_material_refs)`, then build one existing
+`material_rerank_apply_receipt_v0` per chunk. The input is validated completely
+before any chunk is returned; duplicates fail instead of losing coverage.
+Give every receipt a unique id and the **same** proposal, before/after revision,
+gate and validation references for the one atomic source transition. Build all
+receipts before switching authority, persist the complete list after successful
+readback, and verify its flattened membership against the exact preview.
+Persisting only the first receipt does not establish complete coverage. Empty
+input yields one empty chunk for the existing no-change/rejection/rollback
+contracts; the single-receipt limit remains 100.
+
+This SDK slice is independent of project-scope ownership support. It does not
+add a CLI writer, store authority, scoring policy or automatic reranker.
 
 ## Project-Local Skill Delivery
 
@@ -142,6 +200,16 @@ gate.
 3. **Exact-read decision evidence.**
    Promote only current, authoritative evidence; reject stale or secondary-only
    claims.
+   A rerank move or Explore topic may cite packet-known evidence only when its
+   changed fact is fresh and matches a current source revision, its recalled
+   claim is exact-read verified against a current source revision, or its
+   direct source/revision ref is backed by one of those same fresh changed facts
+   or exact-read verified claims. A current `source_revisions` scan row alone is
+   not action evidence. Policy evaluation receives a copy, so it cannot rewrite
+   the packet snapshot used to validate its returned actions.
+   Explicitly stale/rejected records cannot support an action. Unrelated stale
+   records remain visible, and opaque references not recognized in the packet
+   keep their existing caller-owned meaning.
 4. **Choose the smallest valid change.**
    Use lifecycle transition, bounded rerank, or structural rebuild as distinct
    operations.
@@ -177,6 +245,21 @@ for inventory, migration preparation, lifecycle receipts, ranked-entry
 rebuild, bounded rerank, readable projection, Explore intent, apply, and
 rollback. Concrete legacy parsers, private storage adapters, source profiles,
 and provider credentials remain project owned.
+
+## Project Conversation Intake
+
+An explicitly activated project source can pass `MaterialProjectScope` instead
+of `goal_id` to the existing inventory, intake/rollback, ranking, projection and
+settlement builders. Exactly one owner is required; the project path creates
+no Goal. Its project/profile/grant references select existing Core context and
+source ownership, and never grant access by themselves.
+
+Project intake/rollback require the source provider's `verify_project_scope`
+to resolve the current Core caller, audience, exact profile/store, workspace
+write grant and expiring owner gate. Verification runs before source access
+and publication; the source must retain its transaction authorization fence.
+Source initialization stays project owned. Migration, rebuild and Explore keep
+their existing Goal route. No new CLI or transport configuration path is added.
 
 ## Relationship To Other Capabilities
 

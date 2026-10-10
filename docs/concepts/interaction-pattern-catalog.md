@@ -1221,9 +1221,11 @@ main blocker or keeps following a stale local-only benchmark staging todo.
   It does not promote existing Goals or migrate their data, and existing Goals
   keep the selection they were created with; see
   `docs/reference/local-authority-provider-selection.md`;
-- `pull_request_review` carries `review_priority`, which defaults to
-  `other-developers-first` and accepts `owner-first` as an explicit opt-in that
-  changes review ordering only;
+- `pull_request_review` carries `review_order` (`forward` by default, or
+  `reverse`) and Goal-owned `agent_orders` for registered Agent overrides.
+  Commands resolve explicit direction, Agent, Goal, then machine; reverse inverts
+  the full actionable queue, including time order. Legacy priorities map to
+  forward/reverse; configuration grants no review, Todo or merge authority;
 - `steward_executor` carries the executor, model, and reasoning effort the steward
   channel answers on for one machine. It stores no credential and grants no
   authority, and it precedes the Chat service environment rather than replacing
@@ -2993,7 +2995,7 @@ resolved. The two lanes must not collapse into each other.
 
 Replan closeout is semantic and causally bound. A normal validated progress
 refresh may record useful work, but it must not silently close the
-`autonomous_replan_obligation_v0`. Quota first projects the evidence-log into a
+`autonomous_replan_obligation_v0`. Quota first projects compact run history into a
 compact coverage ledger and emits an opaque `obligation_id`; after the bounded
 slice, the agent writes one typed observation. When the result is a runnable
 successor, the Todo transition itself is the receipt:

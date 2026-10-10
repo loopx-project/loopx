@@ -1,6 +1,7 @@
 from __future__ import annotations
 from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
 from ..quota.effective_action import EffectiveAction
+from ..effect_runtime import effect_runtime_result
 import shlex
 import typing
 from collections.abc import Mapping
@@ -579,6 +580,7 @@ def _turn_scoped_cli_settlement_context(
     ),
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if selection.action_portfolio_requires_explicit_selection(payload):
         return None, None
@@ -622,7 +624,7 @@ def _turn_scoped_cli_settlement_context(
         ),
         goal_id=goal_id,
         agent_id=agent_id,
-        command_prefix=selection.render_cli_command_prefix(runtime_root=runtime_root),
+        command_prefix=selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path),
         todo_id=todo_id,
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
@@ -696,11 +698,13 @@ def _selection_recovery_command(
     payload: dict[str, Any], *, available_capabilities: Any,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
     turn_instance_id: str | None, runtime_root: str | None,
+    registry_path: str | None = None,
 ) -> str:
     identity = payload.get("agent_identity") if isinstance(payload.get("agent_identity"), dict) else {}
     return selection.action_selection_recovery_command(
         goal_id=str(payload.get("goal_id") or "<GOAL_ID>"),
         agent_id=identity.get("agent_id"), runtime_root=runtime_root,
+        registry_path=registry_path,
         turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
         scheduler_args=render_scheduler_execution_args(scheduler_execution_context=scheduler_execution_context),
     ) + _goal_ref_cli_arg(payload)
@@ -740,6 +744,7 @@ def interaction_next_cli_actions(
             payload, available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
             turn_instance_id=turn_instance_id, runtime_root=runtime_root,
+            registry_path=registry_path,
         )]
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
@@ -760,6 +765,7 @@ def interaction_next_cli_actions(
             scheduler_execution_context=scheduler_execution_context,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         )
     settlement_args = settlement_binding_args(settlement_plan)
     try:
@@ -774,6 +780,7 @@ def interaction_next_cli_actions(
         scheduler_args=scheduler_args,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        registry_path=registry_path,
     )
     if selection_command_template:
         return [selection_command_template + _goal_ref_cli_arg(payload)]
@@ -947,7 +954,7 @@ def interaction_next_cli_actions(
             (
             f"{command_prefix} todo update --goal-id {goal_id} --todo-id {todo_id}"
             f"{lifecycle_actor_args} --status open --clear-resume-when "
-            "--note '<public-safe successor replan reason>'"
+            "--reason '<public-safe successor replan reason>'"
             ),
             f"{command_prefix} refresh-state --goal-id {goal_id} --classification successor_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
             quota_spend_action,
@@ -1022,20 +1029,41 @@ def interaction_next_cli_actions(
     )
 
 
-def _interaction_required_reads(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _interaction_required_reads(
+    payload: dict[str, Any], contract: dict[str, Any], *,
+    runtime_root: str | None, registry_path: str | None,
+) -> list[dict[str, Any]]:
+    """Transport source/admission facts to the existing typed interaction owner."""
     reads = payload.get("required_reads")
-    if not isinstance(reads, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for item in reads:
-        if not isinstance(item, dict):
-            continue
-        # Transport the admitted command intact; display compaction can change
-        # quoted paths or remove arguments. The typed envelope owns validation.
-        if not item.get("command"):
-            continue
-        result.append(dict(item))
-    return result
+    summary = payload.get("agent_todo_summary") or {}
+    acceptance = summary.get("goal_acceptance_contract") or {}
+    replan = payload.get("replan_action_packet") or {}
+    selected = payload.get("selected_todo") or {}
+    orchestration = payload.get("task_orchestration_contract") or {}
+    result = effect_runtime_result("work_item.interaction_reads.project", {
+        "required_reads": [dict(item) for item in reads if isinstance(item, dict) and item.get("command")]
+            if isinstance(reads, list) else [],
+        "goal_id": payload.get("goal_id"),
+        "goal_state_file": payload.get("goal_state_file"),
+        "goal_acceptance_enabled": acceptance.get("enabled") is True,
+        "selected_todo": {"todo_id": selected.get("todo_id")},
+        "task_orchestration_contract": {field: orchestration.get(field)
+            for field in ("schema_version", "mode", "primary_todo_id")},
+        "should_run": payload.get("should_run") is True,
+        "delivery_allowed": contract["agent_channel"].get("delivery_allowed") is True,
+        "selection_required": contract["cli_channel"].get("selection_required") is True,
+        "has_replan": bool(replan), "settlement_only": replan.get("settlement_only") is True,
+        "effective_action": payload.get("effective_action"),
+        "command_prefix": selection.render_cli_command_prefix(
+            runtime_root=runtime_root or payload.get("runtime_root"),
+            registry_path=registry_path or payload.get("registry")),
+    })
+    projected = result.get("required_reads")
+    if not isinstance(projected, list) or any(
+        not isinstance(item, dict) or not item.get("command") for item in projected
+    ):
+        raise RuntimeError("TypeScript interaction required reads are malformed")
+    return projected
 
 
 def _interaction_spend_policy(
@@ -1316,6 +1344,7 @@ def _build_interaction_cli_channel(
             payload, available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
             turn_instance_id=turn_instance_id, runtime_root=runtime_root,
+            registry_path=registry_path,
         ))
     spend_after_selection = selection.delivery_spend_allowed(payload, spend_after_validation)
     settlement_plan, replan_settlement_contract = (
@@ -1325,6 +1354,7 @@ def _build_interaction_cli_channel(
             scheduler_execution_context=scheduler_execution_context,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         )
     )
     channel = {
@@ -1487,10 +1517,14 @@ def _build_interaction_cli_channel(
         if isinstance(payload.get("selected_todo"), Mapping)
         else {}
     )
-    if spend_after_selection and selected_todo.get("task_repository"):
+    if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
-            "refresh": "delivery_workspace; otherwise --delivery-workspace-path",
+            "refresh": (
+                "delivery_workspace; otherwise --delivery-workspace-path"
+                if selected_todo.get("task_repository")
+                else "registered local Goal target; when caller cwd differs, refresh with --delivery-workspace-path for the actual target; spend uses the recorded delivery workspace"
+            ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",
         }
@@ -1501,10 +1535,8 @@ def _attach_interaction_required_reads(
     contract: dict[str, Any],
     required_reads: list[dict[str, Any]],
 ) -> None:
-    if not required_reads:
-        return
+    # One execution-fact carrier; CLI actions do not duplicate agent reads.
     contract["agent_channel"]["required_reads"] = required_reads
-    contract["cli_channel"]["required_reads"] = required_reads
 
 
 def _attach_interaction_post_writeback_actions(
@@ -1650,7 +1682,6 @@ def build_interaction_contract(
         _interaction_spend_after_validation(mode)
         and todo_lifecycle_settlement_obligation(payload) is None
     )
-    required_reads = _interaction_required_reads(payload)
     capability_reentry = capability_reentry_adapter.build_runtime_capability_reentry_packet(
         payload,
         available_capabilities=available_capabilities,
@@ -1678,6 +1709,7 @@ def build_interaction_contract(
                 payload, available_capabilities=available_capabilities,
                 scheduler_execution_context=scheduler_execution_context,
                 turn_instance_id=turn_instance_id, runtime_root=runtime_root,
+                registry_path=registry_path,
             ),
         }
     else:
@@ -1714,7 +1746,8 @@ def build_interaction_contract(
     )
     if response_plan is not None:
         contract["response_plan"] = response_plan
-    _attach_interaction_required_reads(contract, required_reads)
+    _attach_interaction_required_reads(contract, _interaction_required_reads(
+        payload, contract, runtime_root=runtime_root, registry_path=registry_path))
     _attach_interaction_post_writeback_actions(contract, payload)
     _attach_interaction_vision_continuation_audit(contract, payload)
     _attach_interaction_vision_wait_state(contract, payload)

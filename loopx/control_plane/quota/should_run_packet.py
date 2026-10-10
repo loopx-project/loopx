@@ -798,6 +798,25 @@ def _resolve_external_evidence_observation(
     return external_evidence_observation, external_evidence_observation_recent
 
 
+def _with_lane_recommendation(
+    prepared: _QuotaDecisionPreparation, agent_lane_next_action: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Decorate selected work; preserve replay's frozen execution packet."""
+    source = prepared.item.get("recommendation_context")
+    if isinstance(source, dict) and isinstance(agent_lane_next_action, dict) and not prepared.guarded_agent_lane_next_action:
+        from ..goals.goal_frontier.semantic_history import latest_lane_recommendation_from_status
+        from ..work_items.recommendation_source_io import lane_recommendation_context
+        actor = agent_lane_next_action.get("agent_id")
+        task = next((task for task in prepared.agent_todo_planning_source_items
+            if task.get("todo_id") == agent_lane_next_action.get("todo_id")), None)
+        context = lane_recommendation_context(source, agent_id=actor,
+            selected_todo=agent_lane_next_action, task=task,
+            prior_resolution=latest_lane_recommendation_from_status(
+                prepared.status_payload, goal_id=prepared.safe_goal_id, agent_id=actor))
+        agent_lane_next_action = context["selected_todo"]
+    return agent_lane_next_action
+
+
 def _resolve_quota_should_run_route(
     prepared: _QuotaDecisionPreparation,
 ) -> _QuotaDecisionRoute:
@@ -1043,13 +1062,22 @@ def _resolve_quota_should_run_route(
         should_run=should_run,
         normal_delivery_allowed=normal_delivery_allowed,
     )
+    agent_lane_next_action = _with_lane_recommendation(prepared, agent_lane_next_action)
     agent_scope_frontier = None
     agent_lane_frontier_hint = None
     if receipt_bound_deferred:
         # The no-spend route and its public next action must describe the
         # same committed binding, even when summaries offer independent work.
         selected_recommended_action = prepared.work_lane_contract["action"]
-    elif not replan_decision_allowed and not receipt_bound_monitor_settled:
+    elif (
+        not replan_decision_allowed
+        and not receipt_bound_monitor_settled
+        and prepared.receipt_bound_todo_id is None
+    ):
+        # The typed receipt owner already selected this Turn's immutable
+        # binding. Frontier discovery is for unbound Turns: a newly ready
+        # successor must not replace an interrupted Turn's Todo/effect after
+        # the receipt-bound delivery route has been resolved above.
         selected_recommended_action = selected_action_with_agent_lane(
             selected_recommended_action,
             agent_lane_next_action=agent_lane_next_action,
@@ -1209,6 +1237,9 @@ def _quota_payload_context(prepared: _QuotaDecisionPreparation, route: _QuotaDec
         "status_health_ok": prepared.goal_health_ok,
         "mode": "should-run",
         "goal_id": prepared.safe_goal_id,
+        "registry": prepared.status_payload.get("registry"),
+        "runtime_root": prepared.status_payload.get("runtime_root"),
+        "goal_state_file": prepared.goal_state_file,
         "quota": route.quota,
         "state": route.state,
         "blocked_action_scope": prepared.boundary_projection_repair.get("blocked_action_scope")

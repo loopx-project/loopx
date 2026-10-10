@@ -1,39 +1,43 @@
 import {useEffect, useRef, useState} from "react";
 import {readLoopXTeamWork, type DelegationDependency, type DelegationReadback} from "../../data/chat";
-import {changedRange, comparisonSource, preferredComparisonIndex} from "./team-artifact-comparison";
+import {changedRange, comparisonSource, currentComparisonSelection, preferredComparisonIndex, type ComparisonSelection} from "./team-artifact-comparison";
 import {TeamArtifactContent} from "./team-artifact-content";
 
 export function GoalTeamComparison({sessionId, result, zh}: {
   sessionId: string; result: DelegationReadback; zh: boolean;
 }) {
-  const [selection, setSelection] = useState<{link: DelegationDependency; source: DelegationReadback} | null>(null);
-  const [outputIndex, setOutputIndex] = useState(0);
+  const [selection, setSelection] = useState<ComparisonSelection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [raw, setRaw] = useState(false);
   const generation = useRef(0);
   useEffect(() => {
-    generation.current++; setSelection(null); setError(""); setBusy(false); setOutputIndex(0);
+    generation.current++;
+    setSelection(previous => currentComparisonSelection(previous, result, sessionId));
+    setError(""); setBusy(false);
     return () => {generation.current++;};
   }, [result, sessionId]);
   const artifacts = result.status === "accepted" && !result.error && !result.recovery_required ? result.artifacts ?? [] : [];
   const links = result.dependencies ?? [];
+  const currentSelection = currentComparisonSelection(selection, result, sessionId);
   async function compare(link: DelegationDependency) {
     const current = ++generation.current;
-    setSelection(null); setError(""); setBusy(true); setOutputIndex(preferredComparisonIndex(link.ref, artifacts)); setRaw(false);
+    const output = artifacts[preferredComparisonIndex(link.ref, artifacts)];
+    setSelection(null); setError(""); setBusy(true); setRaw(false);
     try {
       const source = await readLoopXTeamWork(sessionId, link.operation_id);
       if (current !== generation.current) return;
-      if (!comparisonSource(link, source)) {
+      const checked = output ? currentComparisonSelection({sessionId, target: result, link, source, output}, result, sessionId) : null;
+      if (!checked) {
         setError(zh ? "指定来源版本无法核验，未展示对照。" : "The referenced source version cannot be verified. Comparison withheld.");
-      } else setSelection({link, source});
+      } else setSelection(checked);
     } catch {
       if (current === generation.current) setError(zh ? "来源读取失败，已清除上次对照。可重试或查看执行详情。" : "Source read failed; previous comparison cleared. Retry or inspect the execution.");
     } finally {if (current === generation.current) setBusy(false);}
   }
   if (!links.length || !artifacts.length) return null;
-  const before = selection ? comparisonSource(selection.link, selection.source) : null;
-  const after = artifacts[outputIndex];
+  const before = currentSelection ? comparisonSource(currentSelection.link, currentSelection.source) : null;
+  const after = currentSelection?.output;
   const range = before && after ? changedRange(before.text, after.text) : null;
   const labels = zh ? {revises: "修订依据", responds_to: "回应依据", uses: "使用依据"}
     : {revises: "Revision source", responds_to: "Response source", uses: "Input source"};
@@ -42,7 +46,7 @@ export function GoalTeamComparison({sessionId, result, zh}: {
       <span>{zh ? "按需核验" : "On-demand verification"}</span></div>
     <div className="goal-team-comparison-sources">{links.map((link, index) => <button type="button"
       key={`${link.operation_id}:${link.input_ref}:${index}`} disabled={busy || link.state !== "current"}
-      aria-pressed={selection?.link === link} onClick={() => void compare(link)}>
+      aria-pressed={currentSelection?.link === link} onClick={() => void compare(link)}>
       <span>{labels[link.relation]}</span><strong>{link.ref}</strong>
       {links.filter(row => row.ref === link.ref).length > 1 ? <span>{link.operation_id}</span> : null}
       {link.state !== "current" ? <span>{zh ? "无法核验" : "Unavailable"}</span> : null}
@@ -51,7 +55,9 @@ export function GoalTeamComparison({sessionId, result, zh}: {
     {error ? <p role="alert">{error}</p> : null}
     {before && after && range ? <>
       <button type="button" aria-pressed={raw} onClick={() => setRaw(value => !value)}>{raw ? (zh ? "阅读对照" : "Read comparison") : (zh ? "查看原文差异" : "View source changes")}</button>
-      {artifacts.length > 1 ? <label>{zh ? "对照产物" : "Compare output"}<select value={outputIndex} onChange={e => setOutputIndex(Number(e.target.value))}>
+      {artifacts.length > 1 ? <label>{zh ? "对照产物" : "Compare output"}<select value={artifacts.indexOf(after)} onChange={e => {
+        if (currentSelection) setSelection({...currentSelection, output: artifacts[Number(e.target.value)]});
+      }}>
         {artifacts.map((row, index) => <option key={`${row.ref}:${index}`} value={index}>{row.ref}</option>)}
       </select></label> : null}
       <div className="goal-team-comparison-grid">

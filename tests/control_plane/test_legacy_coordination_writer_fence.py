@@ -340,7 +340,7 @@ def test_goal_todo_add_uses_provider_at_override_root_when_promoted(
         }
 
     monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
+        "loopx.control_plane.todos.provider_create.effect_runtime_result",
         missing_provider,
     )
     state_before = state.read_text(encoding="utf-8")
@@ -357,13 +357,8 @@ def test_goal_todo_add_uses_provider_at_override_root_when_promoted(
         )
 
     assert exc_info.value.code == "local_authority_todo_list_unavailable"
-    assert captured["method"] == "coordination.local_authority.todo_snapshot_page"
-    assert captured["params"] == {
-        "schema_version": "loopx_canonical_snapshot_page_request_v0",
-        "runtime_root": str(runtime_override.resolve()),
-        "goal_id": SPLIT_ROOT_GOAL_ID,
-        "include_leases": False,
-        "projection_readback": None,
-        "after": None,
-    }
+    assert captured["method"] == "coordination.local_authority.todo_create"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["runtime_root"] == str(runtime_override.resolve())
     assert state.read_text(encoding="utf-8") == state_before

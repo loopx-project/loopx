@@ -51,3 +51,20 @@ export function parseEditableCapabilityJson(
   if (Object.keys(value).some((key) => !allowed.has(key))) return null;
   return value as Record<string, unknown>;
 }
+
+/** Read the legacy cadence without reinterpreting its unit or writing it back. */
+export function replanCadenceEditorValue(value: unknown): unknown {
+  const record = configurationObject(value);
+  if (Object.hasOwn(record, "completed_todos") && !Object.hasOwn(record, "count_unit")) {
+    return { count_unit: "completed_todos", count: record.completed_todos };
+  }
+  return value;
+}
+
+/** A v0 storage selector did not enable creation; opening Settings must not. */
+export function goalStorageEditorValue(value: unknown): unknown {
+  const record = configurationObject(value);
+  return record.schema_version === "loopx_goal_storage_defaults_v0"
+    ? { ...record, canonical_creation: false }
+    : value;
+}

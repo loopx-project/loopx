@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import nullcontext
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from heapq import merge
 from itertools import chain, islice
@@ -19,6 +19,7 @@ from .control_plane.goals.activation import (
     normalize_goal_activation_state,
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
@@ -69,7 +70,6 @@ STATUS_NEUTRAL_CLASSIFICATIONS = {
     QUOTA_MONITOR_POLL_CLASSIFICATION,
     *PROMOTION_READINESS_CLASSIFICATIONS,
 }
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 REGISTRY_STATUS_FIELDS = (
     "waiting_on",
     "attention_status",
@@ -78,6 +78,16 @@ REGISTRY_STATUS_FIELDS = (
     "next_handoff_condition",
     *LEGACY_TODO_EVENT_SOURCE_FIELDS,
 )
+
+
+def goal_registry_digest(goal: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        goal,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +162,27 @@ def reserve_unique_run_paths(runs_dir: Path, generated_at: str) -> tuple[Path, P
     return reserve_run_artifact_paths(runs_dir, run_file_stem(generated_at))
 
 
+def append_run_index_record(
+    index_path: Path,
+    record: dict[str, Any],
+    *,
+    allow_nan: bool = True,
+) -> None:
+    """Append one readable JSONL record after any unterminated final row."""
+
+    encoded = (
+        json.dumps(record, ensure_ascii=False, allow_nan=allow_nan).encode("utf-8")
+        + b"\n"
+    )
+    with index_path.open("a+b") as handle:
+        handle.seek(0, 2)
+        if handle.tell() > 0:
+            handle.seek(-1, 2)
+            if handle.read(1) != b"\n":
+                handle.write(b"\n")
+        handle.write(encoded)
+
+
 def write_reserved_run_artifacts(
     *,
     runs_dir: Path,
@@ -189,8 +220,7 @@ def write_reserved_run_artifacts(
             encoding="utf-8",
         )
         markdown_path.write_text(render_markdown(payload) + "\n", encoding="utf-8")
-        with index_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(index_record, ensure_ascii=False, allow_nan=False) + "\n")
+        append_run_index_record(index_path, index_record, allow_nan=False)
 
 
 def validate_goal_id_path_segment(goal_id: str) -> str:
@@ -330,6 +360,7 @@ def collect_history(
     include_runtime_goals: bool = True,
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
+    scoped_agent_id: str | None = None,
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
@@ -344,11 +375,16 @@ def collect_history(
         runtime_root,
         registry=build_builtin_machine_configuration_registry(),
     )
+    registry_goal_rows = registry_goals(registry)
+    registry_goal_digests = {
+        str(goal.get("id")): goal_registry_digest(goal)
+        for goal in registry_goal_rows
+    }
     goal_meta = {
         str(goal.get("id")): project_goal_with_builtin_machine_configuration(
             goal, machine_configuration
         )
-        for goal in registry_goals(registry)
+        for goal in registry_goal_rows
     }
     activation_filter = (
         normalize_goal_activation_state(activation_state_filter)
@@ -395,6 +431,12 @@ def collect_history(
         ]
         for run in runs:
             run["goal_id"] = str(run.get("goal_id") or current_goal_id)
+        # Explicit history drill-down scopes the complete source before its
+        # requested cap. Status/quota retain their separate Goal-wide source
+        # and bounded lane decision window; quota accounting is always Goal-wide.
+        goal_runs = runs
+        if scoped_agent_id:
+            runs = [run for run in goal_runs if run.get("agent_id") == scoped_agent_id]
         run_count += len(runs)
         recent_runs = list(
             islice(
@@ -409,10 +451,11 @@ def collect_history(
         )
 
         adapter = meta.get("adapter") if isinstance(meta.get("adapter"), dict) else {}
-        quota = goal_quota_with_spend_ledger(meta, runs) if registry_member else None
+        quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
         goal_record = {
             "id": current_goal_id,
             "activation_state": activation_state.value,
+            "registry_goal_digest": registry_goal_digests.get(current_goal_id),
             "display_name": meta.get("display_name") if registry_member else None,
             "domain": meta.get("domain"),
             "status": meta.get("status") if registry_member else "legacy-runtime",
@@ -423,9 +466,7 @@ def collect_history(
             "adapter_kind": adapter.get("kind"),
             "adapter_status": adapter.get("status"),
             "coordination": meta.get("coordination") if isinstance(meta.get("coordination"), dict) else None,
-            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"))
-            if isinstance(meta.get("explore_graph"), dict)
-            else None,
+            "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"), (meta.get("spawn_policy") or {}).get("explore_harness")) if meta.get("explore_graph") is not None or (meta.get("spawn_policy") or {}).get("explore_harness") else None,
             "spawn_policy": meta.get("spawn_policy") if isinstance(meta.get("spawn_policy"), dict) else None,
             "execution_profile": compact_execution_profile(meta.get("execution_profile")) if registry_member else None,
             "control_plane": compact_control_plane_policy(meta.get("control_plane")) if registry_member else None,
@@ -442,7 +483,7 @@ def collect_history(
             "latest_runs": latest_runs_with_agent_context(
                 runs,
                 limit=limit,
-                agent_lane_id=agent_lane_id,
+                agent_lane_id=None if scoped_agent_id else agent_lane_id,
             ),
             "semantic_history": goal_semantic_history_from_runs(runs),
         }

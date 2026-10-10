@@ -15,7 +15,7 @@ LoopX 协调长程 agent。一个局部正确的改动，仍可能改变 agent �
 | Layer / 层 | What it proves / 证明什么 | Normal cadence / 常规频率 |
 | --- | --- | --- |
 | Unit and contract tests / 单元与合同测试 | Pure rules, schemas, transition tables, invalid-state rejection / 纯规则、schema、状态转换和非法状态拒绝 | Every relevant PR in `python-tests.yml` / 相关 PR 必跑 |
-| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public on `main`, daily, or manual / 本地聚焦；主干、每日或手动全量 |
+| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public daily or manual / 本地聚焦；每日或手动全量 |
 | Catalog-informed canary / Catalog 驱动 canary | The smallest risk-based slice spanning every changed public surface / 覆盖所有变更面的最小风险切片 | Before sensitive merge or release / 敏感合并与发布前 |
 | CLI output budgets / CLI 输出预算 | Agent-facing output stays bounded and base-to-head growth is visible / 输出有界且能发现相对增长 | Relevant PR CI and premerge / 相关 PR CI 与 premerge |
 | Public-safe decision replay / 公开安全决策回放 | Reviewed source-state invariants replay through the real quota-to-scheduler path / 经审阅的源状态不变量重放真实 quota-to-scheduler 链路 | Regression and control-plane changes / 回归与控制面变更 |
@@ -172,7 +172,8 @@ workflow-level path-filtered check that cannot report on every PR.
 
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
-requiring common checks and the real packaged Dashboard build/browser smoke.
+requiring frontend type-check/build, scoped coverage and real packaged Dashboard
+browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
 Mixed, prompt, dependency and unknown changes stay full. Full Python runs four
 complete shards and combines all four coverage files. The `ci:full` label forces
 full qualification; main stays full. No selected-only report impersonates full
@@ -525,6 +526,28 @@ Canary 使用启动 LoopX 的 `sys.executable` 执行 Python 检查，显示的 
 目标 worktree。已有兼容虚拟环境也可用 `python -m pip install -e ".[test]"` 安装源码，
 随后直接使用该环境的命令。
 
+Canary is a repository development tool even when its CLI comes from a wheel.
+Run `premerge`, `run` and `smoke-suite` inside the intended source checkout
+(a subdirectory is also supported):
+the catalog, discovered examples, subprocess cwd and tracked-write guard share
+that checkout root. `canary premerge --catalog PATH` overrides the catalog only;
+it does not change the execution root or authorize commands outside its examples.
+Standalone read-only catalog commands retain their default catalog resolution;
+use their existing `--catalog PATH` when invoking an installed CLI.
+The wheel does not bundle the repository's docs/examples. Missing development
+inputs fail with a checkout/catalog recovery instruction, rather than an empty
+successful validation. `--no-execute` still previews; required CQR verification
+and merge authority remain separate gates.
+
+即使用 wheel 的 CLI，Canary 仍是仓库开发工具。`premerge`、`run`、`smoke-suite`
+在目标完整源码 checkout
+（也支持子目录）后运行；catalog、example 发现、子进程 cwd 与 tracked 写入保护
+共用该仓库根。`canary premerge --catalog PATH` 仅指定 catalog，不切执行根，也不
+授权执行 examples 之外的命令。独立的只读 catalog 命令保留既有默认解析，安装态
+可用其现有 `--catalog PATH` 指定输入。wheel 不携带仓库 docs/examples；缺少输入时明确
+提示补齐 checkout/catalog，不会以空检查冒充成功。`--no-execute` 仍是预览，
+required CQR 校验与合并权限继续分别判断。
+
 The repository does not currently track `.python-version` or `uv.lock`. `uv`
 creates a local lockfile during resolution; keep that generated file out of
 unrelated PRs. Introducing a shared lock or interpreter pin is a separate
@@ -554,6 +577,9 @@ Lint, type checks, and the CLI budget run separately. The required `pytest`
 check rejects failed/skipped shards and missing coverage artifacts, then uses
 `coverage combine` to enforce the existing 19.6% floor on the union, not on
 individual shards. Relative coverage paths make reports portable across runners.
+Each shard has a 60-minute job ceiling for setup, the full partition and report
+upload; individual test deadlines stay unchanged. Verbose progress names failed
+cases before the suite finishes, so an interrupted run retains their identities.
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
@@ -564,11 +590,13 @@ Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker�
 按完整 collection 分片；没有历史耗时时，等权测试交替分配。lint、类型检查和 CLI
 预算独立执行。必需的 `pytest` 汇总检查会拒绝失败／跳过的分片和缺失的 coverage，
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
+每个分片的作业上限为 60 分钟，覆盖环境准备、完整分片和报告上传；单项测试超时
+保持不变。详细进度在套件结束前就记录失败用例名称，运行中断后仍可定位这些用例。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
 
-Reproduce one shard locally with `uv run --extra test python -m pytest -q -n 2 --splits 4 --group 1
+Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
 --splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to
 run the complete suite locally. 全量本地测试仍省略分片参数即可。
 
@@ -646,12 +674,18 @@ Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺
 不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
 正式契约变化时同步更新其归属 fixture。
 
-`full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
-not a required PR check. This separation protects repository quality without
-making every small patch wait for the broadest suite.
+`full-public-smokes.yml` runs daily and by manual dispatch on the selected ref;
+ordinary main pushes do not launch a sweep. It is not a required PR check. The
+five complete shards share one source-verified frontend build and at most two
+shards run at once. Daily/manual Python Tests also probes the next Node runtime;
+supported-runtime qualification remains on full PR/main/merge-queue candidates.
+See [CI impact and resource cadence](ci-impact-selection.md) for supersession,
+force-full and release readback. Hosted queue/runtime gains require measurement.
 
-`full-public-smokes.yml` 在主干、每日定时和手动触发时运行，不是 PR 必须门禁。
-这种分层既保护质量，也避免每个小 patch 都等待最宽测试集。
+`full-public-smokes.yml` 每日定时或按指定 ref 手动运行，不随普通主干提交重复启动，
+也不是 PR 必须门禁。五个完整分片共享一次前端构建，同时最多运行两个分片；
+下一版 Node 探测移到每日／手动 Python Tests，受支持 runtime 的完整验证仍保留。
+发布前需手动运行并回读精确候选的全量结果；实际排队与执行改善需在线测量。
 
 ### Smoke Fleet Health / Smoke 集群健康
 
@@ -775,6 +809,18 @@ TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量
 
 ### Budget Failure Decisions
 
+Complete registry routes exposed an existing brief heartbeat regression on the
+unchanged 128-character-root fixture. Commit
+`fb20c153ba2c2a7376efe68091a76ca470effbde` added those routes: its immediate parent
+emitted 10,417 JSON / 8,846 Markdown characters; the same workload then emitted
+12,107 / 10,198 against 10,500 / 9,000 ceilings. The additional JSON cost is 1,690
+characters across eight command fields and two task-body commands. Keep the
+original failure and thresholds in the evidence, and preserve the full paths,
+fixture and consumer fields when qualifying compaction or a justified budget
+change. Historical thresholds do not freeze a regression budget. This history is
+not a waived regression or a frozen SLO pass. An unchanged base failure must be
+attributed before it is distinguished from a new candidate regression.
+
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
 it does not grant execution quota, spending, or provider authority.
@@ -794,6 +840,9 @@ it does not grant execution quota, spending, or provider authority.
    sample window, workload and distribution; acknowledge noise. Keep the
    failing scenario and original result; do not shrink fixture populations,
    scan roots or sampling depth to obtain a pass.
+   CI comparisons must use the event's immutable base and candidate revisions,
+   including merge-queue bases. Do not resolve a moving branch after queueing:
+   unrelated changes on that branch are not regressions in the tested commit.
 2. **Inspect information value and redundancy.** Name the current consumer and
    decision each changed field supports. Remove derivable or unused copies when
    the consumer contract permits it. Similar rows in different lanes may serve
@@ -801,6 +850,16 @@ it does not grant execution quota, spending, or provider authority.
    just equal JSON. Prefer bounded summaries and reachable cold paths for
    detail. Do not delete identity, completeness, safety or settlement semantics,
    shorten names solely to pass, or build a reference framework for tiny savings.
+   Treat agent-consumed prose as decision semantics too: compare each clause's
+   actor, trigger, ordering, modality, evidence provenance, scope qualifiers,
+   continuation and stop conditions. For example, "replan before continuing"
+   is not equivalent to "replan", "evidence-linked path" is not just "path",
+   and "a reasonable in-scope next step" is not "in-scope work". Unchanged
+   fields, commands, enums and legal outcomes cannot prove instruction parity.
+   Do not sacrifice useful meaning to meet a character ceiling; prefer a
+   justified regression-budget increase when no lossless reduction is proven.
+   A real hard limit needs an explicit lossless caller design and readback,
+   not silent deletion of obligations.
 3. **Choose and disclose the tradeoff.** Compare compaction, retaining the
    ceiling, and a justified increase; a combination is valid. For an increase,
    explain the remaining useful cost, old/new ceiling, measured headroom and
@@ -812,13 +871,52 @@ it does not grant execution quota, spending, or provider authority.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+The fixed public CLI matrix at `2244b96f1e2e5c90bef43ae4c140c0994bfcc07a`
+and the settled-Turn cadence candidate exposed stale absolute ceilings on both
+revisions. The 96-row comparison retained 1/36/18 Todos and 1/12/12 history
+records, full command paths, enabled multi-subagent and blocking-gate cases.
+Quota's selected-Todo source carries current requirements, read freshness,
+before-work ordering and unavailable-source recovery; Turn transports that
+same context, and diagnose serves both selected and Goal-array consumers.
+Retain these caller contracts while calibrating the existing regression limits:
+
+| Output / 输出 | Same base/head measurement / 同口径测量 | Revised ceiling / 新上限 |
+| --- | --- | --- |
+| Quota small JSON / Markdown | 21,871 / 8,690 chars; 579 / 134 lines | 22,000 / 9,000 chars; 600 / 140 lines |
+| Quota crowded JSON / Markdown | 35,710 / 7,772 chars; 836 / 84 lines | 36,000 / 7,800 chars; 850 / 90 lines |
+| Quota explicit-detail Markdown | 8,760 chars; 134 lines | 9,000 chars; 140 lines |
+| Turn small / crowded / multi-agent JSON | 12,060 / 16,250 / 14,098 chars | 12,500 / 17,000 / 14,500 chars |
+| Crowded quota / Turn JSON with Agent vision | 41,503 / 16,679 chars; 939 / 427 lines | 42,000 / 17,000 chars; Turn 440 lines |
+| Turn transaction detail JSON | 13,688 chars | 14,000 chars |
+| TurnEnvelope JSON / enabled multi-subagent / Markdown | 10,498 / 11,426 / 3,949 chars; 255 / 279 / 90 lines | 12,000 JSON / 4,100 Markdown chars; 300 / 95 lines |
+| Diagnose small / crowded JSON | 21,521 / 45,122 chars | 22,000 / 46,000 chars |
+
+Only exceeded character/line guards change; semantic, duplication, per-Todo and
+fixed-growth assertions retain their existing limits. Headroom is bounded by
+the frozen workload, not a universal percentage. This calibration changes
+output regression guards, leaving execution quota, envelope wire limits and
+frozen experiment/promotion criteria with their existing owners. The original
+failures remain failures under the old ceilings; rerun the complete matrix and
+affected semantic tests under the revised contract.
+
+同一冻结负载在主干和候选上均超出旧回归预算；保留当前任务原文、读取时序、
+新鲜度、恢复和停止条件，并按上表校准已有输出检查。增长、语义及去重检查仍独立
+生效；此调整不授予执行额度，也不改写历史实验或验收结果。
+
 1. **同口径测量。** 记录 base/head、负载、指标和测量边界。紧凑 JSON 字符、UTF-8
    字节、嵌套键数、真实 stdout 和 token 不可互换。延迟要保留样本窗口、负载和
    分布，并承认噪声。保留失败场景与原结果，不缩小 fixture、扫描范围或采样深度。
+   CI 对照必须固定事件的 base 和 candidate 提交，包括合并队列的 base；不能在排队
+   后重新解析移动分支，把其他提交的变化当作被测提交的回归。
 2. **分析信息价值与真实冗余。** 说明变化字段服务哪个消费者、哪个决策。合同允许时
    删除可推导或无人使用的副本；不同 lane 中相同的数据可能服务不同消费者，去重
    需要调用方迁移和语义等价验证。详情优先使用有界摘要和可达冷路径。不能删身份、
    完整性、安全或结算语义，不能只为过线缩字段名，也不为微小收益制造引用框架。
+   agent 读取的文字也是决策语义：逐条核对执行者、触发、时序、义务强度、证据来源、
+   范围限定、继续和停止条件。“继续前先 replan”不等于“replan”，“关联证据的路径”
+   不等于“路径”，“合理的范围内下一步”不等于“范围内工作”。字段、命令、枚举和
+   合法结果未变，不能证明指令等价。不能为字符上限损害有用语义；未证明无损压缩时，
+   优先基于证据调整回归预算。真实硬上限需要明确的无损调用方设计和读回，不能默删义务。
 3. **选择并披露取舍。** 比较压缩、保持上限、合理扩容，也可组合使用。扩容需说明
    保留信息的价值与成本、新旧上限、实测余量和预期波动或规模，不规定统一余量比例。
    合同和测试同步修改，重跑原场景及受影响的语义/规模检查，在既有 PR 验证和评审
@@ -842,13 +940,15 @@ The real-CLI differential runner and pytest use the same fixed-width fixture
 alias **per default scenario**. Alias the scenario root, not just its parent:
 otherwise scenario-name suffixes change repeated absolute command paths and
 can create a size failure unrelated to output growth. Measure unmodified
-stdout, keep fixture populations and budgets unchanged, and retain the separate
+stdout, keep fixture populations unchanged, apply the declared candidate budgets,
+preserve historical base measurements, and retain the separate
 real-long-path command-integrity check. This aligns measurement layouts; it does
 not shorten production commands or qualify long-path output under short-path caps.
 
 独立 real-CLI 对照和 pytest 对每个默认场景使用相同的固定宽度 fixture 别名。
 别名应指向场景根目录，而非仅指向父目录；否则场景名会改变多处绝对命令路径，
-产生与输出增长无关的尺寸失败。仍测量未经改写的 stdout，保留原负载、预算及
+产生与输出增长无关的尺寸失败。仍测量未经改写的 stdout，保留原负载和历史 base
+测量，对候选执行其已声明的预算，并保留
 独立的真实长路径命令完整性检查。这仅统一测量布局，不缩短生产命令，也不将
 长路径输出冒充短路径预算已通过。
 
@@ -857,10 +957,20 @@ the existing `validation_matrix` and `observable_semantics` rows. It does not
 add a separate budget receipt or approval gate. The result checker verifies
 evidence structure and verdict consistency; the reviewer still judges whether
 the measurements and tradeoff are sound.
+The existing `observable_semantics.decision_text_assessment` records inspected
+scope, clause comparisons and discriminating counterfactuals through the real
+caller. Missing equivalence evidence blocks approval; changed semantics need
+an accepted goal/contract, not a compression target. Instruction readback proves
+what was delivered, not actual model comprehension or adoption. The result
+checker enforces evidence structure and contradictions, not semantic truth.
 
 PR-review 的 `semantic_alignment` 通过既有 `validation_matrix` 和
 `observable_semantics` 使用这些证据，不增加独立预算回执或审批门。结果校验器检查
 证据结构和结论一致性；测量是否可信、取舍是否合理仍由评审判断。
+既有 `observable_semantics.decision_text_assessment` 记录检查范围、前后语义条款及
+真实调用方上的判别性反例。缺少等价证据不能批准；语义变化须有目标或合同依据，
+压缩指标不能授权。指令读回只证明交付了什么，不证明模型理解或采用；校验器检查
+证据结构和矛盾，不自动判断语义真假。
 
 ## Decision Replay And Issue #2191 / 决策回放与 #2191
 

@@ -1,0 +1,467 @@
+[
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-official-native-ledgerv2-01",
+    "arm_id": "official-native",
+    "arm_role": "baseline",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "official-native-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-native-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "last_sample_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 53.87,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "last_sample_score": {
+        "value": 53.87,
+        "unit": "native_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "not_applicable",
+    "effort": {
+      "duration_ms": 64800485
+    },
+    "insight": {
+      "status": "pending"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-official-blind-ledgerv2-01",
+    "arm_id": "official-blind",
+    "arm_role": "baseline",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "official-blind-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-blind-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "last_sample_score",
+      "terminal_replay_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 11.58,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "last_sample_score": {
+        "value": 0.0,
+        "unit": "native_score",
+        "higher_is_better": true
+      },
+      "terminal_replay_score": {
+        "value": 0.0,
+        "unit": "native_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "not_applicable",
+    "effort": {
+      "duration_ms": 64800425
+    },
+    "insight": {
+      "status": "pending"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-single-native-ledgerv2-01",
+    "arm_id": "single-native",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "single-native-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-native-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "final_artifact_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 28.08,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "final_artifact_score": {
+        "value": 28.08,
+        "unit": "raw_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "qualified",
+    "effort": {
+      "duration_ms": 2809438,
+      "agent_steps": 50,
+      "goal_turns": 1
+    },
+    "insight": {
+      "status": "complete"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "comparison_anchor_run_id": "portfolio-official-native-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-single-blind-ledgerv2-01",
+    "arm_id": "single-blind",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "single-blind-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-blind-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "final_artifact_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 12.41,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "final_artifact_score": {
+        "value": 9.23,
+        "unit": "raw_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "qualified",
+    "effort": {
+      "duration_ms": 4420715,
+      "agent_steps": 43,
+      "goal_turns": 1
+    },
+    "insight": {
+      "status": "complete"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "comparison_anchor_run_id": "portfolio-official-blind-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-native-goal-native-ledgerv2-01",
+    "arm_id": "native-goal-native",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "native-goal-native-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-native-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [],
+    "metrics": {
+      "best_score": {
+        "value": 26.93,
+        "unit": "raw_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "pending",
+    "effort": {
+      "duration_ms": 13250466
+    },
+    "insight": {
+      "status": "complete"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "comparison_anchor_run_id": "portfolio-official-native-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-native-goal-blind-ledgerv2-01",
+    "arm_id": "native-goal-blind",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "native-goal-blind-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-blind-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "final_artifact_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 14.17,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "final_artifact_score": {
+        "value": 0.0,
+        "unit": "raw_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "qualified",
+    "effort": {
+      "duration_ms": 2069381,
+      "agent_steps": 34,
+      "goal_turns": 1
+    },
+    "insight": {
+      "status": "complete"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "comparison_anchor_run_id": "portfolio-official-blind-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-heartbeat-resume-native-ledgerv2-01",
+    "arm_id": "heartbeat-resume-native",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "heartbeat-resume-native-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-native-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "last_sample_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 24.04,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "last_sample_score": {
+        "value": 24.04,
+        "unit": "native_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "pending",
+    "effort": {
+      "duration_ms": 64799346
+    },
+    "insight": {
+      "status": "pending"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "orchestrator_runtime": {
+      "provider_id": "loopx",
+      "revision": "91a4672164238fc2ddc394d61901910984c5e84a"
+    },
+    "comparison_anchor_run_id": "portfolio-official-native-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2",
+    "study_id": "portfolio-worker-matrix-ledger-v2",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-heartbeat-resume-blind-ledgerv2-01",
+    "arm_id": "heartbeat-resume-blind",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "heartbeat-resume-blind-xhigh-64800s-auto300-ledger-v2",
+    "comparison_protocol_id": "parallel-blind-xhigh-64800s-auto300-ledger-v2",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [
+      "last_sample_score"
+    ],
+    "metrics": {
+      "best_score": {
+        "value": 17.32,
+        "unit": "raw_score",
+        "higher_is_better": true
+      },
+      "last_sample_score": {
+        "value": 15.57,
+        "unit": "native_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "pending",
+    "effort": {
+      "duration_ms": 64800176
+    },
+    "insight": {
+      "status": "pending"
+    },
+    "runner_revision": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "orchestrator_runtime": {
+      "provider_id": "loopx",
+      "revision": "91a4672164238fc2ddc394d61901910984c5e84a"
+    },
+    "comparison_anchor_run_id": "portfolio-official-blind-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2-var1",
+    "study_id": "portfolio-explore-qualified-v13",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-heartbeat-explore-native-qualifiedv13-01",
+    "arm_id": "heartbeat-explore-native",
+    "arm_role": "treatment",
+    "attempt": 1,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "heartbeat-explore-native-xhigh-64800s-auto300-qualified-v13",
+    "comparison_protocol_id": "diagnostic-native-var-timing-v1",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [],
+    "metrics": {
+      "best_score": {
+        "value": 31.19,
+        "unit": "raw_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "pending",
+    "effort": {
+      "duration_ms": 64799365
+    },
+    "insight": {
+      "status": "pending"
+    },
+    "runner_revision": "4e820bb0ced6c0f8dff2acd641a6c19dbc986935",
+    "orchestrator_runtime": {
+      "provider_id": "loopx",
+      "revision": "4e820bb0ced6c0f8dff2acd641a6c19dbc986935"
+    },
+    "comparison_anchor_run_id": "portfolio-official-native-ledgerv2-01"
+  },
+  {
+    "schema_version": "benchmark_experiment_board_row_v0",
+    "benchmark_id": "edgebench-ledger-v2-var1",
+    "study_id": "portfolio-explore-qualified-v13",
+    "case_id": "portfolio_risk_calibration",
+    "run_id": "portfolio-heartbeat-explore-blind-qualifiedv13-02",
+    "arm_id": "heartbeat-explore-blind",
+    "arm_role": "treatment",
+    "attempt": 2,
+    "status": "completed",
+    "observed_at": "2026-10-06T06:57:55+00:00",
+    "model_id": "gpt-6.1-sol",
+    "protocol_id": "heartbeat-explore-blind-xhigh-64800s-auto300-qualified-v13",
+    "comparison_protocol_id": "diagnostic-blind-var-timing-v1",
+    "claim_scope": "diagnostic_only",
+    "primary_metric": "best_score",
+    "guardrail_metrics": [],
+    "metrics": {
+      "best_score": {
+        "value": 14.96,
+        "unit": "raw_score",
+        "higher_is_better": true
+      }
+    },
+    "countability": {
+      "integrity_qualified": false,
+      "official_result_present": true,
+      "score_countable": false
+    },
+    "treatment_fidelity": "pending",
+    "effort": {
+      "duration_ms": 64799924
+    },
+    "insight": {
+      "status": "pending"
+    },
+    "runner_revision": "4e820bb0ced6c0f8dff2acd641a6c19dbc986935",
+    "orchestrator_runtime": {
+      "provider_id": "loopx",
+      "revision": "4e820bb0ced6c0f8dff2acd641a6c19dbc986935"
+    },
+    "comparison_anchor_run_id": "portfolio-official-blind-ledgerv2-01"
+  }
+]

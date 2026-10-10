@@ -75,10 +75,15 @@ def main() -> int:
         "github.event_name == 'pull_request'",
         "github.event.pull_request.number",
         "|| 'deployment'",
-        "cancel-in-progress: true",
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
         'node-version: "24"',
         "npm install -g npm@11",
         "npm ci --include=dev --no-audit --no-fund --registry=https://registry.npmjs.org",
+        "./node_modules/.bin/playwright install --with-deps chromium",
+        "node examples/blog-bilingual-index-smoke.mjs",
+        "node apps/presentation/site/scripts/analytics-smoke.mjs output/frontstage-pages/site",
+        "node apps/presentation/site/scripts/seo-smoke.mjs output/frontstage-pages/site --with-docs",
+        'LOOPX_PUBLIC_SITE_DIR="$PWD/output/frontstage-pages/site" npm --prefix apps/presentation/dashboard run smoke:frontstage-browser',
         "docs/showcases/**",
         "docs/assets/long-running-loop-openviking-trajectory.png",
         "docs/assets/long-running-loop-ml-experiment-trajectory.png",
@@ -132,8 +137,23 @@ def main() -> int:
         "gh api graphql",
         "pageInfo { hasNextPage endCursor }",
         "\n  group: frontstage-pages\n",
+        "npm run build:chat",
+        "smoke:personal-workspace-packaged",
+        "frontstage-chat-bundle-",
+        "path: loopx/web/chat/",
     ]:
         assert_absent(text, forbidden)
+
+    # Detaching a non-published product must preserve its own qualification lane.
+    python_tests = (WORKFLOW.parent / "python-tests.yml").read_text(encoding="utf-8")
+    for required in [
+        "npm run build:chat",
+        "scripts/chat_bundle.py verify --source",
+        "npm run smoke:personal-workspace-packaged",
+        "npm run smoke:chat-turn-acceptance-retry",
+        "npm run smoke:chat-upgrade",
+    ]:
+        assert_contains(python_tests, required)
 
     for path in [
         "docs/book/mkdocs.zh.yaml",

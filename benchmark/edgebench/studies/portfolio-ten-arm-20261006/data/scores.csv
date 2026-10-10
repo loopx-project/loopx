@@ -1,0 +1,11 @@
+run_id,arm_id,benchmark_id,best_score,best_round,runtime_seconds,budget_seconds,total_rounds,agent_submissions,auto_submissions,resume_count,timed_out,last_observed_score,score_countable
+portfolio-official-native-ledgerv2-01,official-native,edgebench-ledger-v2,53.87,agent-140,64800.48508262634,64800,355,140,215,0,True,53.87,False
+portfolio-official-blind-ledgerv2-01,official-blind,edgebench-ledger-v2,11.58,auto-97,64800.42538142204,64800,215,0,215,0,True,0.0,False
+portfolio-single-native-ledgerv2-01,single-native,edgebench-ledger-v2,28.08,agent-14,2809.4381194114685,64800,23,14,9,0,False,28.08,False
+portfolio-single-blind-ledgerv2-01,single-blind,edgebench-ledger-v2,12.41,auto-2,4420.715180397034,64800,14,0,14,0,False,9.23,False
+portfolio-native-goal-native-ledgerv2-01,native-goal-native,edgebench-ledger-v2,26.93,agent-14,13250.465523481369,64800,60,16,44,0,False,26.93,False
+portfolio-native-goal-blind-ledgerv2-01,native-goal-blind,edgebench-ledger-v2,14.17,auto-3,2069.3810601234436,64800,6,0,6,0,False,0.0,False
+portfolio-heartbeat-resume-native-ledgerv2-01,heartbeat-resume-native,edgebench-ledger-v2,24.04,agent-28,64799.346007585526,64800,249,34,215,11,True,24.04,False
+portfolio-heartbeat-resume-blind-ledgerv2-01,heartbeat-resume-blind,edgebench-ledger-v2,17.32,auto-2,64800.17631602287,64800,215,0,215,12,False,15.57,False
+portfolio-heartbeat-explore-native-qualifiedv13-01,heartbeat-explore-native,edgebench-ledger-v2-var1,31.19,agent-13,64799.36475229263,64800,163,21,142,10,True,31.19,False
+portfolio-heartbeat-explore-blind-qualifiedv13-02,heartbeat-explore-blind,edgebench-ledger-v2-var1,14.96,auto-3,64799.923781871796,64800,142,0,142,14,True,0.0,False

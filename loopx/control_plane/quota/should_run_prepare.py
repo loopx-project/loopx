@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ...materials import goal_state_path
+
 from ...quota import (
     AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
     _resolve_reward_memory_experiment_from_status,
@@ -117,6 +119,7 @@ from ..work_items.work_lane import (
 class _QuotaDecisionPreparation:
     status_payload: dict[str, Any]
     safe_goal_id: str
+    goal_state_file: str | None
     requested_agent_id: str | None
     plan: dict[str, Any]
     goal_health_ok: bool
@@ -183,6 +186,7 @@ def _preserve_receipt_bound_replan_obligation(
     replan_obligation: Mapping[str, Any] | None,
     receipt_bound_replan_obligation_id: str | None,
     *, guard_scoped: bool = False,
+    agent_id: str | None = None,
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
@@ -196,6 +200,7 @@ def _preserve_receipt_bound_replan_obligation(
             "operation": "receipt_bound_obligation",
             "current_obligation": dict(replan_obligation) if replan_obligation is not None else None,
             "selected_obligation_id": preserved_replan_id, "guard_scoped": guard_scoped,
+            "agent_id": agent_id,
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
         })
@@ -830,6 +835,7 @@ def _prepare_quota_should_run_item(
         registered_agent_ids=registered_agent_ids,
         goal_status=str(registry_goal.get("status") or ""),
         agent_profile=_quota_agent_profile(agent_identity),
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
     )
     replan_obligation = (
         None
@@ -838,6 +844,7 @@ def _prepare_quota_should_run_item(
             goal_frontier_context.get("replan_obligation"),
             receipt_bound_replan_obligation_id,
             guard_scoped=receipt_bound_replan_guard_scoped,
+            agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
             transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
         )
@@ -878,9 +885,11 @@ def _prepare_quota_should_run_item(
         if requested_action_todo_id
         else None
     )
+    state_path = goal_state_path(registry_goal)
     return _QuotaDecisionPreparation(
         status_payload=status_payload,
         safe_goal_id=safe_goal_id,
+        goal_state_file=str(state_path.resolve()) if state_path else None,
         requested_agent_id=requested_agent_id,
         plan=plan,
         goal_health_ok=goal_health_ok,

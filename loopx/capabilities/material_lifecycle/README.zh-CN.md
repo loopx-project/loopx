@@ -69,6 +69,7 @@ flowchart LR
 - 默认每个 ranked entry 最多包含 3 条 primary material。
 - Overflow 必须变成新的、可独立排序的条目，不能藏入 supporting index。
 - 可见 Top-N 之外保留显式 ranked backlog。
+- 可见 Top-N 不是隐式保护前缀；只有明确声明的 pinned entry 或稳定前缀限制重排。
 - Recall 只是线索；影响排序的证据必须经过 exact read。
 - Proposal 与 apply receipt 必须分离。
 - Apply 与 rollback 都需要显式 owner gate 和 revision 校验。
@@ -84,6 +85,22 @@ flowchart LR
 
 普通的一次性阅读、摘要或网页调研不需要启用这项能力，除非项目已经显式激活了
 受管素材库。
+
+## 单条素材重排
+
+`plan_material_single_move(ordered_material_refs, material_ref, to_rank)` 接收
+包含 backlog 的完整排名，返回新顺序和现有 proposal builder 所需的精确区间约束。
+其它素材保留相对顺序，未排序素材走 intake；显式 `protected_material_refs`
+既不能主动移动，也不能被挤动。它不拆散分组阅读单元、不改原始记录、不授权写入。
+adapter 仍须验证 inventory / Decision Context 正文，在 apply 时重新计算 preview，
+保留 owner gate、CAS、读回、发布与回滚；历史 proposal 的约束不自动放宽。
+
+超过 100 个受影响 ref 时，用 `material_rerank_receipt_chunks` 分块，再构建现有 v0
+receipt。完整输入先验证，重复 ref 拒绝；每份 receipt 使用唯一 id、相同 proposal、
+前后 revision、gate 与 validation，表示同一次原子变更。CAS 前构建全部 receipt，
+读回后保存完整列表并核对覆盖；只保留第一份不能证明完整。单份上限仍为 100，
+空输入返回一份空分块，供现有 no-change / rejection / rollback 契约使用。
+该 SDK 增量不依赖项目授权改动，不增设 CLI writer、素材 authority 或自动排序器。
 
 ## 项目级 Skill 安装
 
@@ -127,6 +144,13 @@ write scope 和 owner gate。
    验证 stable ID、source digest、backup digest、count 和 parse health。
 3. **Exact-read 决策证据。**
    只提升当前且权威的证据；拒绝过期、不可读或只有二手来源的 claim。
+   rerank move 或 Explore topic 只能引用符合条件的 packet 证据：changed fact
+   必须新鲜且匹配当前 source revision；recalled claim 必须已 exact-read 验证且匹配当前
+   source revision；直接引用 source/revision 也必须由同一类新鲜 changed fact 或
+   exact-read 验证过的 claim 支持。单独的 `source_revisions` 扫描记录不能作为动作依据。
+   policy 评估拿到的是副本，不能改写用于校验其动作的 packet snapshot。
+   明确过期或被拒绝的记录不能作为动作依据。无关的过期记录仍保留展示；packet
+   无法识别的 opaque ref 继续按原有调用方语义处理。
 4. **选择最小有效变化。**
    把 lifecycle transition、bounded rerank 和 structural rebuild 作为三种不同操作。
 5. **Preview 与验证。**
@@ -158,6 +182,14 @@ loopx material-lifecycle skill-status \
 migration preparation、lifecycle receipt、ranked-entry rebuild、bounded rerank、
 readable projection、Explore intent、apply 与 rollback。具体 legacy parser、私有
 storage adapter、source profile 和 provider credential 仍由项目拥有。
+
+## 明确的项目来源 scope
+
+普通项目对话可为已显式启用的素材来源使用 `MaterialProjectScope`，无需创建 Goal。inventory、candidate intake/rollback、rerank packet、readable projection 和 intake-ranking settlement 支持以 `project_scope` 替代 `goal_id`；两者必须且只能选一个。项目 packet 不含 Goal 标识，也不带入 manager 上下文。
+
+scope 的 `project_ref`、`source_profile_ref`、`workspace_grant_ref` 是既有 Core 授权与来源 profile 的选择器，不授予权限。project candidate provider 必须实现 `MaterialProjectScopeVerifier`，核对当前调用者/受众、精确 store/profile、工作区写入边界、owner gate 的有效期与撤销状态。SDK 在访问 provider 前及发布 authority 前调用该 verifier，授权事实仍由既有 Core owner 提供；adapter 还须在自身 staging/publication 事务内执行授权检查，不能把预检查的 Boolean 当作事务 fence。
+
+默认关闭不变；本路径不注册 Goal、不创建 source authority，不扩大 Goal-only migration/rebuild/Explore。新来源初始化、私有存储与 transport 接入仍由 source owner 提供，不能仅凭这些字段或安装 skill 开始写入。
 
 ## 与其他能力的关系
 

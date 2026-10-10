@@ -16,6 +16,9 @@ from typing import Any, Callable
 
 from .agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from .chat_codex_goal import CodexGoalDriver, validate_goal_chat
+from .control_plane.collaboration.goal_instance_scope import (
+    goal_accepts_collaboration,
+)
 from .control_plane.effect_runtime import effect_runtime_result
 from .control_plane.collaboration.inbox import _read, _root
 from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
@@ -420,7 +423,7 @@ class ChatLoopXMode:
                     "settings": settings,
                     "native": session.get("native_goal") or {},
                     "registered_agents": registered_agent_ids_for_goal(goal),
-                    "goal_active": goal.get("status") not in {"stopped", "archived"},
+                    "goal_active": goal_accepts_collaboration(goal),
                     "execution_binding_valid": True,
                 },
             )
@@ -498,6 +501,17 @@ class ChatLoopXMode:
         wake_turn = None
         if existing:
             request = existing.get("loopx_request") or {}
+            replay_settings = request.get("settings") or {}
+            replay_budget = replay_settings.get("token_budget")
+            request_matches = (
+                request.get("operation") == "wake"
+                and replay_settings.get("agent_id")
+                == (intent.get("requester") or {}).get("agent_id")
+                and isinstance(replay_budget, int)
+                and not isinstance(replay_budget, bool)
+                and existing.get("message")
+                == f"/goal resume --tokens {replay_budget}"
+            )
             wake_turn = {
                 "turn_id": existing.get("turn_id"),
                 "status": existing.get("status"),
@@ -508,6 +522,7 @@ class ChatLoopXMode:
                 "loopx_execution": existing.get("loopx_execution") is True,
                 "operation": request.get("operation"),
                 "intent_id": (request.get("wake") or {}).get("intent_id"),
+                "request_matches": request_matches,
             }
         mode = session.get("loopx_mode") or {}
         settings = mode.get("settings") or {}
@@ -534,7 +549,7 @@ class ChatLoopXMode:
                 "native": session.get("native_goal") or {},
                 "registered_agents": registered_agent_ids_for_goal(goal) if goal else [],
                 "goal_active": goal is not None
-                and goal.get("status") not in {"stopped", "archived"},
+                and goal_accepts_collaboration(goal),
                 "execution_binding_valid": binding_valid,
             },
         )
@@ -964,6 +979,7 @@ def pump_delegation_wakes(
     # is already a lazy dependency of LoopXMode.
     from .chat_runtime import ChatTurnAcceptanceUnavailableError
     from .collaboration_mcp import execution_row_path, record_wake, wake_receipt
+    from .control_plane.chat_turn_acceptance import ManagedTurnReplayConflictError
 
     store = controller.store
     root = store.root.parent
@@ -992,6 +1008,26 @@ def pump_delegation_wakes(
                 )
         except LockAcquireTimeoutError:
             continue  # a worker or decision holds the record; retry next tick
+        except ManagedTurnReplayConflictError:
+            try:
+                receipt = record_wake(
+                    record,
+                    lambda wake: wake_receipt(
+                        wake,
+                        "refused",
+                        reason="wake_identity_conflict",
+                        refused_at=time.time(),
+                    ),
+                )
+            except LockAcquireTimeoutError:
+                continue  # another decision holds the record; retry next tick
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                    ChatTurnAcceptanceUnavailableError) as exc:
+                _LOG.warning(
+                    "Delegation wake refusal could not be recorded (%s); retrying",
+                    type(exc).__name__,
+                )
+                continue
         except (OSError, ValueError, KeyError, TypeError, RuntimeError,
                 ChatTurnAcceptanceUnavailableError) as exc:
             # Isolate one record; the others still progress this tick.

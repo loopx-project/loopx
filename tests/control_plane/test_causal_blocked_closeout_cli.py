@@ -79,13 +79,14 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert rc == 0 and guard["should_run"] is True, guard
     rc, original = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, original
-    digest = original["todos"][0]["completion_validation_sha256"]
-    rc, wait = cli("todo", "update", "--goal-id", GOAL_ID,
-                       "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
-                       "--resume-when", f"{kind}:{MONITOR_ID}",
-                       "--successor-todo-id", ALTERNATIVE_TODO_ID)
-    assert rc == 0, wait
+    digest = original["todo"]["completion_validation_sha256"]
     if defer:
+        # An unsatisfied todo_done wait fences execution. Acquire the lease
+        # before installing that wait, then defer and release it atomically.
+        rc, successor = cli("todo", "update", "--goal-id", GOAL_ID,
+                            "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+                            "--successor-todo-id", ALTERNATIVE_TODO_ID)
+        assert rc == 0, successor
         rc, acquired = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
                            "--owner", AGENT_ID, "--idempotency-key", "execution-wait", "--ttl-seconds", "900")
         assert rc == 0, acquired
@@ -97,6 +98,12 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
         assert rc == 0, json.dumps(suspended, indent=2)
         rc, lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
         assert rc == 0 and lease["lease"]["status"] == "released", lease
+    else:
+        rc, wait = cli("todo", "update", "--goal-id", GOAL_ID,
+                       "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+                       "--resume-when", f"{kind}:{MONITOR_ID}",
+                       "--successor-todo-id", ALTERNATIVE_TODO_ID)
+        assert rc == 0, wait
     refresh_args = ("refresh-state", "--goal-id", GOAL_ID,
                     "--classification", "causal_wait_writeback", "--delivery-batch-scale", "single_surface",
                     "--delivery-outcome", "outcome_gap", *binding,
@@ -121,7 +128,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert _spend_run_count(runtime) == 0
     rc, after = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, after
-    todo = after["todos"][0]
+    todo = after["todo"]
     assert todo["status"] == ("deferred" if defer else "open") and todo["resume_ready"] is False
     assert todo["resume_when"] == f"{kind}:{MONITOR_ID}"
     assert todo["completion_validation_sha256"] == digest

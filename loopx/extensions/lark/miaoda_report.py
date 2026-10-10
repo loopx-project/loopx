@@ -9,6 +9,7 @@ from typing import Any
 
 from ...capabilities.periodic_report.adapters import PeriodicReportAdapterRegistry
 from ...capabilities.periodic_report.bindings import (
+    DELIVERY_INTENT_SCHEMA,
     GENERATION_BUNDLE_SCHEMA,
     build_periodic_report_delivery_receipt,
     build_periodic_report_extension_readiness,
@@ -20,7 +21,6 @@ from . import LARK_EXTENSION_ID, LARK_MIAODA_HTML_PERMISSION
 from .presentation.periodic_report import periodic_report_miaoda_html_sink_adapter
 
 MIAODA_DELIVERY_REQUEST_SCHEMA = "periodic_report_miaoda_delivery_request_v0"
-DELIVERY_INTENT_SCHEMA = "periodic_report_delivery_intent_v0"
 MIAODA_DELIVERY_RESULT_SCHEMA = "periodic_report_miaoda_delivery_result_v0"
 MIAODA_CAPABILITY_ID = "report.miaoda_html.publish"
 MIAODA_PROTOCOL = "periodic_report_sink_v0"

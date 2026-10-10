@@ -43,8 +43,10 @@ def _checkpoint_effect(method: str, request: dict[str, Any]) -> Any:
             "error_code": error.diagnostic_code, "reread_required": False}) from error
 
 
-def _evaluate(**request: Any) -> dict[str, Any]:
-    result = _checkpoint_effect("goal.checkpoint_read_context.evaluate", request)
+def _resolve(runtime_root: Path, **request: Any) -> dict[str, Any]:
+    result = _checkpoint_effect("goal.checkpoint_read_context.resolve", {
+        "runtime_root": str(runtime_root.resolve()), **request,
+    })
     if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
         raise RuntimeError("invalid typed checkpoint read context result")
     if not result["ok"]:
@@ -121,27 +123,6 @@ def _local_source_facts(
     }
 
 
-def _source_facts(
-    root: Path,
-    registry_path: Path,
-    state_file: Path,
-    identity: SettlementIdentity,
-    goal_ref: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    # The typed owner derives Todo and complete acceptance from one head and
-    # fails closed after cutover. Local parsed Markdown cannot override it.
-    return _checkpoint_effect("goal.checkpoint_read_context.source", {
-        "runtime_root": str(root.resolve()), "goal_id": identity.goal_id,
-        "facts": _local_source_facts(
-            root,
-            registry_path,
-            state_file,
-            identity,
-            goal_ref,
-        ),
-    })
-
-
 def read_checkpoint_context(
     *, registry_path: Path, runtime_root_override: str | None, goal_id: str,
     agent_id: str, todo_id: str | None, turn_instance_id: str,
@@ -178,9 +159,9 @@ def read_checkpoint_context(
             raise ValueError("checkpoint-context requires the original committed Turn writeback")
         identity = readback.identity.value
         with _source_guard(root, goal_id, path):
-            result = _evaluate(phase="read", identity=identity.as_dict(), prior=readback.writeback_run,
+            result = _resolve(root, phase="read", identity=identity.as_dict(), prior=readback.writeback_run,
                 read_context_id=uuid4().hex, dependency_todo_ids=dependency_todo_ids or [],
-                facts=_source_facts(root, registry_path, path, identity, goal_ref))
+                facts=_local_source_facts(root, registry_path, path, identity, goal_ref))
             receipt = result.pop("receipt")
             atomic_write_json(_receipt_path(root, identity), receipt)
     return {**result, "read_context_id": receipt["read_context_id"], "settlement_identity": identity.as_dict(),
@@ -203,8 +184,8 @@ def checkpoint_commit_guard(
             receipt = json.loads(_receipt_path(runtime_root, identity).read_text(encoding="utf-8"))
         except FileNotFoundError:
             receipt = None
-        result = _evaluate(phase="check", identity=identity.as_dict(), read_context_id=read_context_id,
-            receipt=receipt, facts=_source_facts(
+        result = _resolve(runtime_root, phase="check", identity=identity.as_dict(), read_context_id=read_context_id,
+            receipt=receipt, facts=_local_source_facts(
                 runtime_root,
                 registry_path,
                 state_file,

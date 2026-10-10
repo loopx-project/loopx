@@ -2,8 +2,9 @@ import { useId, type ReactNode } from "react";
 
 import type { CapabilityConfigurationEditor } from "../../data/chat";
 import { PeriodicReportScheduleField } from "./periodic-report-schedule-field";
+import { useWorkspaceI18n } from "./i18n";
 
-type FieldCopy = Record<string, { description?: string; label?: string; optionLabels?: Record<string, string> }>;
+type FieldCopy = Record<string, { description?: string; label?: string; options?: Record<string, string> }>;
 type ConfigurationField = CapabilityConfigurationEditor["fields"][number];
 type FieldValue = boolean | number | string | string[] | Record<string, unknown> | null;
 type FieldChange = (key: string, value: FieldValue) => void;
@@ -18,8 +19,34 @@ type ConfigurationFieldProps = Readonly<{
 }>;
 
 function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone }: ConfigurationFieldProps) {
+  const { locale } = useWorkspaceI18n();
   const label = copy[field.key]?.label ?? field.label;
   const readOnly = !onChange;
+  const directionLabel = (direction: string) => locale === "zh-CN"
+    ? direction === "forward" ? "正向" : "反向"
+    : direction === "forward" ? "Forward" : "Reverse";
+
+  if (field.input_kind === "pr_review_agent_orders") {
+    const orders = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+    return <fieldset className="personal-pr-review-agent-orders"><legend>{label}</legend>
+      {(field.agents ?? []).map((agent) => <label htmlFor={`${id}-${agent}`} key={agent}>
+        <span>{agent}</span>
+        <select aria-label={agent} disabled={readOnly} id={`${id}-${agent}`} value={String(Object.hasOwn(orders, agent) ? orders[agent] : "inherit")}
+          onChange={onChange ? (event) => {
+            const next = new Map(Object.entries(orders));
+            if (event.target.value === "inherit") next.delete(agent);
+            else next.set(agent, event.target.value);
+            onChange(field.key, Object.fromEntries(next));
+          } : undefined}>
+          <option value="inherit">{locale === "zh-CN" ? "继承 Goal" : "Inherit Goal"}</option>
+          <option value="forward">{directionLabel("forward")}</option>
+          <option value="reverse">{directionLabel("reverse")}</option>
+        </select>
+      </label>)}
+      {!field.agents?.length ? <p>{locale === "zh-CN" ? "此 Goal 尚无注册 Agent" : "No registered Agents in this Goal"}</p> : null}
+    </fieldset>;
+  }
 
   if (field.input_kind === "periodic_report_schedule") {
     return <PeriodicReportScheduleField id={id} value={value} timezone={timezone}
@@ -38,9 +65,9 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     return (
       <label htmlFor={id}>
         <span>{label}</span>
-        <select id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
+        <select disabled={readOnly} id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
           <option value="" />
-          {(field.options ?? []).map((option) => <option key={option} value={option}>{copy[field.key]?.optionLabels?.[option] ?? option}</option>)}
+          {(field.options ?? []).map((option) => <option key={option} value={option}>{copy[field.key]?.options?.[option] ?? (field.key === "review_order" ? directionLabel(option) : option)}</option>)}
         </select>
       </label>
     );
@@ -54,8 +81,12 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     );
   }
   const numeric = field.input_kind === "number";
+  // Models the shipped executors run: the Codex models of the interactive
+  // endpoint and the managed host's DeepSeek default, which is the canonical
+  // `deepseek-flash` id of DeepSeek-V4.1-Flash. Suggestions only: the field
+  // stays free text so an operator can name any id their endpoint serves.
   const modelSuggestions = field.key === "executor_model"
-    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra"] : [];
+    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "deepseek-flash", "deepseek-v4-pro"] : [];
   return (
     <label htmlFor={id}>
       <span>{label}</span>

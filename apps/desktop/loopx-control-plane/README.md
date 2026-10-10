@@ -12,51 +12,59 @@ desktop release workflow succeeds:
 - macOS: `.dmg` plus a zipped `.app` bundle;
 - Windows: `.msi` plus an NSIS `.exe` installer.
 
-On Apple Silicon macOS, signed updater builds carry an exact matching runtime
-source snapshot. Open **Update LoopX** in the bottom-left corner, check for an
-update, select **Install update**, then **Restart to finish**. The App verifies
-the archive signature before replacing itself; the restarted App installs its
-bundled runtime and verifies the selected CLI revision before reconnecting.
-This updates both layers without asking the operator to run a terminal command.
-The boot screen shows runtime installation separately from status/chat service
-connection, and reports elapsed startup time across WebView reloads. Slow
-startup exposes recovery guidance in the first screen instead of hiding all
-progress in the collapsed update panel.
-Existing desktop builds without this updater need a one-time App replacement.
-Windows preview installers retain the manual CLI installation path; they are
-not advertised in the signed update feed until their runtime installer is
-qualified. Browser/PWA users continue to use `loopx update`.
+On Apple Silicon macOS, the App checks its current official channel on launch,
+verifies a newer App's updater signature, installs it and restarts automatically.
+An offline or failed check keeps the installed App usable; it does not certify
+that the App is current. Main points to the latest complete signed build,
+not arbitrary Git HEAD. Builds without the updater need a one-time replacement.
+Windows preview retains manual CLI installation; browser/PWA users continue
+with `loopx update`.
 
 ## Updates And Recovery
 
-The update panel is collapsed by default and opens above the sidebar without
-reducing the Goal list height. Automatic update checks never replace the App. Its
-advanced options expose stable/main channels, repair, and macOS rollback.
-The main channel points to the latest **complete signed build**, not arbitrary
-moving Git HEAD. A missing feed or failed signature is an error, not proof that
-the App is up to date. Release artifacts and matching runtime stay immutable;
-only the main channel feed pointer is replaced.
+Startup automatically uses the newest qualified local runtime it can establish.
+It compares package versions; equal versions with source revisions use ancestry
+from the fixed official GitHub repository. Installation time and lexical SHA
+order never determine freshness. If the bounded check is offline, rate limited
+or revisions diverge, a saved discovery path follows the current default CLI
+when both are snapshots of the same installation and share a release base.
+This follows the installer's completed promotion, without claiming unknown
+source ancestry is newer. A provably older default is not adopted; other
+installations remain independent. Neither case requires a version selection
+screen. An App-owned snapshot with the same
+release base can follow the current App's bundled snapshot when ancestry is
+unknown; this is maintenance of the App's own installation, not proof that one
+source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
+artifact's identity before the workspace opens.
 
-The App binary owns native windowing, service startup, IPC and update/recovery.
-The bundled runtime owns the CLI, HTTP APIs and workspace assets. A runtime-only
-CLI update cannot patch native startup or updater bugs; those require an App
-update. The App update workflow packages both layers from one Git revision.
+If the bundle is newer, or no selected CLI qualifies, the App prepares its
+bundled snapshot in its own data directory through the existing installer.
+This updates the CLI used by the App without replacing uv/pip/pipx's command or
+editing the user's shell profile. An optional failed upgrade retains a qualified
+previous runtime. Core's installation-only doctor qualifies non-editable wheel
+fingerprints: a local reuse fence, not publisher or source attestation. Older
+CLIs without that readback can use the automatic App-owned fallback.
 
-On macOS, opening the App prepares its bundled runtime automatically only when
-no default CLI runtime is installed: with nothing to replace, a fresh machine
-still bootstraps in one launch. When a *different* runtime is already selected,
-the first screen asks the operator instead of replacing it, because that
-default CLI may be the newer layer. The two choices are **Update App and
-runtime** (check this App's channel, then install the signed App and its
-matching snapshot together) and **Use this App's runtime** (install the
-snapshot this App carries, which aligns the CLI to the App's revision and can
-move it backwards). Services stay stopped until one of them is chosen, so an
-App that lags the CLI can no longer silently downgrade the CLI on open. Neither
-choice downloads another App on its own or selects another update channel, and
-both leave Goal data untouched. A channel with no newer build says so and
-leaves the CLI choice standing. Explicit `LOOPX_BIN` overrides are retained and
-are never replaced automatically: a mismatched override must be corrected by
-its owner.
+A launch-time `LOOPX_BIN` remains the developer's explicit pin. Development mode
+also accepts a source runtime without promoting an installation. A previously
+saved path is a discovery candidate, not a permanent version pin. Corrupt
+preferences fall back to discovery. Runtime selection does not grant Goal,
+Todo, capability or account authority.
+
+Terminal failures stop the wait counter and expose recovery immediately.
+**Repair this version** prepares the App-owned runtime, saves the qualified
+promoted executable and reconnects the same window. Restart uses that completed
+promotion rather than an older cached release path; separately managed or
+explicitly pinned CLIs remain with their owner.
+**Forget runtime choice** removes the saved discovery candidate, not a current
+`LOOPX_BIN` value. Channels, rollback and copyable diagnostics remain in Recovery
+& updates and the workspace's existing update panel. Browser callers supply only
+fixed native actions, never commands, paths or download URLs.
+
+The App binary owns windowing, startup, IPC and update/recovery. Its runtime owns
+the CLI, HTTP APIs and workspace assets. A CLI update cannot patch the native
+shell, and a shell update does not certify Goal acceptance or provider readiness.
+The release workflow packages both layers from one Git revision.
 
 The installer and App-owned services use the same bounded tool search,
 including standard Homebrew locations on macOS, without loading interactive
@@ -72,8 +80,9 @@ installation still revalidates enabled extensions by default; the App sets
 Failed runtime preparation remains supervised, with at most three automatic
 install attempts per App process and at least 30 seconds between attempts.
 Existing recovery controls remain available after that budget is exhausted,
-and externally corrected installations are still detected. A matching runtime
-completes a pending installation journal without reinstalling it.
+and externally corrected installations are still detected. Legacy journals
+are cleared only after the actual App installation verifies; they do not pin
+the runtime to an older source revision.
 
 A listener that accepts TCP but does not answer HTTP is given a 15-second
 startup grace period. The supervisor can then replace it only after verifying
@@ -93,27 +102,16 @@ the bundled runtime and then reconnects the same window automatically; it no
 longer requires a second App restart. Reloading the WebView cannot terminate
 the native startup supervisor.
 
-An update journal resumes an approved runtime installation after restart.
-If the app replacement fails with the previous App verified still in place
-(the installed bundle's layout and `codesign` signature both verify on the
-actual installed target, and the installed runtime still pairs with the
-bundled snapshot),
-the journal is discarded instead of resuming and the App keeps starting
-normally; a failure that cannot verify the previous App keeps the journal and
-surfaces the distinct `app_install_incomplete` recovery state, because the
-macOS installer moves the old App away before installing the new one and an
-error alone does not prove the original location is intact. A journal naming a
-version that never shipped is likewise discarded on resume, but that same
-start must then re-run the App/runtime pairing check the no-journal startup
-path enforces before services connect. Concurrent transactions and additional
-installs before a required restart are rejected. Service readiness is distinct
-from installer completion. macOS keeps
-a verified previous App for **Restore previous version**; the backup copy is
-signature-verified before anything is swapped, while the damaged installation
-being repaired is only located, never required to be intact — that is the
-state rollback exists to fix. Restart restores its matching runtime too. Goal state is neither deleted nor migrated backwards by
-this action, so data-schema compatibility still governs rollback suitability.
-Older backup directories are retained for manual recovery and can consume disk.
+Legacy update/rollback journals are resolved against the running App before
+startup. An incomplete App installation retains its recovery state; runtime
+freshness must prevent a journal from silently downgrading a newer CLI.
+Concurrent transactions and another install before restart remain rejected.
+macOS keeps a signature-verified previous App for **Restore previous version**;
+recovery can restore the original install path even when a failed update moved
+the App away entirely. If another installer recreates that path during recovery,
+rollback stops without replacing the concurrent installation.
+Goal data is not deleted or migrated backwards, so data-schema compatibility
+still governs rollback suitability. Older backups may consume disk space.
 
 The embedded Recovery & updates section includes selectable, copyable diagnostics
 with the App version, last failure category, installer exit code when available,
@@ -128,9 +126,10 @@ terminal-selected runtime; it does not prove that Desktop selected the same
 installation or matching revision.
 
 When the update snapshot stays in a terminal phase, the boot screen itself stops
-presenting an endless loading state: after several poll rounds the main status
-line switches to the error projection of the current snapshot code and points at
-the Recovery & updates panel. It returns to the loading shape as soon as the
+presenting an endless loading state: the main status line immediately shows the current error, stops its wait
+counter and expands Recovery & updates. Unchanged invalid selections are
+rechecked at most every 30 seconds; an explicit recovery action wakes the
+supervisor immediately. It returns to the loading shape as soon as the
 snapshot leaves the terminal phase (for example while an explicit repair runs).
 
 ## Known Issues

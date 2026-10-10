@@ -1,4 +1,4 @@
-"""Lark card projection for the finance-owned source-period view.
+"""Lark card projection for the finance-owned research view.
 
 The renderer consumes the same validated ``decision_research_dashboard_v0``
 view as the Dashboard. It does not read provider payloads or define a second
@@ -32,8 +32,6 @@ def _display_value(metric: Mapping[str, Any]) -> str:
     value = metric.get("value")
     if value is None:
         return "missing (not zero)"
-    if isinstance(value, float):
-        return f"{value:g} {metric['unit']}"
     return f"{value} {metric['unit']}"
 
 
@@ -105,7 +103,7 @@ def render_source_period_metrics_markdown(view: Mapping[str, Any]) -> str:
             price = (
                 "missing (not zero)"
                 if market["mark_price"] is None
-                else f"{market['mark_price']:g}"
+                else str(market["mark_price"])
             )
             lines.extend(
                 [
@@ -128,4 +126,90 @@ def build_source_period_metrics_lark_card(
         title="Finance source-period evidence",
         template="yellow",
         footer="LoopX finance projection · evidence only · never auto-ready",
+    )
+
+
+def render_decision_research_markdown(view: Mapping[str, Any]) -> str:
+    """Preserve the canonical research, including uncertainty and counterevidence."""
+
+    validated = validate_decision_research_view(view)
+    identity = validated["identity"]
+    decision = validated["adjudication"]
+    plain = _lark_plain_text
+    lines = [
+        f"**{plain(identity['title'])}**",
+        plain(identity["subtitle"]),
+        f"As of: {plain(identity['as_of'])} · evidence cutoff: {plain(identity['evidence_cutoff'])}",
+        "Research aid only · investment advice: false · trading allowed: false.",
+        "",
+        f"**{plain(decision['label'])}** · confidence: {plain(decision['confidence'])}",
+        plain(decision["summary"]),
+    ]
+
+    def section(title: str, items: list[str]) -> None:
+        if items:
+            lines.extend(["", f"**{title}**", *[f"- {item}" for item in items]])
+
+    section("Measures", [
+        f"{plain(item['label'])}: {plain(item['value'])} · {plain(item['detail'])}"
+        for item in validated["metrics"]
+    ])
+    for layer in validated["layers"]:
+        section(plain(layer["label"]), [
+            f"{plain(layer['status'])} · {plain(layer['summary'])}",
+            *map(plain, layer["evidence_points"]),
+        ])
+    for entity in validated["entities"]:
+        section(plain(entity["display_name"]), [
+            f"{plain(entity['symbol'])} · {plain(entity['status'])} · confidence: {plain(entity['confidence'])}",
+            plain(entity["inference"]),
+        ])
+        section("Observations", [
+            f"{plain(item['label'])}: {plain(item['value'])} · {plain(item['kind'])} · {plain(item['as_of'])} · {plain(item['source_ref'])} · invalidation: {plain(item['invalidation'])}"
+            for item in entity["observations"]
+        ])
+        section("Scenario estimates", [
+            f"{plain(item['label'])}: {plain(item['value'])} · {plain(item['horizon'])} · probability: {plain(item['probability'])} · assumptions: {', '.join(map(plain, item['assumptions']))}"
+            for item in entity["scenario_estimates"]
+        ])
+        section("Counterevidence", list(map(plain, entity["counterevidence"])))
+        section("Thesis breakers", list(map(plain, entity["thesis_breakers"])))
+        section("Next events", list(map(plain, entity["next_events"])))
+    for case in validated["research_ledger"]:
+        section(plain(case["label"]), [
+            f"{plain(case['decision'])} · {plain(case['summary'])}",
+            *[f"{plain(gate['label'])}: {plain(gate['status'])} · {plain(gate['summary'])}" for gate in case["gate_states"]],
+            "Evidence: " + ", ".join(map(plain, case["evidence_refs"])),
+        ])
+    for event in validated["event_gates"]:
+        section(plain(event["label"]), [
+            f"{plain(event['status'])} · {plain(event['observation_window'])}",
+            plain(event["frozen_hypothesis"]),
+            "Next review: " + plain(event["next_review"]),
+        ])
+        for label, key in [("Observables", "observables"), ("Current evidence", "current_evidence"),
+                           ("Supports", "supports"), ("Refutes", "refutes"), ("Thesis breakers", "thesis_breakers")]:
+            section(label, list(map(plain, event[key])))
+    section("Artifacts", [
+        f"{plain(item['label'])}: {plain(item['summary'])} · {plain(item['artifact_ref'])} · evidence: {', '.join(map(plain, item['evidence_refs']))}"
+        for item in validated["artifacts"]
+    ])
+    method = validated["method_state"]
+    section("Method", [f"{plain(method['revision'])} · {plain(method['lifecycle_state'])} · active method changed: {str(method['active_method_changed']).lower()} · {plain(method['summary'])}"])
+    lines.extend(["", render_source_period_metrics_markdown(validated)])
+    return "\n".join(lines)
+
+
+def build_decision_research_lark_card(view: Mapping[str, Any]) -> dict[str, Any]:
+    """Prepare a complete bounded card; sending requires the existing sink authority."""
+
+    markdown = render_decision_research_markdown(view)
+    if len(markdown.encode("utf-8")) > 18_000:
+        raise ValueError("Research exceeds card capacity; review the complete published result in App. No research was truncated or sent.")
+    return build_lark_markdown_reply_card(
+        markdown,
+        title="Finance research review",
+        template="yellow",
+        footer="Research aid only · no trading authority · method adoption is separate",
+        max_markdown_chars=len(markdown),
     )

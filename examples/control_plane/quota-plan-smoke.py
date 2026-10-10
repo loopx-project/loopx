@@ -767,7 +767,7 @@ def assert_control_plane_post_handoff_agent_todo_stays_active() -> None:
     assert "execution_contract_obligation: advance_one_bounded_segment" in markdown, markdown
 
 
-def assert_dependency_observation_returns_to_primary_backlog() -> None:
+def assert_dependency_observation_label_keeps_primary_backlog() -> None:
     goal_id = "loopx-meta"
     payload = post_handoff_meta_fixture(
         with_agent_todo=True,
@@ -783,20 +783,20 @@ def assert_dependency_observation_returns_to_primary_backlog() -> None:
     first_todo = decision["agent_todo_summary"]["first_open_items"][0]
     first_todo_text = str(first_todo.get("title") or first_todo.get("text") or "")
     assert first_todo_text.startswith("SOTA long-horizon"), decision
-    assert decision["heartbeat_recommendation"]["recommended_mode"] == "follow_work_lane_contract", decision
+    assert decision["heartbeat_recommendation"]["recommended_mode"] == "post_handoff_observe_then_backlog_step", decision
     assert (
         decision["heartbeat_recommendation"]["latest_run"]["progress_scope"]
-        == "dependency_observation"
+        == "primary_goal"
     ), decision
     lane = decision["work_lane_contract"]
     assert lane["schema_version"] == "work_lane_contract_v1", lane
-    assert lane["lane"] == "continuous_monitor", lane
+    assert lane["lane"] == "advancement_task", lane
     assert lane["next_lane"] == "advancement_task", lane
-    assert lane["obligation"] == "advance_unless_material_monitor_transition", lane
-    assert lane["reason_codes"] == ["dependency_observation", "open_agent_todo"], lane
+    assert lane["obligation"] == "advance_one_bounded_segment", lane
+    assert lane["reason_codes"] == ["open_agent_todo"], lane
     assert "dependency_observation_cap" not in markdown, markdown
-    assert "follow_work_lane_contract" in markdown, markdown
-    assert "obligation=advance_unless_material_monitor_transition" in markdown, markdown
+    assert "post_handoff_observe_then_backlog_step" in markdown, markdown
+    assert "obligation=advance_one_bounded_segment" in markdown, markdown
     assert decision["execution_obligation"]["must_attempt_work"] is True, decision
     assert decision["execution_obligation"]["kind"] == "work_lane_contract", decision
     assert decision["execution_obligation"]["contract_obligation"] == lane["obligation"], decision
@@ -1412,7 +1412,7 @@ def main() -> int:
     assert_control_plane_waiting_projection_self_repair_should_run()
     assert_control_plane_post_handoff_observe_if_unchanged()
     assert_control_plane_post_handoff_agent_todo_stays_active()
-    assert_dependency_observation_returns_to_primary_backlog()
+    assert_dependency_observation_label_keeps_primary_backlog()
     assert_attention_queue_overrides_stale_run_history()
     assert_project_asset_backed_no_evidence_should_run()
     assert_heartbeat_recommendation_lifecycle()

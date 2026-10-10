@@ -63,7 +63,7 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id="example", domain="engineering", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["worker"])
-    records = [{"schema_version": "todo_item_v0", "todo_id": f"work-{i:03}",
+    records = [{"schema_version": "todo_item_v0", "todo_id": f"todo_work_{i:03}",
         "role": "agent" if i < 40 else "user", "status": "open" if i % 3 else "done",
         "done": i % 3 == 0, "text": f"Retained work {i}", "note": "exact metadata🙂" * 100,
         "archive_state": "active", "source_section": "Agent Todo" if i < 40 else "User Todo",

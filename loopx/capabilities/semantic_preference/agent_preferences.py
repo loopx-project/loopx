@@ -39,19 +39,29 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
 ) -> Any:
-    # Cheap global negative check only; exact scope discovery remains TS-owned.
-    if not agent_id or not (runtime_root / "agent-preferences").exists():
+    # Explicit local use creates this namespace. Untouched runtimes do not
+    # invoke the preference provider or add capability instructions to a guard.
+    if not agent_id:
         return dispatch
-    absent = False
+    try:
+        (runtime_root / "agent-preferences").stat()
+    except FileNotFoundError:
+        return dispatch
+    except OSError:
+        # Let the typed provider disclose denial/failure rather than treating
+        # an inaccessible existing namespace as disabled or empty context.
+        pass
     from ...control_plane.capability_hooks import (
         TurnStartHookRegistration, TURN_START_HOOK_RESULT_SCHEMA_VERSION, dispatch_turn_start_hooks,
     )
 
+    snapshot = None
+
     def produce():
-        nonlocal absent
+        nonlocal snapshot
         state = agent_preferences(registry_path=registry_path, runtime_root=runtime_root,
-                                  goal_id=goal_id, agent_id=agent_id, action="observe")
-        absent = state.get("ok") is True and state.get("status") == "absent"
+                                  goal_id=goal_id, agent_id=agent_id, action="turn_context")
+        snapshot = state
         if not state.get("ok"):
             # The dispatcher exposes this failure; never substitute cached prose.
             return {
@@ -61,7 +71,8 @@ def extend_turn_start_dispatch(
                 "agent_read_required": False, "external_reads_performed": False,
                 "external_writes_performed": False, "local_private_state_mutated": False,
                 "private_content_returned": False, "provider_payload_returned": False,
-                "error_code": "agent_preferences_unreadable",
+                "error_code": ("agent_preferences_permission_denied"
+                    if state.get("status") == "permission_denied" else "agent_preferences_unreadable"),
             }
         count = state["observation_count"]
         return {
@@ -81,18 +92,21 @@ def extend_turn_start_dispatch(
         hook_id="semantic_preference.agent_context", capability_id="semantic-preference",
         requested_read_scope=("owner_private_agent_preferences",), requested_write_scope=(),
         producer=produce,
+        context_reader=lambda: {"ok": True, "status": "read", "current": snapshot["current"]},
         required_read={"kind": "agent_preferences", "command": command,
             "reason": "Read current preferences and retirements; apply explicit user corrections before acting. Memory is not permission.",
             "ordering": "before_work"},
     )
 
     extra = dispatch_turn_start_hooks((hook,))
-    if absent:
-        # Preserve the entire feature-off projection, including counters. An
-        # unreadable store/producer error is not absence and remains visible.
+    # Another Goal/Agent's journal does not opt this scope into preference
+    # context. Retirements and expiry remain present and must invalidate cache.
+    if snapshot is not None and snapshot.get("ok") and snapshot.get("status") == "absent":
         return dispatch
     result = dict(dispatch or {})
-    for key in ("results", "required_reads", "failures"):
+    for key in ("results", "required_reads", "failures", "contexts"):
+        if key == "contexts" and not extra.get(key):
+            continue
         result[key] = list(result.get(key) or []) + list(extra.get(key) or [])
     for key in ("registered_count", "invoked_count"):
         result[key] = int(result.get(key) or 0) + int(extra.get(key) or 0)
@@ -138,5 +152,5 @@ def handle_agent_preferences(args, *, registry_path, runtime_root_arg):
 
 def render_agent_preferences(payload):
     import json
-    # This is an explicitly owner-local read. Generic quota/status never emits it.
+    # The same owner-local read is used by the scoped turn context hook.
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"

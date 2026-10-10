@@ -58,7 +58,7 @@ export function isCapabilityRetirementWriteback(value: unknown, identity: Settle
 
 /** The committed checkpoint accepts progress for a Turn, not Todo completion.
  * The caller must first verify this writeback's exact durable receipt. */
-export function isAcceptedInFlightWriteback(
+export function isAcceptedProgressWriteback(
   value: unknown,
   identity: SettlementIdentity,
 ): boolean {
@@ -71,14 +71,21 @@ export function isAcceptedInFlightWriteback(
       run.delivery_outcome !== "outcome_progress" ||
       !checkpoint || checkpoint.schema_version !== "vision_checkpoint_v0" ||
       checkpoint.agent_id !== identity.agent_id ||
-      checkpoint.delivery_boundary !== "in_flight_continuation" ||
       checkpoint.satisfied !== true || !Array.isArray(checkpoint.triggers)) {
     return false;
   }
   return checkpoint.triggers.some((value) => {
     const trigger = jsonObject(value);
-    return trigger?.kind === "in_flight_continuation" &&
-      trigger.todo_id === identity.todo_id;
+    if (checkpoint.delivery_boundary === "in_flight_continuation") {
+      return trigger?.kind === "in_flight_continuation" &&
+        trigger.todo_id === identity.todo_id;
+    }
+    // A semantic checkpoint can close a bounded segment while the Todo waits
+    // or remains open. Its accepted outcome, not the current frontier or Todo
+    // completion, owns replay of the exact paid Turn.
+    return checkpoint.delivery_boundary === "semantic_closeout" &&
+      trigger?.kind === "material_delivery_outcome" &&
+      trigger.delivery_outcome === run.delivery_outcome;
   });
 }
 

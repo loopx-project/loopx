@@ -84,6 +84,15 @@ graph TD
 
 ### 问答中的等待与失败
 
+前端与飞书的 Chat 回答保留项目内文件的相对位置，例如 `./notes/report.md`，便于核对产物；机器目录、项目外路径及另外声明为私有的目录仍隐藏。项目根目录本身显示为 `[project]`。本机 Markdown 链接保留可读标题，不发送无法在飞书使用的本地链接；状态、提议和权限门禁仍使用完整路径脱敏。这仅改变展现，不授予读取或写入权限。
+
+Frontend and Lark Chat answers retain project-relative filenames such as
+`./notes/report.md`, while hiding machine roots, other local paths and separately
+protected directories. The project root itself remains `[project]`. Local
+Markdown links keep their readable labels instead of unusable local destinations;
+status, proposals and gates still redact entire local paths. This changes answer
+presentation, not read or write authority.
+
 管家与 Goal 的前端对话共用运行视图，适用于查询、编码、投研等各种任务：回答下方显示当前正在做的一步，例如「正在读取 notes.md」。使用 Codex 执行器时，展开「执行过程」可逐步查看思考、读取、搜索、运行的命令、调用的工具和修改的文件；同一步的开始与结束合并为一行，失败的步骤标出退出码，点击一行可查看完整命令、改动文件列表或思考内容。思考内容仅在模型向宿主公开时显示（有的模型只给出思考用时）；不显示命令输出、工具参数与结果或文件改动内容，项目内路径显示为相对路径，其余本机路径和疑似凭据会被隐藏。「完成」只表示该步结束，不代表检查通过。这些步骤只保存在本机、仅所有者可读的会话回放记录中；回合结束超过 24 小时后，下次启动 LoopX Chat 时清理。其他执行器继续显示「最近活动」中的最近六条记录。尚未收到活动时保留等待提示，不根据等待时长推测执行进度。
 
 ![运行中的回答显示当前活动、最近活动和中断本轮](../assets/personal-workspace/conversation-activity-desktop.png)

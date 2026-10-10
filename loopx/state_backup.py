@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import tarfile
 import tempfile
-from typing import Any
+from typing import Any, Protocol
 
 from . import __version__
 from .paths import select_default_runtime_root
@@ -128,6 +128,7 @@ def _discover_targets(
     include_automations: bool,
     include_skills: bool,
     include_registry_projects: bool,
+    configuration_source_registry: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], dict[str, Any]]:
     targets: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -153,12 +154,21 @@ def _discover_targets(
         warnings.extend(target_warnings)
 
     add("runtime_root", runtime_root, "runtime-root")
+    # Import must bind the original registry bytes, even when its caller-owned
+    # route lives outside .loopx; configuration projection is not that source.
+    add("configuration_source_registry", configuration_source_registry, "configuration/registry.source.json")
     add("project_loopx", project / ".loopx", "project/.loopx")
     add("project_codex_goals", project / ".codex" / "goals", "project/.codex/goals")
     add("project_claude_goals", project / ".claude" / "goals", "project/.claude/goals")
     add("project_local_goals", project / ".local" / "goals", "project/.local/goals")
 
     global_registry = runtime_root / "registry.global.json"
+    # Current-project scope still owns its registered routes, including files
+    # outside the conventional Goal directories. Keep cross-project discovery
+    # on the global registry; configuration capture uses the same source below.
+    discovery_registry = (
+        global_registry if include_registry_projects else configuration_source_registry
+    )
     registry_goal_count = 0
     registry_project_roots: set[str] = set()
     reachable_project_roots: set[str] = set()
@@ -166,12 +176,18 @@ def _discover_targets(
     registry_active_state_included_count = 0
     registry_source_registry_count = 0
     registry_source_registry_included_count = 0
-    if include_registry_projects:
+    if include_registry_projects or discovery_registry.exists():
         try:
-            goals = _registry_goals(global_registry)
+            goals = _registry_goals(discovery_registry)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             goals = []
-            warnings.append(f"could not discover global registry projects from {global_registry}: {exc}")
+            warnings.append(f"could not discover registry projects from {discovery_registry}: {exc}")
+        if not include_registry_projects:
+            goals = [
+                goal for goal in goals
+                if not str(goal.get("repo") or "").strip()
+                or _resolved(Path(str(goal["repo"]).strip())) == project
+            ]
         registry_goal_count = len(goals)
         for goal in goals:
             goal_id = str(goal.get("id") or "").strip()
@@ -371,6 +387,7 @@ def build_state_backup_plan(
     include_automations: bool = True,
     include_skills: bool = True,
     include_registry_projects: bool = True,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     resolved_project = _resolved(Path(project))
     resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else select_default_runtime_root())
@@ -378,6 +395,10 @@ def build_state_backup_plan(
     resolved_backup_id = backup_id or _utc_timestamp()
     archive_path = resolved_output_dir / f"loopx-state-{resolved_backup_id}.tar.gz"
     manifest_path = resolved_output_dir / f"loopx-state-{resolved_backup_id}.manifest.json"
+    configuration_source_registry = registry_path or (
+        resolved_runtime_root / "registry.global.json" if include_registry_projects
+        else resolved_project / ".loopx/registry.json"
+    )
     targets, missing, warnings, registry_discovery = _discover_targets(
         project=resolved_project,
         runtime_root=resolved_runtime_root,
@@ -385,6 +406,7 @@ def build_state_backup_plan(
         include_automations=include_automations,
         include_skills=include_skills,
         include_registry_projects=include_registry_projects,
+        configuration_source_registry=configuration_source_registry,
     )
     total_stats = _sum_target_stats(targets)
     logical_source_bytes = total_stats["bytes"]
@@ -398,6 +420,7 @@ def build_state_backup_plan(
         "backup_id": resolved_backup_id,
         "project": str(resolved_project),
         "runtime_root": str(resolved_runtime_root),
+        "configuration_source_registry": str(configuration_source_registry),
         "registry_discovery": registry_discovery,
         "codex_home": str(_codex_home()),
         "output_dir": str(resolved_output_dir),
@@ -425,6 +448,45 @@ def build_state_backup_plan(
             else "no backup targets found; check --project, --runtime-root, and CODEX_HOME"
         ),
     }
+
+
+class _BackupReadStream(Protocol):
+    def read(self, size: int = -1, /) -> bytes: ...
+
+
+class _BackupMemberReader:
+    """Witness the stream tarfile copies, without rereading a changing source."""
+
+    def __init__(self, source: _BackupReadStream) -> None:
+        self.source = source
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size: int = -1, /) -> bytes:
+        data = self.source.read(size)
+        self.digest.update(data)
+        self.size += len(data)
+        return data
+
+
+class _BackupTarFile(tarfile.TarFile):
+    """Retain tarfile's link/metadata behavior and witness every copied member."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.file_members: list[dict[str, Any]] = []
+        super().__init__(*args, **kwargs)
+
+    def addfile(self, tarinfo: tarfile.TarInfo, fileobj: _BackupReadStream | None = None) -> None:
+        # The manifest contains this list; the whole-archive digest covers it.
+        if not tarinfo.isfile() or tarinfo.name == "manifest.json":
+            super().addfile(tarinfo, fileobj)
+            return
+        if fileobj is None:
+            raise ValueError("backup regular member requires its copied byte stream")
+        reader = _BackupMemberReader(fileobj)
+        super().addfile(tarinfo, reader)
+        self.file_members.append({"archive_path": tarinfo.name,
+            "size_bytes": reader.size, "sha256": reader.digest.hexdigest()})
 
 
 def _add_path_to_tar(
@@ -509,14 +571,30 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
         staging = Path(temporary)
         staged_archive = staging / "archive.tar.gz"
         snapshots: dict[Path, tuple[Path, dict[str, Any]]] = {}
-        with tarfile.open(staged_archive, "w:gz", dereference=False) as tar:
+        with _BackupTarFile.open(staged_archive, "w:gz", dereference=False) as tar:
             for item in included:
                 if not isinstance(item, dict):
                     continue
                 source = Path(str(item.get("source_path") or "")).expanduser()
                 archive_name = str(item.get("archive_path") or source.name)
                 _add_path_to_tar(tar, source, archive_name, exclude_roots, staging, snapshots)
+            from .capabilities.configuration_backup import (
+                capture_configuration_backup,
+                verify_configuration_backup,
+            )
+            configuration = capture_configuration_backup(
+                registry_path=Path(payload["configuration_source_registry"]),
+                runtime_root=Path(payload["runtime_root"]),
+            )
+            configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
+            info = tarfile.TarInfo("configuration-backup.json")
+            info.size, info.mode = len(configuration_bytes), 0o600
+            tar.addfile(info, io.BytesIO(configuration_bytes))
+            updated["execution"]["configuration_backup"] = verify_configuration_backup(configuration)
             updated["execution"]["sqlite_snapshots"] = [entry[1] for entry in snapshots.values()]
+            # manifest.json is deliberately excluded: it contains this list.
+            # The existing external archive checksum witnesses the whole tar.
+            updated["execution"]["file_members"] = tar.file_members
             manifest_bytes = json.dumps(updated, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("manifest.json")
             info.size = len(manifest_bytes)

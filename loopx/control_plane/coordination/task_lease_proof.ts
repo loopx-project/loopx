@@ -11,15 +11,30 @@ import {decideTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
+import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {evaluateCoordinationTerminalFence, COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 export interface TaskLeaseProof {
   idempotency_key: string;
   expected_version: number;
+}
+
+/** A reminder's bound actor owns copy edits, not an agent execution claim.
+ * This classifies normalized intent only; shared actor admission and the
+ * current lease/provider fences still decide whether an edit may commit. */
+export function isBoundUserActionMetadataUpdate(todo: JsonObject, input: CoordinationTodoUpdateInput): boolean {
+  return todo.role === "user" && todo.task_class === "user_action" &&
+    todo.status === "open" && todo.claimed_by == null &&
+    input.actor_agent_id !== null && todo.bound_agent === input.actor_agent_id &&
+    input.registered_agents.includes(input.actor_agent_id) &&
+    input.completion === undefined && input.completion_validation_revision === undefined &&
+    input.monitor_observation === undefined &&
+    Object.keys(input.planning_intent ?? {}).every(field => field === "evidence");
 }
 
 export function decodeTaskLeaseProof(value: unknown): TaskLeaseProof | null {
@@ -110,15 +125,62 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   };
   const todo = index.todos.get(input.todo_id)!;
   const intent = input.planning_intent ?? {};
+  // A blocked Todo cannot acquire execution authority. A bundled edit must
+  // first use the existing administrative reopen, rather than reconcile a
+  // claim/acquire a lease that the blocked status itself makes ineligible.
+  // This is a diagnostic probe only; the actual retry rechecks owner admission
+  // and the lifecycle fence in the ordinary provider transaction.
+  const reopen = {...input, patch: {}, clear_fields: [], planning_intent: {
+    status: "open", reason: "Reviewed lifecycle recovery", clear_resume_when: true,
+  }};
+  if (mode === "hard_lease" && intent.status === "open" &&
+      isBlockedLifecycleTransition(reopen, todo) &&
+      blockedLifecycleRejection({goal_id: input.goal_id, todo_id: input.todo_id,
+        actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
+        lease: lease === null ? undefined : index.leases.get(input.todo_id),
+        lease_idempotency_key: input.lease_idempotency_key ?? null,
+        lease_expected_version: input.lease_expected_version ?? null, now: input.now}) === null) {
+    return {...base, action: "resolve_lifecycle_edit",
+      reason: "Reopen this blocked Todo separately with only status, clear-resume-when and a reviewed reason. Do not bundle notes, evidence, work requirements or ownership. Then claim/acquire a fresh execution lease before retrying the remaining edit; reopening alone grants no execution authority.",
+      retry: {command: "loopx todo update --status open --clear-resume-when --reason '<reviewed reason>'",
+        goal_id: input.goal_id, todo_id: input.todo_id, agent_id: input.actor_agent_id,
+        requires_flags: ["--status", "--clear-resume-when", "--reason"],
+        proof_source: "fresh_lifecycle_admission"}};
+  }
   const editRejection = lease === null || isOwnerDeferral(input, todo) ? null : leasedTodoEditRejection(todo, intent);
   if (editRejection !== null) {
     return {...base, action: "resolve_lifecycle_edit", reason_code: editRejection.code,
       reason: "This edit changes leased work requirements or status. Use the owning lifecycle transition; reacquiring a lease alone cannot authorize this metadata edit."};
   }
-  if (todo.claimed_by !== input.actor_agent_id) {
+  if (todo.claimed_by !== input.actor_agent_id && !isBoundUserActionMetadataUpdate(todo, input)) {
     return {...base, action: "reconcile_lease_owner",
       reason: "A leased update requires the actor to own the Todo claim. Reconcile ownership before acquiring execution authority."};
   }
+  const dependency = todoExecutionDependencyRejection(index.todos, input.todo_id, input.now);
+  // Execution must continue to wait. If the owner has instead reviewed this
+  // dependency as obsolete, expose the existing administrative lifecycle;
+  // clearing it directly with an inactive execution proof is still rejected.
+  const dependencyPause = {...input, patch: {}, clear_fields: [],
+    lease_idempotency_key: null, lease_expected_version: null,
+    planning_intent: {status: "blocked", clear_resume_when: true, reason: "Reviewed obsolete dependency"}};
+  if (dependency !== null && mode === "hard_lease" && leaseState === "released" &&
+      sameOwner && todo.claimed_by === input.actor_agent_id && todo.task_class === "advancement_task" &&
+      isBlockedLifecycleTransition(dependencyPause, todo) &&
+      blockedLifecycleRejection({goal_id: input.goal_id, todo_id: input.todo_id,
+        actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
+        lease: index.leases.get(input.todo_id), lease_idempotency_key: null,
+        lease_expected_version: null, now: input.now}) === null) {
+    return {...base, action: "resolve_lifecycle_edit", reason_code: dependency.code,
+      reason: "Keep waiting if the dependency remains valid. For an evidence-backed owner replan, first block the unchanged Todo and clear its obsolete wait through the existing lifecycle, then reopen it. Each step requires fresh provider CAS and its own operation identity; neither consumes an old lease or grants execution. Do not bundle copy, evidence, requirements or ownership edits. Acquire a fresh execution lease afterwards.",
+      lifecycle_replan: {condition: "owner_reviewed_obsolete_dependency", steps: [
+        {command: "loopx todo update --status blocked --clear-resume-when --reason '<reviewed obsolete dependency>'"},
+        {command: "loopx todo update --status open --clear-resume-when --reason '<reviewed new route>'"},
+      ], goal_id: input.goal_id, todo_id: input.todo_id, agent_id: input.actor_agent_id,
+      requires_flags: ["--update-operation-id", "--update-expected-provider-revision"],
+      execution_proof: "omit", next_execution: "acquire_fresh_lease"}};
+  }
+  if (dependency !== null) return {...base, action: "resolve_acquire_rejection",
+    reason_code: dependency.code, reason: dependency.reason};
   const retry = {command: "loopx todo update",
     requires_flags: ["--task-lease-idempotency-key", "--task-lease-expected-version"],
     proof_source: "current_owner_lease_readback"};

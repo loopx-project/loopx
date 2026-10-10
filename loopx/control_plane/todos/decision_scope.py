@@ -17,9 +17,6 @@ from .contract import (
 from .user_gate import is_user_gate_todo_item
 from .todo_semantics import todo_projection_sort_key, todo_item_task_class, todo_item_has_removed_continuation_policy
 
-TODO_GATE_BLOCKING_STATES = frozenset(
-    {"gate_targets_todo", "gate_covers_action", "projection_repair_required"}
-)
 DECISION_SCOPE_CONSISTENCY_SCHEMA_VERSION = "required_decision_scope_consistency_v0"
 STANDING_DECISION_AUTHORITY_SCHEMA_VERSION = "standing_decision_authority_v0"
 DECISION_SCOPE_RELATION_SCHEMA_VERSION = "decision_scope_relation_v0"
@@ -296,35 +293,6 @@ def build_required_decision_scope_repair_hint(
     return result
 
 
-def decision_scope_covers(gate_scope: Any, required_scope: Any) -> bool:
-    gate = normalize_todo_decision_scope(gate_scope)
-    required = normalize_todo_decision_scope(required_scope)
-    if not gate or not required:
-        return False
-    result = _evaluate("covers", gate_scope=gate, required_scope=required)
-    if not isinstance(result, bool):
-        raise TypeError("invalid typed decision scope covers projection")
-    return result
-
-
-def decision_scope_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
-    return _projection(
-        "scope_relation",
-        _evaluate("scope_relation", gate=_facts(gate), item=_facts(agent_item)),
-        schema_versions=frozenset({DECISION_SCOPE_RELATION_SCHEMA_VERSION}),
-        nullable=True,
-    )
-
-
-def exact_todo_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
-    return _projection(
-        "exact_relation",
-        _evaluate("exact_relation", gate=_facts(gate), item=_facts(agent_item)),
-        schema_versions=frozenset({TODO_GATE_RELATION_SCHEMA_VERSION}),
-        nullable=True,
-    )
-
-
 def todo_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
     return _optional_relation(
         "relation",
@@ -345,10 +313,6 @@ def todo_gate_relations(gates: list[dict[str, Any]], items: list[dict[str, Any]]
         gate_count=len(gates),
         item_count=len(items),
     )
-
-
-def todo_gate_relation_blocks_agent(relation: dict[str, Any] | None) -> bool:
-    return bool(relation and relation.get("state") in TODO_GATE_BLOCKING_STATES)
 
 
 def select_scoped_gate_fallback(gates: list[dict[str, Any]], items: list[dict[str, Any]], *,

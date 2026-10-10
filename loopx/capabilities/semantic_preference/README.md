@@ -238,6 +238,40 @@ No copying host conversations, cross-home rebinding or implicit global corpus.
 Moving the Goal state file requires an explicit context migration; it is not
 silently treated as the same private scope.
 
+### Preference guidance belongs to the participating hook
+
+The generic `/loopx` skill no longer teaches preference discovery, reads or
+corrections. Shared work-context guidance stays capability-neutral. Preference
+instructions accompany the capability-owned current view through its turn-start
+hook, so Agents that never use local preferences do not receive this recipe or
+an extra preference-read obligation.
+
+Local participation retains the existing explicit-use boundary: the first
+`semantic-preference agent remember --execute` commits a journal for the exact
+Goal/Agent scope. A read or preview does not activate it. Another scope's journal
+does not opt this scope in. With no namespace, quota/Turn skips the preference
+provider; with no exact-scope journal it leaves the hook projection unchanged.
+This local lifecycle is separate from the external recall `enabled` setting;
+turning external recall off does not erase explicitly committed local preferences.
+
+For participating scopes, a single capability-owned snapshot supplies both
+observation and current bodies. Each guard rereads without a negative cache, so
+corrections, retirements and expiry appear in the next guard. Retired/expired
+markers remain visible to invalidate cached advice; an unreadable journal is
+unavailable, not inactive or empty. Permission denial remains distinguishable.
+Recover the source before preference-dependent work; independent work keeps its
+existing authority.
+
+The delivered view includes the operating rules previously in the generic skill:
+consume it once for this guard's pre-work checks, then execute any remaining
+`required_reads`. Before every preference-dependent external action, obtain a
+fresh exact-scope view through a new guard or explicit `agent read`, even after
+an earlier empty or current view. Read explicitly before a durable correction;
+reuse the subject key, current revision, stable operation identity and exact user
+source, then preview, execute and read back. Missing hook context is unknown, not
+an instruction to discover preferences. An explicit empty read clears cached
+advice; neither context nor its absence grants authority.
+
 ### Memory service providers and the next integration boundary
 
 The extension boundary is a **memory service**, not just a File/SQLite driver.
@@ -341,23 +375,21 @@ a newly fetched revision, which would hide a concurrent correction.
 
 ### Fresh-turn adoption
 
-After any preference has been committed, CLI quota admission and native Turn
-planning/execution disclose a required owner-local read through the existing
-turn-start hook. Every required read and its exact executable command survive
+CLI quota and native Turn share the
+[participating hook contract](#preference-guidance-belongs-to-the-participating-hook)
+above. Native hosts consume delivered current bodies and execute remaining
+required reads. Every remaining read and its exact executable command survive
 Turn compaction, including long quoted paths and more than five hooks; size
-excess remains a diagnostic rather than permission to drop obligations.
-Counts and the read command enter the turn envelope; private
-statements and source quotes do not enter generic quota/status or public sinks.
-Discovery uses a content-free TS observation of the exact Goal/Agent scope.
-A missing store leaves the entire hook projection unchanged even when another
-Goal or Agent has preferences in the same runtime. Retired/expired records still
-require a fresh read; an unreadable store is unavailable, never absence.
+excess does not authorize dropping obligations. Scoped quota/Turn `work_context`
+may carry owner-private bodies; generic status and public sinks do not receive
+private statements or source quotes.
 
 The command reads all current scoped entries, including retired/expired markers,
 instead of relying on embedding or keyword ranking to find a prohibition.
 
-The managed `/loopx` instructions teach the host to persist explicit corrections,
-read them back, and re-read before a preference-dependent external action.
+The [participating hook](#preference-guidance-belongs-to-the-participating-hook)
+delivers `current.instructions` that teach the host to persist explicit
+corrections, read them back, and re-read before a preference-dependent external action.
 A new user instruction overrides old context immediately, including while a
 write is being recovered. An unreadable store is unavailable, not empty. The shared Turn capsule signs
 failed/partial/unavailable hook observations and carries them into the execution
@@ -370,8 +402,7 @@ permissions, make a whole Goal unavailable, or retry failed providers in a loop.
 Do not
 act on a cached preference; independent work can continue. This is a host
 obligation, **not** a claim that a generic memory engine intercepts every tool
-call atomically. Native hosts must execute the disclosed read, and ordinary
-unmanaged conversations have no automatic hook.
+call atomically. Ordinary unmanaged conversations have no automatic hook.
 
 The bounded current view accepts at most 64 subject keys and 32 KiB of records.
 Capacity failure rejects the write; it never silently evicts an old constraint.

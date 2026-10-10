@@ -1,17 +1,50 @@
 # Canonical authority archive and isolated recovery
 
-`loopx authority-archive` exports a pinned prefix of the selected coordination
-AuthorityStore and restores that history into a separate File or SQLite store.
+`loopx authority-archive export` exports a pinned prefix of the selected coordination
+AuthorityStore; `restore` recovers that history into a separate File or SQLite store.
 It preserves the full committed projections, events, operation ids and receipts,
 including archived Todos and retained leases. It does not export the registry,
 quota ledger, external artifacts, host sessions or the rest of a Goal's runtime.
 
-This is the recovery-artifact part of shared-authority D3/L8. It does not promote
+For a Goal promoted through the qualified shadow route, “full” means the history
+actually committed to canonical authority. That route captures active Todos and
+decision-reachable archived dependencies; unrelated old archives, orphan leases
+and original rollout-log receipts can remain only in the retained Markdown/runtime
+source. A source digest proves which bytes were observed; it is not a backup of
+those bytes. A verified canonical archive cannot reconstruct that omitted source.
+Keep the original source until its complete reviewed import and historical
+recovery have been validated. Neither shadow qualification nor canonical archive
+verification alone permits deleting readers still needed to recover that source.
+Supported backup-format and original-receipt readers retain their declared upgrade
+support boundary even after ordinary Markdown writers are retired.
+
+中文：已晋升 Goal 的“完整归档”指已提交到 canonical 的历史。现有 shadow 路径
+捕获当前 Todo 和决策可达的归档依赖；未引用的旧归档、孤立旧租约及原始 rollout
+回执可能仍只在保留的旧源里。源摘要不是源文件备份，canonical 归档不能还原未纳入
+的数据。完整审核导入及历史恢复验收前须保留旧源；shadow 或归档校验通过本身不构成
+删除仍负责恢复这些源数据的读取链的依据。正常 Markdown writer 退役后，受支持的旧
+备份格式及原回执读取器仍须遵守既有升级支持范围。
+
+Export, verification and isolated restore are the recovery-artifact part of
+shared-authority D3/L8. These operations do not promote
 a Goal, switch providers, release a writer fence, register a restored runtime,
 or qualify the default local profile. The recovered lease records are historical
 state, not a new execution grant. Canonical writes made after the captured cursor
 are outside that archive and must be accounted for by a separate fenced cutover.
 Never reactivate an older Markdown state as a rollback after canonical writes.
+
+Changing an existing canonical File Goal to SQLite uses the separate
+[reviewed provider cutover](file-authority-state-log.md#reviewed-filesqlite-cutover)
+in this command family. Returning to File needs a new plan from the **current**
+SQLite head. For example, after migration adds two Todos and completes another,
+the return must retain those additions, the completion result and its original
+receipts. Restoring only the pre-migration backup loses acknowledged work.
+The quota ledger and Host/Turn state have separate owners: in-place provider
+cutover keeps their runtime location; an archive alone cannot recover them.
+
+This is distinct from promoting an unpromoted Markdown Goal or changing its
+ownership policy. The App's task-ownership editor changes policy; it does not
+migrate storage. New-Goal defaults also do not migrate existing Goals.
 
 ## Export and verify
 
