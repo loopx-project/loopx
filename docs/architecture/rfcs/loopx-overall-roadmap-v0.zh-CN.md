@@ -489,6 +489,14 @@ R2 持续运行、真实调用方采用、冷 CLI/p95 与 provider 准入仍是�
 
 English:
 [PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
+S2/S7/S10 PR 等待观察 checkpoint：依赖核验进入既有 opt-in heartbeat prequota
+路径，不依赖 open review 队列成员。Todo 类型化 owner 选择仓库限定的未完成等待
+及有界持久节奏；issue-fix provider 将紧凑公开元数据写入既有 merge 事实。
+未观察的 PR 标识不能豁免交付监督。File/SQLite 恢复、原要求不变、关闭／失败负例
+及重启节奏只验收本批；本机 host 能力接入和 TurnEnvelope 核验接入分别跟踪。
+这不关闭 legacy 退役或 authority 持续运行资格。参见
+[Todo 回读](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察)。
+
 S2/S10 read-preview cost slice. Summary and succession validation share the
 existing TS owner request; empty succession skips transport. Read models are
 isolated from mutation adapters, and unselected report, Lark, extension and Host

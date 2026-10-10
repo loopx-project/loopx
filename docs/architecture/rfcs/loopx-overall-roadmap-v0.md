@@ -637,6 +637,17 @@ admission, fresh task derivation and frontend/Lark qualification remain open.
 R2 的一个恢复切片；调用方准入、新任务生成与前端/Lark 验收仍未闭环。
 
 [PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
+S2/S7/S10 PR wait observation checkpoint. Dependency polling now belongs to the
+existing opt-in heartbeat prequota path, independent of open review-queue
+membership. The Todo typed owner selects repository-qualified unfinished waits
+and bounded durable cadence; the issue-fix provider transports compact public
+metadata into the existing merge fact. An unobserved PR binding cannot exempt
+delivery supervision. File/SQLite resume, unchanged dependency requirements,
+closed/failure negatives and restart cadence qualify this slice; installed host
+capability adoption and TurnEnvelope poll adoption remain distinct. This does
+not close legacy retirement or sustained authority qualification. See
+[Todo readback](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察).
+
 S2/S10 read-preview cost slice. Summary and succession validation share the
 existing TS owner request; empty succession skips transport. Read models are
 isolated from mutation adapters, and unselected report, Lark, extension and Host
