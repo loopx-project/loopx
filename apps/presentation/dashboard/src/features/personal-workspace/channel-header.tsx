@@ -172,6 +172,7 @@ export function ChannelHeader({
         <h1>{selectedGoal?.title ?? t("header.manager")}</h1>
         {selectedGoal && !selectedGoal.loadState ? <p className="personal-channel-activity"><GoalActivityChip goal={selectedGoal} /></p> : null}
         {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
+        <div className="personal-manager-context">
         {stewardBindingVisible && managerChannelBinding ? (
           <p className="personal-manager-execution">
             {onOpenManagerSettings ? <button aria-label={t("header.managerModelSettings")} title={t("header.managerModelSettings")}
@@ -211,6 +212,7 @@ export function ChannelHeader({
               </span>
             ) : null}
         </details> : null}
+        </div>
         {selectedGoal?.loadState ? <p role="status">{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</p> : null}
       </div>
       {selectedGoal ? (
