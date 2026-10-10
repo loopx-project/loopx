@@ -227,8 +227,7 @@ from status and Dashboard surfaces. Publishing does not install or enable the
 extension, activate or replace a Finance method, spend LoopX quota, consume a
 learning queue, create a trade, or place an order.
 
-Render the exact published-view semantics for an authorized Lark delivery
-without sending anything:
+Prepare a card from a research input without publishing or sending it:
 
 ```bash
 loopx-finance-value-discovery render-lark-card \
@@ -243,6 +242,33 @@ a separate readiness rule. 中文：该命令只生成卡片、不发消息；�
 `loopx extension disable loopx-finance-value-discovery --execute`；若只回退
 期次指标，删除可选字段并重新发布旧 view 即可。
 
+For an already published result, use the extension state file selected for
+that runtime (by default `~/.loopx/extensions/state.json`, or
+`<runtime-root>/extensions/state.json` with a custom runtime root) and the exact
+revision/hash reference from the Goal's result index:
+
+```bash
+loopx-finance-value-discovery render-lark-card \
+  --published-state-file extensions-state.json \
+  --goal-id example-goal \
+  --extension-revision EXACT_REVISION \
+  --payload-sha256 EXACT_PAYLOAD_SHA256
+```
+
+This reads through Core's existing projection reader, verifies the requested
+Goal, and includes the original source/version, publication and review dates,
+supersedes references, revision and payload digest. It does not rebuild the
+research, renew its review deadline or fall back to an input on failure. Wrong
+hashes, old revisions, another Goal, missing publication and disabled extensions
+fail before a card is returned. A missing review date stays `unknown`.
+`--surface-id` can select another declared Finance surface; the default is
+`investment-research`. The input and publication-reference modes are exclusive.
+
+中文：已发布成果使用原生状态文件与精确版本/摘要引用，卡片保留原 Goal、来源版本、
+复核期限和摘要；错误、停用或缺失时拒绝，不重建旧稿或延长时效。生成卡片仍不代表
+外部送达、读者采用或交易授权。旧 `--input-json` 入口继续兼容；停用仍用既有
+extension disable，回退用既有 `loopx extension rollback` 选择已保留版本。
+
 The Goal's **Files & Outputs** tab loads the published research only when
 opened. Chat and `serve-status` expose the same extension index and exact
 revision/hash readback. Only a public-safe view belonging to that Goal is
@@ -254,9 +280,12 @@ clocks, exact metric strings, counterevidence, event review conditions and
 artifact references, even when no source-period metrics exist. It rejects a
 research card exceeding 18,000 UTF-8 bytes rather than silently cutting its
 review basis. The existing source-period-only Python renderer remains available.
-For an exact published receipt, render its Core-validated `view` with
-`build_decision_research_lark_card`; rebuilding an input is not publication
-readback, and preparing a card is not sending or adopting a method.
+For an exact published receipt, use
+`build_published_decision_research_lark_card` or the publication-reference CLI
+above. `build_decision_research_lark_card(view)` remains a view-only renderer;
+rebuilding an input is not publication readback, and preparing a card is not
+sending or adopting a method. The same no-truncation limit includes the
+publication reference as well as the research text.
 
 中文：Goal 的“成果”页按需读取已发布的研究，绑定当前 Goal、扩展版本和内容摘要；
 读取失败或停用时清除旧内容。通知卡保留研究结论、反证、未知、原始时点和下一步，
