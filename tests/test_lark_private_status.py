@@ -35,6 +35,35 @@ def test_help_and_empty_steward_status_do_not_open_sessions_or_borrow_scope(ordi
         runtime.close()
 
 
+def test_unselected_project_status_does_not_read_or_expose_agent_cadence(  # noqa: F811
+    ordinary, monkeypatch  # noqa: F811
+):
+    store, runtime, provider, transport = connect(ordinary)
+    from loopx.control_plane import effect_runtime
+
+    actual = effect_runtime.effect_runtime_result
+
+    def observe(method, params, **kwargs):
+        if method == "quota.automation_cadence.manage":
+            pytest.fail("project status must not read an Agent cadence owner")
+        return actual(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", observe)
+    try:
+        transport.admit(
+            "notes-app", provider.event("notes-app", "project-status", "/status")
+        )
+        native = next(
+            row for row in transport.core.pending() if row["command"] == "status"
+        )
+        assert "automation_cadence" not in native["status_snapshot"]
+        assert transport.reconcile() == 1
+        assert "自动执行" not in provider.writes[-1][1]
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()
+
+
 def test_pending_status_readback_recovers_from_files_without_resending(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:

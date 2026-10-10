@@ -615,7 +615,7 @@
     },
     {
       "site": "loopx/cli_commands/automation_cadence.py::<module>.handle_automation_cadence_command::codec_read:load_registry#1",
-      "line": 63,
+      "line": 88,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",

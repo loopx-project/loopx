@@ -2,11 +2,36 @@
 
 from __future__ import annotations
 import argparse
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..history import load_registry
 from ..paths import resolve_runtime_root
+
+
+def _render_automation_cadence(result: dict[str, Any]) -> str:
+    eligibility = result["eligibility"]
+    next_at_ms = eligibility["next_eligible_at_ms"]
+    next_at = (
+        datetime.fromtimestamp(next_at_ms / 1_000, timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+        if next_at_ms is not None
+        else "none"
+    )
+    source_revisions = ", ".join(
+        str(source["revision"]) for source in result["sources"]
+    ) or "none"
+    return (
+        f"Automatic execution minimum: {result['min_interval_minutes']} minutes\n"
+        f"Configuration revision: {result['configuration_revision']}\n"
+        f"Source revisions: {source_revisions}\n"
+        f"Minimum-interval condition: {eligibility['state']} ({eligibility['reason']})\n"
+        f"Interval threshold time: {next_at}\n"
+        f"Enforcement: {result['enforcement']}\n"
+        "Host wake cadence and pre-model guarantees must be read back separately."
+    )
 
 
 def register_automation_cadence_command(subparsers: Any, add_format: Any) -> None:
@@ -99,11 +124,6 @@ def handle_automation_cadence_command(
     print_payload(
         result,
         output_format(args),
-        lambda v: (
-            f"Automatic execution minimum: {v['min_interval_minutes']} minutes\n"
-            f"Configuration revision: {v['configuration_revision']}\n"
-            f"Enforcement: {v['enforcement']}\n"
-            "Host wake cadence and pre-model guarantees must be read back separately."
-        ),
+        _render_automation_cadence,
     )
     return 0

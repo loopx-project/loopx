@@ -10,7 +10,7 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 15500` | `nested_keys <= 360` | `top_level_keys <= 52` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 15500` | `nested_keys <= 376` | `top_level_keys <= 54` |
 | `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 23000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
@@ -22,6 +22,14 @@ activation packet. The other payloads are measured before stdout formatting. JSO
 indentation and Markdown wrappers can make emitted output materially larger;
 the emitted-output qualification matrix below measures that separate boundary
 through the real CLI entry point.
+
+The M3 automatic-cadence readback raises the quota fixture from 357 to 368
+nested keys. The 11-key increase is one always-present, validated readback:
+Goal, Agent and automation scope, configuration revision, effective minimum and
+the owner's four-field eligibility union. The 376-key ceiling leaves eight keys
+of headroom. The same envelope moves the fixture from 51 to 52 top-level keys;
+the 54-key ceiling leaves two keys of headroom. The JSON-size ceiling does not
+change.
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact

@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
 import {normalizeProjectContext, normalizeStewardContext, normalizeStewardGoalScope} from "./conversation_scope.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
@@ -28,6 +29,41 @@ function sessionIdentity(value: unknown, label: string): string {
   const result = requireNonEmptyString(value, label);
   if (!/^[A-Za-z0-9._-]{1,160}$/.test(result)) throw new EffectRuntimeRequestError(`${label} is invalid`);
   return result;
+}
+
+function automationCadenceStatus(value: unknown, recipient: JsonObject): JsonObject {
+  const row = requireJsonObject(value, "automation cadence observation");
+  if (row.goal_id !== recipient.goal_id || row.agent_id !== recipient.agent_id || row.automation_id !== null) {
+    throw new EffectRuntimeRequestError("automation cadence observation belongs to another Agent scope");
+  }
+  const eligibility = requireAutomationCadenceEligibility(row.eligibility);
+  const unavailable = eligibility.state === "unavailable";
+  if (unavailable) {
+    if (row.configuration_revision !== null || row.min_interval_minutes !== null) {
+      throw new EffectRuntimeRequestError("unavailable automation cadence observation cannot claim policy values");
+    }
+  } else {
+    for (const [field, label] of [
+      ["configuration_revision", "automation cadence configuration revision"],
+      ["min_interval_minutes", "automation cadence minimum interval"],
+    ] as const) {
+      const number = requireInteger(row[field], label);
+      if (!Number.isSafeInteger(number) || number < 0) {
+        throw new EffectRuntimeRequestError(`${label} must be a non-negative safe integer`);
+      }
+    }
+    if (Number(row.min_interval_minutes) > 525600) {
+      throw new EffectRuntimeRequestError("automation cadence minimum interval exceeds one year");
+    }
+  }
+  return {
+    goal_id: recipient.goal_id,
+    agent_id: recipient.agent_id,
+    automation_id: null,
+    configuration_revision: unavailable ? null : Number(row.configuration_revision),
+    min_interval_minutes: unavailable ? null : Number(row.min_interval_minutes),
+    eligibility,
+  };
 }
 
 function agentTarget(value: unknown): JsonObject {
@@ -384,6 +420,14 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
       throw new EffectRuntimeRequestError("status Session context changed");
     }
   }
+  const statusCommand = requireJsonObject(params.request, "external request").command === "status";
+  const cadenceExpected = statusCommand && recipient !== null;
+  if ((params.automation_cadence !== undefined) !== cadenceExpected) {
+    throw new EffectRuntimeRequestError("automation cadence observation requires an exact selected Agent status");
+  }
+  const cadence = cadenceExpected
+    ? automationCadenceStatus(params.automation_cadence, recipient as JsonObject)
+    : null;
   if (!Number.isSafeInteger(params.queued_count) || Number(params.queued_count) < 0
       || (!current && params.queued_count !== 0)) throw new EffectRuntimeRequestError("invalid canonical queue observation");
   const instant = requireNonEmptyString(params.observed_at, "status observation time");
@@ -403,6 +447,7 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
     ...(selected.audience === "group" ? {audience: "group"} : {}),
     executor_endpoint_id: recipient?.executor_endpoint_id ?? selected.executor_endpoint_id, grant: selected.grant,
     ...(recipient ? {recipient_agent_id: recipient.agent_id, recipient_goal_id: recipient.goal_id, recipient_mode: "attached_host"} : {}),
+    ...(cadence ? {automation_cadence: cadence} : {}),
     authorized_commission_count: steward ? (selected.goal_ids as string[]).length : 0,
     session_status: current?.status ?? null, active_turn_status: turn?.status ?? null,
     active_turn_observation_available: !current?.active_turn_id || turn !== null,

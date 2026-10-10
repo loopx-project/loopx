@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from loopx.control_plane.quota import live_decision
+from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.quota import live_decision, should_run_packet
 from loopx.control_plane.quota.effect_program import ReceiptBoundReplayPhase
 from loopx.control_plane.effect_program import (
     interpret_quota_should_run_packet,
@@ -94,6 +96,32 @@ def _ordinary_status_payload() -> dict[str, object]:
         ],
         recommended_action=todo_text,
         next_action=todo_text,
+    )
+
+
+def _ordinary_agent_status_payload(agent_id: str) -> dict[str, object]:
+    todo_text = "[P1] Keep advancing the selected task."
+    return quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[
+            {
+                "todo_id": "todo_ordinary_work",
+                "index": 1,
+                "text": todo_text,
+                "role": "agent",
+                "status": "open",
+                "priority": "P1",
+                "task_class": "advancement_task",
+            }
+        ],
+        recommended_action=todo_text,
+        next_action=todo_text,
+        claim_scope_agent_id=agent_id,
+        coordination={
+            "registered_agents": [agent_id],
+            "agent_model": "peer_v1",
+        },
     )
 
 
@@ -188,6 +216,244 @@ def test_live_quota_decision_maps_to_effect_turn(tmp_path: Path) -> None:
     assert turn.interpretation.interaction_mode == "bounded_delivery"
     assert turn.next_effect.cli_actions
     assert turn.next_effect.cli_actions[0].startswith("loopx --runtime-root ")
+
+
+def _configure_automation_cadence(runtime_root: Path) -> dict[str, object]:
+    configured = effect_runtime_result(
+        "quota.automation_cadence.manage",
+        {
+            "runtime_root": str(runtime_root),
+            "operation": "configure",
+            "goal_id": GOAL_ID,
+            "agent_id": None,
+            "automation_id": None,
+            "expected_revision": 0,
+            "min_interval_minutes": 60,
+            "owner_reference": "fixture-owner",
+            "execute": True,
+        },
+        retry_safe=False,
+    )
+    assert configured["configuration_revision"] == 1
+    return configured
+
+
+def _configure_waiting_automation_cadence(
+    runtime_root: Path,
+    *,
+    agent_id: str,
+) -> int:
+    _configure_automation_cadence(runtime_root)
+    now_ms = int(time.time() * 1_000)
+    admitted = effect_runtime_result(
+        "quota.automation_cadence.admit",
+        {
+            "runtime_root": str(runtime_root),
+            "goal_id": GOAL_ID,
+            "agent_id": agent_id,
+            "automation_id": None,
+            "request_id": "fixture-first-start",
+            "now_ms": now_ms,
+            "trigger_at_ms": now_ms,
+        },
+        retry_safe=False,
+    )
+    assert admitted["admitted"] is True
+    return now_ms + 60 * 60 * 1_000
+
+
+def test_owner_cadence_wait_is_app_only_and_has_no_scheduler_side_effect(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    agent_id = "cadence-agent"
+    next_eligible_at_ms = _configure_waiting_automation_cadence(
+        runtime_root,
+        agent_id=agent_id,
+    )
+    status = _ordinary_agent_status_payload(agent_id)
+    app_context = {
+        "host_surface": "codex_app",
+        "scheduler_owner": "host_automation",
+        "execution_mode": "hosted_automation",
+    }
+
+    packet = build_live_quota_should_run_decision(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context=app_context,
+    )
+
+    assert packet["automation_cadence_readback"]["eligibility"] == {
+        "state": "waiting",
+        "reason": "minimum_interval_wait",
+        "eligible_now": False,
+        "next_eligible_at_ms": next_eligible_at_ms,
+    }
+    assert packet["decision"] == "wait"
+    assert packet["effective_action"] == "blocked_wait"
+    assert packet["should_run"] is False
+    assert packet["automation_liveness"]["keep_active"] is True
+    assert packet["interaction_contract"]["mode"] == "blocked_wait"
+    assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    scheduler = packet["scheduler_hint"]
+    assert scheduler["action"] == "backoff_until_state_change"
+    assert scheduler["app_automation"]["apply"] == "none"
+    assert scheduler["app_automation"]["host_action"] == "none"
+    assert scheduler["app_automation"]["host_action_required"] is False
+    assert scheduler["app_automation"]["ack_required"] is False
+    assert "ack_hint" not in scheduler["app_automation"]
+    assert "failure_hint" not in scheduler["app_automation"]
+    assert "recommended_rrule" not in scheduler["app_automation"]
+    assert "stateful_backoff" not in scheduler["app_automation"]
+    assert "execution_phase" not in scheduler
+    turn = interpret_quota_should_run_packet(
+        packet,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        capabilities=["shell"],
+    )
+    assert "automation_update" not in repr(turn.next_effect)
+    assert "scheduler ack" not in repr(turn.next_effect).lower()
+
+    generic = build_live_quota_should_run_decision(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context={
+            "host_surface": "generic_cli",
+            "scheduler_owner": "agent_cli_loop",
+            "execution_mode": "interactive",
+        },
+    )
+    assert generic["automation_cadence_readback"]["eligibility"]["state"] == "waiting"
+    assert generic["decision"] == "run"
+    assert generic["should_run"] is True
+
+    paused = build_live_quota_should_run_decision(
+        quota_status_payload(
+            goal_id=GOAL_ID,
+            status="active",
+            agent_todo_items=[],
+            recommended_action="wait for quota resume",
+            quota_state="paused",
+            quota_extra={"compute": 0},
+            claim_scope_agent_id=agent_id,
+            coordination={
+                "registered_agents": [agent_id],
+                "agent_model": "peer_v1",
+            },
+        ),
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context=app_context,
+    )
+    assert paused["automation_cadence_readback"]["eligibility"]["state"] == "waiting"
+    assert paused["state"] == "paused"
+    assert paused["decision"] == "skip"
+    assert paused["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+
+
+def test_owner_interval_eligibility_does_not_override_paused_quota(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    agent_id = "cadence-agent"
+    configured = _configure_automation_cadence(runtime_root)
+    assert configured["configuration_revision"] == 1
+
+    packet = build_live_quota_should_run_decision(
+        quota_status_payload(
+            goal_id=GOAL_ID,
+            status="active",
+            agent_todo_items=[],
+            recommended_action="wait for quota resume",
+            quota_state="paused",
+            quota_extra={"compute": 0},
+            claim_scope_agent_id=agent_id,
+            coordination={
+                "registered_agents": [agent_id],
+                "agent_model": "peer_v1",
+            },
+        ),
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context={
+            "host_surface": "codex_app",
+            "scheduler_owner": "host_automation",
+            "execution_mode": "hosted_automation",
+        },
+    )
+
+    assert packet["automation_cadence_readback"]["eligibility"]["state"] == "eligible"
+    assert packet["state"] == "paused"
+    assert packet["decision"] == "skip"
+    assert packet["should_run"] is False
+    assert packet["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+
+
+def test_cadence_read_failure_is_unknown_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_effect_runtime_result = should_run_packet.effect_runtime_result
+
+    def fail_cadence_read(method: str, params: object, **kwargs: object) -> object:
+        if method == "quota.automation_cadence.manage":
+            raise RuntimeError("private owner failure")
+        return real_effect_runtime_result(method, params, **kwargs)
+
+    monkeypatch.setattr(
+        should_run_packet,
+        "effect_runtime_result",
+        fail_cadence_read,
+    )
+    packet = build_live_quota_should_run_decision(
+        _ordinary_agent_status_payload("cadence-agent"),
+        goal_id=GOAL_ID,
+        agent_id="cadence-agent",
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        scheduler_execution_context={
+            "host_surface": "codex_app",
+            "scheduler_owner": "host_automation",
+            "execution_mode": "hosted_automation",
+        },
+    )
+
+    assert packet["automation_cadence_readback"]["eligibility"] == {
+        "state": "unavailable",
+        "reason": "owner_read_failed",
+        "eligible_now": None,
+        "next_eligible_at_ms": None,
+    }
+    assert packet["decision"] == "run"
+    assert packet["should_run"] is True
+    assert "private owner failure" not in repr(packet)
 
 
 @pytest.mark.parametrize("reads", [False, True])

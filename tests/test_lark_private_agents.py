@@ -10,7 +10,11 @@ from test_attached_session_broker import _registry, GOAL_ID, AGENT_ID, HOST_SURF
 from loopx.attached_session import bind_attached_agent_session, claim_attached_agent_turn, complete_attached_agent_turn
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
 from loopx.chat_store import _read_json
+from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.extensions.lark.private_conversation_api import PrivateConversationRequestMixin
+from loopx.presentation.renderers.conversation_status_markdown import (
+    render_conversation_status,
+)
 
 
 def target(fixture):
@@ -82,6 +86,203 @@ def test_private_agent_selection_preserves_original_host_session_and_original_ap
         assert send(provider, transport, "other-app", f"/agent {grant['target_ref']}", "steward-app")[0]["status"] == "command_rejected"
         denied = next(row for row in transport.core.pending() if row["source"]["sender_ref"] != first["source"]["sender_ref"])
         assert denied["status"] == "rejected"
+    finally:
+        runtime.close()
+
+
+def test_selected_agent_status_freezes_owner_cadence_and_replays_without_reread(  # noqa: F811
+    ordinary, monkeypatch  # noqa: F811
+):
+    store, runtime, provider, transport, _, _, grant = target(ordinary)
+    from loopx.control_plane import effect_runtime
+
+    actual = effect_runtime.effect_runtime_result
+    cadence_reads = []
+
+    def observe(method, params, **kwargs):
+        if method == "quota.automation_cadence.manage":
+            cadence_reads.append(dict(params))
+            return {
+                "schema_version": "automation_cadence_result_v1",
+                "ok": True,
+                "goal_id": GOAL_ID,
+                "agent_id": AGENT_ID,
+                "automation_id": None,
+                "configuration_revision": 4,
+                "min_interval_minutes": 60,
+                "eligibility": {
+                    "state": "waiting",
+                    "reason": "minimum_interval_wait",
+                    "eligible_now": False,
+                    "next_eligible_at_ms": 1791637200000,
+                },
+                "sources": [{"owner_reference": "must-not-leak"}],
+            }
+        return actual(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", observe)
+    try:
+        send(provider, transport, "select-cadence", f"/agent {grant['target_ref']}")
+        transport.reconcile()
+        result, event = send(provider, transport, "cadence-status", "/status")
+        assert result["status"] == "command_recorded"
+        assert cadence_reads == [{
+            "runtime_root": str(runtime.coordination_runtime_root),
+            "operation": "read",
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "automation_id": None,
+        }]
+        native = next(
+            row for row in transport.core.pending() if row["command"] == "status"
+        )
+        cadence = native["status_snapshot"]["automation_cadence"]
+        assert cadence["eligibility"]["state"] == "waiting"
+        assert cadence["eligibility"]["next_eligible_at_ms"] == 1791637200000
+        assert "owner_reference" not in json.dumps(native["status_snapshot"])
+
+        before = len(provider.writes)
+        assert transport.reconcile() == 1
+        assert len(provider.writes) == before + 1
+        assert "等待至 2026-10-10T13:00:00.000Z" in provider.writes[-1][1]
+        frozen = native["status_snapshot"]
+
+        assert transport.admit("notes-app", {**event, "event_id": "redelivery"})[
+            "status"
+        ] == "command_recorded"
+        restarted = type(transport)(
+            controller=runtime,
+            runtime_root=transport.runtime_root,
+            runner=provider,
+            cli_bin="lark-cli",
+        )
+        assert restarted.reconcile() == 1
+        assert len(cadence_reads) == 1
+        assert len(provider.writes) == before + 1
+        assert restarted.core.read_request(native["request_ref"])[
+            "status_snapshot"
+        ] == frozen
+        assert len(store.list_sessions()) == 1
+    finally:
+        runtime.close()
+
+
+def test_real_owner_interval_eligibility_does_not_override_stronger_status(  # noqa: F811
+    ordinary,  # noqa: F811
+):
+    _, runtime, provider, transport, _, _, grant = target(ordinary)
+    try:
+        configured = effect_runtime_result(
+            "quota.automation_cadence.manage",
+            {
+                "runtime_root": str(runtime.coordination_runtime_root),
+                "operation": "configure",
+                "goal_id": GOAL_ID,
+                "agent_id": None,
+                "automation_id": None,
+                "expected_revision": 0,
+                "min_interval_minutes": 60,
+                "owner_reference": "failed-session-regression",
+                "execute": True,
+            },
+            retry_safe=False,
+        )
+        assert configured["configuration_revision"] == 1
+
+        send(provider, transport, "select-failed-session", f"/agent {grant['target_ref']}")
+        transport.reconcile()
+        send(provider, transport, "failed-session-status", "/status")
+        native = next(
+            row for row in transport.core.pending() if row["command"] == "status"
+        )
+        assert (
+            native["status_snapshot"]["automation_cadence"]["eligibility"]["state"]
+            == "eligible"
+        )
+
+        for changes, expected in [
+            ({"session_status": "resume_failed"}, "会话恢复失败"),
+            (
+                {
+                    "active_turn_status": "running",
+                    "active_turn_observation_available": False,
+                },
+                "执行状态暂不可读",
+            ),
+        ]:
+            rendered = render_conversation_status(
+                {**native["status_snapshot"], **changes}
+            )
+            assert expected in rendered
+            assert "最小间隔条件已满足" in rendered
+            assert "当前可启动" not in rendered
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("failure", ["missing_root", "read_failed", "malformed", "mismatch"])
+def test_selected_agent_status_owner_failure_is_unknown_not_ready(  # noqa: F811
+    ordinary, monkeypatch, failure  # noqa: F811
+):
+    _, runtime, provider, transport, _, _, grant = target(ordinary)
+    from loopx.control_plane import effect_runtime
+
+    send(provider, transport, f"select-{failure}", f"/agent {grant['target_ref']}")
+    transport.reconcile()
+    actual = effect_runtime.effect_runtime_result
+    calls = []
+
+    def observe(method, params, **kwargs):
+        if method != "quota.automation_cadence.manage":
+            return actual(method, params, **kwargs)
+        calls.append(dict(params))
+        if failure == "read_failed":
+            raise OSError("private owner path")
+        result = {
+            "schema_version": "automation_cadence_result_v1",
+            "ok": True,
+            "goal_id": "another-goal" if failure == "mismatch" else GOAL_ID,
+            "agent_id": AGENT_ID,
+            "automation_id": None,
+            "configuration_revision": 1,
+            "min_interval_minutes": 60,
+            "eligibility": {
+                "state": "waiting",
+                "reason": "minimum_interval_wait",
+                "eligible_now": False,
+                "next_eligible_at_ms": 1791637200000,
+            },
+        }
+        if failure == "malformed":
+            result["eligibility"]["next_eligible_at_ms"] = None
+        return result
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", observe)
+    if failure == "missing_root":
+        monkeypatch.setattr(runtime, "coordination_runtime_root", None)
+    try:
+        send(provider, transport, f"status-{failure}", "/status")
+        native = next(
+            row for row in transport.core.pending() if row["command"] == "status"
+        )
+        cadence = native["status_snapshot"]["automation_cadence"]
+        assert cadence["eligibility"] == {
+            "state": "unavailable",
+            "reason": (
+                "runtime_root_unavailable"
+                if failure == "missing_root"
+                else "owner_read_failed"
+            ),
+            "eligible_now": None,
+            "next_eligible_at_ms": None,
+        }
+        assert cadence["configuration_revision"] is None
+        assert cadence["min_interval_minutes"] is None
+        assert len(calls) == (0 if failure == "missing_root" else 1)
+        transport.reconcile()
+        assert "不能据此判断可启动" in provider.writes[-1][1]
+        assert "当前可启动" not in provider.writes[-1][1]
+        assert "private owner path" not in provider.writes[-1][1]
     finally:
         runtime.close()
 

@@ -58,6 +58,16 @@ export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGo
   const reduction = validMinutes && directRule !== undefined && proposedMinutes < directRule.min_interval_minutes;
   const changed = proposedMinutes !== (directRule?.min_interval_minutes ?? 0);
   const canSave = Boolean(inspection && scopeReady && validMinutes && changed && !requiresRefresh && !busy);
+  const eligibilityLabel = inspection?.eligibility.state === "eligible"
+    ? t("cadence.eligibleNow")
+    : inspection?.eligibility.state === "waiting"
+      ? t("cadence.waiting")
+      : inspection?.eligibility.state === "unavailable"
+        ? t(inspection.eligibility.reason === "agent_scope_required" ? "cadence.agentScopeRequired" : "cadence.eligibilityUnavailable")
+        : t("cadence.eligibilityUnconfigured");
+  const nextEligibleIso = inspection?.eligibility.next_eligible_at_ms == null
+    ? null
+    : new Date(inspection.eligibility.next_eligible_at_ms).toISOString();
 
   function edit() { setNotice(null); }
 
@@ -117,6 +127,11 @@ export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGo
         <p>{directRule
           ? t("cadence.directSource", { minutes: directRule.min_interval_minutes, inherited: inheritedFloor })
           : scope === "goal" ? t("cadence.unconfigured") : t("cadence.inheritedSource", { minutes: inheritedFloor })}</p>
+        <div className="personal-cadence-eligibility" data-state={inspection.eligibility.state}>
+          <span>{t("cadence.eligibility")}</span><strong>{eligibilityLabel}</strong>
+          {nextEligibleIso ? <p>{t(inspection.eligibility.state === "waiting" ? "cadence.eligibleAt" : "cadence.eligibleSince")} <time dateTime={nextEligibleIso}>{nextEligibleIso}</time></p> : null}
+          <small>{t("cadence.revision", { revision: inspection.configuration_revision })}</small>
+        </div>
       </div>
       <div className="personal-cadence-fields personal-cadence-target">
         <label>{t("cadence.minimum")}<input aria-label={t("cadence.minimum")} disabled={Boolean(busy)} min={0} max={525600} onChange={(event) => { setMinutes(event.target.value); edit(); }} type="number" value={minutes} aria-invalid={!validMinutes} /><small>{t("cadence.zeroHint")}</small></label>

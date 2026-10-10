@@ -1,12 +1,37 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { promisify } from "node:util";
 
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
+
+const execFileAsync = promisify(execFile);
+
+async function admitCadenceStart(root, agentId) {
+  const { stdout } = await execFileAsync(resolveTestPython(), ["-c", `
+import json
+from pathlib import Path
+import sys
+import time
+from loopx.control_plane.effect_runtime import effect_runtime_result
+now_ms = int(time.time() * 1000)
+result = effect_runtime_result("quota.automation_cadence.admit", {
+    "runtime_root": str(Path(sys.argv[1]) / "runtime"),
+    "goal_id": "multi-agent-projection",
+    "agent_id": sys.argv[2],
+    "automation_id": None,
+    "request_id": "browser-cadence-start",
+    "now_ms": now_ms,
+    "trigger_at_ms": now_ms,
+}, retry_safe=False)
+print(json.dumps(result))
+`, root, agentId], { cwd: repoRoot });
+  return JSON.parse(stdout);
+}
 
 // The packaged UI writes to the actual HTTP handler and typed file authority.
 // Only the surrounding workspace directory remains the shared browser fixture.
@@ -200,6 +225,14 @@ export const automationCadenceScenario = {
       await panel.getByText("限定单个自动化", { exact: true }).click();
       const noteDetails = panel.locator("details[open]").filter({ hasText: "添加备注（可选）" });
       if (await noteDetails.count()) await noteDetails.locator("summary").click();
+      const admitted = await admitCadenceStart(authority.root, "codex-latest-lane");
+      if (!admitted.admitted) throw new Error("Cadence fixture start was not admitted");
+      const waiting = await read("codex-latest-lane");
+      const nextEligibleIso = new Date(waiting.eligibility.next_eligible_at_ms).toISOString();
+      await target.selectOption("goal");
+      await target.selectOption("agent:codex-latest-lane");
+      await panel.getByText("最小间隔条件尚未满足", { exact: true }).waitFor();
+      await panel.getByText(nextEligibleIso, { exact: true }).waitFor();
       const files = await readdir(resolve(authority.root, "runtime"), { recursive: true });
       const policyPath = files.find((file) => file.endsWith(".json"));
       const stored = JSON.parse(await readFile(resolve(authority.root, "runtime", policyPath), "utf8"));
@@ -214,13 +247,15 @@ export const automationCadenceScenario = {
       await page.getByRole("button", { name: "Automatic execution interval", exact: true }).click();
       await page.getByLabel("Applies to", { exact: true }).selectOption("agent:codex-latest-lane");
       await page.getByText("This scope: 10 min · inherited minimum: 0 min.", { exact: true }).waitFor();
+      await page.getByText("Minimum interval not yet satisfied", { exact: true }).waitFor();
+      await page.getByText(nextEligibleIso, { exact: true }).waitFor();
       await page.getByLabel("Minimum interval (minutes)", { exact: true }).fill("20");
       if (!await page.getByRole("button", { name: "Save", exact: true }).isEnabled()) throw new Error("English Save required a note");
       await page.screenshot({ path: resolve(outputDir, "desktop-automation-cadence-english.png"), animations: "disabled" });
       const unexpected = errors.filter((error) => !error.includes("409 (Conflict)"));
       if (unexpected.length) throw new Error(`Browser errors: ${unexpected.join(" | ")}`);
       await checkpointCoverage();
-      return { coverageEntries: await context.close(), note: "Packaged Save → real HTTP/TS file authority: optional notes, one commit on duplicate submit, explicit reduction, inheritance and peer isolation, stale CAS rejection, unverified-readback recovery, keyboard and mobile verified. Codex timers remain separately configured." };
+      return { coverageEntries: await context.close(), note: "Packaged Save → real HTTP/TS file authority: optional notes, one commit on duplicate submit, explicit reduction, inheritance and peer isolation, stale CAS rejection, unverified-readback recovery, exact owner waiting timestamp, English/Chinese, keyboard and mobile verified. App timers remain unchanged." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "automation-cadence-failure.png"), animations: "disabled" }).catch(() => {});

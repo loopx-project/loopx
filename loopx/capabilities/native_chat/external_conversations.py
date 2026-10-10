@@ -6,6 +6,7 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -13,6 +14,10 @@ from typing import Any
 
 from ...chat_store import _atomic_write_json, _read_json
 from ...chat_attachments import normalize_chat_image_attachments
+from ...control_plane.quota.automation_cadence_readback import (
+    automation_cadence_readback,
+    unavailable_automation_cadence_readback,
+)
 from ...file_lock import exclusive_file_lock
 
 
@@ -32,6 +37,51 @@ class ChatExternalConversations:
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self.actions: Any | None = None
+
+    def _automation_cadence_observation(
+        self, target: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Read the owner once for the exact selected Agent status scope."""
+
+        goal_id = str(target["goal_id"])
+        agent_id = str(target["agent_id"])
+        runtime_root = getattr(self.controller, "coordination_runtime_root", None)
+        if not runtime_root:
+            return unavailable_automation_cadence_readback(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                automation_id=None,
+                reason="runtime_root_unavailable",
+            )
+        try:
+            from ...control_plane.effect_runtime import effect_runtime_result
+
+            owner_result = effect_runtime_result(
+                "quota.automation_cadence.manage",
+                {
+                    "runtime_root": str(runtime_root),
+                    "operation": "read",
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "automation_id": None,
+                },
+                retry_safe=True,
+            )
+            if not isinstance(owner_result, Mapping):
+                raise ValueError("automation cadence owner result must be an object")
+            return automation_cadence_readback(
+                owner_result,
+                expected_goal_id=goal_id,
+                expected_agent_id=agent_id,
+                expected_automation_id=None,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return unavailable_automation_cadence_readback(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                automation_id=None,
+                reason="owner_read_failed",
+            )
 
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
@@ -137,6 +187,8 @@ class ChatExternalConversations:
                 "queued_count": len(controller.store.queued_turns(current["session_id"])) if current else 0,
                 "active_turn": ({key: value for key, value in controller.store.load_turn(current["session_id"], active_id).items()
                     if key != "attachments"} if active_id else None)}
+            if row["command"] == "status" and target:
+                observations["automation_cadence"] = self._automation_cadence_observation(target)
         # Routing needs presence, not private image bytes. Persisted attachments
         # remain in the native request/Turn and never enter the effect bridge.
         plan = effect_runtime_result("collaboration.conversation.request", {

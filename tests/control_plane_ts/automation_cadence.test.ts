@@ -4,7 +4,71 @@ import {mkdtemp, mkdir, rm, readFile, writeFile, readdir} from "node:fs/promises
 import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
 import {execFileSync} from "node:child_process";
-import {admitAutomationStart as admit, cadenceStorePath, confirmAutomationStart as confirm, manageAutomationCadence as manage, projectCadenceProgression as progression} from "../../loopx/control_plane/quota/automation_cadence.ts";
+import {admitAutomationStart as admit, cadenceStorePath, confirmAutomationStart as confirm, manageAutomationCadence as manage, projectCadenceProgression as progression, requireAutomationCadenceEligibility} from "../../loopx/control_plane/quota/automation_cadence.ts";
+
+test("owner projects lane-safe eligibility without changing legacy aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cadence-readback-"));
+  const originalNow = Date.now;
+  const scope = {runtime_root: root, goal_id: "fixture", agent_id: "a", automation_id: null};
+  try {
+    Date.now = () => 1000;
+    const unconfigured = await manage({...scope, operation: "read"});
+    assert.deepEqual(unconfigured.eligibility, {
+      state: "unconfigured", reason: "unconfigured",
+      eligible_now: null, next_eligible_at_ms: null,
+    });
+    assert.equal(unconfigured.eligible_now, true);
+
+    await manage({...scope, agent_id: null, operation: "configure", expected_revision: 0,
+      min_interval_minutes: 60, owner_reference: "owner-request", execute: true});
+    const goal = await manage({...scope, agent_id: null, operation: "read"});
+    assert.deepEqual(goal.eligibility, {
+      state: "unavailable", reason: "agent_scope_required",
+      eligible_now: null, next_eligible_at_ms: null,
+    });
+    assert.equal(goal.eligible_now, true);
+
+    const ready = await manage({...scope, operation: "read"});
+    assert.deepEqual(ready.eligibility, {
+      state: "eligible", reason: "owner_minimum_interval",
+      eligible_now: true, next_eligible_at_ms: null,
+    });
+
+    await admit({...scope, request_id: "first", now_ms: 1000, trigger_at_ms: 1000});
+    Date.now = () => 1000 + 3_600_000 - 1;
+    const waiting = await manage({...scope, operation: "read"});
+    assert.deepEqual(waiting.eligibility, {
+      state: "waiting", reason: "minimum_interval_wait",
+      eligible_now: false, next_eligible_at_ms: 1000 + 3_600_000,
+    });
+    Date.now = () => 1000 + 3_600_000;
+    assert.deepEqual((await manage({...scope, operation: "read"})).eligibility, {
+      state: "eligible", reason: "owner_minimum_interval",
+      eligible_now: true, next_eligible_at_ms: 1000 + 3_600_000,
+    });
+  } finally {
+    Date.now = originalNow;
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("eligibility decoder rejects impossible public states", () => {
+  assert.deepEqual(requireAutomationCadenceEligibility({
+    state: "waiting", reason: "minimum_interval_wait",
+    eligible_now: false, next_eligible_at_ms: 42,
+  }), {
+    state: "waiting", reason: "minimum_interval_wait",
+    eligible_now: false, next_eligible_at_ms: 42,
+  });
+  assert.throws(() => requireAutomationCadenceEligibility({
+    state: "waiting", reason: "minimum_interval_wait",
+    eligible_now: false, next_eligible_at_ms: null,
+  }), /next eligible/);
+  assert.throws(() => requireAutomationCadenceEligibility({
+    state: "eligible", reason: "owner_minimum_interval",
+    eligible_now: false, next_eligible_at_ms: null,
+  }), /eligible now/);
+});
 
 test("owner floor inherits without changing another agent; reductions and concurrent writes require authority", async () => {
   const root = await mkdtemp(join(tmpdir(), "cadence-"));
