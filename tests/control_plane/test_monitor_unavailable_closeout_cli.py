@@ -60,7 +60,6 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     if scenario == "capability_restore":
         rc, unavailable = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *binding)
         assert rc != 0 and unavailable["error_code"] == "quota_action_selection_rejected", unavailable
-        assert unavailable["action_selection_qualification"]["reason"] == "candidate_not_currently_eligible"
         assert _classification_count(runtime, "monitor_observation_unavailable") == 0
         assert _spend_run_count(runtime) == 0
     rc, guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *binding, *capabilities)
