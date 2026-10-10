@@ -554,11 +554,10 @@ export function resumeConditionHasKnownPendingTarget(condition: JsonObject, wait
     case "capacity_available": return condition.provider_required === false
       && condition.provider === "runtime_available_capabilities" && condition.capability === spec.target;
     case "pr_merged": {
-      const ref = normalizedPrRef(spec.target);
-      const repository = ref?.repo ?? githubRepository(waitingTodo.task_repository);
-      return ref !== null && repository !== null && condition.pr_repo === repository
-        && condition.pr_number === ref.number && condition.repository_binding_state !== "ambiguous"
-        && condition.repository_binding_source === (ref.repo ? "qualified_resume_when" : "task_repository");
+      // Binding identifies what to observe; absence of a merge event does not
+      // establish that GitHub is still pending. Match blocked-wait settlement:
+      // only a registered causal monitor/Todo can relax delivery supervision.
+      return false;
     }
     case "resume_at": {
       const scheduled = resumeTimestamp(spec.target);

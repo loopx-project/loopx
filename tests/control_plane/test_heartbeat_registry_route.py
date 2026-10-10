@@ -67,6 +67,16 @@ def test_prompt_and_recovery_commands_keep_explicit_route(tmp_path, mode):
         _route(error[key], registry, runtime)
 
 
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+def test_external_poll_opt_out_keeps_prequota_out_of_every_host_prompt(tmp_path, mode):
+    payload = build_heartbeat_prompt(goal_id="route-fixture", registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime", agent_id="worker-a", registered_agents=["worker-a"],
+        available_capabilities=["filesystem_read", "filesystem_write", "shell"],
+        runtime_profile="codex_app_heartbeat", **{mode: True})
+    assert "heartbeat-prequota" not in payload["task_body"]
+    assert payload.get("pr_review_pre_quota_command") is None
+
+
 def _execute(argv: list[str], cwd: Path):
     env = dict(os.environ, PYTHONPATH=str(cli.REPO_ROOT))
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *argv],
