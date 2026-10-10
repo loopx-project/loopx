@@ -224,19 +224,25 @@ D1 分别研究目标关系与证据增量。保留必要前置、合理阻塞�
 行为。可选评估不可用时，必要的确定性检查仍生效。除检测延迟外，还要测量对合法
 工作的误干预与漏报。告警和从未告警的记录都要抽查；只审查告警记录无法估计漏报。
 
-源码在 `44931b6d22a50b949d43354e6ea498fb6b68d231` 复核：可选
-`packages/loopx-jev` capture 读取声明文件集合及净变化，不观察每条中间断言。
-核心 [`external_progress_review_trigger`](../../../loopx/control_plane/work_items/external_progress_review.py)
-消费身份可归属、评估版本已固定的回执。`assist` 可把合格连续信号转为既有 replan
-义务；较新的已完成、未触发 verdict 可以结束该连续信号。这是当前信号政策，不是
-业务正确证明。[progress-review 合同](../../../loopx/capabilities/progress_review/README.zh-CN.md)
-继续拥有 off/shadow/assist 兼容性。修改组合信号或解除政策须明确披露并提供反例，
-本设计不隐式改变当前行为。
+本地候选实现通过
+[`progress_review_evidence.ts`](../../../loopx/control_plane/work_items/progress_review_evidence.ts)
+绑定显式选中的规范任务 criterion。可选观察器的 `acceptance_scope` 读取既有验收
+owner；私有 registry/runtime 引用不进入模型请求。手写 basis 仍为 `operator_study`。
+回执声明选中文件的净变化覆盖；采集与核心回执解码共用 Goal/Agent/Todo 身份约束，
+不匹配时拒绝模型派发及漂移消费。核心读回也把新 canonical binding 与当前 criterion
+复核；依据变化或不可用时撤回该回执信号，不改历史。旧回执兼容性与默认关闭隔离
+保持原合同。
 
-后续连接[共享工作中的证据失效](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#38-失效证据与受影响消费者)
+打包能力编辑器分别展示目标关系与证据增量、criterion 来源、覆盖范围及过期／缺失／
+不可用状态，提供显式刷新。`off_goal` 加 `new_evidence` 不被改写为符合目标；组合
+信号未触发仍遵循原连续段政策。File/SQLite 下规范 criterion 编辑及真实 HTTP／界面
+流程已做本地验证；未开展新的真实模型质量实验或自动干预。见
+[能力合同](../../../loopx/capabilities/progress_review/README.zh-CN.md)与
+[观察器指南](../../../packages/loopx-jev/DRIFT_SHADOW.zh-CN.md)。
+
+这些观察衔接[共享工作中的证据失效](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#38-失效证据与受影响消费者)
 与[恢复资格](composable-state-machines-recovery-verification-v0.zh-CN.md#检测控制与恢复证据)。
-优先把现有 verifier 结果与依赖读回接到这些 owner；增加模型推理仍取决于第 6 节
-比较，不能成为修复已证实确定性缺口的前置条件。
+增加模型推理仍取决于第 6 节比较，不能成为修复已证实确定性缺口的前置条件。
 
 ### 5.3 提供方事实与延后机制
 

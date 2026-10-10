@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import postcss from "postcss";
 
 /**
  * Contract for the font and monospace tokens the Dashboard stylesheets reference.
@@ -23,17 +24,28 @@ const loopxModeStyles = readFileSync(new URL("./goal-loopx-mode.css", import.met
 const collaborationStyles = readFileSync(new URL("./collaboration-card.css", import.meta.url), "utf8");
 const deliveryStyles = readFileSync(new URL("./delivery-review.css", import.meta.url), "utf8");
 
-// The two font tokens exist, and the body face is expressed through the sans token.
-assert.match(
-  dashboardStyles,
-  /--font-sans:\s*\n?\s*"Geist Variable", "Geist", Inter,/,
-  "The sans token is defined from the Geist Variable family",
-);
-assert.match(
-  dashboardStyles,
-  /--font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace,/,
-  "The mono token is defined from the Geist Mono family with platform fallbacks",
-);
+// Tokens must be defined at the root, with Geist first and the approved CJK
+// families available before the final generic fallback.
+function assertFontTokens(source) {
+  const tokens = new Map();
+  postcss.parse(source).walkRules(":root", (rule) => {
+    rule.walkDecls(/^--font-(sans|mono)$/, (decl) => tokens.set(decl.prop, decl.value));
+  });
+  for (const [name, prefix, generic] of [
+    ["--font-sans", /^"Geist Variable",\s*"Geist",/, "sans-serif"],
+    ["--font-mono", /^"Geist Mono Variable",\s*"Geist Mono",\s*ui-monospace,/, "monospace"],
+  ]) {
+    const value = tokens.get(name);
+    assert.ok(value, `${name} must be defined on :root`);
+    assert.match(value, prefix, `${name} leads with the canonical Geist family`);
+    assert.match(
+      value,
+      new RegExp(`"PingFang SC",\\s*"Microsoft YaHei",\\s*"Noto Sans CJK SC",[\\s\\S]*\\b${generic}$`),
+      `${name} includes the approved CJK fallbacks before the generic family`,
+    );
+  }
+}
+assertFontTokens(dashboardStyles);
 assert.match(
   dashboardStyles,
   /font-family: var\(--font-sans\)/,
@@ -54,10 +66,23 @@ assert.ok(
   "Operator credential status resolves through the mono token, not a misspelled private one",
 );
 
-// Where a fallback is given, it must be the same family — a bare `monospace`
+// Goal code/evidence uses the defined shared token through either font syntax.
+function assertGoalMonoSurfaces(source) {
+  const stylesheet = postcss.parse(source);
+  for (const selector of [".goal-team-work code", ".goal-team-evidence pre", ".goal-team-results pre"]) {
+    let font;
+    stylesheet.walkRules(selector, (rule) => {
+      rule.walkDecls(/^(font|font-family)$/, (decl) => { font = decl.value; });
+    });
+    assert.ok(font, `${selector} declares its code font`);
+    assert.match(font, /var\(--font-mono(?:\s*,|\s*\))/, `${selector} resolves through the shared mono token`);
+  }
+}
+assertGoalMonoSurfaces(loopxModeStyles);
+
+// Where an optional fallback is given, it must be the same family — a bare `monospace`
 // keyword would quietly render a different face from every other code surface.
 const fallbacks = [...loopxModeStyles.matchAll(/var\(--font-mono,\s*([^)]*)\)/g)].map((match) => match[1]);
-assert.ok(fallbacks.length > 0, "Goal LoopX mode keeps an explicit mono fallback");
 for (const fallback of fallbacks) {
   assert.match(
     fallback,
@@ -65,6 +90,17 @@ for (const fallback of fallbacks) {
     `The mono fallback names the Geist Mono family rather than a bare keyword: ${fallback}`,
   );
 }
+
+// A missing root token or a code declaration changed to sans must fail even
+// when every other font declaration remains valid.
+assert.throws(
+  () => assertFontTokens(dashboardStyles.replace(/--font-mono\s*:[^;]+;/, "")),
+  /--font-mono must be defined on :root/,
+);
+assert.throws(
+  () => assertGoalMonoSurfaces(loopxModeStyles.replace(/var\(--font-mono\)/g, "var(--font-sans)")),
+  /resolves through the shared mono token/,
+);
 
 // The private token names that had *bare* references and no definition must not
 // come back. `--pw-surface` is deliberately not listed: it stays valid as an

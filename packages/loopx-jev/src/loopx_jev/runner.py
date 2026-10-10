@@ -31,6 +31,7 @@ def read_basis(
         "horizon",
         "evidence",
         "already_known",
+        "acceptance_scope",
     }
     if not isinstance(manifest, dict) or set(manifest) - allowed:
         raise ValueError("unknown basis fields")
@@ -85,15 +86,60 @@ def read_basis(
             }
         )
         checks.append((target, digest))
+    from loopx.control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRejected
+
+    scope = manifest.get("acceptance_scope")
+    def criterion_basis():
+        requirements = None
+        requested = None
+        if scope is not None:
+            from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
+            if not isinstance(scope, dict) or set(scope) != {
+                "registry_ref", "runtime_ref", "agent_id", "todo_id", "criterion_ids"
+            }:
+                raise ValueError("explicit current task acceptance scope required")
+            def local_reference(key):
+                value = scope[key]
+                if not isinstance(value, str) or not value:
+                    raise ValueError("local acceptance reference required")
+                relative = Path(value)
+                target = workspace / relative
+                if relative.is_absolute() or ".." in relative.parts or target.is_symlink() or not target.resolve().is_relative_to(workspace.resolve()):
+                    raise ValueError("acceptance reference escapes the selected workspace")
+                return target
+            current = inspect_goal_acceptance(registry_path=local_reference("registry_ref"),
+                runtime_root=str(local_reference("runtime_ref")), goal_id=manifest.get("goal_id"),
+                agent_id=scope["agent_id"], todo_id=scope["todo_id"])
+            requirements = current.get("completion_requirements")
+            if requirements is None:
+                raise ValueError("current task has no canonical acceptance criteria")
+            requested = scope["criterion_ids"]
+        try:
+            return effect_runtime_result("progress_review.criterion_basis", {
+                "acceptance": manifest["acceptance"], "requirements": requirements, "criterion_ids": requested,
+                "goal_id": manifest.get("goal_id"), "agent_id": scope.get("agent_id") if scope else None,
+            })
+        except EffectRuntimeRejected as exc:
+            # Older independently installed cores still support manual studies.
+            # Keep their legacy shape; never fabricate a canonical binding or
+            # bypass a current core's validation/IO failure.
+            if scope is None and exc.diagnostic_code == "unsupported_method":
+                return {"acceptance": manifest["acceptance"]}
+            raise
+    selected = criterion_basis()
     basis = {
         **manifest,
         "evidence": observations,
         "basis_origin": "explicit_operator_study_basis_not_completion_authority",
+        "acceptance": selected["acceptance"],
+        **({"criterion_binding": selected["binding"]} if "binding" in selected else {}),
     }
 
     def current() -> bool:
         try:
             if read_json(path, 32768)[1] != manifest_hash:
+                return False
+            if scope is not None and criterion_basis() != selected:
                 return False
             for target, digest in checks:
                 if target.is_symlink() or not target.resolve().is_relative_to(
@@ -105,7 +151,7 @@ def read_basis(
                 if len(raw) > 32768 or hashlib.sha256(raw).hexdigest() != digest:
                     return False
             return True
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
             return False
 
     return basis, current

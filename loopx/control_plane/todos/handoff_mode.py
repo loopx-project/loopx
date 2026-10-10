@@ -93,7 +93,7 @@ def _resolve_state(
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> tuple[Path | None, Path]:
-    from ...todos import resolve_todo_state_path
+    from .path_resolution import resolve_todo_state_path
 
     return resolve_todo_state_path(
         registry_path=registry_path,
@@ -187,7 +187,7 @@ def enter_added_todo_ownership_handoff_gate(
     ``todo update --claimed-by``, which is the verb that owns that action.
     """
 
-    from ...todos import matching_todo_block  # loopx.todos, deferred: import cycle
+    from .addition import matching_todo_block
     from .active_state_editing import section_bounds
 
     bounds = section_bounds(lines, role)

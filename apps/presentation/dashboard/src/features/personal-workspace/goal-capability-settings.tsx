@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Code2, LoaderCircle, RefreshCw } from "lucide-react";
 
 import {
@@ -273,6 +273,33 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
         {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
           description={readOnlyReason} />}
 
+        {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
+          <h3>{locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}</h3>
+          <button type="button" onClick={onApplied}>{locale === "zh-CN" ? "重新读取审查证据" : "Recheck review evidence"}</button>
+          <p>{selected.observation.read_state === "unavailable" ? (locale === "zh-CN" ? "审查存储不可读，当前判断未知。" : "Review storage unavailable; current judgment unknown.")
+            : selected.observation.read_state === "missing" ? (locale === "zh-CN" ? "尚无审查回执。" : "No review receipts yet.")
+            : `${selected.observation.receipt_count} ${locale === "zh-CN" ? "条已读取回执" : "loaded receipts"}`}</p>
+          <p>{locale === "zh-CN" ? "过期 / 拒收" : "Stale / rejected"}: {selected.observation.stale_receipts} / {selected.observation.rejected_receipts}</p>
+          {selected.observation.latest ? <>
+            <p>{locale === "zh-CN" ? "最新审查" : "Latest review"}: {selected.observation.latest.status}</p>
+            <p>{locale === "zh-CN" ? "与目标的关系" : "Relation to goal"}: {selected.observation.latest.judgments.choice?.relation ?? "unknown"}</p>
+            <p>{locale === "zh-CN" ? "新证据增量" : "Evidence increment"}: {selected.observation.latest.judgments.choice?.increment ?? "unknown"}</p>
+            {selected.observation.latest.evidence_scope ? <>
+              <p>{selected.observation.latest.evidence_scope.criterion_binding.origin === "goal_acceptance"
+                ? (locale === "zh-CN" ? "绑定任务的规范验收条款" : "Bound to canonical task acceptance criteria")
+                : (locale === "zh-CN" ? "依据操作者研究条款；不证明规范验收关联" : "Operator study basis; canonical acceptance binding is unverified")}</p>
+              {selected.observation.latest.criterion_current === false ? <p role="alert">{locale === "zh-CN" ? "条款或任务关联已变化，旧判断不可作为当前依据。" : "Criteria or task binding changed; the old judgment is unavailable for current use."}</p> : null}
+              <p>{locale === "zh-CN" ? "仅观察声明文件在两个检查点之间的净变化" : "Observed only the net change of declared files between two checkpoints"}</p>
+              <details><summary>{locale === "zh-CN" ? "观察范围与条款版本" : "Observed scope and criterion version"}</summary>
+                <code>{selected.observation.latest.evidence_scope.criterion_binding.criteria_sha256}</code>
+                <p>{selected.observation.latest.evidence_scope.criterion_binding.criterion_ids?.join(", ")}</p>
+                <p>{selected.observation.latest.evidence_scope.files.join(", ")}</p>
+              </details>
+            </> : <p>{locale === "zh-CN" ? "旧回执未记录所选条款及文件覆盖范围。" : "Legacy receipt did not record selected criteria or file coverage."}</p>}
+          </> : null}
+          <p>{locale === "zh-CN" ? "此观察不证明任务完成；未命中漂移条件也不等于工作符合目标。" : "This observation does not prove completion; a drift condition not met does not establish on-goal work."}</p>
+        </section> : null}
+
         {localizedSelected.capability_id === "lark_event_inbox" ? (
           <section className="personal-capability-linked-setting">
             <div>
@@ -361,18 +388,23 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
   const [inspection, setInspection] = useState<GoalConfigurationInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const readGeneration = useRef(0);
 
   function load() {
     if (!goalId) return;
+    const generation = ++readGeneration.current;
     setLoading(true);
     setError(null);
+    // Withdraw the previous observation during a recheck; preserve navigation.
+    setInspection(current => current ? {...current, capability_catalog: {...current.capability_catalog,
+      capabilities: current.capability_catalog.capabilities.map(item => item.observation ? {...item, observation: undefined} : item)}} : null);
     void fetchGoalConfiguration(goalId)
-      .then(setInspection)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed")))
-      .finally(() => setLoading(false));
+      .then(value => {if (generation === readGeneration.current) setInspection(value);})
+      .catch((reason: unknown) => {if (generation === readGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed"));})
+      .finally(() => {if (generation === readGeneration.current) setLoading(false);});
   }
 
-  useEffect(load, [goalId]);
+  useEffect(() => {setInspection(null); load(); return () => {readGeneration.current++;};}, [goalId]);
 
   if (!goalId) {
     return <p className="personal-capability-empty">{t("capabilities.chooseGoal")}</p>;

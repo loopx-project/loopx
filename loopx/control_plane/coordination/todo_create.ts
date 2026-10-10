@@ -33,6 +33,7 @@ export interface CoordinationTodoCreateInput {
   readonly registered_agents: readonly string[];
   readonly operation_id: string;
   readonly dry_run: boolean;
+  readonly expected_provider_revision?: string;
   readonly now: Date;
 }
 
@@ -79,6 +80,9 @@ function normalizeCreateInput(rawInput: CoordinationTodoCreateInput,
   }
   if (!(input.now instanceof Date) || Number.isNaN(input.now.valueOf())) {
     throw new AuthorityStoreProtocolError("now must be a valid Date");
+  }
+  if (input.expected_provider_revision !== undefined) {
+    requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision");
   }
   if (todo.status === "done" || todo.archive_state !== "active") {
     throw new AuthorityStoreProtocolError(
@@ -223,6 +227,8 @@ export async function executeCoordinationTodoCreate(
     todo: input.todo,
     actor_agent_id: input.actor_agent_id,
     dry_run: input.dry_run,
+    ...(input.expected_provider_revision === undefined ? {} :
+      {expected_provider_revision: input.expected_provider_revision}),
   });
   const receipt = createReceipt(input, requestSha);
   const existing = await receipt.read(store);
@@ -234,6 +240,13 @@ export async function executeCoordinationTodoCreate(
   const head = observation.authority;
   if (head.status !== "loaded") {
     return {schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA, ...head};
+  }
+  // Bind the caller's reviewed head before planning; commitCreate retains the
+  // same head in the provider CAS. Historical receipt recovery above wins.
+  if (input.expected_provider_revision !== undefined &&
+      input.expected_provider_revision !== head.provider_revision) {
+    return failure("provider_revision_mismatch", "Current revision changed; inspect again before continuing",
+      {current_provider_revision: head.provider_revision});
   }
   let projection: ReturnType<typeof indexCoordinationProjection>;
   try {

@@ -170,20 +170,28 @@ D1–D3；先完成 Host 生命周期、
 ## Recover a canonical Todo edit with retained lease history
 
 A canonical Todo can retain a released or expired lease even in `legacy` mode.
-That record preserves execution lineage: `todo update` still requires a current
-active owner proof. `handoff_mode_requires_lease` does **not** mean that the Goal
+In `legacy` and `hard_lease`, that record preserves execution lineage: `todo update`
+still requires a current active owner proof. In `soft_claim`, an open agent Todo's
+current claim owner may edit text/notes or clear those fields without proof when
+its retained lease is released and held by the same owner. The transaction keeps
+the lease, epoch and historical receipts unchanged and still checks actor,
+exclusion, binding and provider CAS. This does not authorize ownership, planning,
+work-requirement or completion changes. `handoff_mode_requires_lease` does **not** mean that the Goal
 has silently switched to `hard_lease`.
 
 Lease-proof rejections of canonical metadata edits now include the actual `handoff_mode` and a
 read-only `recovery` projection. It contains no execution key and grants no
-permission. The original rejection code and all fences remain unchanged:
+permission. Explicit old or partial proof is still rejected; for the qualifying
+soft-claim copy edit, recovery tells the caller to retry without both proof flags
+under a fresh operation and current revision. Other execution fences remain:
 
 | Observation | Recovery |
 | --- | --- |
 | Active lease held by the current claim owner; missing/stale proof | Inspect the lease and retry using its current proof. Do not acquire a competing execution. |
 | Released/expired lease; current owner is eligible and acquisition passes the current mode, acceptance and scope checks | Inspect the version, acquire a short lease with a fresh key, update using the returned proof, then release it. |
 | Active foreign holder, divergent claim, or absent claim | Reconcile ownership through its lifecycle; never borrow another holder's proof. |
-| `soft_claim`, non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
+| `soft_claim` with released same-owner history, ordinary owner copy edit | Omit lease proof; keep the history. No replacement lease is needed or allowed. |
+| Non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
 | Edit changes retained leased work requirements or status | Use the owning lifecycle transition; acquiring another lease cannot authorize the metadata edit. |
 
 The recovery descriptor uses the standalone `loopx task-lease acquire` command.
@@ -202,8 +210,14 @@ the configured mode, promote a provider, or waive acceptance.
 
 ### 保留租约历史时的更新恢复
 
-canonical Todo 在 `legacy` 模式下也可能保留 released／expired lease。它记录的是
-执行世代，不能因为过期或已释放就绕过写入 fence。`handoff_mode_requires_lease`
+canonical Todo 在 `legacy` 模式下也可能保留 released／expired lease。legacy 与
+hard_lease 仍要求当前有效 owner proof。soft_claim 下，open Agent Todo 的当前
+claim owner 可不带 proof 编辑文本／备注或清空这些字段，前提是保留的 lease 已释放
+且同属本人。事务保留 lease、epoch 和原回执，仍核验 actor、excluded、bound 和
+provider CAS；这不授权 ownership、planning、工作要求或完成变更。未释放的 active
+lease 即使自然过期，也不适用。显式旧 proof 或部分 proof 仍拒绝；合法普通编辑的
+恢复提示要求去掉两个 proof flag，用新 operation 和当前 revision 重试。
+`handoff_mode_requires_lease`
 不表示 Goal 已自动切成 `hard_lease`；拒绝结果会返回真实 mode 与只读 `recovery`。
 
 有效的本主租约应 inspect 后使用当前 proof 重试；已释放或过期的租约，只有当前
@@ -211,7 +225,7 @@ claim owner 满足相同的 acquire 准入规则时，才提示“inspect versio
 申请短 lease → 带新 proof 更新 → release”。legacy 必须用独立 `task-lease acquire`，
 不能用仅限 hard_lease 的合并式 claim+lease。
 
-异主有效 lease、claim 不一致、soft_claim、不允许执行的 Todo、验收阻塞或 scope
+异主有效 lease、claim 不一致、不允许执行的 Todo、验收阻塞或 scope
 冲突不会得到不可执行的 acquire 建议；修改已租用工作的要求或状态须走对应 lifecycle。
 提示不包含 execution key、不授予权限，也不修改 mode 或 provider。并发造成 version
 变化时重新读取，不能绕过 CAS；dry-run 和拒绝路径不产生 Todo 或租约写入。
