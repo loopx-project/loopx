@@ -101,7 +101,7 @@ failure leaves the generated files untouched.
 - [LoopX Overall Roadmap v0](loopx-overall-roadmap-v0.md)
   ([中文版](loopx-overall-roadmap-v0.zh-CN.md))
   - **Delivery on `main`:** Planning and audit evidence, not runtime promotion.
-  - **Current boundary:** Maps all 30 pre-existing primary RFCs and important
+  - **Current boundary:** Maps every primary RFC and important
     non-RFC domains into 13 streams, G0–G5 product milestones and R1–R7 core
     execution cards. Covers product, multi-LoopX-Agent collaboration/handoff,
     kernel, hosts, memory, cost, security, operations, research, releases,
@@ -422,6 +422,15 @@ failure leaves the generated files untouched.
     Lark operation cards. Direct Goal workspace navigation and Overview compose
     bounded graph/acceptance readback, source navigation and snapshot export. General cross-channel disclosure,
     living documents and governed amendment/settlement review remain open.
+- [Goal Workspace Surface v0](goal-workspace-surface-v0.md)
+  ([中文版](goal-workspace-surface-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; Overview, Tasks, Chat, Files, the W1
+    map, usage, acceptance readback and lifecycle pause ship as separate regions.
+  - **Current boundary:** Owns one Goal page's composition and the display
+    semantics of its vitals: persistent masthead with scoped Pause, window- and
+    coverage-labeled figures, work grouped by owner, all-work rail, shared
+    selection and since-last-look delta. M1 requires first-screen preview
+    approval. No new authority, Todo field, lifetime usage or Lark parity.
 - [Live Team Workspace v0](live-team-workspace-v0.md)
   ([中文版](live-team-workspace-v0.zh-CN.md))
   - **Delivery on `main`:** Design proposal only; no live team-stream qualification.

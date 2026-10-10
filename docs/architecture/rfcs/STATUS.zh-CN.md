@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (43)
+## 已接受 (44)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -39,6 +39,7 @@
 | [Goal 实例身份与孤儿状态恢复（v0）](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal 级能力组合与 Connector 生命周期（v0）](goal-scoped-capability-portfolio-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | 已接受 | none | — |
+| [RFC：Goal 工作区页面 v0](goal-workspace-surface-v0.zh-CN.md) | 已接受 | 无 | — |
 | [DSH / Pi：L1 观察与 Managed Runtime 选型](harness-selection-dsh-pi-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 分层步幅控制 v0](hierarchical-agent-stride-control-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | 已接受 | 无 | — |

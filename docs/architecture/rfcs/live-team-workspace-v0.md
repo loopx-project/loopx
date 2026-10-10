@@ -490,7 +490,10 @@ and never advances L1, V4 or G1:
   (interaction 5), opens Todo details in place, discloses omitted/missing/cyclic
   coverage and becomes a list on phones. A packaged synthetic scenario covers the
   desktop, 390px and keyboard paths of V3. A disposable demo Goal exercises the
-  real cold delivery-review read; live team Goals remain unqualified.
+  real cold delivery-review read; live team Goals remain unqualified. The
+  [Goal workspace](goal-workspace-surface-v0.md) places this map as the Map lens
+  beside By owner and Board, sharing one selection; that changes placement, not
+  this contract.
 - **W2 Live state on the map:** show running turns, owed returns and stale
   observations on the same nodes from the existing execution observation owner,
   without a new polling loop; disconnection shows age, not activity.
