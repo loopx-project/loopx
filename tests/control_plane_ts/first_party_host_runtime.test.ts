@@ -16,7 +16,11 @@ function facts(
     profile_id: "source_session_v1",
     operation,
     planned_goal_ref: GOAL_A,
-    authority: { kind: "present", goal_ref: GOAL_A },
+    authority: {
+      kind: "present",
+      goal_ref: GOAL_A,
+      activation_state: "active",
+    },
     ...(operation === "select_state"
       ? { host_state: { kind: "absent" } }
       : {}),
@@ -73,6 +77,28 @@ test("Goal recreation rejects a stale plan at every checkpoint", () => {
         }),
       ),
       { kind: "reject", code: "stale_goal_instance" },
+      operation,
+    );
+  }
+});
+
+test("a stopped exact Goal rejects every host runtime checkpoint", () => {
+  for (const operation of [
+    "select_state",
+    "require_current",
+    "accept_result",
+  ] as const) {
+    assert.deepEqual(
+      decideFirstPartyHostRuntime(
+        facts(operation, {
+          authority: {
+            kind: "present",
+            goal_ref: GOAL_A,
+            activation_state: "stopped",
+          },
+        }),
+      ),
+      { kind: "reject", code: "goal_stopped" },
       operation,
     );
   }

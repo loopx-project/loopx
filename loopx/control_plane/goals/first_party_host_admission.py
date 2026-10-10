@@ -17,6 +17,7 @@ from ..projects.registry_codec import (
     load_project_registry,
 )
 from ..effect_program import TurnProviderStepKind
+from .activation import goal_activation_state
 from .source_session_registry_state import (
     exact_goal_ref,
     guard_path,
@@ -175,10 +176,18 @@ def source_goal_authority(registry_path: Path, goal_id: str) -> dict[str, Any]:
     if len(matches) != 1:
         return {"kind": "absent"}
     goal = matches[0]
+    try:
+        activation_state = goal_activation_state(goal).value
+    except ValueError:
+        return {"kind": "unavailable", "reason": "goal_activation_unreadable"}
     goal_ref = {"goal_id": goal.get("id")}
     if "goal_instance_id" in goal:
         goal_ref["goal_instance_id"] = goal.get("goal_instance_id")
-    return {"kind": "present", "goal_ref": goal_ref}
+    return {
+        "kind": "present",
+        "goal_ref": goal_ref,
+        "activation_state": activation_state,
+    }
 
 
 def capture_first_party_host_goal_ref(
