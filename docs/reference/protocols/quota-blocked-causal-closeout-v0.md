@@ -77,6 +77,41 @@ number alone is not a qualified blocked-closeout proof. Register a real
 monitor or dependency Todo and use `monitor_changed` / `todo_done` for causal
 closeout. Unsupported PR waits now name this recovery route explicitly.
 
+### Unavailable Monitor observation
+
+An admitted open Agent `continuous_monitor` on canonical authority may discover
+that its observation cannot be obtained. Close the original Goal/Agent/Todo/Turn
+with `refresh-state --delivery-outcome outcome_gap --progress-result-class
+blocked`, a stable blocker ID, evidence IDs and a normal vision decision. Do not
+invent a `monitor-poll` hash, record control metadata as an account observation,
+or spend. The existing settlement plan exposes this path.
+
+The same typed quota owner freezes `quota_monitor_unavailable_v0` in the existing
+`blocked_retry` receipt slot, with `observation_available=false` and the Monitor
+scope. Exact admission, identity, evidence and durable writeback still gate
+`typed_blocked_writeback_no_spend`. This closes only the attempted Turn: the Todo
+stays open; `last_checked_at`, `next_due_at`, result hash, material generation,
+cadence and expiry remain unchanged. It creates neither a retry clock nor an
+advancement wait, material successor, completion or delivery claim. Existing
+advancement retry/causal-wait semantics and genuine committed polls retain their
+behavior. A committed poll cannot be rewritten as an unavailable attempt.
+
+Exact replay returns the frozen receipt, with no duplicate writeback or debit.
+After closing the original effect, reenter the current recovery host Turn to
+select independently eligible work; do not create a third identity or rebind the
+old one. Missing capability admission or evidence and wrong bindings still fail.
+File and SQLite CLI acceptance covers this recovery, preserved observation
+fields, capability restoration, committed-poll rejection and zero debit.
+PostgreSQL and live host adoption remain separate qualifications. Before rollback,
+reconcile these receipts using a runtime that recognizes the new proof.
+
+This is a bounded R1/S2/S10 recovery slice in the existing quota owner. The legacy
+`isBoundedBlockedRetry` entry point remains for active callers, but now qualifies
+Monitor unavailable proofs as well; only the advancement schema projects a
+bounded retry. No Python decision owner, new switch, frontend control or Lark
+authority is added. App/Chat consume the same CLI settlement guidance; their
+packaged surfaces are not qualified by the CLI tests.
+
 ## 中文
 
 已准入的 advancement Turn 可以发现真实依赖，以
@@ -130,3 +165,27 @@ excluded/bound 限制仍拒绝。恢复后，模式要求执行 fencing 时获�
 `pr_merged` 仍是合法的调度等待条件，但 PR 编号本身不能证明阻塞结算所需的
 真实依赖。应登记实际 monitor／依赖 Todo，以 `monitor_changed`／`todo_done`
 完成因果结算；错误信息明确给出此恢复路径。
+
+### Monitor 观察不可取得
+
+canonical authority 上已准入、开放的 Agent `continuous_monitor`，可能在尝试中
+发现无法取得观察。用原 Goal/Agent/Todo/Turn 调用 `refresh-state`，提供
+`outcome_gap`、typed `blocked`、稳定 blocker、证据 ID 与正常 vision 决策，沿既有
+计划关闭本次尝试。不得编造 poll hash、把控制元数据记成账户观察或扣额。
+
+同一 TS quota owner 在既有 `blocked_retry` 回执槽冻结
+`quota_monitor_unavailable_v0`、`observation_available=false` 与 Monitor 范围；
+精确准入、身份、证据和持久写回仍是无扣额结算门槛。只关闭原 Turn，Todo 仍开放，
+检查/到期时钟、hash、material generation、cadence 与 expiry 不变。不生成重试时钟、
+advancement 等待、material successor、完成或投递声明。旧 advancement 重试/因果等待
+与真实 poll 保持原行为；已提交 poll 不能改写为不可观察尝试。
+
+精确重放返回冻结回执，不重复写回或扣额；原 effect 关闭后，重新进入当前 recovery
+host Turn 可选择独立合法任务，不新造第三身份或重绑旧 Turn。缺准入能力、缺证或错绑
+仍拒绝。File/SQLite 的真实 CLI 验收覆盖恢复、观察字段保留、能力恢复、已 poll 拒绝与
+零扣额；PostgreSQL、本机真实采用及 App/Lark 打包入口仍分阶段验收。降级前用支持新
+证明的运行时核对回执。
+
+这是既有 quota owner 的 R1/S2/S10 有界修复，兼容保留活动调用者使用的
+`isBoundedBlockedRetry` 名称；只有 advancement schema 产生有界重试投影。
+不新增 Python 判断源、开关、前端控件或 Lark 权威；CLI 计划提供同源说明。

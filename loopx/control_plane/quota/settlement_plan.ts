@@ -53,7 +53,11 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
           " Pass a new packet with --agent-vision-json.") +
         " Route elimination needs evidence; failure alone is not progress. " +
-        "outcome_gap: blocked + blocker/evidence IDs; continuation checks.",
+        "outcome_gap: blocked + blocker/evidence IDs; continuation checks. " +
+        "For an admitted open continuous Monitor whose observation is unavailable, " +
+        "use this original identity for typed blocked outcome_gap; it settles without " +
+        "poll or spend and preserves observation clocks/hash/generation. " +
+        "An already committed Monitor poll needs neither refresh nor spend.",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
       // Autonomous replan already carries this owner in its writeback contract.
@@ -62,7 +66,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     {
       kind: "quota_spend", owner: "agent",
       precondition: "matching durable writeback exists and any declared completion validation " +
-        "has completed the Todo, or the same Turn has qualified in-flight/replan progress",
+        "has completed the Todo, or the same Turn has qualified in-flight/replan progress; " +
+        "skip this step after typed_blocked_writeback_no_spend",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "quota_spend_receipt",
       command_template: spend,
     },
