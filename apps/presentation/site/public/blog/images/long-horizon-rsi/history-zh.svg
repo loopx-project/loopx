@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1220" viewBox="0 0 1600 1220"><title>通用长程能力，是 RSI 的先决条件</title><desc>LoopX公开历史按meta自举、通用长程系统、工作区与社区分期。非合并提交739、3870、2239，日均35.2、50.3、86.1，凌晨占比40.3%、36.1%、24.8%。按北京时间committer时间统计。开发活动并非AI自动化比例。</desc><rect width="1600" height="1220" fill="#fafafa"/><g font-family="PingFang SC,Noto Sans CJK SC,Helvetica Neue,Arial,sans-serif">
-<text x="72" y="64" font-size="23" fill="#0070f3" font-weight="600" >LOOPX  /  LONG-HORIZON × SELF-IMPROVEMENT</text>
+<text x="72" y="64" font-size="23" fill="#0070f3" font-weight="600" >LOOPX  /  LONG-HORIZON</text><path d="M397 51 L406 60 M406 51 L397 60" fill="none" stroke="#0070f3" stroke-width="2" stroke-linecap="round"/><text x="414" y="64" font-size="23" fill="#0070f3" font-weight="600" >SELF-IMPROVEMENT</text>
 <text x="72" y="142" font-size="63" fill="#171717" font-weight="600" >通用长程能力，是 RSI 的先决条件</text>
 <text x="72" y="197" font-size="30" fill="#4d4d4d" font-weight="400" >用改善后的系统，继续改善系统。</text>
 <line x1="72" x2="1528" y1="229" y2="229" stroke="#ddd"/>
@@ -25,7 +25,7 @@
 <text x="972" y="867" font-size="27" fill="#171717" font-weight="600" text-anchor="middle">真实工作</text><text x="972" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">目标与反馈</text>
 <text x="1194" y="867" font-size="27" fill="#171717" font-weight="600" text-anchor="middle">改进系统</text><text x="1194" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">验证与采用</text>
 <text x="1430" y="867" font-size="27" fill="#0070f3" font-weight="600" text-anchor="middle">下一轮工作</text><text x="1430" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">继承有效改进</text>
-<text x="1075" y="887" font-size="27" fill="#4d4d4d" font-weight="400" text-anchor="middle">→</text><text x="1312" y="887" font-size="27" fill="#4d4d4d" font-weight="400" text-anchor="middle">→</text>
+<g fill="none" stroke="#4d4d4d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1066 879 H1084 M1078 873 L1084 879 L1078 885"/><path d="M1303 879 H1321 M1315 873 L1321 879 L1315 885"/></g>
 <path d="M1430 951 V978 H972 V951" fill="none" stroke="#0070f3" stroke-width="2"/><path d="M966 959 L972 951 L978 959" fill="none" stroke="#0070f3" stroke-width="2"/>
 <text x="1204" y="1025" font-size="24" fill="#0070f3" font-weight="500" text-anchor="middle">有效改进，成为下一轮的环境</text>
 <text x="889" y="1073" font-size="22" fill="#666" font-weight="400" >概念示意 · 人在回路的系统级自迭代</text>

@@ -20,6 +20,14 @@ everything; do not absorb every project's continuous execution into this chat.
 ## Understand, verify and decide
 
 Resolve the desired outcome and its exact object before deciding who should act.
+Resolve the intended project, purpose and output destination from the request
+and relevant conversation before matching a role or an older task. A public
+source and a broad collection responsibility do not authorize converting
+private learning notes into an operations library or another project's work.
+Carry that intent and subsequent owner corrections in the collaboration brief.
+As a receiver, retain them instead of substituting your own store or role; report
+a scope or destination mismatch through your assessment. If the destination is
+unresolved, read the relevant authorized context or ask one focused question.
 Use authorized current evidence for facts that could change that decision;
 distinguish authoritative observations, historical records, claims and inference.
 If the requested outcome is already satisfied, return the verified result and

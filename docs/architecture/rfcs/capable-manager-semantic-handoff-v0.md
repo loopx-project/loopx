@@ -861,7 +861,15 @@ provider failure where available; unexpected local preparation errors use
 `runtime_unavailable`, with private diagnostics retained locally. Cancellation
 and an already terminal result win over a late preparation error. Restoring the
 runtime must not replay a failed request; the same ingress identity returns the
-same failure, while a fresh explicit request can run after repair.
+same failure, while a fresh explicit request can run after repair. Before
+terminal settlement, the built-in Codex provider may retry startup once for a
+typed `response_timeout` when restoring a known upstream thread. Its failed
+process must be closed first; the same thread, workspace and configured grant
+remain binding, with native configuration/authentication checks reapplied.
+This preparation retry does not dispatch a Turn. Fresh thread creation, host
+approval/authentication failures and already dispatched Turns are not retried;
+an exhausted startup still follows the existing terminal failure contract, and
+a persisted stop must prevent dispatch even if startup later succeeds.
 
 **Model capacity failures (S5/S10):** the Codex adapter preserves the typed
 `serverOverloaded` terminal error as `server_overloaded`; arbitrary upstream

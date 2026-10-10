@@ -270,6 +270,39 @@ def test_review_evidence_retains_brief_without_provider_payload():
     assert "raw_provider_payload" not in row["review_response"] and "usage" not in row["review_response"]
 
 
+def test_material_purpose_oracles_reject_wrong_role_and_dropped_destination():
+    suite = json.loads((ROOT / "examples/evaluations/chat-purpose.public.json").read_text())
+    cases = {case["id"]: case for case in suite["cases"]}
+    learning = cases["material-notebook-purpose"]
+    operations = cases["material-explicit-operations-purpose"]
+    # Same source and directory, but an explicit new purpose changes the recipient.
+    assert learning["context_ref"] == operations["context_ref"]
+    assert learning["target"] != operations["target"]
+    for case in cases.values():
+        if case["expected"] != "handoff":
+            continue
+        refs = case["required_handoff_refs"]
+        response = {"message": "Passing the requested work for assessment.", "context_handoff": {
+            **case["target"], "brief": {"context": " ".join(refs)}
+        }}
+        assert evaluation.score(case, response)["passed"]
+        wrong = operations["target"] if case["target"] == learning["target"] else learning["target"]
+        assert "wrong_recipient" in evaluation.score(case, {
+            **response, "context_handoff": {**response["context_handoff"], **wrong}
+        })["errors"]
+        # Naming the destination in the visible answer cannot repair a lost brief.
+        for brief in (None, " ".join(refs), {"context": refs[-1]}):
+            row = evaluation.score(case, {
+                "message": " ".join(refs),
+                "context_handoff": {**case["target"], "brief": brief}
+            })
+            assert "missing_handoff_ref" in row["errors"]
+    unknown = cases["material-unknown-purpose"]
+    answer = {"message": "Should this go into ResearchNotebook learning notes or OperationsLibrary?"}
+    assert evaluation.score(unknown, answer)["passed"]
+    assert not evaluation.score(unknown, {**answer, "context_handoff": operations["target"]})["passed"]
+
+
 @pytest.mark.parametrize("provider", ["codex", "operator-api"])
 def test_material_release_cli_keeps_counterfactual_answers_for_review(tmp_path, monkeypatch, provider):
     """Real prompt/parser/report flow over seven cases; inference is substituted."""

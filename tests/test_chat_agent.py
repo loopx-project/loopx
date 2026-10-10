@@ -243,12 +243,15 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         assert Path(env["HOME"]) != Path.home()
         assert Path(env["CODEX_HOME"]) != tmp_path / "account-codex"
         environment = params["config"]["shell_environment_policy"]
-        assert environment["inherit"] == "none" and environment["include_only"] == ["PATH"]
+        assert environment["inherit"] == "none"
+        assert environment["include_only"] == ["PATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"]
         assert environment["experimental_use_profile"] is False
         expected_path = "/usr/bin:/bin:/usr/sbin:/sbin"
         if safe_toolchain:
             expected_path = str(toolchain / "usr/bin") + ":" + expected_path
         assert environment["set"]["PATH"] == expected_path
+        assert environment["set"]["GIT_CONFIG_GLOBAL"] == chat_agent.os.devnull
+        assert environment["set"]["GIT_CONFIG_NOSYSTEM"] == "1"
         assert "PRIVATE_FIXTURE" not in environment.get("set", {})
         sent = []
         monkeypatch.setattr(session, "_request", lambda method, params, **kw:
@@ -284,6 +287,75 @@ def test_project_filesystem_scope_rejects_missing_or_changed_native_readback_wit
     assert sum(r.get("method") == "thread/resume" for r in requests) == 1
     assert not any(r.get("method") in {"thread/start", "turn/start"} for r in requests)
     assert process.returncode == 0
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_project_git_configuration_preserves_local_config_without_account_inheritance(
+        monkeypatch, tmp_path, isolated):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    git = chat_agent.shutil.which("git")
+    assert git, "real Git is required to qualify workspace tool configuration"
+    workspace, account = tmp_path / "workspace", tmp_path / "account"
+    workspace.mkdir()
+    account.mkdir()
+    env = {"PATH": chat_agent.os.defpath, "HOME": str(account),
+           "GIT_CONFIG_GLOBAL": chat_agent.os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def run(*args, environment=env):
+        return chat_agent.subprocess.run([git, *args], cwd=workspace, env=environment,
+            capture_output=True, text=True, check=False)
+
+    assert run("init").returncode == 0
+    assert run("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+               "commit", "--allow-empty", "-m", "fixture").returncode == 0
+    expected_head = run("rev-parse", "HEAD").stdout.strip()
+    assert run("config", "--local", "fixture.origin", "workspace").returncode == 0
+    # Reading account configuration must fail the control case. A safe profile
+    # succeeds without reading or relaxing access to that configuration.
+    (account / ".gitconfig").write_text("not valid Git configuration\n")
+    control_env = {key: value for key, value in env.items() if key != "GIT_CONFIG_GLOBAL"}
+    assert run("rev-parse", "HEAD", environment=control_env).returncode != 0
+
+    monkeypatch.setattr(chat_agent.sys, "platform", "linux")
+    profile = "loopx_workspace_only_write"
+    process = _FakeAppServerProcess(config_response={"config": {}},
+        thread_response={"thread": {"id": "thread-loopx-chat"},
+                         "activePermissionProfile": {"id": profile},
+                         "runtimeWorkspaceRoots": [str(workspace)]})
+    real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
+    binary = tmp_path / "native-codex"
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda name:
+        str(binary) if name == "codex" else real_which(name))
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, *a, **kw:
+        process if command[0] == str(binary) else real_popen(command, *a, **kw))
+    host_config = {"shell_environment_policy": {"set": {"FIXTURE_SETTING": "preserved"}}}
+    snapshot = json.loads(json.dumps(host_config))
+    context = ChatProjectContexts([workspace], filesystem_scope=(
+        "workspace_only" if isolated else "host_default")).available()[0]
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=workspace,
+        goal_id=None, objective="project", project_context=context,
+        codex_home=tmp_path / "account-codex", host_config=host_config)
+    try:
+        request = next(json.loads(line) for line in process.stdin.getvalue().splitlines()
+                       if json.loads(line).get("method") == "thread/start")
+        policy = request["params"]["config"]["shell_environment_policy"]
+        settings = policy["set"]
+        assert host_config == snapshot
+        if isolated:
+            # Codex filters include_only after applying set, including on
+            # resumed threads. The resulting tool environment must retain the
+            # host's two public Git settings, without inheriting account state.
+            tool_env = {key: value for key, value in settings.items()
+                        if key in policy["include_only"]}
+            assert set(tool_env) == {"PATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"}
+            assert run("--version", environment=tool_env).returncode == 0
+            assert run("rev-parse", "HEAD", environment=tool_env).stdout.strip() == expected_head
+            assert run("config", "--get", "fixture.origin", environment=tool_env).stdout.strip() == "workspace"
+        else:
+            assert settings == snapshot["shell_environment_policy"]["set"]
+            assert run("rev-parse", "HEAD", environment={**control_env, **settings}).returncode != 0
+    finally:
+        session.close()
 
 
 class _FakeClaudeProcess:

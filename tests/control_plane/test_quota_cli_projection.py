@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+
+import pytest
 
 from loopx.control_plane.quota.cli_projection import (
     QUOTA_CLI_GOAL_BOUNDARY_DETAIL_COMMAND,
@@ -12,6 +15,47 @@ from loopx.control_plane.quota.cli_projection import (
 from loopx.presentation.renderers.quota_markdown import (
     render_quota_should_run_markdown,
 )
+
+
+@pytest.mark.parametrize("inline", ["absent", "identical", "different", "wrong-step"])
+def test_replan_authoring_is_available_without_another_read(inline: str) -> None:
+    authoring = {"schema_version": "goal_vision_replan_contract_v0",
+                 "minimal_example": {"state": "vision_patch_proposed"},
+                 "fields": {"vision_patch": {"acceptance_summary": 420}}}
+    packet = {"obligation_id": "replan-fixture", "writeback_contract": {
+        "vision_authoring": authoring, "preferred_input": "evidence_linked_vision_path",
+        "rule": "Retain current requirements and cite observed evidence."}}
+    steps = [{"kind": "validation"}]
+    if inline != "absent":
+        steps.append({"kind": "validation" if inline == "wrong-step" else "durable_writeback",
+                      "vision_authoring": {**authoring, **({"additional_rule": "Keep this."}
+                                                          if inline == "different" else {})}})
+    payload = {"replan_action_packet": packet, "heartbeat_receipt": {"turn_instance_id": "turn-one"},
+               "interaction_contract": {"cli_channel": {"settlement_plan": {"ordered_steps": steps}}}}
+    original = deepcopy(payload)
+    compact = compact_quota_should_run_cli_payload(payload)
+    writeback = compact["replan_action_packet"]["writeback_contract"]
+    assert "vision_authoring_detail_ref" not in writeback
+    assert writeback["rule"] == packet["writeback_contract"]["rule"]
+    if inline == "identical":
+        assert "vision_authoring" not in writeback
+        assert writeback["vision_authoring_ref"] == (
+            "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].vision_authoring")
+        assert compact["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1][
+            "vision_authoring"] == authoring
+    else:
+        assert writeback["vision_authoring"] == authoring
+        assert "vision_authoring_ref" not in writeback
+    assert compact["heartbeat_receipt"] == payload["heartbeat_receipt"]
+    assert compact["interaction_contract"] == payload["interaction_contract"]
+    assert payload == original
+    assert compact_quota_should_run_cli_payload(payload, include_vision_detail=True) == original
+
+
+def test_progress_only_replan_does_not_invent_a_vision_input() -> None:
+    payload = {"replan_action_packet": {"obligation_id": "progress-fixture",
+                                       "writeback_contract": {}}}
+    assert compact_quota_should_run_cli_payload(payload) == payload
 
 
 def _items(count: int, *, prefix: str) -> list[dict[str, object]]:

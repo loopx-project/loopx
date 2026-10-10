@@ -555,6 +555,11 @@ this brief and live receiver/return facts in place. Compatible requests without
 a brief retain their existing shape and identity. A changed brief under the same
 ingress identity is a conflict, not a second delegation.
 
+Generated receiver guidance is delivery metadata, separate from that request
+content. Updating it in a release must not reject an otherwise identical saved
+request. Replay retains the original entry bytes, guidance, assessment and
+return history; message, brief and recipient identity conflicts still fail.
+
 The default shared Chat handoff acknowledgment is a short user-facing preview:
 the exact recipient Agent, purpose, a bulleted result checklist (up to three
 items), execution boundaries (up to two items), and the return requirement.

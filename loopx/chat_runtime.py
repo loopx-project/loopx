@@ -127,26 +127,39 @@ class CodexAppServerAdapter:
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> "CodexAppServerAdapter":
-        return cls(
-            CodexChatAgentSession.start(
-                codex_bin=codex_bin,
-                work_dir=work_dir,
-                goal_id=goal_id,
-                objective=objective,
-                response_timeout_sec=startup_timeout_sec,
-                idle_timeout_sec=idle_timeout_sec,
-                hard_timeout_sec=hard_timeout_sec,
-                execution_mode=execution_mode,
-                runtime_profile=runtime_profile,
-                sandbox=sandbox,
-                project_context=project_context,
-                resume_thread_id=resume_thread_id,
-                codex_home=codex_home,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                dynamic_tools=dynamic_tools,
-            )
-        )
+        retry_timeout = bool(resume_thread_id)
+        while True:
+            try:
+                return cls(
+                    CodexChatAgentSession.start(
+                        codex_bin=codex_bin,
+                        work_dir=work_dir,
+                        goal_id=goal_id,
+                        objective=objective,
+                        response_timeout_sec=startup_timeout_sec,
+                        idle_timeout_sec=idle_timeout_sec,
+                        hard_timeout_sec=hard_timeout_sec,
+                        execution_mode=execution_mode,
+                        runtime_profile=runtime_profile,
+                        sandbox=sandbox,
+                        project_context=project_context,
+                        resume_thread_id=resume_thread_id,
+                        codex_home=codex_home,
+                        model=model,
+                        reasoning_effort=reasoning_effort,
+                        dynamic_tools=dynamic_tools,
+                    )
+                )
+            except CodexChatTimeoutError as exc:
+                if not retry_timeout or exc.error_code != "response_timeout":
+                    raise
+                # start() has closed the failed process; no Turn was dispatched.
+                # Retry the same known thread once, never an unknown thread/start
+                # effect, a host gate or a request that has already begun.
+                retry_timeout = False
+                logging.getLogger(__name__).warning(
+                    "Codex resumed-session startup timed out; retrying once before Turn dispatch"
+                )
 
     def capabilities(self) -> dict[str, Any]:
         return {

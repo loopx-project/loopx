@@ -188,8 +188,9 @@ def test_host_restart_recovers_legacy_source_and_full_return_once(tmp_path, monk
 
 @pytest.mark.parametrize("change", ["closed", "missing_turn", "revoked", "source_changed", "wrong_store",
                                         "channel_changed", "route_changed", "receipt_conflict", "unsettled"])
-def test_invalid_legacy_sources_are_not_recovered(tmp_path, monkeypatch, change):
-    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_invalid_legacy_sources_are_not_recovered(tmp_path, monkeypatch, change, provider):
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
     path = route_path(root, receipt)
     legacy = json.loads(path.read_text())
     legacy.pop("source_chat_runtime_root")
@@ -217,18 +218,24 @@ def test_invalid_legacy_sources_are_not_recovered(tmp_path, monkeypatch, change)
     elif change == "unsettled":
         store.update_turn(session["session_id"], turn["turn_id"], status="queued")
     _write(path, legacy)
+    collaboration_root = _root(root)
+    before_requests = {p: p.read_bytes() for folder in ("entries", "peer-operations", "roundtrips")
+                       for p in (collaboration_root / folder).rglob("*.json")}
     assert recover_source_chat_provenance(root, registry, store) == 0
     assert json.loads(path.read_text()) == legacy
     with pytest.raises(ValueError):
         forward(root, registry, receipt)
+    assert {p: p.read_bytes() for folder in ("entries", "peer-operations", "roundtrips")
+            for p in (collaboration_root / folder).rglob("*.json")} == before_requests
     assert not (root / "chat").exists()
 
 
-def test_pinned_source_is_read_only_not_retargetable_and_keeps_current_grants(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_pinned_source_is_read_only_not_retargetable_and_keeps_current_grants(tmp_path, monkeypatch, provider):
     from loopx.capabilities.manager_context.roundtrip import register
     from loopx.control_plane.collaboration.inbox import _entry
 
-    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch)
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
     path = route_path(root, receipt)
     before = path.read_bytes()
     with pytest.raises(ValueError):
@@ -248,11 +255,12 @@ def test_pinned_source_is_read_only_not_retargetable_and_keeps_current_grants(tm
 
 
 @pytest.mark.parametrize("locator", [None, {}, "relative-root", "/unrelated-synthetic-host"])
-def test_host_cannot_replace_existing_provenance(tmp_path, monkeypatch, locator):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_host_cannot_replace_existing_provenance(tmp_path, monkeypatch, locator, provider):
     from loopx.capabilities.manager_context.roundtrip import register
     from loopx.control_plane.collaboration.inbox import _entry
 
-    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch)
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
     path = route_path(root, receipt)
     _write(path, json.loads(path.read_text()) | {"source_chat_runtime_root": locator})
     before = path.read_bytes()
@@ -271,8 +279,9 @@ def test_colocated_host_preserves_legacy_route_shape(tmp_path, monkeypatch):
     assert path.read_bytes() == before
 
 
-def test_committed_request_survives_a_lost_chat_answer(tmp_path, monkeypatch):
-    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_committed_request_survives_a_lost_chat_answer(tmp_path, monkeypatch, provider):
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
     path = route_path(root, receipt)
     route = json.loads(path.read_text())
     route.pop("source_chat_runtime_root")
@@ -283,8 +292,9 @@ def test_committed_request_survives_a_lost_chat_answer(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("change", ["closed", "missing_turn", "bad_locator", "wrong_locator", "ambiguous_turn"])
-def test_pinned_source_still_requires_the_exact_available_conversation(tmp_path, monkeypatch, change):
-    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_pinned_source_still_requires_the_exact_available_conversation(tmp_path, monkeypatch, change, provider):
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
     path = route_path(root, receipt)
     if change == "closed":
         store.update_session(session["session_id"], status="closed")

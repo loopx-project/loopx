@@ -61,6 +61,84 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("surface,output_format,feature,growth", [
+    ("start_goal_guided", "json", "complete_todo_readback", (948, 6, 894)),
+    ("start_goal_guided_command_pack_detail", "markdown", "complete_todo_readback", (436, 2, 0)),
+    ("quota_should_run", "json", "vision_cli_authoring", (3049, 94, 1807)),
+    ("loopx_turn_plan", "json", "vision_cli_authoring", (237, 0, 237)),
+])
+def test_authoring_growth_is_bounded_one_time_and_surface_scoped(
+    surface, output_format, feature, growth,
+):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base = _row(
+        row_id=f"surface/{surface}/small/{output_format}", format=output_format,
+        chars=1000, utf8_bytes=1000, lines=20, compact_payload_chars=800,
+        authoring_inputs={feature: False},
+    )
+    candidate = {
+        **base, "authoring_inputs": {feature: True},
+        "chars": 1000 + growth[0], "utf8_bytes": 1000 + growth[0],
+        "lines": 20 + growth[1], "compact_payload_chars": 800 + growth[2],
+    }
+    result = _compare_row(base, candidate)
+    assert not result["failures"]
+    assert result["review_signals"]
+    # No waiver for an already-upgraded or unobserved base, or another surface.
+    assert _compare_row({**base, "authoring_inputs": {feature: True}}, candidate)["failures"]
+    assert _compare_row({**base, "authoring_inputs": {}}, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "authoring_inputs": {feature: False}})["failures"]
+    assert _compare_row(
+        {**base, "row_id": f"surface/status/small/{output_format}"},
+        {**candidate, "row_id": f"surface/status/small/{output_format}"},
+    )["failures"]
+    # Retain independent metric limits; a declared transition is not unlimited.
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        inflated = {**candidate, metric: base[metric] + result["allowances"][metric] + 1}
+        assert _compare_row(base, inflated)["failures"]
+
+
+def test_authoring_observations_require_complete_structured_or_rendered_guidance():
+    from loopx.control_plane.testing.cli_output_semantics import authoring_input_observations
+
+    purpose = (
+        "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
+        "compare .todo.text, status/claim. Excerpts cannot verify writes. "
+        "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+    )
+    step = {
+        "id": "read_back_authored_todos", "kind": "operator_or_agent_actions",
+        "purpose": purpose,
+        "command_template": "loopx --format json todo list --goal-id test --todo-id '<todo-id>'",
+    }
+    rendered = (
+        f"5. `read_back_authored_todos` (operator_or_agent_actions): {purpose}\n"
+        f"   - command/source: `{step['command_template']}`"
+    )
+    for text in (json.dumps({"steps": [step]}), rendered):
+        assert authoring_input_observations(text)["complete_todo_readback"]
+        assert not authoring_input_observations(text.replace("Excerpts cannot verify writes. ", ""))[
+            "complete_todo_readback"
+        ]
+        assert not authoring_input_observations(text.replace("--todo-id", "--limit"))[
+            "complete_todo_readback"
+        ]
+    assert not authoring_input_observations(json.dumps({"note": rendered}))["complete_todo_readback"]
+    hint = (
+        "Replace example claims/refs with evidence; obey the live contract and total limit. "
+        "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. "
+        "checkpoint-context is only for recovery after the original committed Turn writeback; "
+        "follow its returned same-Turn recovery action, not a fresh-turn preflight."
+    )
+    authoring = {"schema_version": "goal_vision_replan_contract_v0", "authoring_hint": hint}
+    assert authoring_input_observations(json.dumps(authoring))["vision_cli_authoring"]
+    assert not authoring_input_observations(json.dumps({"authoring_hint": hint}))["vision_cli_authoring"]
+    assert not authoring_input_observations(json.dumps({**authoring, "authoring_hint": hint[:100]}))[
+        "vision_cli_authoring"
+    ]
+
+
 def test_thin_bilingual_byte_allowance_does_not_relax_character_or_quota_limits():
     from loopx.control_plane.testing.cli_output_differential import _compare_row
 

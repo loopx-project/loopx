@@ -52,6 +52,7 @@ def test_empty_frontier_plans_before_writes_without_starting_a_loop(bound_goal):
     assert [step["id"] for step in packet["ordered_steps"]] == [
         "plan_ranked_todos",
         "write_ordered_todos",
+        "read_back_authored_todos",
     ]
     assert packet["planner"]["required_before_todo_write"] is True
     assert packet["execution_handoff"] == {
@@ -82,6 +83,7 @@ def test_existing_plan_is_an_incremental_frontier_not_a_new_goal(bound_goal):
     assert [step["id"] for step in packet["ordered_steps"]] == [
         "compare_planned_todos_with_frontier",
         "apply_todo_delta",
+        "read_back_authored_todos",
     ]
     assert all(item["todo_id"] != "todo_peer" for item in packet["existing_todos"])
 
