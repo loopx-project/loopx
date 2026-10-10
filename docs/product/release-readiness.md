@@ -199,6 +199,18 @@ attestation separately binds those bytes to the repository, workflow, commit,
 and build event; neither mechanism claims that the package is vulnerability
 free.
 
+Wheel builds recreate the LoopX package subtrees in `build_lib` and wheel staging
+after verifying the frontend bundle. Reused build or retained staging directories
+must not carry modules, packages or resources deleted from current source.
+Current package data and the bundle's qualified previous asset generation
+remain included; unrelated build output
+and editable setup remain untouched. A build destination overlapping the
+source package is rejected. Explicit `bdist_wheel --skip-build` still packages
+the selected existing build; it is not a fresh-source qualification. Before
+qualifying retirement, inspect the built wheel and run its installed entry
+points outside the source checkout; a source
+test or a manually cleaned build directory alone does not prove this rule.
+
 Before a recovery dispatch, inspect the existing `pypi` environment's allowed
 branch/tag refs as well as the Trusted Publisher and enabled variable:
 
