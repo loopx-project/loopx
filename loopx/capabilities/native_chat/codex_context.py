@@ -117,9 +117,13 @@ def public_source_reader(config: Mapping[str, Any], host_config: Mapping[str, An
     name = "loopx_public_source_read"
     if name in config.get("mcp_servers", {}) or name in host_config.get("mcp_servers", {}):
         raise ValueError("Public source reader conflicts with native MCP configuration")
+    from ...extensions import public_source_reader as reader
+    # Managed releases put their source on the host's sys.path, not necessarily
+    # in site-packages. Bind this release's file; -m could fail or select an
+    # older site-installed LoopX once the child discards the host's sys.path.
     return {**host_config, "mcp_servers": {**host_config.get("mcp_servers", {}), name: {
         "enabled": True, "command": str(Path(sys.executable).absolute()),
-        "args": ["-I", "-m", "loopx.extensions.public_source_reader"],
+        "args": ["-I", str(Path(reader.__file__).resolve())],
         "env": {"PATH": os.defpath}, "env_vars": [],
         "startup_timeout_sec": 30, "tool_timeout_sec": 40,
     }}}

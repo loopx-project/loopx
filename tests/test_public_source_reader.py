@@ -3,6 +3,7 @@ import io
 import ipaddress
 import socket
 import time
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -118,7 +119,7 @@ def test_public_provider_disabled_by_default_and_operator_only(monkeypatch):
     assert enabled["mcp_servers"]["personal"] == {"enabled": False}
     public = enabled["mcp_servers"]["loopx_public_source_read"]
     assert public["env_vars"] == [] and list(public["env"]) == ["PATH"]
-    assert public["args"] == ["-I", "-m", "loopx.extensions.public_source_reader"]
+    assert public["args"] == ["-I", str(Path(reader.__file__).resolve())]
     assert effective["mcp_servers"]["personal"]["command"] == "private"
     with pytest.raises(ValueError):
         codex_context.public_source_reader({"mcp_servers": {"loopx_public_source_read": {"env": {"SECRET": "fixture"}}}}, {})
@@ -137,7 +138,7 @@ def test_dependency_failure_prevents_provider_admission(monkeypatch):
 def test_worker_deadline_and_environment_are_not_account_owned(monkeypatch):
     import subprocess
     def blocked(command, **kwargs):
-        assert command[1:] == ["-I", "-m", "loopx.extensions.public_source_reader", "--observe"]
+        assert command[1:] == ["-I", str(Path(reader.__file__).resolve()), "--observe"]
         assert kwargs["timeout"] == 30 and list(kwargs["env"]) == ["PATH"]
         raise subprocess.TimeoutExpired(command, 30)
     monkeypatch.setattr(reader.subprocess, "run", blocked)
@@ -156,10 +157,30 @@ def test_writable_workspace_and_pythonpath_cannot_replace_trusted_provider(tmp_p
     marker = tmp_path / "workspace-code-ran"
     (package / "public_source_reader.py").write_text(
         "from pathlib import Path; Path('workspace-code-ran').write_text('untrusted')")
-    result = subprocess.run([sys.executable, "-I", "-m", "loopx.extensions.public_source_reader", "--observe"],
+    result = subprocess.run([sys.executable, "-I", str(Path(reader.__file__).resolve()), "--observe"],
         cwd=tmp_path, env={"PATH": os.defpath, "PYTHONPATH": str(tmp_path)},
         input=json.dumps({"kind": "text", "url": "file:///etc/passwd"}).encode(),
         capture_output=True, timeout=5)
     assert result.returncode != 0 and b"invalid observation" not in result.stderr
     assert b"anonymous HTTPS source required" in result.stderr
     assert not marker.exists()
+
+
+def test_source_only_host_worker_needs_no_site_installed_loopx(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import venv
+    host = tmp_path / "source-only-host"
+    venv.EnvBuilder(with_pip=False).create(host)
+    interpreter = host / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    absent = subprocess.run([str(interpreter), "-I", "-c",
+        "import importlib.util; assert importlib.util.find_spec('loopx') is None"],
+        capture_output=True, check=True)
+    assert absent.stdout == b""
+    # The worker must reach its URL boundary through the host release, instead
+    # of failing to import LoopX or needing another installed package revision.
+    monkeypatch.setattr(reader.sys, "executable", str(interpreter))
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        reader._observation("text", "file:///etc/passwd")
+    assert b"anonymous HTTPS source required" in error.value.stderr
+    assert b"No module named" not in error.value.stderr

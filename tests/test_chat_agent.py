@@ -239,9 +239,10 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         assert params["config"]["project_doc_max_bytes"] == 0
         servers = dict(params["config"]["mcp_servers"])
         if public_reader:
+            from loopx.extensions import public_source_reader as source_reader
             public = servers.pop("loopx_public_source_read")
             assert public["enabled"] is True and public["env_vars"] == []
-            assert public["args"] == ["-I", "-m", "loopx.extensions.public_source_reader"]
+            assert public["args"] == ["-I", str(Path(source_reader.__file__).resolve())]
         assert servers == {
             "managed_fixture": {"enabled": False}, "caller_fixture": {"enabled": False}}
         env = launched[0]

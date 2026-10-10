@@ -22,9 +22,13 @@ in their original native store. Workspace grants, shell network restrictions,
 model authentication, audience and history do not change.
 
 The host first disables all effective personal/project MCP entries, then admits
-one provider with a fixed interpreter/module, minimal environment and no caller
+one provider with a fixed interpreter and current-release file, minimal environment and no caller
 credentials. Isolated Python excludes the writable workspace and `PYTHONPATH`
-from provider module lookup. The reserved name `loopx_public_source_read` must not appear in a
+from provider module lookup. Source-only and bundled releases use their own
+provider file for both MCP startup and observation workers; they do not need a
+second site-installed LoopX package, and cannot silently use an older one. The
+optional dependencies must still be installed in that host interpreter. The
+reserved name `loopx_public_source_read` must not appear in a
 lower native configuration layer: a collision fails before model dispatch rather
 than merging its command, environment or headers. Project files and model input
 cannot enable this provider. Missing dependencies are an installation failure,

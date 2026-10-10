@@ -233,7 +233,8 @@ def _observation(kind: str, url: str, index: int | None = None) -> dict:
     # Bound DNS, parsing and rendering too; a socket timeout alone cannot bound
     # getaddrinfo. Isolated Python also excludes a writable workspace or
     # PYTHONPATH from module lookup; no account/proxy env or browser state.
-    result = subprocess.run([sys.executable, "-I", "-m", "loopx.extensions.public_source_reader", "--observe"],
+    # Keep the same release even when LoopX is not installed in site-packages.
+    result = subprocess.run([sys.executable, "-I", str(Path(__file__).resolve()), "--observe"],
         input=json.dumps({"kind": kind, "url": url, "index": index}).encode(),
         capture_output=True, timeout=TIMEOUT, env={"PATH": os.defpath}, check=True)
     return json.loads(result.stdout)
