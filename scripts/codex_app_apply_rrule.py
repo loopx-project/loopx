@@ -272,6 +272,48 @@ def _ensure_sqlite_row(
         connection.close()
 
 
+def _resolve_bound_thread_id(
+    goal: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str,
+    automation_id: str,
+) -> str:
+    """Resolve the one bound host thread this automation must target.
+
+    The installed manifest carries its target thread, and host-side readback
+    resolves a goal's threads through the goal's ``thread_agent_bindings``.
+    Installing with an unresolved thread therefore writes an automation that no
+    readback can observe, so an unbound or ambiguous binding is refused here
+    instead of being persisted as an empty value.
+    """
+    bindings = (goal.get("coordination") or {}).get("thread_agent_bindings")
+    matches: list[str] = []
+    for binding in bindings if isinstance(bindings, list) else []:
+        if not isinstance(binding, dict):
+            continue
+        if str(binding.get("agent_id") or "") != agent_id:
+            continue
+        thread_id = str(binding.get("thread_id") or "").strip()
+        if thread_id:
+            matches.append(thread_id)
+    if len(matches) != 1:
+        # The recovery command must be runnable as printed: ``bind-agent-thread``
+        # is registered at the root, and without ``--execute`` it only previews
+        # the binding it is asked to write.
+        raise SystemExit(
+            f"{automation_id}: expected exactly one bound host thread for agent "
+            f"{agent_id!r}, found {len(matches)}; bind one with "
+            f"`loopx bind-agent-thread --goal-id {goal_id} --agent-id {agent_id} "
+            "--host-surface codex-app --thread-id <host-thread-id> --execute`, or "
+            "remove an extra binding with "
+            f"`loopx unbind-agent-thread --goal-id {goal_id} --agent-id {agent_id} "
+            "--host-surface codex-app --thread-id <host-thread-id> --execute`, "
+            "before installing the Codex App automation"
+        )
+    return matches[0]
+
+
 def _ensure_automation(
     *,
     loopx: str,
@@ -288,17 +330,12 @@ def _ensure_automation(
     if toml_path.exists() and _sqlite_row_exists(db_path, automation_id):
         return False
     goal = _load_registry_goal(registry, goal_id)
-    thread_id = ""
-    bindings = (goal.get("coordination") or {}).get("thread_agent_bindings") or []
-    if isinstance(bindings, list):
-        matches = [
-            binding
-            for binding in bindings
-            if isinstance(binding, dict)
-            and str(binding.get("agent_id") or "") == agent_id
-        ]
-        if len(matches) == 1:
-            thread_id = str(matches[0].get("thread_id") or "")
+    thread_id = _resolve_bound_thread_id(
+        goal,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        automation_id=automation_id,
+    )
     cwd = str(goal.get("repo") or "")
     name = f"{goal_id} LoopX"
     if toml_path.exists():
