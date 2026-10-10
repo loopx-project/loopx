@@ -9,6 +9,53 @@ from typing import Any
 from loopx.control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 
+def authoring_input_observations(text: str) -> dict[str, bool]:
+    """Recognize complete reviewed guidance for one-time output qualification.
+
+    These observations never classify runtime authority. Match the structured
+    owner and full instruction, not a keyword in arbitrary operator prose.
+    """
+    readback_purpose = (
+        "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
+        "compare .todo.text, status/claim. Excerpts cannot verify writes. "
+        "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+    )
+    vision_hint = (
+        "Replace example claims/refs with evidence; obey the live contract and total limit. "
+        "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. "
+        "checkpoint-context is only for recovery after the original committed Turn writeback; "
+        "follow its returned same-Turn recovery action, not a fresh-turn preflight."
+    )
+    observed = {"complete_todo_readback": False, "vision_cli_authoring": False}
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            if (value.get("id") == "read_back_authored_todos"
+                    and value.get("kind") == "operator_or_agent_actions"
+                    and value.get("purpose") == readback_purpose
+                    and "--todo-id '<todo-id>'" in str(value.get("command_template", ""))):
+                observed["complete_todo_readback"] = True
+            if (value.get("schema_version") == "goal_vision_replan_contract_v0"
+                    and value.get("authoring_hint") == vision_hint):
+                observed["vision_cli_authoring"] = True
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    try:
+        collect(json.loads(text))
+    except json.JSONDecodeError:
+        observed["complete_todo_readback"] = bool(re.search(
+            r"^\d+\. `read_back_authored_todos` \(operator_or_agent_actions\): "
+            + re.escape(readback_purpose)
+            + r"\n   - command/source: `loopx [^\n]*--todo-id '<todo-id>'`$",
+            text, re.MULTILINE,
+        ))
+    return observed
+
+
 def heartbeat_user_language_prompt_revision(text: str) -> str | None:
     """Attribute the one-time user-language prompt transition in CLI probes.
 
