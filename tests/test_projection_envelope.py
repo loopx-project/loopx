@@ -5,6 +5,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import loopx.control_plane.projection_envelope_facts as projection_envelope
+import loopx.global_risks as global_risks
+import loopx.global_todos as global_todos
 import loopx.summary_all as summary_all
 from loopx.control_plane.runtime.status_projection_cache import (
     load_status_projection_cache,
@@ -268,6 +270,142 @@ def test_global_gates_counts_unavailable_quota_and_missing_status_envelope(tmp_p
     assert "🔴" in summary_all.render_global_gates_markdown(payload)
 
 
+def test_global_todos_discloses_global_membership_and_display_truncation(tmp_path: Path, monkeypatch) -> None:
+    status_payload = _global_status_payload(tmp_path, excluded=3)
+    monkeypatch.setattr(global_todos, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(
+        global_todos,
+        "build_quota_should_run",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "normal_delivery_allowed": True,
+            "selected_todo": {"todo_id": "todo-a", "status": "open", "priority": "P1"},
+            "agent_todo_summary": {
+                "deferred_resume_candidates": [
+                    {"todo_id": "todo-b", "status": "deferred", "priority": "P2"}
+                ]
+            },
+        },
+    )
+
+    payload = global_todos.build_global_todos(
+        registry_path=tmp_path / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, limit=1,
+    )
+
+    envelope = payload["projection_envelope"]
+    assert envelope["projection"] == "global_todos"
+    assert (envelope["coverage"]["expected_count"], envelope["coverage"]["included_count"]) == (4, 1)
+    assert envelope["coverage"]["omitted"][0]["reason"] == "outside_current_registry"
+    assert (envelope["coverage"]["shown_count"], envelope["coverage"]["available_count"]) == (1, 2)
+    assert envelope["coverage"]["truncated"] is True
+    assert "incomplete_coverage" in envelope["alert_reasons"]
+    assert envelope["upstream"][0]["projection"] == "status"
+    assert "status/registry" in _sources(envelope)
+    assert _sources(envelope)["goal_quota"]["item_count"] == 1
+    assert "🔴 projection alerts" in global_todos.render_global_todos_markdown(payload)
+    assert str(tmp_path) not in json.dumps(envelope)
+
+
+def test_global_todos_missing_status_envelope_and_failed_quota_alert(tmp_path: Path, monkeypatch) -> None:
+    status_payload = _global_status_payload(tmp_path, excluded=0)
+    status_payload.pop("projection_envelope")
+    monkeypatch.setattr(global_todos, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(
+        global_todos, "build_quota_should_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("quota unavailable")),
+    )
+
+    payload = global_todos.build_global_todos(
+        registry_path=tmp_path / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, limit=5,
+    )
+
+    envelope = payload["projection_envelope"]
+    assert _sources(envelope)["status"]["status"] == "not_read"
+    assert _sources(envelope)["goal_quota"]["unreadable_count"] == 1
+    assert envelope["alert_reasons"] == ["missing_required_sources", "unreadable_sources"]
+
+
+def test_global_todos_missing_attention_queue_alerts(tmp_path: Path, monkeypatch) -> None:
+    status_payload = _global_status_payload(tmp_path, excluded=0)
+    status_payload.pop("attention_queue")
+    monkeypatch.setattr(global_todos, "collect_status", lambda **_: status_payload)
+
+    envelope = global_todos.build_global_todos(
+        registry_path=tmp_path / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, limit=5,
+    )["projection_envelope"]
+
+    assert _sources(envelope)["attention_queue"]["status"] == "not_read"
+    assert "missing_required_sources" in envelope["alert_reasons"]
+
+
+def test_global_risks_inherits_status_and_discloses_missing_global_membership(tmp_path: Path, monkeypatch) -> None:
+    status_payload = _global_status_payload(tmp_path, excluded=0)
+    status_payload.update({"contract": {"error_diagnostics": []}, "run_history": {"goals": []}})
+    monkeypatch.setattr(global_risks, "collect_status", lambda **_: status_payload)
+
+    payload = global_risks.build_global_risks(
+        registry_path=tmp_path / ".loopx" / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, time_range="24h", limit=5,
+    )
+
+    envelope = payload["projection_envelope"]
+    assert envelope["projection"] == "global_risks"
+    assert envelope["complete"] is True and envelope["alert"] is False
+    assert envelope["upstream"][0]["projection"] == "status"
+    assert "status/registry" in _sources(envelope)
+    assert _sources(envelope)["status_contract"]["item_count"] == 0
+
+    status_payload["global_registry"] = {"available": False, "findings": []}
+    missing = global_risks.build_global_risks(
+        registry_path=tmp_path / ".loopx" / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, time_range="24h", limit=5,
+    )
+    envelope = missing["projection_envelope"]
+    assert envelope["coverage"]["expected_count"] is None
+    assert envelope["complete"] is False
+    assert "missing_required_sources" in envelope["alert_reasons"]
+    assert "incomplete_coverage" in envelope["alert_reasons"]
+    assert "🔴 projection alerts" in global_risks.render_global_risks_markdown(missing)
+    assert str(tmp_path) not in json.dumps(envelope)
+
+
+def test_global_risks_scan_truncation_is_an_incomplete_coverage_alert(tmp_path: Path, monkeypatch) -> None:
+    status_payload = _global_status_payload(tmp_path, excluded=0)
+    status_payload["contract"] = {
+        "error_diagnostics": [
+            {"code": "test_failure", "scope": "global"} for _ in range(41)
+        ]
+    }
+    monkeypatch.setattr(global_risks, "collect_status", lambda **_: status_payload)
+
+    payload = global_risks.build_global_risks(
+        registry_path=tmp_path / ".loopx" / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, time_range="24h", limit=1,
+    )
+
+    envelope = payload["projection_envelope"]
+    assert payload["summary"]["source_rows_truncated"] is True
+    assert envelope["coverage"]["omitted"][-1]["reason"] == "source_rows_not_scanned"
+    assert envelope["coverage"]["truncated"] is True
+    assert "incomplete_coverage" in envelope["alert_reasons"]
+
+
+def test_global_risks_empty_contract_container_is_a_read_source(tmp_path: Path, monkeypatch) -> None:
+    status_payload = _global_status_payload(tmp_path, excluded=0)
+    status_payload["contract"] = {}
+    monkeypatch.setattr(global_risks, "collect_status", lambda **_: status_payload)
+
+    envelope = global_risks.build_global_risks(
+        registry_path=tmp_path / ".loopx" / "registry.json", runtime_root_override=None,
+        scan_roots=[], agent_id=None, time_range="24h", limit=5,
+    )["projection_envelope"]
+
+    assert _sources(envelope)["status_contract"]["status"] == "fresh"
+
+
 def test_real_cli_global_membership_failure_and_recovery(tmp_path):
     """Global scope must never use local membership as its denominator."""
     import subprocess
@@ -298,7 +436,7 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
             global_path.unlink(missing_ok=True)
         else:
             global_path.write_text(content)
-        for command in ("global-summary", "global-gates"):
+        for command in ("global-summary", "global-gates", "global-todos", "global-risks"):
             envelope = cli(command)["projection_envelope"]
             assert envelope["coverage"]["expected_count"] is None
             assert envelope["complete"] is False and envelope["alert"] is True
@@ -308,7 +446,7 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
             local = cli("status")["projection_envelope"]
             assert local["complete"] is True and local["alert"] is False
         global_path.write_text(json.dumps(global_registry))
-        for command in ("global-summary", "global-gates"):
+        for command in ("global-summary", "global-gates", "global-todos", "global-risks"):
             local = cli(command)["projection_envelope"]
             assert (local["coverage"]["included_count"], local["coverage"]["expected_count"]) == (1, 2)
             assert local["complete"] is False
