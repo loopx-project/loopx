@@ -56,7 +56,7 @@ import {
 } from "./heartbeat_receipt_identity.ts";
 
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
-import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait } from "./blocked_wait.ts";
+import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import {
   parseQuotaAccountingOwner,
@@ -1142,6 +1142,8 @@ function readQuotaSettlementFromRequest(
     material_change: isMaterialMonitorPoll(monitorPoll),
     durable_writeback_present: writeback.failure === null,
     quota_spend_present: spend.failure === null,
+    unavailable_attempt_present: blockedNoSpend &&
+      isMonitorUnavailableWait(writebackRun?.blocked_retry, identity.todo_id),
   });
   // A committed observation closes its exact Turn independently of whether
   // the monitor still appears in the current Todo frontier. Reuse the monitor
@@ -1157,7 +1159,7 @@ function readQuotaSettlementFromRequest(
     no_spend_closeout_present: blockedNoSpend,
   });
 
-  const recovery = request.refresh_retry === null ? null : refreshRecovery(
+  const refreshDecision = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
     workspaceCausality?.requirement,
     writebackRun !== null && snapshot.runs.slice(
@@ -1169,6 +1171,14 @@ function readQuotaSettlementFromRequest(
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
   );
+  // A non-material poll need not appear as findWriteback's advancement run.
+  // Its exact committed observation still fences an incompatible unavailable
+  // claim; retain the normal workspace/vision supplement paths for real polls.
+  const recovery = monitorPoll !== null && request.refresh_retry?.delivery_outcome === "outcome_gap" &&
+      isTurnScopedSettlementOutcome(request.refresh_retry.delivery_outcome,
+        request.refresh_retry.progress_observation, identity.todo_id)
+    ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
+    : refreshDecision;
 
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
