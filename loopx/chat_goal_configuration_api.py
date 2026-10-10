@@ -417,6 +417,14 @@ class GoalConfigurationRequestMixin:
                 result,
                 machine_namespaces=self._goal_configuration_machine_namespaces(),
             )
+            from .agent_registry import load_goal_from_registry
+            from .capabilities.progress_review.context import external_progress_review_context
+            goal = load_goal_from_registry(self.server.registry_path, goal_ids[0].strip())
+            observation = external_progress_review_context(goal or {}, getattr(self.server, "runtime_root", None))
+            if observation is not None:
+                for capability in response.get("capability_catalog", {}).get("capabilities", []):
+                    if capability.get("capability_id") == "progress_review":
+                        capability["observation"] = observation["summary"]
         except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
             self._send_error(
                 str(exc),

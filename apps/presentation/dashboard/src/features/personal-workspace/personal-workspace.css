@@ -902,6 +902,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-capability-editor-status p { margin-top: 3px; }
 .personal-capability-editor-status.is-preview { background: var(--pw-blue-soft); color: var(--pw-blue-ink); }
 .personal-capability-editor-status.is-read-only { background: #fff5e8; color: #9a5a10; }
+.personal-capability-observation { display: grid; gap: 10px; margin: 20px 24px; min-width: 0; overflow-wrap: anywhere; }
+.personal-capability-observation h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.personal-capability-observation button { justify-self: start; min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; font-size: 12px; cursor: pointer; }
+.personal-capability-observation details { font-size: 12px; }
+.personal-capability-observation summary { min-height: 32px; cursor: pointer; }
+.personal-capability-observation code { display: block; font-size: 11px; overflow-wrap: anywhere; }
 .personal-capability-linked-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; margin: 0 24px 20px; padding: 14px; border: 1px solid var(--pw-line); border-radius: 10px; background: var(--pw-bg); }
 .personal-capability-linked-setting > div { display: grid; gap: 4px; }
 .personal-capability-linked-controls { min-width: 0; justify-items: start; }
