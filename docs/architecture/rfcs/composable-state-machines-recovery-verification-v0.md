@@ -304,15 +304,13 @@ lease/GoalRef fence, followed by M3's actual delivery callers.
 
 ### Source-grounded implementation sequence
 
-These are unimplemented composition deltas within existing M2/M3 and roadmap
-R2/R3/R4, not new milestones. Source owners were rechecked at
-`44931b6d22a50b949d43354e6ea498fb6b68d231`.
+The table tracks independent composition boundaries within M2/M3 and roadmap R2/R3/R4. Candidate checkpoints do not establish installed behavior or full M2 acceptance. The source baseline is `233cc76fd22760947d73e1501032b8b77e28148b`.
 
-| Bounded outcome | Existing entry and owner | Current gap and decisive exit |
+| Bounded outcome | Existing entry and owner | Current checkpoint and decisive exit |
 | --- | --- | --- |
 | Unavailable declared ancestry prevents new dependent use | `Delegations._read_current/start`, `delegation_results.require_dependencies/adoption_evidence`, `delegation.ts` | Alignment §3.8: source → A → B with A input invalidated must refuse current dependent use even if A output is unchanged. Qualify real read/start/adopt/settlement and packaged evidence readback; keep historical completion. |
 | Independent check failure reaches an actionable original-task recovery journey | `executor._task_validation_stage`, `ValidatedTurnReceipt`, canonical `turn_loop_controller_contract_v0.json`, `turn_journal.ts` | Preserve qualified failure scope and repair/replan detail; complete bounded repair or verifier-only retry, current validation and original-effect settlement. Host assertions cannot become trusted validation. |
-| Optional semantic review explains its evidence and coverage | Existing progress-review receipt/loader and canonical Goal acceptance inspection | Bind a selected criterion and evidence coverage in shadow readback; show missing/stale basis and separate judgment dimensions. Model quality and intervention qualify separately. |
+| Shadow review explains criteria and coverage | progress-review receipt/context, `progress_review_evidence.ts`, canonical acceptance inspect | Select current canonical task criteria; exact GoalRef preserves instance identity, while changed tasks or recreated instances withdraw old judgments. Independent older cores retain only the legacy manual-study shape; canonical scope never downgrades. Show separate dimensions, declared-file net change, missing evidence and unreadable storage. Default off and existing assist trigger rules retain their semantics. |
 
 For the second outcome, `_task_validation_stage` already saves the independent
 result and blocks settlement. `ValidatedTurnReceipt` omits that validation's
@@ -344,6 +342,15 @@ entries share the owner. A command-copy button or backend receipt alone does not
 complete the journey. Bound repeated verification and source-chain traversal
 using measured workloads. Roll back code through its owner while retaining
 receipts, completed effects and unresolved recovery obligations.
+
+An optional `acceptance_scope` refers only to registry/runtime paths inside the
+selected workspace. Criteria come from the current owner; private commands and
+paths stay out of model questions. Hashes, versions and declared coverage are
+observations, not proof of model correctness, a durable business checkpoint or
+whole-task completion. Existing team evidence and capability settings carry App
+readback, and CLI/MCP share the owner; no Lark-specific protocol is introduced.
+Live correction, remote exactly-once, takeover, observer quality and intervention
+retain their existing RFC acceptance owners.
 
 ## 12. Open decisions
 

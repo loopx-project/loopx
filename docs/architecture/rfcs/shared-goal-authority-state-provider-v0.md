@@ -41,6 +41,14 @@ Frozen failures/missing evidence remain visible. T4 deletes proven redundant
 owners alongside implementation, without waiting for R6 or all Python to vanish.
 This replaces stale current-count estimates, not historical execution evidence.
 
+The [reversible trial operation sheet](../../reference/sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用)
+joins ordinary native Todo/guard/writeback/once-only spend with restart and a
+current-head exit to File. Its CLI regression preserves full Todo metadata and
+the original settled Turn through that exit. It is a bounded qualification path,
+not sustained use, full Goal recovery, a live Host trial or released-default
+approval. Package/source parity must also exclude retired modules after repeated
+builds; a clean build alone cannot close that packaging rule.
+
 **Fresh creation opt-in (2026-10-04, proposed).** The existing
 [device setting and CLI/App creation owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
 can freeze a File/SQLite target and `soft_claim`/`hard_lease` policy, initialize

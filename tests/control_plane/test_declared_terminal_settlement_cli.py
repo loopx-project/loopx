@@ -79,8 +79,9 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("closeout_source", ["turn", "lifecycle"])
 def test_declared_leased_completion_writeback_spend_terminal_and_replay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, closeout_source: str,
 ) -> None:
     project, workspace, runtime, registry, run, lease, marker, _, original = _fixture(
         tmp_path, monkeypatch, provider,
@@ -132,6 +133,11 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     assert warning["count"] == 1
     assert "ordinary Todo completion needs no artificial successor" in warning["recommended_action"]
     assert "terminal_closure_proof" not in ordinary["agent_todos"]
+    code, early_reentry = run("todo", "complete", "--goal-id", cli.GOAL_ID,
+        "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
+        "--completion-identity-key", completed["completion_identity_key"],
+        "--no-follow-up", "--evidence", complete_args[-1])
+    assert code == 1, early_reentry
     code, continuing_guard = run(*guard_args)
     assert code == 0, continuing_guard
     assert continuing_guard["agent_todo_summary"]["todo_succession_warning"]["recommended_action"] == warning["recommended_action"]
@@ -162,16 +168,22 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     code, spent = run(*spend_args)
     assert code == 0, spent
     assert spent["appended"] is True
-    code, terminal = run(*complete_args, "--no-follow-up")
+    terminal_args = (*complete_args, "--no-follow-up") if closeout_source == "turn" else (
+        "todo", "complete", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
+        "--agent-id", cli.AGENT_ID, "--completion-identity-key", completed["completion_identity_key"],
+        "--no-follow-up", "--evidence", complete_args[-1])
+    code, terminal = run(*terminal_args)
     assert code == 0, terminal.get("error") or terminal.get("reason") or terminal
     assert terminal["completion_continuation"] == "no_followup"
-    assert terminal["completion_recovery"] == "same_turn_terminal_closeout"
+    assert terminal["completion_recovery"] == (
+        "same_turn_terminal_closeout" if closeout_source == "turn" else "lifecycle_reentry_terminal_closeout")
     assert terminal["changed"] is True
     assert terminal["idempotent_replay"] is False
-    assert [r["step_kind"] for r in terminal["settlement_result"]["receipts"]] == [
-        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
-    ]
-    for args in (complete_args, refresh_args, spend_args, (*complete_args, "--no-follow-up")):
+    if closeout_source == "turn":
+        assert [r["step_kind"] for r in terminal["settlement_result"]["receipts"]] == [
+            "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+        ]
+    for args in (complete_args, refresh_args, spend_args, terminal_args):
         code, replay = run(*args)
         assert code == 0, replay
         assert replay["idempotent_replay"] is True

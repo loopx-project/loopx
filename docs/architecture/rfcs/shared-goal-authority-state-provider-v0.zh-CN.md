@@ -34,6 +34,12 @@
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
 或所有 Python 消失。本节替代陈旧的当前数量估算，不覆盖历史执行证据。
 
+[可逆试用操作单](../../reference/sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用)
+将原生 Todo/guard/writeback/单次 spend、重启和从当前 head 退出至 File 串为同一旅程。
+CLI 回归保留完整 Todo metadata 和原 Turn 结算；这是有界资格路径，不是持续使用、
+完整 Goal 恢复、真实 Host 试用或发布默认通过。安装包/源码一致性还须证明重复构建
+不夹带已退役模块；单次冷构建通过不等于构建规则已经修复。
+
 **新建 opt-in（2026-10-04，拟议）。** 既有
 [设备设置和 CLI/App 创建 owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
 可固定 File/SQLite 目标与 `soft_claim`/`hard_lease` 策略，初始化空 canonical

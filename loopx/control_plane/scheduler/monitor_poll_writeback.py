@@ -18,7 +18,7 @@ def resolve_monitor_todo_item(
     todo_id: str | None = None,
     target_key: str | None = None,
 ) -> dict[str, Any]:
-    from ...todos import list_goal_todos
+    from ...control_plane.todos.list_readback import list_goal_todos
 
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
     safe_target_key = str(target_key or "").strip()

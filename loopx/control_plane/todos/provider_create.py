@@ -46,6 +46,7 @@ def create_canonical_todo_if_promoted(
     claimed_by: str | None, metadata: dict[str, Any], dry_run: bool,
     project: Path | None = None, state_file: Path | None = None,
     operation_id: str | None = None,
+    expected_provider_revision: str | None = None,
 ) -> dict[str, Any] | None:
     # The durable fence selects the route; the native transaction owns the
     # complete-head validation. A separate source read supplies no create facts.
@@ -100,7 +101,10 @@ def create_canonical_todo_if_promoted(
         result = effect_runtime_result(
             "coordination.local_authority.todo_create",
             {
-                "schema_version": "loopx_local_coordination_todo_create_request_v1",
+                "schema_version": ("loopx_local_coordination_todo_create_request_v2"
+                    if expected_provider_revision is not None else "loopx_local_coordination_todo_create_request_v1"),
+                **({"expected_provider_revision": expected_provider_revision}
+                    if expected_provider_revision is not None else {}),
                 "runtime_root": str(runtime_root.resolve()),
                 "goal_id": goal_id,
                 "todo": todo,

@@ -844,6 +844,10 @@ class CodexChatAgentSession:
                     raise session._runtime_error("Codex returned an invalid project configuration.")
                 if permissions_profile:
                     host_config = codex_context.disable_mcp_servers(effective, host_config or {})
+                    try:
+                        host_config = codex_context.public_source_reader(effective, host_config)
+                    except ValueError as exc:
+                        raise session._runtime_error(str(exc)) from None
                     if session._host_model_auth is not None:
                         # Use public native transport defaults, not the
                         # account's configuration or environment. Reject a

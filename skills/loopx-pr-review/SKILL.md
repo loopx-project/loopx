@@ -69,7 +69,7 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
 1. Record the packet's exact head, then follow `review_execution_contract.decision_procedure`:
    the current goal and `problem_context` delivery judgment first, including on re-review,
    then `evidence_commands` and repository-native validation.
-2. Fill `review_plan.result_template`; missing evidence stays `unverified`, never `verified` from metadata or CI.
+2. Fill `review_plan.result_template`; missing evidence stays `unverified`; never infer `verified` from metadata or CI.
    Execute repository-reuse, default-off, authority and real-path counterfactuals, not prose declarations.
    Fill `result.reviewer` per `review_execution_contract.reviewer_declaration`; open with its `body_marker` line.
    Read `problem_context.spec_basis`'s specification before the diff, plus any `repository_experience` advice.

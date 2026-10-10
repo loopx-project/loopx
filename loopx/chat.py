@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import unquote
 
-from .todos import add_goal_todo
+from .control_plane.todos.mutation_api import add_goal_todo
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
 from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
@@ -661,6 +662,10 @@ def _normalize_todo_text(text: str) -> str:
 
 
 def _todo_revision(payload: dict[str, Any]) -> str | None:
+    # Canonical dry-runs return their provider head; the compatibility writer
+    # retains its existing document revision witness.
+    if payload.get("decision_read_from_provider") is True:
+        return str(payload["provider_revision"])
     correctness = payload.get("local_state_write_correctness")
     if not isinstance(correctness, dict):
         return None
@@ -675,13 +680,15 @@ def _todo_revision(payload: dict[str, Any]) -> str | None:
 
 
 def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str, Any]:
+    canonical = payload.get("todo")
+    record = canonical if isinstance(canonical, dict) else {}
     todo = {
         "goal_id": str(payload.get("goal_id") or ""),
         "todo_id": str(payload.get("todo_id") or ""),
-        "text": str(payload.get("todo") or ""),
-        "status": str(payload.get("status") or "open"),
-        "task_class": str(payload.get("task_class") or "advancement_task"),
-        "action_kind": str(payload.get("action_kind") or CHAT_TODO_ACTION_KIND),
+        "text": str(record.get("text") if record else payload.get("todo") or ""),
+        "status": str(record.get("status") if record else payload.get("status") or "open"),
+        "task_class": str(record.get("task_class") or payload.get("task_class") or "advancement_task"),
+        "action_kind": str(record.get("action_kind") or payload.get("action_kind") or CHAT_TODO_ACTION_KIND),
     }
     return {
         "ok": bool(payload.get("ok")),
@@ -696,6 +703,10 @@ def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str
 
 def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
     compact = _compact_todo_payload(payload, applied=False)
+    if payload.get("decision_read_from_provider") is True:
+        # A create dry-run allocates a proposed operation identity without a
+        # write. Its random Todo id is not the reviewed intent or source head.
+        compact["todo"].pop("todo_id")
     return _stable_digest(
         {
             "schema_version": CHAT_TODO_PREVIEW_SCHEMA_VERSION,
@@ -734,15 +745,18 @@ def _todo_no_write_receipt(
     *,
     goal_id: str,
     current_preview: dict[str, Any],
+    write_attempted: bool = False,
+    state_revision: str | None = None,
 ) -> dict[str, Any]:
     receipt = {
         "schema_version": CHAT_TODO_NO_WRITE_RECEIPT_SCHEMA_VERSION,
         "goal_id": goal_id,
         "status": "not_applied",
         "outcome": "preview_stale",
-        "write_attempted": False,
-        "current_preview_id": _todo_preview_fingerprint(current_preview),
-        "state_revision": _todo_revision(current_preview),
+        "write_attempted": write_attempted,
+        **({"current_preview_id": _todo_preview_fingerprint(current_preview)}
+            if not write_attempted else {}),
+        "state_revision": state_revision or _todo_revision(current_preview),
     }
     receipt["receipt_id"] = _stable_digest(receipt)
     return receipt
@@ -755,6 +769,7 @@ def _add_review_todo(
     text: str,
     priority: str | None = None,
     dry_run: bool,
+    expected_provider_revision: str | None = None,
 ) -> dict[str, Any]:
     return add_goal_todo(
         registry_path=registry_path,
@@ -765,6 +780,8 @@ def _add_review_todo(
         task_class="advancement_task",
         action_kind=CHAT_TODO_ACTION_KIND,
         dry_run=dry_run,
+        **({"expected_provider_revision": expected_provider_revision}
+            if expected_provider_revision is not None else {}),
     )
 
 
@@ -810,13 +827,28 @@ def apply_todo_review_preview(
                 current_preview=current_preview,
             ),
         )
-    applied = _add_review_todo(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        text=text,
-        priority=priority,
-        dry_run=False,
-    )
+    try:
+        applied = _add_review_todo(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            text=text,
+            priority=priority,
+            dry_run=False,
+            **({"expected_provider_revision": _todo_revision(current_preview)}
+                if current_preview.get("decision_read_from_provider") is True else {}),
+        )
+    except LocalCoordinationAuthorityUnavailable as exc:
+        if exc.code != "provider_revision_mismatch":
+            raise
+        # Only a conclusive owner rejection proves no write. Unknown commit
+        # responses keep their existing original-operation recovery contract.
+        receipt = _todo_no_write_receipt(goal_id=goal_id,
+            current_preview=current_preview, write_attempted=True,
+            state_revision=exc.payload.get("current_provider_revision"))
+        raise TodoReviewPreviewConflict(
+            "stale todo preview; preview the proposal again before applying",
+            receipt=receipt,
+        ) from exc
     compact = _compact_todo_payload(applied, applied=True)
     compact["receipt"] = _todo_write_receipt(
         preview_id=preview_id,

@@ -5,7 +5,7 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
-import {canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
+import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 import {decideTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
@@ -35,6 +35,20 @@ export function isBoundUserActionMetadataUpdate(todo: JsonObject, input: Coordin
     input.completion === undefined && input.completion_validation_revision === undefined &&
     input.monitor_observation === undefined &&
     Object.keys(input.planning_intent ?? {}).every(field => field === "evidence");
+}
+
+/** Released history survives policy migration but is not a soft-claim execution
+ * grant. Only current-owner copy edits qualify; planning and terminal mutations
+ * keep their existing fences. Actor/exclusion/binding admission runs separately. */
+export function isSoftClaimReleasedCopyUpdate(todo: JsonObject, lease: JsonObject | undefined,
+  input: CoordinationTodoUpdateInput): boolean {
+  if (lease?.status !== "released" || todo.role !== "agent" || todo.status !== "open" ||
+      input.actor_agent_id === null || todo.claimed_by !== input.actor_agent_id ||
+      lease.owner !== input.actor_agent_id || input.completion !== undefined ||
+      input.completion_validation_revision !== undefined || input.monitor_observation !== undefined ||
+      Object.keys(input.planning_intent ?? {}).length !== 0) return false;
+  canonicalTaskLease(lease, input.goal_id, input.todo_id);
+  return leaseRepositoryRejection(todo, lease) === null;
 }
 
 export function decodeTaskLeaseProof(value: unknown): TaskLeaseProof | null {
@@ -125,6 +139,14 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   };
   const todo = index.todos.get(input.todo_id)!;
   const intent = input.planning_intent ?? {};
+  if (mode === "soft_claim" && isSoftClaimReleasedCopyUpdate(todo,
+      index.leases.get(input.todo_id), input)) {
+    return {...base, action: "resolve_lifecycle_edit",
+      reason: "The released lease is retained history in soft_claim. Retry this owner copy edit without either task-lease proof flag, using a fresh update operation and current provider revision. Keep the history; do not acquire a replacement lease. Planning, ownership and terminal edits remain subject to their own admission.",
+      retry: {command: "loopx todo update", goal_id: input.goal_id, todo_id: input.todo_id,
+        agent_id: input.actor_agent_id,
+        requires_flags: ["--update-operation-id", "--update-expected-provider-revision"]}};
+  }
   // A blocked Todo cannot acquire execution authority. A bundled edit must
   // first use the existing administrative reopen, rather than reconcile a
   // claim/acquire a lease that the blocked status itself makes ineligible.

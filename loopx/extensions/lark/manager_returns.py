@@ -320,7 +320,7 @@ class LarkManagerReturnTransport:
         )
 
 
-def start_return_service(server: Any, runtime_root: Path) -> Any:
+def start_return_service(server: Any, runtime_root: Path, *, start_service: bool = True) -> Any:
     """Compose the return pump at the existing Chat/Lark service boundary."""
     from ...capabilities.manager_context.roundtrip import ReturnService
 
@@ -333,5 +333,6 @@ def start_return_service(server: Any, runtime_root: Path) -> Any:
         runtime_root, server.registry_path, server.chat_store, transport
     )
     transport.cancelled = service.stop.is_set
-    service.start()
+    if start_service:
+        service.start()
     return service

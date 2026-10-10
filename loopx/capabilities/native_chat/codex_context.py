@@ -6,7 +6,9 @@ an independent native store; no credentials or history are seeded into it.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -97,3 +99,31 @@ def disable_mcp_servers(config: Mapping[str, Any], host_config: Mapping[str, Any
     return {**host_config, "mcp_servers": {
         name: {"enabled": False} for name in effective.keys() | requested.keys()
     }}
+
+
+def public_source_reader(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Admit one operator-selected anonymous provider after private MCP removal.
+
+    This is a host IO adapter, not a project-controlled grant. No inherited
+    server fields, browser state, credentials or private execution permissions.
+    """
+    setting = os.environ.get("LOOPX_CHAT_PUBLIC_SOURCE_READ", "off")
+    if setting == "off":
+        return dict(host_config)
+    if setting != "on":
+        raise ValueError("LOOPX_CHAT_PUBLIC_SOURCE_READ must be on or off")
+    if any(importlib.util.find_spec(module) is None for module in ("mcp", "resvg_py", "PIL", "defusedxml")):
+        raise ValueError("Install loopx[public-source-reader] in the existing Chat host environment")
+    name = "loopx_public_source_read"
+    if name in config.get("mcp_servers", {}) or name in host_config.get("mcp_servers", {}):
+        raise ValueError("Public source reader conflicts with native MCP configuration")
+    from ...extensions import public_source_reader as reader
+    # Managed releases put their source on the host's sys.path, not necessarily
+    # in site-packages. Bind this release's file; -m could fail or select an
+    # older site-installed LoopX once the child discards the host's sys.path.
+    return {**host_config, "mcp_servers": {**host_config.get("mcp_servers", {}), name: {
+        "enabled": True, "command": str(Path(sys.executable).absolute()),
+        "args": ["-I", str(Path(reader.__file__).resolve())],
+        "env": {"PATH": os.defpath}, "env_vars": [],
+        "startup_timeout_sec": 30, "tool_timeout_sec": 40,
+    }}}

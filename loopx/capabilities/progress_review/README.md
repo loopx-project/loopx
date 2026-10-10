@@ -44,7 +44,7 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 | `mode` | `off`, `shadow`, `assist` | `off` loads nothing; `shadow` records and displays; `assist` may raise the obligation |
 | `signal` | `noul`, `choice` | Which receipt judgment pair counts as drift |
 | `drift_threshold` | 2–20 | Consecutive completed drift receipts before an obligation |
-| `contract_revision` | sha256 or empty | The observer basis revision receipts must be bound to; printed by `loopx-jev drift init`. Required for `assist`. The pin is manual: receipts bound to other revisions are never counted, changing the basis does not retire earlier receipts by itself, and status reports `rebind_hint: newer_receipts_under_unpinned_revision` when the newest receipt is bound elsewhere |
+| `contract_revision` | sha256 or empty | The observer basis revision receipts must be bound to; printed by `loopx-jev drift init`. Required for `assist`. The pin is manual: receipts bound to other revisions are never counted, changing the basis does not retire legacy or operator-study receipts by itself, and status reports `rebind_hint: newer_receipts_under_unpinned_revision` when the newest receipt is bound elsewhere |
 
 The policy lives at `control_plane.progress_review` in the goal registry and is
 visible in `loopx configure-goal --goal-id <goal-id>` under `feature_summary`
@@ -65,7 +65,10 @@ Each receipt carries only typed fields:
 - `judgments.noul`: probabilities for `behavior_change`, `serves_acceptance`,
   `evidence_increment`, or null;
 - `drift_signal.noul` and `drift_signal.choice`: `true`, `false` or null;
-- `timing_ns`, `usage`, `label_probability_threshold`, `recorded_at`.
+- `timing_ns`, `usage`, `label_probability_threshold`, `recorded_at`;
+- optional `evidence_scope`: criterion origin/version/hash and declared relative
+  files, with coverage `declared_file_net_change`. New canonical bindings are
+  rechecked against current task acceptance before their signals are consumed.
 
 `sequence` is the writing observer's local counter and restarts at zero when
 `drift init` creates a new observer state. The core never compares sequences
@@ -105,7 +108,7 @@ This tightens the original stage-0 `assist` compatibility: incompletely bound
 historical receipts remain visible in shadow/status but cannot form or clear an
 obligation. Existing off behavior, model requests, manual revision pins and typed
 replan outcomes are unchanged. Every captured transition is one of three things: **drift**
-(completed, selected signal `true`, pinned revision), **on-goal** (completed,
+(completed, selected signal `true`, pinned revision), **condition not met** (completed,
 signal `false`) or **unevaluated** for one typed reason (`pending`, `failed`,
 `abstained`, `stale`, `undecided`, `missing`, `unattributed`,
 `identity_conflict`, `other_revision`, `not_evaluated`). Formation is
@@ -113,11 +116,29 @@ conservative: an obligation needs `drift_threshold` consecutive drift
 transitions with no unevaluated transition between them. Persistence is not:
 once formed, newer unevaluated transitions neither extend nor dissolve the
 obligation, and their count is reported as `unevaluated_transitions` on the
-trigger. Only an acknowledged replan or a newer completed on-goal verdict ends
+trigger. Only an acknowledged replan or a newer completed non-triggering verdict ends
 it; the Goal owner can also set the mode back to `shadow` or `off`. Receipts
 bound to a revision other than the pinned one are unevaluated history and
 never counted. The scan covers the run history the Goal keeps
 (`latest_runs`), so an obligation can only be as old as that window.
+
+## Criterion and observation readback
+
+For canonical task criteria, initialize the optional observer with an explicit
+[`acceptance_scope`](../../../packages/loopx-jev/DRIFT_SHADOW.md#bind-canonical-task-criteria).
+The observer reads the existing acceptance owner instead of trusting the
+manifest's acceptance text. Manual bases remain labeled `operator_study`.
+A changed or unavailable canonical criterion binding makes that receipt stale
+and withdraws its signal; stored history and the policy's manual revision pin
+remain intact. Legacy receipts retain their existing behavior.
+
+In **Goal settings → capability center → progress-review sentinel**, enabled
+Goals show relationship and evidence increment separately, criterion origin,
+selected-file coverage and missing/stale/unavailable states. Use **重新读取审查证据**
+to refresh; the old judgment is withdrawn during the read. `off_goal` together
+with `new_evidence` can be a non-triggering signal without being on Goal.
+Receipt-store failure is unavailable, never cached success. Model scores do not
+validate a task or authorize stop, rollback or completion. `off` reads nothing.
 
 ## Discharge
 

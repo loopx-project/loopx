@@ -910,6 +910,16 @@ def test_background_service_delivers_without_another_agent_or_query(flow, monkey
     assert observations == []  # Legacy delivery is outside the exact-source telemetry contract.
 
 
+def test_return_service_can_close_before_start(flow):
+    root, registry, store, _ = flow
+    service = ReturnService(root, registry, store, lambda *_: {"reply_verified": True})
+
+    service.close()
+
+    assert service.stop.is_set()
+    assert not service.thread.is_alive()
+
+
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
 def test_registration_revocation_blocks_return_without_retargeting(flow, project):
     root, registry, store, create = flow

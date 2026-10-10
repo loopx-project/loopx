@@ -2,7 +2,7 @@
 
 from urllib.parse import parse_qs, urlparse
 
-from ..todos import list_goal_todos
+from ..control_plane.todos.list_readback import list_goal_todos
 
 from ..capabilities.explore.result_log import (
     build_explore_result_projection,

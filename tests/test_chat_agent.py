@@ -177,6 +177,7 @@ def test_non_macos_workspace_does_not_discover_macos_tools(monkeypatch):
 
 @pytest.mark.parametrize("grant", ["workspace_read", "workspace_write"])
 @pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("public_reader", [False, True])
 @pytest.mark.parametrize("tool_options", [
     {},
     {"unsafe_path": "/Library/Developer", "unsafe_kind": "owner"},
@@ -192,9 +193,10 @@ def test_non_macos_workspace_does_not_discover_macos_tools(monkeypatch):
     {"selected": "/Applications/Xcode.app/Contents/Developer", "unsafe_path": "/"},
 ])
 def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_turn(
-        monkeypatch, tmp_path, grant, resume, tool_options):
+        monkeypatch, tmp_path, grant, resume, tool_options, public_reader):
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
     context = ChatProjectContexts([tmp_path], workspace_grant=grant, filesystem_scope="workspace_only").available()[0]
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "on" if public_reader else "off")
     toolchain, _ = _system_toolchain_fixture(monkeypatch, **tool_options)
     safe_toolchain = not tool_options
     profile = "loopx_workspace_only_" + ("write" if grant == "workspace_write" else "read")
@@ -235,7 +237,13 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         assert params["config"]["default_permissions"] == profile
         assert params["config"]["skills"]["include_instructions"] is False
         assert params["config"]["project_doc_max_bytes"] == 0
-        assert params["config"]["mcp_servers"] == {
+        servers = dict(params["config"]["mcp_servers"])
+        if public_reader:
+            from loopx.extensions import public_source_reader as source_reader
+            public = servers.pop("loopx_public_source_read")
+            assert public["enabled"] is True and public["env_vars"] == []
+            assert public["args"] == ["-I", str(Path(source_reader.__file__).resolve())]
+        assert servers == {
             "managed_fixture": {"enabled": False}, "caller_fixture": {"enabled": False}}
         env = launched[0]
         assert "PRIVATE_FIXTURE_TOKEN" not in env

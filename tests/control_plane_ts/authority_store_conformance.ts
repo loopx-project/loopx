@@ -13,6 +13,7 @@ import {registerUserCompletionFollowthroughConformance} from "./user_completion_
 import {registerSuccessionReadConformance} from "./succession_read_conformance.ts";
 import {registerUserCompletionUpdateConformance} from "./user_completion_update_conformance.ts";
 import {registerTerminalSourceConformance} from "./terminal_source_conformance.ts";
+import {registerTerminalReentryConformance} from "./terminal_reentry_conformance.ts";
 import {registerLeaseAcquisitionConformance} from "./lease_acquisition_conformance.ts";
 import {registerClaimTransferConformance} from "./claim_transfer_conformance.ts";
 import {registerLeasedMonitorConformance} from "./monitor_poll_lease_conformance.ts";
@@ -401,6 +402,7 @@ export function registerAuthorityStoreConformance(
   registerCompletionValidationBindingConformance(providerName, factory);
   registerUserCompletionUpdateConformance(providerName, factory);
   registerTerminalSourceConformance(providerName, factory);
+  registerTerminalReentryConformance(providerName, factory);
   registerUserCompletionFollowthroughConformance(providerName, factory);
   registerMonitorConfigurationConformance(providerName, factory);
   registerMonitorGateScopeConformance(providerName, factory);
