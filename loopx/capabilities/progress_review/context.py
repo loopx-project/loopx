@@ -34,6 +34,7 @@ def external_progress_review_context(
     if policy["mode"] == "off" or runtime_root is None or not goal_id:
         return None
     from ...control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
+    from ...control_plane.goals.goal_ref_validation import exact_goal_ref
     read_error = None
     try:
         loaded, rejected = load_progress_review_receipts(Path(runtime_root), goal_id)
@@ -50,8 +51,11 @@ def external_progress_review_context(
             todo_id = binding["todo_id"]
             if todo_id not in current_by_todo:
                 try:
+                    goal_instance_id = goal.get("goal_instance_id")
                     observation = effect_runtime_result("goal.acceptance.inspect", {
                         "goal_id": goal_id, "runtime_root": str(runtime_root), "todo_id": todo_id,
+                        **({"goal_ref": exact_goal_ref(goal_id, goal_instance_id)}
+                           if goal_instance_id is not None else {}),
                     })
                     current_by_todo[todo_id] = observation.get("completion_requirements")
                 except (OSError, ValueError, EffectRuntimeRemoteError):

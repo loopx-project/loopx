@@ -86,14 +86,14 @@ def read_basis(
             }
         )
         checks.append((target, digest))
-    from loopx.control_plane.effect_runtime import effect_runtime_result
-    from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
+    from loopx.control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRejected
 
     scope = manifest.get("acceptance_scope")
     def criterion_basis():
         requirements = None
         requested = None
         if scope is not None:
+            from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
             if not isinstance(scope, dict) or set(scope) != {
                 "registry_ref", "runtime_ref", "agent_id", "todo_id", "criterion_ids"
             }:
@@ -114,17 +114,25 @@ def read_basis(
             if requirements is None:
                 raise ValueError("current task has no canonical acceptance criteria")
             requested = scope["criterion_ids"]
-        return effect_runtime_result("progress_review.criterion_basis", {
-            "acceptance": manifest["acceptance"], "requirements": requirements, "criterion_ids": requested,
-            "goal_id": manifest.get("goal_id"), "agent_id": scope.get("agent_id") if scope else None,
-        })
+        try:
+            return effect_runtime_result("progress_review.criterion_basis", {
+                "acceptance": manifest["acceptance"], "requirements": requirements, "criterion_ids": requested,
+                "goal_id": manifest.get("goal_id"), "agent_id": scope.get("agent_id") if scope else None,
+            })
+        except EffectRuntimeRejected as exc:
+            # Older independently installed cores still support manual studies.
+            # Keep their legacy shape; never fabricate a canonical binding or
+            # bypass a current core's validation/IO failure.
+            if scope is None and exc.diagnostic_code == "unsupported_method":
+                return {"acceptance": manifest["acceptance"]}
+            raise
     selected = criterion_basis()
     basis = {
         **manifest,
         "evidence": observations,
         "basis_origin": "explicit_operator_study_basis_not_completion_authority",
         "acceptance": selected["acceptance"],
-        "criterion_binding": selected["binding"],
+        **({"criterion_binding": selected["binding"]} if "binding" in selected else {}),
     }
 
     def current() -> bool:
