@@ -110,6 +110,13 @@ def cold_cli(fixture, receiver_package, action, *args, success=True):
 
 
 def backup(fixture, name):
+    # The Stage2c job installs a wheel, while pytest imports the checkout.
+    # Keep this original-producer child on the same source as its parent;
+    # cold_cli separately binds the copied receiver through PYTHONPATH.
+    source_root = Path(loopx.__file__).resolve().parent.parent
+    source_pythonpath = os.pathsep.join(filter(None, (
+        str(source_root), os.environ.get("PYTHONPATH", ""),
+    )))
     child = subprocess.run([sys.executable, "-c",
         "import loopx,sys;print(loopx.__file__,file=sys.stderr);"
         "from loopx.entrypoint import main;raise SystemExit(main())",
@@ -117,7 +124,9 @@ def backup(fixture, name):
         "--format", "json", "backup-state", "--project", str(fixture.state.parent),
         "--output-dir", str(fixture.state.parent.parent / "backups"), "--backup-id", name,
         "--current-project-only", "--no-skills", "--no-automations", "--execute"],
-        cwd=fixture.state.parent.parent, capture_output=True, text=True, timeout=60)
+        cwd=fixture.state.parent.parent,
+        env={**os.environ, "PYTHONPATH": source_pythonpath},
+        capture_output=True, text=True, timeout=60)
     assert str(Path(loopx.__file__).resolve()) in child.stderr
     assert child.returncode == 0, child.stdout + child.stderr
     result = json.loads(child.stdout)
