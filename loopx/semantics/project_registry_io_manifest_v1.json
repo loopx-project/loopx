@@ -711,7 +711,7 @@
     },
     {
       "site": "loopx/cli_commands/goal_channel.py::<module>._source_context::codec_read:load_registry#1",
-      "line": 322,
+      "line": 346,
       "column": 14,
       "kind": "codec_read",
       "api": "load_registry",
@@ -719,7 +719,7 @@
     },
     {
       "site": "loopx/cli_commands/goal_channel.py::<module>.handle_goal_channel_command::codec_read:load_registry#1",
-      "line": 467,
+      "line": 491,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

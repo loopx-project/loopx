@@ -64,6 +64,7 @@ import {
 import {
   COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
   executeCoordinationTodoClaim,
+  unqualifiedGoalRefClaimFailure,
 } from "./todo_claim.ts";
 import {
   COORDINATION_TODO_CREATE_RESULT_SCHEMA,
@@ -1027,6 +1028,9 @@ export async function claimLocalCoordinationTodo(
         input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
+    const scopeFailure = unqualifiedGoalRefClaimFailure(input);
+    if (scopeFailure !== null) return {...scopeFailure, source_authority: null,
+      decision_read_from_provider: false, legacy_fallback_used: false};
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version === LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {
@@ -1073,6 +1077,9 @@ export async function claimLocalCoordinationTodo(
           : requireAuthorityStoreId(input.role, "role"),
         registered_agents: registeredAgents,
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        ...(input.expected_provider_revision === undefined ? {} : {
+          expected_provider_revision: requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision"),
+        }),
         lease_request: leaseRequest,
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
