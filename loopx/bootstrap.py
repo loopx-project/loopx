@@ -38,8 +38,8 @@ from .execution_profile import (
 )
 from .global_registry import sync_project_registry_to_global
 from .install_contract import (
-    ARCHIVE_FALLBACK_INSTALL_COMMAND,
-    DEFAULT_INSTALL_REPAIR_COMMAND,
+    archive_fallback_install_command,
+    install_repair_command,
 )
 from .orchestration import (
     DEFAULT_ORCHESTRATION_MODE,
@@ -504,8 +504,8 @@ def bootstrap_project(
                     "Fix global registry write access, then rerun this command.",
                     "Use --no-global-sync only for an explicit local-only setup.",
                 ],
-                "install_repair_command": DEFAULT_INSTALL_REPAIR_COMMAND,
-                "archive_fallback_install_command": ARCHIVE_FALLBACK_INSTALL_COMMAND,
+                "install_repair_command": install_repair_command(),
+                "archive_fallback_install_command": archive_fallback_install_command(),
                 "install_repair_note": (
                     "If this local LoopX install is missing or stale, repair the PyPI distribution "
                     "and packaged workflow skills, then confirm with loopx doctor before continuing."
@@ -665,8 +665,8 @@ def bootstrap_project(
             f"loopx --registry {runtime_root / 'registry.global.json'} status",
             f"loopx --registry {relative_state_file(project, registry_path)} history --goal-id {goal_id}",
         ],
-        "install_repair_command": DEFAULT_INSTALL_REPAIR_COMMAND,
-        "archive_fallback_install_command": ARCHIVE_FALLBACK_INSTALL_COMMAND,
+        "install_repair_command": install_repair_command(),
+        "archive_fallback_install_command": archive_fallback_install_command(),
         "install_repair_note": (
             "If this local LoopX install is missing or stale, repair the PyPI distribution "
             "and packaged workflow skills, then confirm with loopx doctor before continuing."

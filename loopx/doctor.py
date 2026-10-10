@@ -17,7 +17,11 @@ from .control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_RUNTIME_INDEX,
 )
 from .control_plane.runtime.time import chronology_key
-from .install_contract import NO_CLONE_INSTALL_URL
+from .install_contract import (
+    NO_CLONE_INSTALL_URL,
+    local_install_command,
+    no_clone_upgrade_command,
+)
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
@@ -79,62 +83,6 @@ REQUIRED_INSTALLED_SKILL_PHRASES = {
         "Repair at the lowest durable layer",
     ),
 }
-
-
-def _powershell_literal(value: str | Path) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def local_install_command(repo_root: Path, *, skip_skills: bool = False) -> str:
-    if os.name == "nt":
-        return (
-            "pwsh -NoLogo -NoProfile -File "
-            f"{_powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
-            f"-Python {_powershell_literal(sys.executable)}"
-            + (" -SkipSkills" if skip_skills else "")
-        )
-    command = str(repo_root / "scripts" / "install-local.sh")
-    return f"LOOPX_INSTALL_SKILL=0 {command}" if skip_skills else command
-
-
-def no_clone_upgrade_command(
-    source_ref: Any = None,
-    *,
-    doctor_agent_type: str | None = None,
-    skip_skills: bool = False,
-) -> str:
-    if os.name == "nt":
-        repo_root = Path(__file__).resolve().parents[1]
-        doctor_agent_arg = (
-            f" --agent-type {_powershell_literal(doctor_agent_type)}"
-            if doctor_agent_type
-            else ""
-        )
-        return (
-            f"{local_install_command(repo_root, skip_skills=skip_skills)}\n"
-            f"loopx doctor{doctor_agent_arg}"
-        )
-    ref = str(source_ref or "").strip()
-    installer = f"curl -fsSL {NO_CLONE_INSTALL_URL}"
-    doctor_agent_arg = (
-        f" --agent-type {shlex.quote(doctor_agent_type)}"
-        if doctor_agent_type
-        else ""
-    )
-    install_env: list[str] = []
-    if ref and ref != "stable":
-        install_env.append(f"LOOPX_REF={shlex.quote(ref)}")
-    if skip_skills:
-        install_env.append("LOOPX_INSTALL_SKILL=0")
-    if install_env:
-        installer = f"{installer} | env {' '.join(install_env)} bash"
-    else:
-        installer = f"{installer} | bash"
-    return (
-        f"{installer}\n"
-        'export PATH="$HOME/.local/bin:$PATH"\n'
-        f"loopx doctor{doctor_agent_arg}"
-    )
 
 
 def user_local_bin() -> Path:
