@@ -249,12 +249,11 @@ PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 
 
 ### 基于源码的实现顺序
 
-以下是既有 M2/M3 与路线图 R2/R3/R4 中尚未实现的组合增量，不新增里程碑。
-Source owner 在 `44931b6d22a50b949d43354e6ea498fb6b68d231` 复核。
+以下表格记录既有 M2/M3 与路线图 R2/R3/R4 的独立组合边界；候选 checkpoint 不表示已安装能力或完整 M2 验收。源码基线为 `233cc76fd22760947d73e1501032b8b77e28148b`。
 
-| 有界结果 | 既有入口与 owner | 当前缺口与决定性出口 |
+| 有界结果 | 既有入口与 owner | 当前 checkpoint 与决定性出口 |
 | --- | --- | --- |
-| 声明来源链不可用时，阻止新的依赖使用 | `Delegations._read_current/start`、`delegation_results.require_dependencies/adoption_evidence`、`delegation.ts` | 遵循对齐 §3.8：source → A → B 中 A input 失效，即使 A output 不变也须拒绝当前依赖使用；验证真实 read/start/adopt/settlement 和打包证据读回，保留历史完成。 |
+| 声明来源链失效阻断当前使用 | `Delegations.read/start`、`delegation_results.py`、`delegation_result_use.ts` | `current_use` 区分历史完成和当前资格。新派发、采用与结算共用来源链检查；原 operation 重放只读回。File/SQLite 三层来源反例和打包团队证据页验证撤回、原因、输入引用与修复后重读。 |
 | 独立检查失败进入原任务可操作的恢复旅程 | `executor._task_validation_stage`、`ValidatedTurnReceipt`、canonical `turn_loop_controller_contract_v0.json`、`turn_journal.ts` | 传递已资格化失败范围与 repair/replan 细节；完成有界修复或只运行 verifier 的重试、当前验证与原效果结算。Host 声明不能冒充可信验证。 |
 | 可选语义审查说明证据和覆盖范围 | 既有 progress-review receipt/loader 与 canonical Goal acceptance inspect | 在 shadow 读回绑定选中 criterion 和证据覆盖；显示缺失/陈旧依据及独立判断维度。模型质量和干预另行资格化。 |
 
@@ -279,6 +278,11 @@ result，只重跑 validation，不再次调用 Host。**实际修复工作**需
 修复/复验，并在打包 App 读回成功或继续失败；CLI 与受影响 Lark 入口共用 owner。
 复制命令按钮或后端 receipt 不能独自完成旅程。用实际测量限制重复验证和来源链遍历
 成本；经既有 owner 回退代码，同时保留 receipt、已提交效果和未解决恢复义务。
+
+来源链每次准入最多读取 64 个 operation、16 层，按 operation 合并重复来源读取。
+15 秒经过时间预算停止发起后续检查；已启动的 validator 仍受其配置超时约束，
+这不是 15 秒 HTTP 响应承诺。预算耗尽返回不可用，不以缓存成功回退。该路径只
+覆盖明确声明的本地委派输入；跨来源不是原子快照，未声明的记忆或任意推理仍不在范围内。
 
 ## 12. 未决事项
 

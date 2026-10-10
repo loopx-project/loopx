@@ -314,31 +314,25 @@ R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完�
 不代表清除全部旧 session，也不证明模型理解了纠正。已经提交的外部 effect 继续
 服从自己的对账或显式授权补偿合同。
 
-**实现边界，源码 `44931b6d22a50b949d43354e6ea498fb6b68d231`：**
-[`Delegations._read_current`](../../../loopx/collaboration_mcp.py)重验 accepted
-operation 自己的规则与输出；`read` 随后才附加
-[`result_relationships`](../../../loopx/control_plane/collaboration/delegation_results.py)。
-它可以保持 accepted，同时 incoming dependency 已 unavailable。`dependencies`
-通过 `_read_current` 读取 source，因而不继续检查 source 自己的 incoming dependency。
-有界文件 I/O 诊断配合 synthetic local validation 复现了 source → A → B：A input
-改变、output 不变，A 显示依赖不可用，B 的直接使用仍合格。该诊断不是 live worker
-或 canonical store 测试。
+**本地实现检查点：** 在 `44931b6d22a50b949d43354e6ea498fb6b68d231`
+观察到的直接来源检查缺口，已有候选实现：
+[`delegation_result_use.ts`](../../../loopx/control_plane/collaboration/delegation_result_use.ts)
+拥有判定，[`delegation_results.py`](../../../loopx/control_plane/collaboration/delegation_results.py)
+采集 host 观察。read、start、adoption 与 settlement 资格化 requester 范围内的
+显式来源链，保留历史 accepted/done 记录。每次准入独立缓存来源观察并检测循环，
+界限为 64 个 operation、16 层、15 秒经过时间预算；预算停止后续检查，不中止已
+运行的 validator。缺失与未访问证据均 unavailable；不跨准入缓存成功，不声称原子
+文件快照。准入与采用消费整体验证结果；逐项检查之后预算耗尽，也会撤回此前
+的 link 成功，避免读回与准入分歧。
 
-最近的实现切片是：资格化**显式关联的本机委派结果的当前使用**，保留历史 accepted/
-done receipt。复用 [`delegation.ts`](../../../loopx/control_plane/collaboration/delegation.ts)
-决定 typed eligibility，`delegation_results.py` 采集 host 观察。在 read、start、
-adoption 与 settlement 使用同一 current-use 检查；不把 `todo_done` 改成递归产物
-验证。只沿 requester 范围内的声明关系，采用单次读取的循环检测、共享来源缓存及
-经测量的深度/operation/时间界限。未访问的尾部保持 unavailable，不能假定 accepted；
-不跨准入缓存成功。对任意并发文件 writer，不声称原子快照。
-
-验收覆盖直接/传递失效、共享来源菱形、循环、来源丢失、真实声明 validator 发现
-字节不变的错误内容，以及 start 后 settlement 前失效。验证无关联输入行为等价、
-历史记录不变、verifier 成本有界、恢复不重复派发 worker。打包 team/evidence 视图
-须显示当前不可用及原因，在获授权修复来源/输入后支持当前复验并读回结果。
-修复若需要新的执行，使用另行准入的任务；复验 accepted operation 不得重新派发其
-worker。CLI/MCP/Chat 共用 owner。全 Goal 反向传播、全部 session context 纠正与
-业务回滚仍在该切片之外。
+[`test_delegation_result_use.py`](../../../tests/test_delegation_result_use.py)
+通过真实本机 worker、独立 validator 和 File/SQLite 存储验证 source → A → B：
+A input 变化时撤回当前使用，拒绝下游 start/adoption，保留历史，修复后恢复且不重复
+派发 accepted worker。typed 测试覆盖共享来源、循环与预算耗尽。打包 team/evidence
+经真实 HTTP 读回，撤下受影响报告、显示原因，并在修复后复验。CLI/MCP/Chat 共用
+owner；操作见[本地委派](../../reference/local-delegation.md#repair-and-recheck)。
+这是本地验证的候选实现，不等于已安装行为；全 Goal 反向传播、全部 session 纠正、
+业务回滚与跨主机 HA 仍在边界之外。
 
 ## 4. Authority matrix
 
