@@ -712,6 +712,52 @@ def test_structured_turn_cannot_promote_nonfinal_json_to_a_final_result(monkeypa
         session.send("Return the structured result.", output_schema={"type": "object"})
 
 
+@pytest.mark.parametrize("final_phase", [None, "final_answer"])
+def test_ordinary_turn_compact_answer_uses_final_item_not_commentary(monkeypatch, tmp_path, final_phase):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(), thread_id="thread-fixture",
+        work_dir=tmp_path,
+    )
+    final_text = 'Actual answer.\n<loopx-review-json>{"message":"","proposals":[]}</loopx-review-json>'
+    final = {"type": "agentMessage", "text": final_text}
+    if final_phase is not None:
+        final["phase"] = final_phase
+    upstream = iter([
+        {"method": "item/agentMessage/delta", "params": {"delta": "I will check."}},
+        {"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "commentary", "text": "I will check."}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Actual ans"}},
+        {"method": "item/completed", "params": {"item": final}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    events = []
+    response = session.send("Answer.", on_event=lambda kind, data: events.append((kind, data)))
+    assert response["message"] == "Actual answer."
+    assert not any(kind == "protocol.warning" for kind, _ in events)
+    assert events[-1] == ("answer.final", {"response": response})
+
+
+def test_ordinary_turn_cannot_adopt_a_commentary_envelope(monkeypatch, tmp_path):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(), thread_id="thread-fixture",
+        work_dir=tmp_path,
+    )
+    text = 'Plan.\n<loopx-review-json>{"message":"","proposals":[{"kind":"todo","text":"must not run"}]}</loopx-review-json>'
+    upstream = iter([
+        {"method": "item/agentMessage/delta", "params": {"delta": text}},
+        {"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "commentary", "text": text}}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    response = session.send("Answer.")
+    assert response["message"] == ""
+    assert response["proposals"] == []
+
+
 def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(
     monkeypatch,
     tmp_path,

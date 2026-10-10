@@ -193,6 +193,7 @@ def test_writable_project_turns_use_project_skills_without_manager_work_selectio
         assert prompt.endswith(f"Operator user message:\n{message}")
         envelope = json.loads(prompt.split(CHAT_REVIEW_OPEN_TAG, 1)[1].split(CHAT_REVIEW_CLOSE_TAG, 1)[0])
         assert envelope["schema_version"] == "loopx_chat_agent_response_v0"
+        assert envelope["message"] == ""
         assert envelope["proposals"] == []
         assert all(envelope[field] is None for field in ("protected_action", "goal_draft", "context_handoff", "gate"))
     session = store.load_session(sid)

@@ -463,7 +463,7 @@ def _turn_prompt(
     )
     envelope = {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-        "message": "Complete answer for the operator, at the depth this task needs.",
+        "message": "",
         "proposals": [],
         "protected_action": None,
         "goal_draft": None,
@@ -584,7 +584,7 @@ def _turn_prompt(
         "First write the complete operator-facing answer as safe Markdown text. Give a simple question a direct sourced answer; for a complex task, lead with the judgment and then explain the material evidence, comparisons, decisions and limitations at useful depth. "
         "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate, raw ID inventories and more than five actionable items. "
         "Do not emit executable HTML. The complete answer must stay in this conversation, even when a separate report artifact also exists. "
-        "Then append exactly one machine-readable envelope whose message field repeats that complete answer. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
+        "Then append exactly one machine-readable envelope with message set to the empty string: the transport reuses the visible answer before the opening tag. Do not repeat the answer in JSON. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
         "protected_action must be null or an object shaped as "
         '{"operation":"merge|release|deploy|delete|payment","target":"user-stated target","summary":"short public-safe proposal"}. '
         "Do not write anything after the closing tag. Use these tags and shape:\n"
@@ -1302,7 +1302,7 @@ class CodexChatAgentSession:
         if on_event:
             on_event("turn.started", {"upstream_turn_id": turn_id})
         parts: list[str] = []
-        completed_structured_response: str | None = None
+        completed_agent_response: str | None = None
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
         steps = CodexActivitySteps(protected_paths=[self.work_dir])
         visible_delta_count = 0
@@ -1407,18 +1407,17 @@ class CodexChatAgentSession:
                         on_event("answer.delta", {"text": visible})
             elif method == "item/completed":
                 item_text = _agent_item_text(message)
-                if output_schema is not None and isinstance(params, dict):
+                if isinstance(params, dict):
                     item = params.get("item")
                     if isinstance(item, dict) and item.get("type") == "agentMessage":
-                        # Completed items are authoritative. A structured Turn
-                        # may stream commentary before its final JSON; joining
-                        # all deltas would turn that valid answer into invalid
-                        # JSON (or promote commentary JSON as the result).
+                        # Completed answer items are authoritative. Joining
+                        # commentary and partial deltas would pollute the
+                        # visible-answer prefix or promote nonfinal metadata.
                         phase = item.get("phase")
                         if phase is None or phase == "final_answer":
-                            completed_structured_response = item_text
-                        elif phase != "commentary" or completed_structured_response is None:
-                            completed_structured_response = ""
+                            completed_agent_response = item_text
+                        elif phase != "commentary" or completed_agent_response is None:
+                            completed_agent_response = ""
                 if item_text and not parts:
                     parts.append(item_text)
                     visible = display_filter.feed(item_text)
@@ -1465,10 +1464,8 @@ class CodexChatAgentSession:
         if visible_tail and on_event:
             visible_delta_count += 1
             on_event("answer.delta", {"text": visible_tail})
-        raw_response = "".join(parts)
+        raw_response = completed_agent_response if completed_agent_response is not None else "".join(parts)
         if output_schema is not None:
-            if completed_structured_response is not None:
-                raw_response = completed_structured_response
             try:
                 result = json.loads(raw_response)
             except (ValueError, TypeError) as exc:
