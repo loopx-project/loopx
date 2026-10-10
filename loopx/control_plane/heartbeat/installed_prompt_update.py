@@ -18,11 +18,19 @@ from .automation_upgrade import SCHEMA, _atomic, apply_offline, bootstrap_bindin
 from .bootstrap_prompt import host_bootstrap_binding
 
 
-def require_closed_app() -> None:
+def require_closed_app(timeout: float = 5.0) -> None:
     if sys.platform != "darwin":
         raise ValueError("offline adapter is qualified only on macOS; use the App automation API")
     for name in ("Codex", "ChatGPT"):
-        observed = subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True, check=False)
+        try:
+            observed = subprocess.run(
+                ["/usr/bin/pgrep", "-x", name],
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise ValueError(f"failed to check running application status for {name}: {exc}") from exc
         if observed.returncode != 1:
             raise ValueError("close the Codex/ChatGPT App before offline migration; otherwise use automation_update")
 

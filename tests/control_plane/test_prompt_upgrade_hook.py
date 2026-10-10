@@ -232,3 +232,13 @@ def test_real_quota_cli_exposes_hint_without_bypassing_health_gate(tmp_path, mon
     assert current_result.returncode == pending_result.returncode == 1
     for key in ("should_run", "decision", "reason", "state"):
         assert current[key] == pending[key]
+
+
+def test_require_closed_app_handles_timeout(monkeypatch):
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(ValueError, match="failed to check running application status"):
+        lifecycle.require_closed_app(timeout=0.1)
