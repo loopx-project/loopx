@@ -67,6 +67,13 @@ Resolve allowed public references to the verified version and relevant lines,
 or state the evidence limitation. Keep private paths redacted rather than
 making them visible to satisfy the citation check.
 
+Before attributing a shadow result to the product, compare its effective prompt,
+project objective, answer guidance, history and tool grants with the original
+Core Turn. Matching the model and sandbox alone is insufficient. A direct
+adapter probe that omits Core context can demonstrate a probe failure without
+demonstrating a live reply regression. Keep that distinction in the evidence;
+even a faithful native probe does not qualify provider receipt or Topic timing.
+
 Use the real installed host and provider in a private pilot before public entry.
 Two pilot group contexts exercise separation without requiring premature entry
 into the target developer groups. Mocked transport, a configured App, unit tests,
