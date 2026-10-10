@@ -302,7 +302,7 @@ def test_turn_plan_maps_admitted_child_to_codex_native_operation() -> None:
             "host_adapter": {
                 "host": "codex-cli",
                 "native_operation": "spawn_agent",
-                "arguments": {"fork_context": False},
+                "arguments": {"fork_turns": "none"},
                 "requires_session": False,
             },
         }
@@ -521,7 +521,7 @@ def test_turn_plan_exposes_forked_snapshot_only_when_explicitly_selected() -> No
     assert operation["host_adapter"] == {
         "host": "codex-cli",
         "native_operation": "spawn_agent",
-        "arguments": {"fork_context": True},
+        "arguments": {"fork_turns": "all"},
         "requires_session": False,
     }
 
@@ -833,7 +833,7 @@ def test_turn_host_request_carries_typed_child_operations() -> None:
     assert request["child_operations"][0]["host_adapter"] == {
         "host": "codex-cli",
         "native_operation": "spawn_agent",
-        "arguments": {"fork_context": False},
+        "arguments": {"fork_turns": "none"},
         "requires_session": False,
     }
     assert request["result_contract"]["stdout"] == "one public-safe JSON object"
