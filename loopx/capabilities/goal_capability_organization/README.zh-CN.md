@@ -47,6 +47,40 @@ loopx agent-context --goal-id example --agent-id coordinator --phase before_plan
 未给候选时可在预算内进行有界发现。引用和调用者观察**不认证执行授权**；行动前
 仍读回原 owner。建议不授予 provider 调用、安装、配置变更、交易、签名或转账。
 
+### 经同一规划入口消费试用反馈
+
+试用提案现在返回 `trial_basis_digest`。原 owner 记录结果后，调用者可在
+`--capability-candidate-json` 的同一候选中附加可选 `trial_feedback`，例如：
+
+```json
+{"outcome_ref":"owner/outcome-v1","trial_basis_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","status":"failed"}
+```
+
+示意 digest 须替换成原提案返回值。规划 provider 对按下列顺序构造的对象执行 UTF-8
+`JSON.stringify` 哈希：`goal_id`、`agent_id`、`todo_id`、`gap_ref`、
+`capability_id`、`candidate_revision`、`configuration_ref`、`effect_ref`、
+`rollback_ref`。缺失 scope 字段或 revision 为 `null`。可选 `candidate_revision`
+与 `outcome_ref` 沿用有界引用格式；digest 是 `sha256:` 后接 64 位小写十六进制。
+适用性与启用状态仍须满足原要求。
+
+| 调用者声明的反馈 | 对该候选的建议 |
+| --- | --- |
+| basis 一致，`failed` 或 `no_evidence` | 继续工作，不再次提议相同输入的试用 |
+| basis 一致，`succeeded` | 检查原 owner 结果，不推断效用或采用 |
+| scope、revision 或引用变化 | 与原 owner 检查已过期反馈 |
+| 没有反馈 | 保留原试用提案行为 |
+| 反馈格式非法 | 隔离可选建议失败；取得新的 owner 观察后可恢复 |
+
+后续独立且没有反馈的候选仍可使用；已启用直接候选在反馈校验前优先选中，
+关闭策略时跳过反馈。这个确定性建议 consumer 不认证回执或持久化重试门禁。
+digest 只标识声明，不认证真实性。重命名 revision 不证明试用改进，原准入与
+效果评审仍须执行。记录、退役与回滚保留原 owner。
+
+范围细化参考
+[Rethinking the Evaluation of Harness Evolution for Agents](https://arxiv.org/html/2607.12227v3)：
+有界工具反馈、任务效果、迁移和开发／评估总成本须分别留证，确定性测试不证明
+实证效用。
+
 使用／结果／效果和退役判定继续写回既有 Todo、outcome 与能力 owner。实际价值
 必须相对基线改善目标结果或成本；调用、PR 和测试通过不是效用，未知效果保持未知。
 经原能力 owner 回滚，不删除历史证据。空、非法或超预算建议独立失败，不能阻断
