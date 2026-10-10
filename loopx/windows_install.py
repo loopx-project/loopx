@@ -77,6 +77,7 @@ def _ensure_chat_bundle(
         cwd=source_root,
         check=True,
         stdout=sys.stderr,
+        timeout=300,
     )
 
 
