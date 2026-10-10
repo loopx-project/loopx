@@ -569,11 +569,16 @@ def run_worker(
     environment = dict(os.environ)
     adapter_bin = str(Path(sys.executable).absolute().parent)
     environment["PATH"] = adapter_bin + os.pathsep + environment.get("PATH", "")
-    return subprocess.run(
-        command,
-        cwd=str(project.resolve()),
-        env=environment,
-    ).returncode
+    try:
+        return subprocess.run(
+            command,
+            cwd=str(project.resolve()),
+            env=environment,
+            timeout=1800,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        print("KunlunCode adapter execution timed out after 1800 seconds", file=sys.stderr)
+        return 124
 
 
 def status(project: Path) -> dict[str, Any]:
