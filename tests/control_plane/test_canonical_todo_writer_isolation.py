@@ -24,6 +24,7 @@ def without_source_todo_writers(tmp_path, monkeypatch):
     shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
                     ignore=shutil.ignore_patterns("__pycache__"))
     (package / "control_plane/todos/line_update.py").unlink()
+    (package / "control_plane/todos/legacy_mutation.py").unlink(missing_ok=True)
     capture_adapter = package / "control_plane/coordination/runtime_shadow_writer_adapter.py"
     source = capture_adapter.read_text()
     lines = source.splitlines(keepends=True)
@@ -253,6 +254,7 @@ def test_explicit_source_writer_import_preserves_the_existing_seam(tmp_path):
 import sys
 import loopx.todos as todos
 assert 'loopx.control_plane.todos.line_update' not in sys.modules
+assert 'loopx.control_plane.todos.legacy_mutation' not in sys.modules
 from loopx.todos import apply_todo_update_to_lines
 from loopx.control_plane.todos import line_update
 assert apply_todo_update_to_lines is line_update.apply_todo_update_to_lines
