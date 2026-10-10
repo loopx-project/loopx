@@ -59,6 +59,7 @@ import {
 } from "./todo_successor_derivation.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
+import {isLifecycleCloseout, prepareTerminalReentry} from "./todo_terminal_reentry.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
@@ -472,6 +473,12 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     todo_id: input.todo_id,
     expected_role: input.expected_role,
     command: input.command,
+    // This phase has no historical native receipt to preserve. Also bind its
+    // evidence and receipt payloads so changed retries cannot mask replacement.
+    ...(isLifecycleCloseout(input) ? {note: input.note, evidence: input.evidence, reason: input.reason,
+      validation_receipt: input.validation_receipt,
+      goal_acceptance_source_binding: input.goal_acceptance_source_binding ?? null,
+      goal_acceptance_validation_receipts: input.goal_acceptance_validation_receipts ?? null} : {}),
     // Older receipts deliberately retain their original fingerprint. A reviewed
     // command binds both its approved snapshot and its complete prose intent.
     ...(input.review_basis === undefined ? {} : {review_basis: input.review_basis,
@@ -1048,7 +1055,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     input = observation.input;
     head = observation.authority;
   } else {
-    input = {...normalized, operation_id: normalized.operation_identity.kind === "completion_turn"
+    input = {...normalized, operation_id: normalized.operation_identity.kind === "completion_turn" || isLifecycleCloseout(normalized)
       ? completionTurnOperationId(normalized, normalized.requested_no_followup)
       : normalized.operation_identity.operation_id};
     // Named operation recovery reports history, not present execution authority.
@@ -1204,6 +1211,29 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {terminal_decision: authority},
       "decision_rejection",
     );
+  }
+  if (isLifecycleCloseout(input)) {
+    let closed: JsonObject | null;
+    try {
+      closed = prepareTerminalReentry(todo, input, activeLease(projection.leases.get(input.todo_id), input.now));
+    } catch (error) {
+      return terminalFailure("invalid_todo_completion_transaction",
+        error instanceof Error ? error.message : "Invalid terminal lifecycle reentry", {}, "decision_rejection");
+    }
+    const target = closed ?? todo;
+    return commitTerminalResult(store, input, requestSha, head, {
+      todo_id: input.todo_id, command: input.command, changed: closed !== null,
+      terminal_decision: closed === null ? authority : {...authority, outcome: "apply",
+        code: "terminal_transition", idempotent: false, next_todo_status: "done"},
+      successor_todo_ids: [], generated_successor_todo_ids: [],
+      validation_receipt: null, completion_policy: null,
+      completion_identity_key: target.completion_turn_key ?? null,
+      completion_identity_source: input.requested_completion_identity_source,
+      completion_continuation: target.completion_continuation ?? null,
+      completion_recovery: target.completion_recovery ?? null,
+      completion_receipt_id: target.completion_receipt_id ?? null,
+      completed_at: target.completed_at ?? null,
+    }, closed === null ? [] : [{kind: "todo_upsert", todo: closed}], authoritySourcesCurrent);
   }
   // Supersede retires waiting work through its existing terminal owner; it is
   // not execution of the deferred Todo or proof that its prerequisite ran.
