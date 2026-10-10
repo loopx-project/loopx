@@ -111,7 +111,7 @@ async function readAdoptedResult(goalId: string, todoIds: Set<string>, force: bo
           if (!row.operation_id || !row.todo_id || !todoIds.has(row.todo_id) || row.status !== "accepted") continue;
           const source = await readLoopXTeamWork(session.sessionId, row.operation_id);
           if (source.operation_id !== row.operation_id || source.todo_id !== row.todo_id
-            || source.status !== "accepted" || source.recovery_required || source.error) {
+            || source.status !== "accepted" || source.current_use?.state === "unavailable" || source.recovery_required || source.error) {
             incomplete = true;
             continue;
           }
@@ -137,7 +137,7 @@ async function readAdoptedResult(goalId: string, todoIds: Set<string>, force: bo
                 && consumer.request_id === adoption.consumer_request_id
                 && consumer.agent_id === adoption.consumer_agent_id
                 && consumer.todo_id === adoption.consumer_todo_id
-                && consumer.status === "accepted" && !consumer.recovery_required && !consumer.error && artifact) {
+                && consumer.status === "accepted" && consumer.current_use?.state !== "unavailable" && !consumer.recovery_required && !consumer.error && artifact) {
                 const key = `${session.sessionId}:${consumer.operation_id}`;
                 const earlier = adopted.get(key);
                 if (!earlier || (!isMarkdownArtifact(earlier.artifact.ref) && isMarkdownArtifact(artifact.ref))) {
