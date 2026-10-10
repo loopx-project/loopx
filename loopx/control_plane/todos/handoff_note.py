@@ -107,7 +107,18 @@ def project_handoff_context(sources: list[dict[str, Any]], *,
             results.extend(validate_handoff_context(result.get("handoff_context") if isinstance(result, dict) else None, index - start))
             start, size = index, 0
         if row_size > MAX_REQUEST_BYTES - 4096:
-            raise ValueError("Todo handoff source exceeds the typed runtime request budget")
+            # Historical source text can exceed one ordinary frame. Reuse the
+            # existing private snapshot transport; do not truncate before the
+            # typed credential exclusion or add a Python fallback decision.
+            try:
+                result = effect_runtime_result("todo.context.page", {"handoff_sources": sources[index:index + 1],
+                    **({"handoff_followups": followups[index:index + 1]} if followups is not None else {})},
+                    large_local_snapshot=True)
+            except EffectRuntimeRejected as error:
+                raise ValueError(str(error)) from error
+            results.extend(validate_handoff_context(result.get("handoff_context") if isinstance(result, dict) else None, 1))
+            start, size = index + 1, 0
+            continue
         size += row_size
     return results
 

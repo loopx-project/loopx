@@ -65,7 +65,9 @@ context owner. Summary reuses its normalized identity/claim/exclusion/class
 facts in one batch; the index keeps source compaction before labelling and audit
 merging in one native batch. Planning and quota collectors project whole chosen
 sets. Oversized display context uses byte-bounded read-lens batches while
-counts, dependency decisions and closure retain their full-source owner. The
+counts, dependency decisions and closure retain their full-source owner. A
+single oversized historical record reuses the existing private snapshot transport:
+credential checks see its full text before display truncation. The
 Python facade keeps shared metadata codecs and historical tuple/SHA-1 identity
 encoding, with no Python decision fallback. Retain nested-empty precedence,
 Unicode whitespace/codepoint limits and credential rejection before truncation;

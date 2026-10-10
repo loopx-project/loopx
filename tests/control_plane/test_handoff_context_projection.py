@@ -247,3 +247,26 @@ def test_byte_bounded_context_batches_retain_every_record(monkeypatch):
     assert [row["todo_id"] for row in result] == [row["todo_id"] for row in rows]
     assert all(row["continuation_hint"] == "a" * 279 + "..." for row in result)
     assert calls == ["todo.context.page", "todo.context.page"]
+
+
+@pytest.mark.parametrize("credential", [False, True])
+def test_oversized_single_source_reuses_private_snapshot_without_pretruncation(monkeypatch, credential):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.todos.handoff_note import handoff_context_source, project_handoff_context
+    calls, original = [], effect_runtime.effect_runtime_result
+
+    def track(method, request, **kwargs):
+        calls.append((method, kwargs.get("large_local_snapshot", False)))
+        return original(method, request, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
+    text = "a" * (effect_runtime.MAX_REQUEST_BYTES + 1000)
+    if credential:
+        text += " " + "token" + "=" + "v"
+    rows = [{"todo_id": f"todo_snapshot_{i}", "text": "Work", "successor_todo_ids": ["todo_next"],
+             "note": text if i == 1 else "Continue"} for i in range(3)]
+    contexts = project_handoff_context([handoff_context_source(row) for row in rows])
+    assert [row["note"]["todo_id"] for row in contexts] == [row["todo_id"] for row in rows]
+    assert contexts[1]["continuation_hint"] == (None if credential else "a" * 279 + "...")
+    assert contexts[1]["note"]["summary"] == ("Work" if credential else "a" * 279 + "...")
+    assert calls == [("todo.context.page", False), ("todo.context.page", True), ("todo.context.page", False)]

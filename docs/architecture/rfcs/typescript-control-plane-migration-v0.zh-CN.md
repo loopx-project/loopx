@@ -57,7 +57,8 @@ handoff／continuation 显示决策已归入既有 TypeScript Todo context owner
 在同一个 batch 复用已归一化的身份、claim、exclusion 和任务类型事实；index 在单个
 原生 batch 保留先压缩源、再标注、最后合并审计事件的顺序。planning 与 quota
 收集器整组投影已选记录。过大的显示上下文按字节预算分批读取，计数、依赖决策与
-闭合仍由完整源 owner 处理。Python facade 保留共享 metadata codec 和历史
+闭合仍由完整源 owner 处理。超大单条历史记录复用既有私有快照传输，完整文本
+先进入凭证检查，再截断显示；不另加单条 frame 上限。Python facade 保留共享 metadata codec 和历史
 元组／SHA-1 身份编码，没有 Python 决策回退。nested-empty 优先级、Unicode 空白／
 codepoint 上限和截断前凭证拒绝都是需要保留的兼容义务。File／SQLite CLI 与正常
 wheel 的恢复验收要求：Markdown 显示缺失或选定 provider 不可用时，完整源与
