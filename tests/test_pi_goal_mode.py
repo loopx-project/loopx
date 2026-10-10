@@ -163,6 +163,37 @@ def test_pi_extension_binding_state_stays_private_and_scoped() -> None:
     assert "0o700" in runtime
 
 
+def test_pi_extension_separates_host_prompts_from_user_input() -> None:
+    adapter = extension_source()
+    runtime = runtime_source()
+    # Pi restarts a run with its own prompt after context compaction. That prompt
+    # must not pause the loop the way real user input does, so the adapter marks
+    # it and the runtime skips the pause for it.
+    assert 'pi.on("session_compact"' in adapter
+    assert "hostGeneratedPromptPending" in adapter
+    assert "{ hostGenerated }" in adapter
+    assert "options?.hostGenerated === true" in runtime
+    # A pause keeps a durable reason, and every pause path reports it: the
+    # previous silent user-prompt pause is what made a stalled loop look healthy.
+    assert 'pauseReason: "user_prompt"' in runtime
+    assert 'pauseReason: "aborted"' in runtime
+    assert 'pauseReason: ""' in runtime
+    assert "auto-continuation paused by user input" in runtime
+
+
+def test_pi_extension_status_widget_stays_compact() -> None:
+    adapter = extension_source()
+    # A widget is a fixed-height area near the editor: the full packet preview
+    # must not be dumped into it (it was truncated mid-sentence and covered the
+    # working indicator). Keep a summarized status instead and store the full
+    # text in the session entry.
+    assert "buildLoopxStatusWidget" in adapter
+    assert 'placement: "belowEditor"' in adapter
+    assert "setWidget(\"loopx\", undefined)" in adapter
+    assert 'pi.appendEntry("loopx-packet"' in adapter
+    assert 'setWidget("loopx", display.split' not in adapter
+
+
 def test_pi_goal_loop_runtime_contract() -> None:
     node = shutil.which("node")
     if not node:

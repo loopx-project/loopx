@@ -39,6 +39,13 @@ into a LoopX-governed visible goal loop.
   and fences an in-flight quota probe. For persistent sessions, the loop stays
   paused across Pi restarts until `/loopx resume` or a fresh goal activation
   explicitly re-arms it.
+- **Host-generated prompts** — Pi continues a session on its own after context
+  compaction, overflow recovery, or a retry, and those runs reach
+  `before_agent_start` with a prompt that is not the injected task body. The
+  adapter marks that prompt as host-generated so the runtime does not read it as
+  the owner taking the wheel; only real user input pauses the loop, and the pause
+  is reported to the owner (`pauseReason: "user_prompt"`, or `"aborted"` after
+  Escape). `/loopx resume` clears the reason and re-arms the loop.
 
 ## Install / uninstall
 
