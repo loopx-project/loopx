@@ -57,11 +57,12 @@ and spends no model calls. For an explicit repair, the settled native
 not participate in installation or reload decisions.
 
 The init row publishes a typed `loopxBootstrap` service only after that
-success or safe failure settles. The plugin patch adds the service to the
-existing Web server and Web runtime injection lists, turning DSH's printed URL
-into the host-visible readiness boundary. The failure value contains only the
-safe stage and cause kind; it releases DSH startup without granting LoopX
-readiness or hiding the repair command.
+success or safe failure settles. Only LoopX's Host and Driver depend on this
+service. DSH's native Loader wait puts initialization before the printed URL;
+the shared Web server and runtime must remain independent of this optional
+package so disabling or uninstalling it cannot stop DSH. The failure value
+contains only the safe stage and cause kind; it settles initialization without
+granting LoopX readiness or hiding the repair command.
 
 The command accepts no free-form input. Invalid input returns the usage error
 before any followup or CLI probe. An exact invocation performs this bounded

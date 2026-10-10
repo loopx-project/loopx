@@ -77,9 +77,10 @@ cd packages/dsh-loopx-plugin
 
 Start DSH on loopback (port `0` asks the OS for a free port) and open the
 printed URL. The plugin finishes its idempotent LoopX CLI and skill bootstrap
-before DSH publishes the Web URL. Its typed `loopxBootstrap` service gates the
-Web server and runtime rows until startup has either succeeded or failed
-safely:
+before DSH publishes the Web URL through its native Loader readiness boundary.
+The source candidate gates only LoopX's Host and Driver on `loopxBootstrap`,
+so disabling or uninstalling it keeps the shared Web server and runtime alive.
+The published beta.6 limitation is described under automatic initialization:
 
 ```bash
 dsh --profile web --port 0
@@ -122,7 +123,10 @@ pnpm smoke:docker
 The runtime smoke creates an isolated temporary DSH profile. Its real web
 process proves profile composition, automatic initialization before readiness,
 immediate skill-catalog visibility, boot-manifest discovery, bundle serving,
-Client materialization, and the loopback Connection fence. Separately, a
+Client materialization, and the loopback Connection fence. A
+live-disable probe withdraws the bootstrap provider and all package rows while
+checking that DSH stays available and LoopX's route retires; a fresh process
+also boots with the whole package disabled. Separately, a
 packed supported-DSH Context, Connection, and WebServer with a live Host Session fixture
 cover same-turn binding discovery, lease-time source reconciliation,
 status-only updates, pending-watch cancellation, successful actions, and
@@ -290,12 +294,18 @@ does not change LoopX core state by itself.
 
 When DSH loads the plugin, the init row runs the same typed initialization
 routine and publishes the `loopxBootstrap` readiness service only after it
-settles. The plugin's profile patch makes DSH's Web server and runtime depend
-on that service, so the printed URL is a real bootstrap boundary. A safe
-failure is logged without raw subprocess output or local paths, releases the
-Web rows instead of stopping DSH, and leaves `/loopx-init` registered for an
-explicit retry. Automatic startup does not create Agent followups or model
-calls.
+settles. DSH's native Loader wait keeps the printed URL behind initialization;
+the service is a dependency only of LoopX's Host and Driver. A safe failure is
+logged without raw subprocess output or local paths and leaves `/loopx-init`
+registered for an explicit retry. Disabling the package leaves LoopX's
+rows unavailable while DSH remains usable. Removing the package's
+rows releases its routes without stopping the shared Web server or runtime.
+Automatic startup does not create Agent followups or model calls.
+
+The host-isolation repair in this source is pending a new plugin release.
+Published beta.6 still adds the shared Web dependency and can disconnect DSH
+during hot uninstall, including with Hub 1.6.4. For that published package,
+close DSH, remove it with the native plugin CLI, then restart DSH.
 
 The repair command has no arguments. Extra input returns a usage error before any
 model work or CLI probe. A valid invocation queues a bounded start followup on
