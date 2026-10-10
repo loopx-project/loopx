@@ -551,7 +551,7 @@
     },
     {
       "site": "loopx/claude_goal_mode/scripts/goalmode_cmd.py::<module>.goal_detail::codec_read:load_registry#1",
-      "line": 134,
+      "line": 135,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",

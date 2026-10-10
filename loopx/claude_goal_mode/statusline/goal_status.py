@@ -24,6 +24,7 @@ from pathlib import Path
 # session's project goal, and only while goal-mode is armed (heartbeat installed).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 from goal_state import active_context
+from stdio_utf8 import pin_utf8_stdio
 
 
 import shutil as _shutil
@@ -94,4 +95,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pin_utf8_stdio()
     main()

@@ -63,6 +63,13 @@ the scope or reach the network. For untrusted or high-stakes work, run Claude Co
 in a container/VM instead. So `/loop` can run largely unattended without auto mode,
 within that boundary.
 
+Claude Code exchanges the event and every answer as UTF-8, so the `/loopx`
+command, the gate and the statusline pin their own stdio to UTF-8. On a host with
+another default codec (`cp936` on zh-CN Windows stays `gbk` even when the input is
+UTF-8) an unpinned gate would decode the event into mojibake, miss the project
+goal and answer `{}` — no gate at all — and `/loopx status` would raise on its own
+state glyphs. `tests/test_claude_goal_mode_stdio_utf8.py` guards all three.
+
 ```bash
 python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project --harden
 ```
