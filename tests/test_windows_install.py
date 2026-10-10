@@ -615,3 +615,12 @@ def test_windows_installer_rolls_back_user_surfaces_and_retains_upgraded_candida
     retained_candidate = install_root / "releases" / "rejected-late"
     assert retained_candidate.is_dir()
     assert (retained_candidate / "scripts" / "loopx_entry.py").is_file()
+
+
+def test_resolve_python_handles_timeout(monkeypatch: pytest.MonkeyPatch):
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="Python runtime probe failed or timed out"):
+        windows_install._resolve_python("python", timeout=0.1)

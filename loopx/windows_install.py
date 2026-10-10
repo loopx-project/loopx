@@ -33,13 +33,19 @@ REQUIRED_DEEP_CHECKS = {
 }
 
 
-def _resolve_python(requested: str) -> Path:
-    result = subprocess.run(
-        [requested, "-c", "import sys; print(sys.executable); raise SystemExit(sys.version_info < (3, 11))"],
-        check=False,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-    )
+def _resolve_python(requested: str, timeout: float = 30.0) -> Path:
+    try:
+        result = subprocess.run(
+            [requested, "-c", "import sys; print(sys.executable); raise SystemExit(sys.version_info < (3, 11))"],
+            check=False,
+            capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise RuntimeError(
+            f"Python runtime probe failed or timed out for {requested}: {exc}"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"Python 3.11+ is required; selected runtime failed validation: {requested}"
