@@ -2,6 +2,7 @@
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requiredSemanticOutcomes} from "./replan_semantics.ts";
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
@@ -33,7 +34,7 @@ function objectOrNull(value: unknown): JsonObject | null {
 
 function sameSourceDigest(left: JsonObject, right: JsonObject, field: string): boolean {
   const value = objectOrNull(left._source_facts)?.[field + "_digest"];
-  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) &&
+  return typeof value === "string" && BARE_SHA256_PATTERN.test(value) &&
     value === objectOrNull(right._source_facts)?.[field + "_digest"];
 }
 
@@ -47,7 +48,7 @@ function accountingMatchKey(row: JsonObject): string | null {
   if (keys.slice(0, 4).some(key => identity[key] !== source[key]) ||
       ["goal_id", "agent_id", "todo_id"].some(key => identity[key] !== row[key])) return null;
   if (typeof source.recommended_action_digest !== "string" ||
-      !/^[a-f0-9]{64}$/.test(source.recommended_action_digest) || !row.recommended_action) return null;
+      !BARE_SHA256_PATTERN.test(source.recommended_action_digest) || !row.recommended_action) return null;
   return JSON.stringify([...keys.map(key => identity[key]), source.recommended_action_digest]);
 }
 

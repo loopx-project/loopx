@@ -156,3 +156,18 @@ test("independent accounting, mismatched identities and actual progress are neve
     assert.equal((context.evidence as JsonObject[]).length, altered === accounting ? 1 : 2);
   }
 });
+
+test("invalid source digest shapes cannot authorize accounting reduction", () => {
+  const hex = "b".repeat(64);
+  for (const bad of [hex.slice(1), hex + "b", hex.toUpperCase(), "g".repeat(64), `sha256:${hex}`]) {
+    for (const field of ["recommended_action_digest", "delivery_outcome_digest"]) {
+      const rows = pair().map(item => ({...item,
+        ...(field === "delivery_outcome_digest" ? {delivery_outcome: "verified result"} : {}),
+        _source_facts: {...item._source_facts as JsonObject, [field]: bad}}));
+      const context = projectReplanContext({...request, rows});
+      assert.equal((context.evidence as JsonObject[]).length, 2, `${field}: ${bad}`);
+      assert.ok((context.evidence as JsonObject[]).every(item =>
+        String(item.summary).includes(String(rows[0].recommended_action))));
+    }
+  }
+});
