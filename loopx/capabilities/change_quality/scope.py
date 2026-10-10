@@ -18,15 +18,25 @@ def _git(
     # text mode: a non-None encoding would silently flip bytes-mode callers
     # into text mode because CPython treats any of text/encoding/errors as
     # text-mode requests.
-    return subprocess.run(
-        ["git", "-C", str(repo_root), *args],
-        check=False,
-        text=text,
-        encoding="utf-8" if text else None,
-        errors="replace" if text else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            check=False,
+            text=text,
+            encoding="utf-8" if text else None,
+            errors="replace" if text else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        empty = "" if text else b""
+        return subprocess.CompletedProcess(
+            args=["git", "-C", str(repo_root), *args],
+            returncode=124,
+            stdout=empty,
+            stderr="git command timed out after 30s" if text else b"git command timed out after 30s",
+        )
 
 
 def resolve_git_root(repo_path: Path) -> Path:
