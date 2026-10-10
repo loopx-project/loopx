@@ -90,6 +90,12 @@ Core、HTTP、provider 读回及原生协议 fixture 验证上述边界，属于
 模型认证与真实调试群旅程通过后，才能接入两个正式开发群。公开来源读取另需完成其
 限定范围工具的验收；本改动不启用无限制网络或个人浏览器。
 
+`workspace_only` 会话新建与恢复时均关闭原生 Apps connector 和继承的 MCP。
+宿主显式设置 `LOOPX_CHAT_PUBLIC_SOURCE_READ=on` 后，仅允许匿名
+`read_public_url` / `read_public_image`，并为这两项工具设置原生批准规则；其他 MCP
+工具仍不可用。关闭该开关会移除公开 reader，隔离会话的 Apps 仍保持关闭。
+普通 `host_default` 会话保留账号原有配置。
+
 已有项目原生登录继续使用其选定账号；否则，可信宿主的原生文件式 ChatGPT 认证
 可通过 Codex 实验性 `chatgptAuthTokens` 接口，仅在私有 stdio 中提供 access token
 和账号标识。短期认证保留在进程内存，不写入项目存储、模型上下文、工具环境或命令行。
