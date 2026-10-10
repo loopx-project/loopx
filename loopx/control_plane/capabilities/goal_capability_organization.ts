@@ -1,7 +1,6 @@
 /** Goal-owned improvement intent; never capability enablement or admission. */
 import { createHash } from "node:crypto";
 import type { AgentContextProvider } from "../agent_context.ts";
-import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
