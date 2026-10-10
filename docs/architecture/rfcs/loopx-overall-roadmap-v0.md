@@ -991,6 +991,12 @@ later App create/edit/complete preserve the provider head under an explicitly
 selected `soft_claim` policy. Missing selected storage and absent `hard_lease`
 execution proof still refuse without Markdown fallback. The packaged settings
 journey uses backup, preview, reload/readback and explicit confirmation.
+Reviewed canonical Todo creation carries its provider revision into the existing
+typed command identity and provider transaction, rejecting concurrent writes
+without applying the stale request. Original-operation recovery precedes that
+current-head check and preserves later writes. After import or receipt recovery,
+the same settings screen independently rereads current ownership; a failed read
+shows a retryable error instead of retaining the pre-import policy.
 This qualifies the bounded App import/loading path, not deletion of remaining
 bootstrap/Host/history callers, full-state identity adoption, D2 or a released
 default. Keep those existing acceptances open.
