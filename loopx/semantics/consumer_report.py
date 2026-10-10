@@ -160,13 +160,18 @@ def source_revision(repo_root: Path) -> tuple[str, bool]:
     when the tree is clean. A dirty tree is reported, never hidden.
     """
     def git(*arguments: str) -> str:
-        return subprocess.run(['git', *arguments], cwd=repo_root, check=True,
-                              stdout=subprocess.PIPE).stdout.decode('utf-8').strip()
+        return subprocess.run(
+            ['git', *arguments],
+            cwd=repo_root,
+            check=True,
+            stdout=subprocess.PIPE,
+            timeout=30,
+        ).stdout.decode('utf-8').strip()
 
     try:
         sha = git('rev-parse', 'HEAD')
         dirty = bool(git('status', '--porcelain', '--', *CONSUMER_SCAN_ROOTS))
-    except (subprocess.CalledProcessError, OSError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return 'unknown', True
     return sha, dirty
 
