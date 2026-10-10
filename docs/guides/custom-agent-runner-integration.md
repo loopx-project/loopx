@@ -207,6 +207,23 @@ the outer runner applies and acknowledges scheduler state correctly. Those are
 useful extension and contribution surfaces for making Turn more mature; an
 Agent process exit code or scraped transcript is not a substitute for them.
 
+### Watch a running Turn
+
+In a second terminal, inspect the same Turn while `run-once` is active:
+
+```bash
+loopx --registry <registry.json> --runtime-root <runtime-root> turn inspect-journal \
+  --goal-id <goal-id> --agent-id <agent-id> --turn-key <sha256-turn-key> \
+  --watch --watch-interval 1 --format json
+```
+
+Watch mode emits one newline-delimited JSON progress event whenever the journal
+status or completed phase list changes. The event contains only Turn identity,
+journal status, completed phases, and an empty effects list; it never includes
+host output or session content. It stops at `committed`, `stopped`, or `failed`.
+The command is read-only; use Ctrl-C to stop watching early. Start it after the
+Turn journal exists, and use the same registry and runtime root as the runner.
+
 ## Acceptance Checklist
 
 Before calling the integration autonomous, prove that:

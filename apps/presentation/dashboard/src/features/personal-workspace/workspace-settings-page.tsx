@@ -57,6 +57,7 @@ export function WorkspaceSettingsPage({
   const [tab, setTab] = useState<SettingsPage>(initialTab === "machine" ? "capabilities" : initialTab);
   const [capabilityScope, setCapabilityScope] = useState<"machine" | "goal">(initialTab === "capabilities" ? "goal" : "machine");
   const [capabilityGoalId, setCapabilityGoalId] = useState(initialGoalId ?? "");
+  const [ownershipRefresh, setOwnershipRefresh] = useState(0);
   const tabsRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const navigation = tabsRef.current;
@@ -223,8 +224,11 @@ export function WorkspaceSettingsPage({
           />
         ) : null}
         {tab === "ownership" && selectedGoal ? <div key={selectedGoal.goalId}>
-          <GoalOwnershipSettings goalId={selectedGoal.goalId} onChanged={onChanged} />
-          <GoalStorageSettings goalId={selectedGoal.goalId} onChanged={onChanged} />
+              <GoalOwnershipSettings goalId={selectedGoal.goalId} onChanged={onChanged} refreshKey={ownershipRefresh} />
+              <GoalStorageSettings goalId={selectedGoal.goalId} onChanged={() => {
+                setOwnershipRefresh(value => value + 1);
+                onChanged();
+              }} />
         </div> : null}
         {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}

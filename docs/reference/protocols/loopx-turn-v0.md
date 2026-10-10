@@ -768,6 +768,31 @@ The completion fence accepts this distinct
 reinterpret the local key as a quota receipt or permit arbitrary cross-Turn
 terminal replay.
 
+After legacy state is promoted to a canonical provider, this lifecycle-only
+closeout uses its own stable closeout operation receipt. The authoritative
+completed Todo supplies the original identity even when its pre-promotion
+completion has no native operation receipt. The transition preserves the
+original completion timestamp, evidence, validation commitment, completion
+receipt and quota history. It neither resolves nor reruns the old validator.
+Only continuation metadata changes; new results, successors, ownership edits,
+replacement evidence, a mismatched identity or an active execution lease are
+rejected. Exact retry recovers the closeout receipt, including after a lost
+response. This does not relax the original Turn's writeback/spend ordering.
+Quota-bound identities must resolve through original durable settlement
+receipts and pass the existing settlement readback; missing history rejects.
+Only the exact TS-derived local completion identity is exempt from quota
+readback. Historical closeout replay still precedes fresh authority lookup.
+
+旧状态迁移到 canonical provider 后，这类生命周期收尾使用独立、稳定的收尾操作
+回执。即使迁移前的完成记录没有 native operation receipt，也从权威已完成 Todo
+读取原始身份，只更新 continuation 元数据；原始完成时间、证据、验证声明、完成
+回执与 quota 历史保持不变，不重新解析或执行旧验证器。身份不符、新结果、后继、
+所有权或证据修改，以及仍持有执行租约的请求均拒绝。响应丢失后的精确重试恢复
+已有收尾回执，不放宽原始 Turn 的 writeback/spend 顺序。
+绑定 quota 的身份必须从原始持久回执解析，并通过既有 settlement 读回；历史缺失
+时拒绝。只有精确匹配 TS 生成的本地完成身份才能免除 quota 读回。已提交收尾的
+历史重放仍先于新的权威检查。
+
 `repair_required` and `replan_required` are distinct. Repair preserves the
 current task intent. Replan changes the runnable todo set or route because the
 existing task no longer advances the goal. Replan is required when any of the

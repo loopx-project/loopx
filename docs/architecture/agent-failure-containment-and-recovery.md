@@ -197,8 +197,7 @@ contracts; passing them does not establish live model correction, arbitrary
 remote exactly-once effects or production recovery time. Diagnostics deployment,
 overhead and long-running non-interference need separate evidence.
 
-The RFCs specify three remaining integration gaps in these partially implemented
-paths:
+The RFCs track three integration paths with separate implementation checkpoints:
 
 1. [Current-use checks for explicit delegation ancestry](rfcs/shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers):
    refuse new dependent use when its declared basis is unavailable, preserving

@@ -323,17 +323,27 @@ test("readback separates original completion from current source without replayi
 
 test("an active capture blocks cutover even with an empty outbox; pending data stays intact", async t => {
   const root = await fixture(t);
-  const {bootstrapManagedShadow} = await import("../../loopx/control_plane/coordination/shadow_management.ts");
+  const first = await plan(root, "sqlite");
+  const source = await (await selected(root, goal)).store.scanCommitted(null, 10);
+  const {bootstrapManagedShadow, rollbackManagedShadow} = await import("../../loopx/control_plane/coordination/shadow_management.ts");
   const {mkdir} = await import("node:fs/promises");
+  const dependencies = {withPrimaryLocks: async <T>(fn: () => Promise<T>) => await fn(), verifySourceSnapshot: async () => {}};
   const capture = await bootstrapManagedShadow({runtime_root: root, goal_id: goal, operation_id: "capture",
     source_version: "state:1", source_snapshot: {state_path: join(root, "state.md")},
     projection: {schema_version: "loopx_coordination_shadow_projection_v0", goal_id: goal, todos: [], leases: []}},
-    {withPrimaryLocks: async fn => await fn(), verifySourceSnapshot: async () => {}});
+    dependencies);
   assert.equal(capture.status, "applied", JSON.stringify(capture));
   const file = join(root, "active-capture-plan.json");
   const denied = await manage(request(root, {action: "plan-migration", provider: "sqlite", plan: file}));
   assert.equal(denied.ok, false);
   assert.match(String(denied.reason), /active capture/);
+  // The capture began after this reviewed plan. Both preview and execution
+  // must recheck quiescence; a saved plan cannot bypass the newer writer.
+  for (const execute of [false, true]) {
+    const late = await manage(request(root, {...first, execute}));
+    assert.equal(late.ok, false);
+    assert.match(String(late.reason), /active capture/);
+  }
   const pending = join(root, "authority-shadow", "outbox", goal, "todos");
   await mkdir(pending, {recursive: true});
   await writeFile(join(pending, "entry.prepared.json"), "pending source write");
@@ -341,6 +351,17 @@ test("an active capture blocks cutover even with an empty outbox; pending data s
   assert.equal(again.ok, false);
   assert.equal(await readFile(join(pending, "entry.prepared.json"), "utf8"), "pending source write");
   assert.equal((await selected(root, goal)).provider, "file");
+  assert.deepEqual(await (await selected(root, goal)).store.scanCommitted(null, 10), source);
+  // Explicit native disposition preserves pending bytes in the capture's own
+  // archive. Provider migration neither drains nor deletes that outbox.
+  const disposition = await rollbackManagedShadow({runtime_root: root, goal_id: goal,
+    operation_id: "capture-disposition", expected_provider_revision: capture.provider_revision}, dependencies);
+  assert.equal(disposition.status, "applied", JSON.stringify(disposition));
+  const retained = join(String(disposition.outbox_archive_path), "todos", "entry.prepared.json");
+  assert.equal(await readFile(retained, "utf8"), "pending source write");
+  assert.equal((await manage(request(root, first))).status, "migrated");
+  assert.equal((await selected(root, goal)).provider, "sqlite");
+  assert.equal(await readFile(retained, "utf8"), "pending source write");
 });
 
 test("verified historical completion survives unavailable current provider without adoption", async t => {

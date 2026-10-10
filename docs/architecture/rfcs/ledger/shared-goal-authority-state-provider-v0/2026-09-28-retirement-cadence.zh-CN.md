@@ -256,12 +256,16 @@ File → SQLite → 已确认的 Todo 新增／修改／完成 → 新进程读�
 保留前缀，不能充当当前 head 的回退。checkpoint 缺少合格路径决策时，新一轮仍
 须重规划；provider 恢复不能抹掉这项义务，也不能把 Todo 完成当作 Goal 验收。
 
-这补齐了有界 CLI 组合验收，不是完整安装态产品验收。App 的任务所有权编辑器
-只迁移执行策略，尚无已有 Goal 的 File/SQLite 切换交互。下一配套仍复用同一 TS
-migration owner：在现有 Goal 设置中提供不接收调用者路径的 preview/apply，
-失响应／重启后恢复原预览，明确拒绝原因，并单独读回当前选中来源。须用真实
-packaged UI 和后端核验 pending projection/outbox、Host 停止及结算。旧 Markdown
-完整捕获、隔离 checkpoint 导入、全 Goal 恢复、D2 与发布默认决策仍各自验收。
+已有 Goal 设置现已通过同一 TS migration owner 提供 File/SQLite 预览、显式应用、
+失响应／重启后恢复原预览，以及独立的当前来源读回。真实 packaged UI／后端旅程
+将 SQLite 新写入带回 File；历史完成回执不能重新采用旧目标。执行策略迁移仍是
+另一个设置。真实 HTTP／provider 还覆盖预览后新准入的 Host lease：runtime 重启后
+应用仍拒绝，恢复只读；原生 release 改变了 source，结算后仍须审核新计划。
+原生 capture disposition 先在其所属归档保留 prepared outbox 字节，再切换 provider；
+旧计划不能绕过后来启动的 capture。这些只验证本地 canonical 连续性，不证明真实
+Host 进程已停止、旧 Markdown 完整捕获、pending projection 投递、隔离 checkpoint
+导入或全 Goal 恢复。这些更广的验收边界、D2 和发布默认决策各自核验，
+设置旅程不强制 legacy 迁移。
 
 以下是冻结候选版本后的工程窗口，不是承诺发布日期。故障注入只用可丢弃 runtime
 和经过验证的隔离副本，不能为了测试杀掉或改写活跃 Goal。
@@ -391,6 +395,30 @@ SQLite 的 `Count` opcode 读取覆盖索引，执行均值由 0.145 增至 0.83
 2.059 倍越线的精确归因。JS 返回行数有界不代表 SQLite 工作量恒定。回归同时验证
 live proof 窗口外的非尾部 hole：完整极值／head／parent 不能代替连续性校验。
 本次不据此提权威缓存、删 proof、切换 provider 或运行时性能修复。
+
+`233cc76fd` 上的固定历史消费者对照补齐了本诊断缺少的完整读取命令比较。
+macOS arm64、Node 24.21.0／SQLite 3.53.4，复用经完整历史校验的 64 KiB
+FULL/WAL 10k／100k 合成历史，并在隔离副本中执行。每轴各测 20 次 status 和
+20 次 quota，交替历史深度与命令顺序。每个样本新启 Python CLI 和 managed
+Effect runtime，关闭在计时外；保留 OS 文件缓存。两轴采用相同且非空的
+1,353 文件公共扫描根，测量前后输入 digest 不变。
+
+| 完整读取命令 | 10k p50／p95 | 100k p50／p95 |
+| --- | ---: | ---: |
+| `status` | 672／846 ms | 689／875 ms |
+| `quota should-run` | 873／1,111 ms | 894／1,079 ms |
+
+80 次调用均保留 canonical Todo；最终 cursor／完整 projection digest 不变，
+最老／中间原始 receipt 仍能校验，隔离 runtime 已停止并删除。这个单 Todo 读取
+负载没有明显命令增长，既不证明原 warm-head 失败的根因，也不验收原正式 profile。
+它未测 mutation、增长中的历史、并发 writer、安装 wheel／App 或完整领域 Goal
+payload。源码与扫描输入也不同于 `5f51559dc`，不能把这些值称为性能修复前后对比。
+
+处置：保留连续性校验和当前持久格式。这项消费者对照本身不足以支持新增索引、
+缓存决策、计数器或连接池。后续更窄索引／持久证明方案须先明确格式／升级边界，
+保留非尾部 hole 检测、原 digest／receipt，并在真实所属消费者上证明同负载改善，
+再决定实现。继续既有整 Goal 消费者、安装恢复和社区负责人所持正式资格工作，
+不让独立迁移／退役等待微基准全绿。
 
 原失败和预算继续保留；绝对值通过不抵消增长失败行，但按 §7.2 的消费者影响决策，
 这一行也不能单独否决发布默认值。#5805 已让新建默认采用 canonical SQLite／

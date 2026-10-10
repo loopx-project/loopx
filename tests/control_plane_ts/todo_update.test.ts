@@ -835,7 +835,7 @@ test("schema-less historical canonical leases retain active execution semantics 
 });
 
 
-test("retained lease diagnostics distinguish recovery without granting execution", async () => {
+test("retained execution fences distinguish recovery; soft released owner copy needs no proof", async () => {
   for (const mode of ["legacy", "soft_claim", "hard_lease"]) {
     for (const state of ["released", "expired", "active"]) {
       for (const owner of ["agent-a", "agent-b"]) {
@@ -850,6 +850,11 @@ test("retained lease diagnostics distinguish recovery without granting execution
               expires_at: state === "expired" ? "2026-09-04T00:00:00Z" : "2026-09-06T00:00:00Z", write_scopes: []}]}});
         const before = await store.loadAuthority();
         const result = await executeCoordinationTodoUpdate(store, {...request, dry_run: true});
+        if (mode === "soft_claim" && state === "released" && owner === "agent-a") {
+          assert.equal(result.status, "planned");
+          assert.deepEqual(await store.loadAuthority(), before);
+          continue;
+        }
         assert.equal(result.status, "failed");
         assert.equal(result.handoff_mode, mode);
         const recovery = result.recovery as Record<string, unknown>;
@@ -970,7 +975,7 @@ test("inactive history does not invent an executable lease acquisition", async (
     [{claimed_by: null}, {}, "legacy", "reconcile_lease_owner"],
     [{}, {required_capabilities: ["code_review"]}, "legacy", "resolve_lifecycle_edit"],
     [{}, {status: "blocked"}, "legacy", "resolve_lifecycle_edit"],
-    [{}, {}, "soft_claim", "resolve_acquire_rejection"],
+    [{status: "blocked"}, {}, "soft_claim", "resolve_acquire_rejection"],
   ] as const) {
     const {store, request} = await seeded(overrides);
     const head = await store.loadAuthority();

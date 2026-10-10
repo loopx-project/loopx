@@ -176,7 +176,7 @@ def _decision_packet(
     gate_scope = None
     if (before.get("requires_user_action") is True and registry_path is not None
         and registry_due.get("todo_id")):
-        from ...todos import list_goal_todos
+        from ...control_plane.todos.list_readback import list_goal_todos
         from ..todos.decision_scope import todo_gate_scope_projections
         snapshot = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
             runtime_root_arg=str(runtime_root) if runtime_root else None, limit=None)

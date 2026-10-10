@@ -249,14 +249,13 @@ PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 
 
 ### 基于源码的实现顺序
 
-以下是既有 M2/M3 与路线图 R2/R3/R4 中尚未实现的组合增量，不新增里程碑。
-Source owner 在 `44931b6d22a50b949d43354e6ea498fb6b68d231` 复核。
+以下表格记录既有 M2/M3 与路线图 R2/R3/R4 的独立组合边界；候选 checkpoint 不表示已安装能力或完整 M2 验收。源码基线为 `233cc76fd22760947d73e1501032b8b77e28148b`。
 
-| 有界结果 | 既有入口与 owner | 当前缺口与决定性出口 |
+| 有界结果 | 既有入口与 owner | 当前 checkpoint 与决定性出口 |
 | --- | --- | --- |
 | 声明来源链不可用时，阻止新的依赖使用 | `Delegations._read_current/start`、`delegation_results.require_dependencies/adoption_evidence`、`delegation.ts` | 遵循对齐 §3.8：source → A → B 中 A input 失效，即使 A output 不变也须拒绝当前依赖使用；验证真实 read/start/adopt/settlement 和打包证据读回，保留历史完成。 |
 | 独立检查失败进入原任务可操作的恢复旅程 | `executor._task_validation_stage`、`ValidatedTurnReceipt`、canonical `turn_loop_controller_contract_v0.json`、`turn_journal.ts` | 传递已资格化失败范围与 repair/replan 细节；完成有界修复或只运行 verifier 的重试、当前验证与原效果结算。Host 声明不能冒充可信验证。 |
-| 可选语义审查说明证据和覆盖范围 | 既有 progress-review receipt/loader 与 canonical Goal acceptance inspect | 在 shadow 读回绑定选中 criterion 和证据覆盖；显示缺失/陈旧依据及独立判断维度。模型质量和干预另行资格化。 |
+| shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；精确 GoalRef 保持实例身份，任务变化或实例重建撤回旧判断。独立旧核心只保留手工研究的旧格式；规范 scope 不降级。显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
 
 第二项中，`_task_validation_stage` 已保存独立结果并阻断结算；`ValidatedTurnReceipt`
 未携带该验证的 `recovery_kind`，canonical controller 有意将 legacy
@@ -279,6 +278,13 @@ result，只重跑 validation，不再次调用 Host。**实际修复工作**需
 修复/复验，并在打包 App 读回成功或继续失败；CLI 与受影响 Lark 入口共用 owner。
 复制命令按钮或后端 receipt 不能独自完成旅程。用实际测量限制重复验证和来源链遍历
 成本；经既有 owner 回退代码，同时保留 receipt、已提交效果和未解决恢复义务。
+
+规范审查 basis 的 `acceptance_scope` 只引用选定 workspace 内的 registry/runtime，
+条款内容从当前 owner 读取，原命令及私有路径不进入模型问题。criterion hash、
+版本和覆盖是来源观察，不证明模型答案正确、完整业务 checkpoint 或全部任务完成。
+前端沿既有团队证据和能力设置入口读回；受影响 CLI/MCP 共用 owner，未新增
+Lark 专有协议。真实模型纠错、远端 exactly-once、接管、observer 质量与受控干预
+仍由原 RFC 验收所有者负责。
 
 ## 12. 未决事项
 
