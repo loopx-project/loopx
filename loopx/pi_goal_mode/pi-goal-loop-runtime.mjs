@@ -102,6 +102,41 @@ export function sessionKey(sessionFile) {
   return label ? `${label}-${digest}` : `session-${digest}`
 }
 
+// Stable per-session thread identity for the LoopX host-thread binding. The Pi
+// adapter is the only host surface that has to supply one itself: the CLI's
+// HOST_THREAD_ID_ENV table has no "pi" entry and never reads PI_SESSION_ID, and
+// Pi injects that variable into bash-tool children only, so it is absent from the
+// extension process. The session file is unique per Pi session, and unlike the
+// bare environment value it cannot be inherited from a parent Pi process, which
+// is what happens when a Pi session is started inside tmux. A --no-session run
+// has no file and deliberately resolves to null, leaving the selection packet
+// flow unchanged.
+export function piThreadId(sessionFile) {
+  const stem = String(sessionFile || "").split("/").pop() || ""
+  const sanitized = stem.replace(/\.(jsonl|json)$/i, "").replace(/[^A-Za-z0-9._-]/g, "-")
+  return sanitized || null
+}
+
+// A thread-binding gate packet offers the lanes it could bind to. Only a single
+// unambiguous candidate may be bound automatically; zero candidates, several
+// lanes or a conflicting binding stay a user decision, so the caller forwards the
+// original packet untouched instead of guessing an identity.
+export function soleThreadBindingCandidate(packet) {
+  const activation = packet?.host_loop_activation || packet?.command_pack?.host_loop_activation || {}
+  const gate = activation.identity_selection_gate || activation.identity_contract
+  const choices = gate?.choices
+  if (!Array.isArray(choices) || choices.length !== 1) return null
+  const agentId = typeof choices[0]?.agent_id === "string" ? choices[0].agent_id.trim() : ""
+  const goalId =
+    typeof packet?.goal_id === "string" && packet.goal_id.trim()
+      ? packet.goal_id.trim()
+      : typeof packet?.command_pack?.goal_id === "string"
+        ? packet.command_pack.goal_id.trim()
+        : ""
+  if (!agentId || !goalId) return null
+  return { goalId, agentId }
+}
+
 export function stateRoot(directory) {
   if (process.env.LOOPX_PI_STATE_DIR) {
     return path.resolve(process.env.LOOPX_PI_STATE_DIR)
