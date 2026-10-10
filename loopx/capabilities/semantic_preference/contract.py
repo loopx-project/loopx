@@ -65,24 +65,29 @@ def _config(config: str | Path, project: str | Path) -> dict[str, Any]:
     except ValueError:
         relative = None
     if relative is not None:
-        tracked = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(root),
-                "ls-files",
-                "--error-unmatch",
-                "--",
-                str(relative),
-            ],
-            capture_output=True,
-            check=False,
-        )
-        ignored = subprocess.run(
-            ["git", "-C", str(root), "check-ignore", "--quiet", "--", str(relative)],
-            capture_output=True,
-            check=False,
-        )
+        try:
+            tracked = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "ls-files",
+                    "--error-unmatch",
+                    "--",
+                    str(relative),
+                ],
+                capture_output=True,
+                check=False,
+                timeout=30.0,
+            )
+            ignored = subprocess.run(
+                ["git", "-C", str(root), "check-ignore", "--quiet", "--", str(relative)],
+                capture_output=True,
+                check=False,
+                timeout=30.0,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise ValueError(f"failed to verify git status for config file: {exc}") from exc
         if tracked.returncode == 0 or ignored.returncode != 0:
             raise ValueError("config inside the project must be ignored and untracked")
     try:

@@ -1777,6 +1777,30 @@ def test_semantic_preference_config_reuses_strict_extension_id_grammar(
         provider_doctor(config, project=project)
 
 
+def test_semantic_preference_config_handles_git_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = project / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": "semantic_preference_hook_config_v0",
+                "enabled": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(ValueError, match="failed to verify git status for config file"):
+        provider_doctor(config, project=project)
+
+
 def test_capability_resolution_ignores_disabled_implementations(
     tmp_path: Path,
 ) -> None:
