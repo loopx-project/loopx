@@ -505,6 +505,38 @@ non-tail hole outside the live proof window: intact extrema/head/parent cannot
 replace continuity verification. No cached authority, proof removal, provider
 change or runtime performance fix is proposed from these observations.
 
+A fixed-history consumer control at `233cc76fd` closes the diagnostic's missing
+whole-command read comparison. On macOS arm64, Node 24.21.0 / SQLite 3.53.4,
+it reuses full-history-verified 64 KiB FULL/WAL 10k/100k synthetic histories
+in isolated copies. Each depth has 20 status and 20 quota samples, balancing
+depth and command order. Every sample starts a new Python CLI and managed
+Effect runtime, with shutdown outside timing; the OS file cache stays warm.
+Both depths use the same non-empty 1,353-file public scan root, whose input
+digest remains unchanged before/after measurement.
+
+| Complete read command | 10k p50 / p95 | 100k p50 / p95 |
+| --- | ---: | ---: |
+| `status` | 672 / 846 ms | 689 / 875 ms |
+| `quota should-run` | 873 / 1,111 ms | 894 / 1,079 ms |
+
+All 80 calls retain the canonical Todo. Final cursor/full-projection digests
+are unchanged, and oldest/middle original receipts still verify. Isolated
+runtimes are stopped and removed. This control shows no material command
+growth in that one-Todo read workload; it neither proves the original warm-head
+failure's cause nor qualifies the original formal profile. It omits mutations,
+growing history, concurrent writers, installed-wheel/App execution and the
+full-domain Goal payload. Its source and scan inputs differ from `5f51559dc`,
+so these timings are not a before/after performance-fix claim.
+
+Disposition: keep continuity verification and the current persisted format.
+No new index, cached decision, counter or connection pool is justified by this
+consumer control alone. Any future narrower-index or persisted-proof proposal
+must name its format/upgrade boundary, preserve non-tail-hole detection and
+original digests/receipts, and demonstrate a matched improvement through the
+real owning consumer before implementation. Continue existing whole-Goal
+consumer, installed recovery and contributor-owned formal qualification work;
+do not make independent migration/retirement wait for an all-green microbenchmark.
+
 Keep the original failed result and budgets. A passing absolute head budget
 does not cancel its failed growth row, and that row alone does not veto a
 released default under Section 7.2's consumer-impact decision. New creation

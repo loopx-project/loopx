@@ -392,6 +392,30 @@ SQLite 的 `Count` opcode 读取覆盖索引，执行均值由 0.145 增至 0.83
 live proof 窗口外的非尾部 hole：完整极值／head／parent 不能代替连续性校验。
 本次不据此提权威缓存、删 proof、切换 provider 或运行时性能修复。
 
+`233cc76fd` 上的固定历史消费者对照补齐了本诊断缺少的完整读取命令比较。
+macOS arm64、Node 24.21.0／SQLite 3.53.4，复用经完整历史校验的 64 KiB
+FULL/WAL 10k／100k 合成历史，并在隔离副本中执行。每轴各测 20 次 status 和
+20 次 quota，交替历史深度与命令顺序。每个样本新启 Python CLI 和 managed
+Effect runtime，关闭在计时外；保留 OS 文件缓存。两轴采用相同且非空的
+1,353 文件公共扫描根，测量前后输入 digest 不变。
+
+| 完整读取命令 | 10k p50／p95 | 100k p50／p95 |
+| --- | ---: | ---: |
+| `status` | 672／846 ms | 689／875 ms |
+| `quota should-run` | 873／1,111 ms | 894／1,079 ms |
+
+80 次调用均保留 canonical Todo；最终 cursor／完整 projection digest 不变，
+最老／中间原始 receipt 仍能校验，隔离 runtime 已停止并删除。这个单 Todo 读取
+负载没有明显命令增长，既不证明原 warm-head 失败的根因，也不验收原正式 profile。
+它未测 mutation、增长中的历史、并发 writer、安装 wheel／App 或完整领域 Goal
+payload。源码与扫描输入也不同于 `5f51559dc`，不能把这些值称为性能修复前后对比。
+
+处置：保留连续性校验和当前持久格式。这项消费者对照本身不足以支持新增索引、
+缓存决策、计数器或连接池。后续更窄索引／持久证明方案须先明确格式／升级边界，
+保留非尾部 hole 检测、原 digest／receipt，并在真实所属消费者上证明同负载改善，
+再决定实现。继续既有整 Goal 消费者、安装恢复和社区负责人所持正式资格工作，
+不让独立迁移／退役等待微基准全绿。
+
 原失败和预算继续保留；绝对值通过不抵消增长失败行，但按 §7.2 的消费者影响决策，
 这一行也不能单独否决发布默认值。#5805 已让新建默认采用 canonical SQLite／
 `hard_lease`，重复修改此归属不是剩余工作。按源码和支持 profile 对齐已有安装态
