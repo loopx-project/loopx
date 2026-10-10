@@ -5,6 +5,7 @@ import type {AuthorityStore} from "../../loopx/control_plane/coordination/author
 import {executeCoordinationTodoTerminalLifecycle as execute,
   type CoordinationTodoTerminalLifecycleInput} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {localTodoCompletionIdentity} from "../../loopx/control_plane/todos/completion_fence.ts";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 
 export function registerTerminalReentryConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
@@ -12,7 +13,7 @@ export function registerTerminalReentryConformance(provider: string, factory: Au
     for (const validationRequired of [false, true]) {
     test(`${provider}: migrated terminal reentry preserves completion and closes only continuation (${schema}, validation=${validationRequired})`, async t => {
       const {store, contender} = await factory(t);
-      const goal = "goal-a", key = `${goal}:agent-a:todo_migrated:original-turn`;
+      const goal = "goal-a", key = localTodoCompletionIdentity(goal, "todo_migrated");
       const todo: JsonObject = {schema_version: schema === "native" ? "todo_domain_item_v0" : "todo_item_v0",
         todo_id: "todo_migrated", role: "agent", status: "done", done: true, archive_state: "active",
         text: "Retain previously validated work", claimed_by: "agent-a", evidence: "Original validation passed",

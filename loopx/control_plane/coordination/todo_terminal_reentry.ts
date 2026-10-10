@@ -1,14 +1,48 @@
-import type {JsonObject} from "../effect_program.ts";
+import {settlementIdentity, type JsonObject} from "../effect_program.ts";
+import {jsonObject} from "../runtime_decode.ts";
 import {AuthorityStoreProtocolError, canonicalAuthoritySha256} from "./authority_store_codec.ts";
 import type {CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
 import {registeredTodoMutationRejection} from "./todo_lifecycle_decision.ts";
-import {evaluateTodoCompletionFence, TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "../todos/completion_fence.ts";
+import {evaluateTodoCompletionFence, localTodoCompletionIdentity, TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "../todos/completion_fence.ts";
 import {selectTodoCompletionState, TODO_COMPLETION_STATE_REQUEST_SCHEMA} from "../todos/completion_state.ts";
 import {resolveTodoCompletionPolicy} from "../todos/completion_policy.ts";
 
 export function isLifecycleCloseout(input: CoordinationTodoTerminalLifecycleInput): boolean {
   return input.command === "complete" && input.requested_no_followup &&
     input.requested_completion_identity_source === "lifecycle_reentry";
+}
+
+export function requiresReentrySettlement(input: CoordinationTodoTerminalLifecycleInput): boolean {
+  return input.requested_completion_turn_key !== localTodoCompletionIdentity(input.goal_id, input.todo_id);
+}
+
+/** Resolve historical quota identity from its durable receipt, never by parsing
+ * an opaque completion key or treating missing history as unscoped work. */
+export async function verifyReentrySettlement(runtimeRoot: string,
+  input: CoordinationTodoTerminalLifecycleInput): Promise<void> {
+  const {readQuotaSettlementSnapshot, readQuotaSettlementFromSnapshot,
+    QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA} = await import("../quota/settlement_readback.ts");
+  const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, input.goal_id);
+  const event = snapshot.events.find(event => {
+    const details = jsonObject(event.details);
+    const identity = jsonObject(details?.settlement_identity);
+    return event.agent_id === input.actor_agent_id &&
+      (details?.settlement_effect_id === input.requested_completion_turn_key ||
+        identity?.effect_id === input.requested_completion_turn_key);
+  });
+  const turn = event?.run_id;
+  if (typeof turn !== "string" || input.actor_agent_id === null ||
+      settlementIdentity({goal_id: input.goal_id, agent_id: input.actor_agent_id,
+        todo_id: input.todo_id, turn_instance_id: turn}).effect_id !== input.requested_completion_turn_key) {
+    throw new AuthorityStoreProtocolError("Lifecycle closeout requires the original quota identity and settled receipts");
+  }
+  const readback = readQuotaSettlementFromSnapshot({schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+    runtime_root: runtimeRoot, goal_id: input.goal_id, agent_id: input.actor_agent_id,
+    todo_id: input.todo_id, turn_instance_id: turn,
+    infer_turn_instance_id: false, allow_unbound_binding: false}, snapshot);
+  if (jsonObject(jsonObject(readback.settlement)?.payload)?.ok !== true) {
+    throw new AuthorityStoreProtocolError("Lifecycle closeout requires matching writeback and quota spend receipts");
+  }
 }
 
 /** A migrated completion is already authoritative. Close only its continuation;

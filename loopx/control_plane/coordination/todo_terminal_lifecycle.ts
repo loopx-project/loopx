@@ -59,7 +59,7 @@ import {
 } from "./todo_successor_derivation.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
-import {isLifecycleCloseout, prepareTerminalReentry} from "./todo_terminal_reentry.ts";
+import {isLifecycleCloseout, prepareTerminalReentry, requiresReentrySettlement} from "./todo_terminal_reentry.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
@@ -1032,6 +1032,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   store: AuthorityStore,
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<void>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1216,6 +1217,11 @@ export async function executeCoordinationTodoTerminalLifecycle(
     let closed: JsonObject | null;
     try {
       closed = prepareTerminalReentry(todo, input, activeLease(projection.leases.get(input.todo_id), input.now));
+      if (closed !== null && requiresReentrySettlement(input)) {
+        if (verifyLifecycleSettlement === undefined) throw new AuthorityStoreProtocolError(
+          "Lifecycle closeout requires original quota settlement verification");
+        await verifyLifecycleSettlement(input);
+      }
     } catch (error) {
       return terminalFailure("invalid_todo_completion_transaction",
         error instanceof Error ? error.message : "Invalid terminal lifecycle reentry", {}, "decision_rejection");
