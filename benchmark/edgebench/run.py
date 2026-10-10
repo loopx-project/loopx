@@ -25,7 +25,9 @@ from benchmark.runtime.sforge import (
 )
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
-from benchmark.edgebench.prompts import blind_task_prompt, best_only_task_prompt
+from benchmark.edgebench.prompts import (
+    blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
+)
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
@@ -98,8 +100,8 @@ def main(argv=None):
     parser.add_argument("--log-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--worker", choices=PROFILES, required=True)
-    parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="best-only",
-                        help="New-run default: best-only; blind/native are explicit controls")
+    parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="native",
+                        help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--model", required=True)
@@ -114,13 +116,19 @@ def main(argv=None):
     cadence.add_argument("--replan-after-todos", type=int, choices=range(1, 6),
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--eval-interval", type=int,
-                        help="Auto-evaluation seconds; task-defaults.json overrides the 300s fallback; 0 disables")
-    parser.add_argument("--submission-cooldown", type=int, default=120)
+                        help="Native default: 0 (no periodic evaluation); other modes use task defaults; explicit 0 disables")
+    parser.add_argument("--submission-cooldown", type=int,
+                        help="Native default: 3600s between accepted submissions; other modes retain 120s")
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
     args = parser.parse_args(argv)
     args.timeout = _task_default(args.task, "timeout_seconds", args.timeout, DEFAULT_TIMEOUT_SECONDS)
-    args.eval_interval = _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300)
+    args.eval_interval = (0 if args.feedback == "native" and args.eval_interval is None else
+                         _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300))
+    if args.submission_cooldown is None:
+        args.submission_cooldown = 3600 if args.feedback == "native" else 120
+    if args.eval_interval < 0 or args.submission_cooldown < 0:
+        parser.error("Evaluation interval and submission cooldown must be non-negative")
     if args.task_entry == "loopx-planned" and not args.worker.startswith("heartbeat-"):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
@@ -140,6 +148,7 @@ def main(argv=None):
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
     blind_endpoint = None
     feedback_prompt = None
+    workspace_instructions = None
     if args.feedback != "native":
         proxy = urlsplit(args.api_proxy_url or "")
         judge = urlsplit(args.judge_url)
@@ -154,6 +163,12 @@ def main(argv=None):
             validate_best_only(task, args.eval_interval)
         render_prompt = best_only_task_prompt if args.feedback == "best-only" else blind_task_prompt
         feedback_prompt = render_prompt(task.work.agent_query, task.submit_paths)
+    elif not task.game_mode:
+        native_policy = dict(submission_cooldown=args.submission_cooldown,
+            eval_interval=args.eval_interval, internet=task.internet,
+            selection=task.judge.selection, score_direction=task.judge.score_direction)
+        feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
+        workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
     config = SForgeConfig(
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
@@ -166,6 +181,7 @@ def main(argv=None):
         }
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
+                         workspace_instructions=workspace_instructions,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          replan_after_turns=args.replan_after_turns,
