@@ -50,6 +50,23 @@ a public article with an image, and two distinct group/Topic contexts. Pin the
 source used to judge an answer; do not freeze a historical answer as permanently
 current. Repeat on another platform only when that platform is in the rollout.
 
+For short repository questions such as CQ06, retain the requested source
+verification while checking that discovery stays focused: find current docs
+and the owning reader, read relevant sections together, and avoid rereading
+unchanged instructions or unrelated implementation. Record model/tool round
+counts and tool elapsed times separately from end-to-end reply latency.
+Repeated model rounds or token totals do not identify a CPU hotspot. A focused
+read strategy is a candidate optimization until the same original question,
+version, host, permissions and concurrent Topic workload demonstrate an
+improvement; it cannot relax the response budget below.
+
+Judge source references in the final group reply after presentation and privacy
+redaction. A correct model answer containing host-local file links can lose its
+citations during delivery; those hidden links are not usable public evidence.
+Resolve allowed public references to the verified version and relevant lines,
+or state the evidence limitation. Keep private paths redacted rather than
+making them visible to satisfy the citation check.
+
 Use the real installed host and provider in a private pilot before public entry.
 Two pilot group contexts exercise separation without requiring premature entry
 into the target developer groups. Mocked transport, a configured App, unit tests,
