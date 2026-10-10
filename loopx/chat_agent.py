@@ -518,6 +518,14 @@ def _turn_prompt(
         + "with an autonomous project task. "
         + planning_limits
         + trusted_manager_limits
+        + (
+            "For explanation-only repository questions, batch independent initial reads of applicable project instructions with focused searches of current documentation and the owning code. "
+            "When the project root and search terms are already supplied, avoid a separate working-directory check or broad file inventory. Use an output budget that retains complete applicable instructions, then fetch only relevant documentation and source sections. "
+            "Read applicable skills and reuse unchanged instruction reads; stop unrelated discovery when the requested facts have sufficient evidence. "
+            "Inspect the implementation when documentation is insufficient, conflicts with the selected version, or the operator requests source verification. "
+            "Answer directly with the needed version and source references. Explicit requests to change or execute project work still follow their existing authorized workflow. "
+            if not execution_mode else ""
+        )
         + (CONVERSATION_INTENT_RESOLUTION_INSTRUCTION if not execution_mode and not project_work else "")
         + (TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION if direct_work else "")
         + (
