@@ -1044,7 +1044,11 @@ source/Goal mismatch never become empty success. Outputs retain their existing F
 Overview, Tasks, Chat and Files are direct Goal navigation; configuration opens
 the existing settings editor. Visited views retain filters, completed history
 and scroll within the same Goal/source. The delivery section is inline in
-Overview, not a third board/list layout or nested settings modal.
+Overview, not a third board/list layout or nested settings modal. The page
+composition around it (persistent masthead, vitals, direction, work by owner,
+results and the all-work rail) belongs to the
+[Goal workspace RFC](goal-workspace-surface-v0.md); this section's contract is
+unchanged.
 
 This is a bounded S5/G2 visibility slice, not G2 qualification or a general
 interaction compiler. It reuses existing graph, acceptance and preview/apply

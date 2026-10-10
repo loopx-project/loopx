@@ -315,6 +315,11 @@ Do not mix marketing pills and application squares in the same control group.
   and the scope of the counts (for example "this page only") sits next to it.
   Counts come from the same typed classification as the labels, never from
   prose.
+- Metric cells name their window and scope. An absent measurement renders as
+  an em dash with a "not measured" label, never as zero; owner-reported partial
+  coverage carries a visible marker. The
+  [Goal workspace RFC](../architecture/rfcs/goal-workspace-surface-v0.md)
+  defines the per-Goal vitals, glyph set and page composition.
 - Detail many owners with a grid of owner cards: identity, one status pill, the
   owner's own records, and identifiers behind a disclosure. A blocked owner's
   card may carry a tinted hairline; avoid filling the card with color.
