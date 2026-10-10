@@ -24,13 +24,18 @@ def _git(
     repo: Path,
     *args: str,
     check: bool = True,
+    timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=False,
+            capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise IntegrationBranchError(f"git command timed out after {timeout}s: {' '.join(args)}") from None
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
         raise IntegrationBranchError(detail)
