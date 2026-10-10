@@ -15,6 +15,7 @@ from pathlib import Path
 from canonical_authority_fixture import isolate_sqlite_runtime
 import test_quota_settlement_cli as settlement
 from test_quota_authority_settlement_journey import _source
+from test_todo_list_record_references import expand_references
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,7 +42,11 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
         return json.loads(process.stdout)
 
     def listed():
-        return run("todo", "list", "--goal-id", goal)
+        payload = run("todo", "list", "--goal-id", goal)
+        # Inventory lanes use response-local pointers for identical records.
+        # Expand the wire view before comparing complete retained work; never
+        # join by Todo id, which can conflate distinct projected facts.
+        return expand_references(payload, payload)
 
     def plan(provider, name):
         path = tmp_path / f"{name}.json"

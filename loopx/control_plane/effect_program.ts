@@ -184,6 +184,7 @@ export interface SettlementStep {
   expected_receipt: string;
   command_template?: string;
   command_condition?: "todo_deliverable_complete";
+  vision_authoring?: JsonObject;
   conditional?: true;
 }
 
@@ -606,6 +607,7 @@ export function settlementStepPayload(step: SettlementStep): JsonObject {
   if (step.command_template) payload.command_template = step.command_template;
   if (step.command_condition) payload.command_condition = step.command_condition;
   if (step.conditional) payload.conditional = true;
+  if (step.vision_authoring) payload.vision_authoring = step.vision_authoring;
   return payload;
 }
 

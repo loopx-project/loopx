@@ -362,3 +362,24 @@ def test_cli_flags_reach_configure_goal(tmp_path: Path) -> None:
         "drift_threshold": 5,
         "contract_revision": None,
     }
+
+
+def test_readback_separates_dimensions_and_keeps_missing_and_io_unknown(tmp_path, monkeypatch):
+    from loopx.capabilities.progress_review.context import external_progress_review_context
+    from loopx.capabilities.progress_review import receipt as receipt_module
+    goal = {"id": GOAL_ID, "control_plane": {"progress_review": {"mode": "shadow"}}}
+    assert external_progress_review_context({}, tmp_path) is None
+    assert external_progress_review_context(goal, tmp_path)["summary"]["read_state"] == "missing"
+    mixed = receipt(judgments={"choice": {"relation": "off_goal", "increment": "new_evidence"}, "noul": {
+        "behavior_change": 0.9, "serves_acceptance": 0.1, "evidence_increment": 0.9}},
+        drift_signal={"noul": False, "choice": False})
+    write_progress_review_receipt(tmp_path, GOAL_ID, mixed)
+    latest = external_progress_review_context(goal, tmp_path)["summary"]["latest"]
+    assert latest["judgments"]["choice"] == {"relation": "off_goal", "increment": "new_evidence"}
+    def unreadable(*args, **kwargs):
+        raise OSError("disposable storage unavailable")
+    monkeypatch.setattr(receipt_module, "load_progress_review_receipts", unreadable)
+    summary = external_progress_review_context(goal, tmp_path)["summary"]
+    assert summary["read_state"] == "unavailable"
+    assert summary["read_error"] == "receipt_store_unavailable"
+    assert summary["latest"] is None

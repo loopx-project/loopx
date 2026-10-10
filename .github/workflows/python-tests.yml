@@ -700,6 +700,13 @@ jobs:
       - name: Check Windows collaboration lock sidecars
         run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
 
+      - name: Qualify native Windows peer reads and long-path inputs
+        run: >-
+          python -m pytest -q
+          tests/test_peer_collaboration.py::test_peer_exchange_survives_long_private_store_paths
+          tests/test_peer_collaboration.py::test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest
+          tests/test_peer_collaboration.py::test_peer_read_qualifies_long_workspace_input
+
       - name: Validate local-state routing and interruption recovery on Windows
         run: >-
           python -m pytest -q

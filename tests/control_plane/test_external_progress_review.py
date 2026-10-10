@@ -369,7 +369,7 @@ def test_newer_drift_after_formation_extends_and_rebinds_the_baseline() -> None:
     assert result["oldest_counted_generated_at"] == "2026-09-21T00:00:01Z"
 
 
-def test_a_newer_completed_on_goal_verdict_ends_the_open_condition() -> None:
+def test_a_newer_completed_nontriggering_signal_ends_the_open_condition() -> None:
     """A positive verdict on a newer transition is evidence; a missing one is not."""
 
     runs = [run(3, turn="t3"), run(2, turn="t2"), run(1, turn="t1")]

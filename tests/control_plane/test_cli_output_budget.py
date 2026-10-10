@@ -1167,7 +1167,7 @@ def test_malformed_todo_state_fails_closed_without_dropping_bounded_detail(
         assert default_payload.get(key) == detail_payload.get(key)
 
 
-def test_quota_cli_bounds_real_scale_vision_audit_and_keeps_cold_detail(
+def test_quota_cli_keeps_required_authoring_inline_and_diagnostic_audit_cold(
     tmp_path: Path,
 ) -> None:
     with _stable_budget_fixture_root(tmp_path / "quota-vision-detail") as stable_root:
@@ -1196,9 +1196,10 @@ def test_quota_cli_bounds_real_scale_vision_audit_and_keeps_cold_detail(
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    # Pinned base/head emit 41,503 chars on the same 36-Todo / 12-run vision
-    # fixture. Keep complete decision semantics; 42k leaves 497 chars.
-    assert len(default_text) <= 42_000
+    # Same 36-Todo / 12-run command: 41,176 -> 44,225 chars (+7.4%).
+    # Required authoring replaces a second diagnostic read; preserve its rules
+    # and field limits. This fixed allowance does not relax other lane budgets.
+    assert len(default_text) <= 45_000
     default_payload = json.loads(default_text)
     detail_payload = json.loads(detail_text)
     compact_audit = default_payload["vision_continuation_audit"]
@@ -1212,16 +1213,8 @@ def test_quota_cli_bounds_real_scale_vision_audit_and_keeps_cold_detail(
     assert "registry_read_instruction" in detailed_audit["vision_gap_judge"]
     compact_replan = default_payload["replan_action_packet"]
     detailed_replan = detail_payload["replan_action_packet"]
-    assert compact_replan["payload_compaction"] == {
-        "schema_version": "quota_cli_replan_action_compaction_v0",
-        "mode": "compact_hot_path",
-        "compacted_fields": ["writeback_contract.vision_authoring"],
-        "full_detail_cold_path": "quota should-run --include-detail vision",
-    }
-    assert "vision_authoring" not in compact_replan["writeback_contract"]
-    assert compact_replan["writeback_contract"]["vision_authoring_detail_ref"] == (
-        "quota should-run --include-detail vision"
-    )
+    assert compact_replan["writeback_contract"] == detailed_replan["writeback_contract"]
+    assert "payload_compaction" not in compact_replan
     assert detailed_replan["writeback_contract"]["vision_authoring"][
         "schema_version"
     ] == "goal_vision_replan_contract_v0"

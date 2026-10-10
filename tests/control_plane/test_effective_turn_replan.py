@@ -231,16 +231,28 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     assert selected_rc == 0, selected
     contract = selected["replan_action_packet"]["writeback_contract"]
     assert contract["preferred_input"] == "evidence_linked_vision_path"
+    plan = selected["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert contract["vision_authoring_ref"] == (
+        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].vision_authoring"
+    )
+    authoring = plan["ordered_steps"][1]["vision_authoring"]
+    assert authoring["schema_version"] == "goal_vision_replan_contract_v0"
+    if threshold_override is None and device_count is None:
+        rc, envelope = _run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+            "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
+        )
+        assert rc == 0, envelope
+        assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
+        assert envelope["writeback"]["settlement_plan"] == plan
     vision_path = tmp_path / "periodic-vision.json"
-    vision = {
-        "schema_version": "goal_vision_replan_contract_v0",
-        "state": "vision_patch_proposed",
-        "vision_patch": {"acceptance_summary": "Original acceptance remains open."},
-        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
+    vision = json.loads(json.dumps(authoring["minimal_example"]))
+    vision["vision_patch"] = {"acceptance_summary": "Original acceptance remains open."}
+    vision["path_delta"] = {"schema_version": "goal_path_delta_v0", "outcome": "replan",
                        "prior_assumption": "The existing method remains viable.",
                        "observed_reality": "Current validation supports continuing it.",
-                       "retained": ["Existing method and open Todo"], "evidence_refs": []},
-    }
+                       "retained": ["Existing method and open Todo"], "evidence_refs": []}
     command = shlex.split(selected["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
     command = command[command.index("refresh-state"):]
     command[command.index("--agent-vision-json") + 1] = str(vision_path)

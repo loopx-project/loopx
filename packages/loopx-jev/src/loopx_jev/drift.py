@@ -69,6 +69,8 @@ def contract(path: Path, repo: Path) -> tuple[dict[str, Any], str, Callable[[], 
     if not isinstance(basis.get("goal_id"), str) or not basis["goal_id"].strip():
         raise ValueError("missing_goal_identity")
     _, revision = read_json(path, 32768)
+    if basis.get("criterion_binding", {}).get("origin") == "goal_acceptance":
+        revision = digest({"manifest": revision, "criterion_binding": basis["criterion_binding"]})
     return basis, revision, guard
 
 
@@ -170,6 +172,20 @@ def invalidate_baseline(root: Path) -> None:
         atomic_json(root / "state.json", current)
 
 
+def _require_criterion_run(basis, goal_id, run, paths):
+    # The core decoder owns this identity rule for both capture and receipt use.
+    if basis.get("criterion_binding", {}).get("origin") == "goal_acceptance":
+        from loopx.control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRejected
+        try:
+            effect_runtime_result("progress_review.evidence_scope", {
+                "goal_id": goal_id, "run": run,
+                "scope": {"criterion_binding": basis["criterion_binding"],
+                          "coverage": "declared_file_net_change", "files": paths},
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError("run_acceptance_scope_mismatch") from exc
+
+
 def enqueue(
     root: Path,
     prepared: dict[str, Any],
@@ -186,6 +202,7 @@ def enqueue(
             "generated_at"
         ):
             raise ValueError("run_goal_or_identity_mismatch")
+        _require_criterion_run(prepared["basis"], current["goal_id"], record, current["paths"])
         # Checkpoint supplements for the same bound Turn are the same transition.
         identity = (
             {
@@ -354,19 +371,27 @@ def drain(
 
             def current() -> bool:
                 try:
+                    _require_criterion_run(job["basis"], initial["goal_id"], job["run"], job["paths"])
                     now = policy(config_path)
+                    # Legacy studies keep their manifest-only guard. New canonical
+                    # scopes must recheck the same complete owner-bound revision.
+                    if job.get("basis", {}).get("criterion_binding", {}).get("origin") == "goal_acceptance":
+                        _, revision, basis_current = contract(Path(initial["basis_path"]), Path(initial["repo"]))
+                        if not basis_current():
+                            return False
+                    else:
+                        _, revision = read_json(Path(initial["basis_path"]), 32768)
                     return (
                         now.mode == "shadow"
                         and now.generation == job["config_generation"]
                         and state(root)["configuration_epoch"]
                         == job["configuration_epoch"]
-                        and read_json(Path(initial["basis_path"]), 32768)[1]
-                        == job["contract_revision"]
+                        and revision == job["contract_revision"]
                         and read_json(job_path, 256 * 1024)[1] == job_digest
                         and read_json(Path(job["source_record"]), 4 * 1024 * 1024)[1]
                         == job["record_digest"]
                     )
-                except (OSError, ValueError, KeyError, TypeError):
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                     return False
 
             options: dict[str, Any] = {}
@@ -472,6 +497,9 @@ def _emit_receipt(
         "timing_ns": timing,
         "usage": result.get("usage") if isinstance(result.get("usage"), dict) else None,
         "recorded_at": time.time(),
+        **({"evidence_scope": {"criterion_binding": job["basis"]["criterion_binding"],
+            "coverage": "declared_file_net_change", "files": job.get("paths", [])}}
+           if (job.get("basis") or {}).get("criterion_binding") else {}),
     }
     try:
         path = write_progress_review_receipt(runtime_root, goal_id, receipt)

@@ -88,7 +88,7 @@ Note 能保留尝试过的路径与下一步，但 summary 仍由发送者提供
 
 这些测试设计包含失败、陈旧来源、输入改变和 effect 中断等负例。Fixture provider 与一次性本地状态验证各自合同；通过不等于真实模型纠错、任意远端 exactly-once 或生产恢复时间合格。诊断部署、开销与长时间 non-interference 需要独立证据。
 
-RFC 明确了这些部分实现路径中仍需补齐的三项整合缺口：
+RFC 将以下三项整合路径分别记录为独立 checkpoint：
 
 1. [显式委派来源链的当前使用检查](rfcs/shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#38-失效证据与受影响消费者)：声明依据不可用时拒绝新的依赖使用，保留历史完成，限制遍历与验证成本。
 2. [原任务修复与复验](rfcs/composable-state-machines-recovery-verification-v0.zh-CN.md#基于源码的实现顺序)：把独立失败依据传入可操作恢复路径，按当前 criterion 复验，再对账原效果。

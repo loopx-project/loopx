@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import subprocess
+import socket
 import sys
 import time
 
@@ -13,7 +14,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result, restart_ef
 from test_cold_source_import_cli import workspace
 
 
-@pytest.fixture(params=[True, False], ids=["capture-present", "capture-absent"])
+@pytest.fixture(params=[True, False], ids=["producers-present", "four-producers-absent"])
 def capture_present(request):
     return request.param
 
@@ -22,8 +23,10 @@ def capture_present(request):
 def cold_api(tmp_path, monkeypatch, request, capture_present):
     _, state, _, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     if not capture_present:
-        for name in ("runtime_shadow_writer_adapter.py", "local_authority_shadow_outbox.py"):
-            (receiver / "loopx/control_plane/coordination" / name).unlink()
+        for name in ("todos.py", "bootstrap.py",
+            "control_plane/coordination/runtime_shadow_writer_adapter.py",
+            "control_plane/coordination/local_authority_shadow_outbox.py"):
+            (receiver / "loopx" / name).unlink()
     registry = tmp_path / "project/.loopx/registry.json"
     if request.param:
         # The configured registry may live outside conventional Goal folders.
@@ -34,23 +37,24 @@ def cold_api(tmp_path, monkeypatch, request, capture_present):
         alias.symlink_to(tmp_path / "project", target_is_directory=True)
         registry = alias / "source-registry.json"
     ready = tmp_path / "server-ready.json"
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        requested_port = reservation.getsockname()[1]
     script = """
 import json,sys,loopx
 from pathlib import Path
-from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-server = ChatHTTPServer(('127.0.0.1', 0), ChatRequestHandler)
-server.registry_path, server.runtime_root, ready = map(Path, sys.argv[1:])
-server.runtime_root_override = str(server.runtime_root)
-server.verbose = False
-pending = ready.with_suffix('.pending')
-pending.write_text(json.dumps({'port': server.server_port, 'package': loopx.__file__}))
-pending.replace(ready)
-server.serve_forever()
+from loopx.chat_server import serve_chat
+registry, runtime, ready = map(Path, sys.argv[1:4])
+port = int(sys.argv[4])
+ready.write_text(json.dumps({'port': port, 'package': loopx.__file__}))
+serve_chat(registry_path=registry, runtime_root_override=runtime,
+    scan_roots=[Path(json.loads(registry.read_text())['goals'][0]['repo'])], host='127.0.0.1', port=port,
+    goal_id='cold', open_browser=False, verbose=False)
 """
     error_path = tmp_path / "server-errors.txt"
     error_stream = error_path.open("w")
     server = subprocess.Popen([sys.executable, "-u", "-c", script,
-        str(registry), str(runtime), str(ready)], cwd=tmp_path,
+        str(registry), str(runtime), str(ready), str(requested_port)], cwd=tmp_path,
         env={**env, "LOOPX_USAGE_PING": "0"}, stdout=subprocess.DEVNULL, stderr=error_stream)
 
     def execute(script):
@@ -68,23 +72,33 @@ server.serve_forever()
         server.wait(timeout=10)
         ready.unlink()
         server = subprocess.Popen([sys.executable, "-u", "-c", script,
-            str(registry), str(runtime), str(ready)], cwd=tmp_path,
+            str(registry), str(runtime), str(ready), str(requested_port)], cwd=tmp_path,
             env={**env, "LOOPX_USAGE_PING": "0"}, stdout=subprocess.DEVNULL, stderr=error_stream)
         port = wait_ready()
 
     def wait_ready():
         deadline = time.monotonic() + 30
-        while not ready.exists():
+        while True:
             assert server.poll() is None, error_path.read_text()
-            assert time.monotonic() < deadline, "receiver HTTP server did not start"
+            assert time.monotonic() < deadline, "receiver App did not start"
+            if ready.exists():
+                startup = json.loads(ready.read_text())
+                assert startup["package"] == str(receiver / "loopx/__init__.py")
+                try:
+                    client = http.client.HTTPConnection("127.0.0.1", startup["port"], timeout=1)
+                    client.request("GET", "/chat/")
+                    response = client.getresponse()
+                    assert response.status == 200
+                    assert b"<script" in response.read()
+                    client.close()
+                    return startup["port"]
+                except (ConnectionError, OSError):
+                    pass
             time.sleep(.01)
-        startup = json.loads(ready.read_text())
-        assert startup["package"] == str(receiver / "loopx/__init__.py")
-        return startup["port"]
 
     def call(action="", payload=None, origin=None):
         client = http.client.HTTPConnection("127.0.0.1", port, timeout=90)
-        path = "/api/chat/goal-storage" + (f"/import/{action}" if action else "?goal_id=cold")
+        path = action if action.startswith("/") else "/api/chat/goal-storage" + (f"/import/{action}" if action else "?goal_id=cold")
         headers = {"Content-Type": "application/json"}
         if origin:
             headers["Origin"] = origin
@@ -95,7 +109,9 @@ server.serve_forever()
         code = response.status
         client.close()
         public = json.dumps(value)
-        assert str(tmp_path) not in public and body not in public
+        assert str(tmp_path) not in public
+        if not action.startswith("/"):
+            assert body not in public
         assert "plan_path" not in value and "source_snapshot" not in value
         return code, value
 
@@ -116,8 +132,8 @@ server.serve_forever()
         restart_effect_runtime()
 
 
-def prepare(call, provider="sqlite"):
-    code, value = call("preview", {"goal_id": "cold", "provider": provider, "handoff_mode": "hard_lease"})
+def prepare(call, provider="sqlite", handoff_mode="hard_lease"):
+    code, value = call("preview", {"goal_id": "cold", "provider": provider, "handoff_mode": handoff_mode})
     assert code == 200 and value["ok"], value
     return value
 
@@ -131,7 +147,7 @@ def test_cold_http_preview_reload_confirm_original_recovery(cold_api, provider):
     call, read, state, body, runtime, registry, execute, restart = cold_api
     original = state.read_bytes()
     assert call()[1]["current"]["canonical"] is False
-    plan = prepare(call, provider)
+    plan = prepare(call, provider, handoff_mode="soft_claim")
     assert plan["source_inventory"] == {"todo_count": 2, "archived_todo_count": 1,
         "lease_count": 0, "source_handoff_mode": "legacy"}
     assert plan["coordination_source_backup_verified"] is True
@@ -154,13 +170,32 @@ def test_cold_http_preview_reload_confirm_original_recovery(cold_api, provider):
     rows = read()["todos"]
     assert next(row for row in rows if row["todo_id"] == "todo_current")["text"] == body
     assert next(row for row in rows if row["todo_id"] == "todo_archived")["evidence"] == "original"
-    result = execute(f"""
-import json
-from loopx.todos import add_goal_todo
-print(json.dumps(add_goal_todo(registry_path=Path({str(registry)!r}), goal_id='cold',
-    role='agent', text='Keep later write', claimed_by='agent-a', note='Original metadata')))
-""")
-    assert result["added"] is True
+    def action(kind, parameters, key):
+        code, preview = call("/api/actions/preview", {
+            "action_kind": kind, "summary": "Review the imported Goal task",
+            "normalized_parameters": {"goal_id": "cold", **parameters},
+            "context": {}, "idempotency_key": key})
+        assert code == 201, preview
+        proposal = preview["proposal"]
+        code, applied = call(f"/api/actions/{proposal['proposal_id']}/apply", {})
+        assert code == 200 and applied["proposal"]["status"] == "applied", applied
+        return applied["proposal"]["receipt"]
+
+    created = action("todo.create", {"text": "Keep later write", "priority": "P3"}, "later-create")
+    later_id = created["resource_ids"]["todo_id"]
+    action("todo.update", {"todo_id": later_id, "operation": "edit", "priority": "P4",
+        "text": "Keep the edited later write", "note": "Original metadata", "agent_id": "agent-a"}, "later-edit")
+    action("todo.update", {"todo_id": later_id, "operation": "complete",
+        "agent_id": "agent-a", "no_followup": True}, "later-complete")
+    code, detail = call(f"/api/chat/todo/detail?goal_id=cold&todo_id={later_id}")
+    assert code == 200 and detail["text"] == "[P4] Keep the edited later write", detail
+    assert call("/api/chat/todo/detail?goal_id=cold&todo_id=todo_current")[1]["text"] == body
+    assert call("/api/chat/todo/detail?goal_id=cold&todo_id=todo_archived")[1]["archive_state"] == "archive"
+    rows = read()["todos"]
+    target = next(row for row in rows if row["todo_id"] == later_id)
+    assert target["status"] == "done" and target["priority"] == "P4"
+    assert target["note"] == "Original metadata"
+    assert target["text"] == "[P4] Keep the edited later write"
     later = read()
     state.unlink()
     restart()
@@ -259,7 +294,7 @@ def test_registered_runtime_alias_import_preserves_original_operation(cold_api, 
     assert state.read_bytes() == original
     result = execute(f"""
 import json
-from loopx.todos import add_goal_todo
+from loopx.control_plane.todos.mutation_api import add_goal_todo
 print(json.dumps(add_goal_todo(registry_path=Path({str(registry)!r}), goal_id='cold',
     role='agent', text='Keep the write after aliased import', claimed_by='agent-a')))
 """)
@@ -291,3 +326,35 @@ def test_registered_runtime_alias_retarget_rejects_without_import(cold_api, prov
     assert not list(runtime.rglob("writer-fence.json"))
     assert not list(other.rglob("writer-fence.json"))
     assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_app_enforces_lease_and_missing_provider_without_legacy_fallback(cold_api, provider):
+    call, read, state, _, runtime, _, _, _ = cold_api
+    plan = prepare(call, provider)
+    assert call("apply", {**carrier(plan), "writers_stopped": True})[1]["status"] == "applied"
+    original_state, original_head = state.read_bytes(), read()
+    code, refused = call("/api/actions/preview", {
+        "action_kind": "todo.update", "summary": "An edit without execution proof",
+        "normalized_parameters": {"goal_id": "cold", "todo_id": "todo_current",
+            "operation": "edit", "text": "Forbidden edit", "agent_id": "agent-a"},
+        "context": {}, "idempotency_key": "missing-lease"})
+    assert code == 400 and refused["error_code"] == "handoff_mode_requires_lease", refused
+    assert read() == original_head and state.read_bytes() == original_state
+    stores = list(runtime.rglob("authority-store-*.json" if provider == "file" else "authority-*.sqlite"))
+    assert len(stores) == 1
+    storage = stores[0]
+    absent = storage.with_name(storage.name + ".absent")
+    storage.rename(absent)
+    try:
+        code, refused = call("/api/actions/preview", {
+            "action_kind": "todo.create", "summary": "A create without its selected provider",
+            "normalized_parameters": {"goal_id": "cold", "text": "No Markdown fallback"},
+            "context": {}, "idempotency_key": "missing-provider"})
+        assert code == 400, refused
+        assert refused["error_code"] != "action_preview_failed", refused
+        assert not storage.exists()
+        assert state.read_bytes() == original_state
+    finally:
+        absent.rename(storage)
+    assert read() == original_head

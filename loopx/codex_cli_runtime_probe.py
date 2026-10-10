@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
 
 
 DEFAULT_CODEX_BIN = "codex"
