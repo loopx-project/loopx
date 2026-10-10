@@ -228,3 +228,34 @@ def test_namespace_merge_rejects_private_fields_in_a_public_update() -> None:
             },
             registry=_registry(),
         )
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+def test_machine_configuration_json_input_is_bounded(tmp_path, monkeypatch, source):
+    import io
+    from types import SimpleNamespace
+    from loopx.capabilities.machine_configuration import cli as machine_config_cli
+
+    monkeypatch.setattr(
+        machine_config_cli,
+        "MAX_MACHINE_CONFIGURATION_INPUT_BYTES",
+        8,
+        raising=False,
+    )
+    if source == "file":
+        request_path = tmp_path / "oversized.json"
+        request_path.write_bytes(b'{"ok":1} ')
+        source_text = str(request_path)
+    else:
+        monkeypatch.setattr(
+            machine_config_cli.sys,
+            "stdin",
+            SimpleNamespace(
+                buffer=io.BytesIO(b'{"ok":1} '),
+                read=lambda: '{"ok":1} ',
+            ),
+        )
+        source_text = "-"
+
+    with pytest.raises(ValueError, match="machine configuration input exceeds"):
+        machine_config_cli._load_json_object(source_text)

@@ -23,11 +23,25 @@ from .store import (
 )
 
 
+MAX_MACHINE_CONFIGURATION_INPUT_BYTES = 16 * 1024 * 1024
+
+
 def _load_json_object(path_text: str) -> dict[str, Any]:
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        binary_stdin = getattr(sys.stdin, "buffer", None)
+        raw = (
+            binary_stdin.read(MAX_MACHINE_CONFIGURATION_INPUT_BYTES + 1)
+            if binary_stdin is not None
+            else sys.stdin.read(MAX_MACHINE_CONFIGURATION_INPUT_BYTES + 1).encode("utf-8")
+        )
     else:
-        payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
+        with Path(path_text).expanduser().open("rb") as input_file:
+            raw = input_file.read(MAX_MACHINE_CONFIGURATION_INPUT_BYTES + 1)
+    if len(raw) > MAX_MACHINE_CONFIGURATION_INPUT_BYTES:
+        raise ValueError(
+            "machine configuration input exceeds the 16777216-byte limit"
+        )
+    payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError(f"{path_text} must contain a JSON object")
     return payload
