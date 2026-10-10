@@ -12,8 +12,10 @@ from ...extensions.runtime import (
     execute_extension_runtime_binding,
 )
 from ...history import load_registry
+from ...paths import resolve_runtime_root
 from ...rollout_event_log import iter_rollout_events
 from .core import TRIGGER_DECISION_SCHEMA, build_periodic_report_run
+from .extension_envelope import build_openviking_archive_execution_envelope
 from .machine_defaults import (
     SUBSCRIPTION_ERROR_SCHEMA,
     PeriodicReportSubscriptionConfigurationError,
@@ -25,20 +27,21 @@ from .machine_store import (
     read_periodic_report_machine_defaults,
     rollback_periodic_report_machine_defaults,
 )
-from .extension_envelope import build_openviking_archive_execution_envelope
+from .pending_intent import consume_pending_periodic_report_intent
 from .presets import (
     PERIODIC_REPORT_PROFILE_PRESET_ALIASES,
     build_periodic_report_preset_activation,
 )
 from .profile import build_periodic_report_activation
-from .runtime_producer import build_periodic_report_runtime_trigger_decision
-from .triggers import build_periodic_report_trigger_decision
-from .pending_intent import consume_pending_periodic_report_intent
 from .request_action import (
     discover_periodic_report_request_ports,
     record_periodic_report_request,
 )
-from ...paths import resolve_runtime_root
+from .runtime_producer import build_periodic_report_runtime_trigger_decision
+from .triggers import build_periodic_report_trigger_decision
+
+
+MAX_PERIODIC_REPORT_INPUT_BYTES = 16 * 1024 * 1024
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -61,9 +64,20 @@ ProviderCommandHandler = Callable[..., int | None]
 
 def _load_json_object(path_text: str) -> dict[str, Any]:
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        binary_stdin = getattr(sys.stdin, "buffer", None)
+        raw = (
+            binary_stdin.read(MAX_PERIODIC_REPORT_INPUT_BYTES + 1)
+            if binary_stdin is not None
+            else sys.stdin.read(MAX_PERIODIC_REPORT_INPUT_BYTES + 1).encode("utf-8")
+        )
     else:
-        payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
+        with Path(path_text).expanduser().open("rb") as input_file:
+            raw = input_file.read(MAX_PERIODIC_REPORT_INPUT_BYTES + 1)
+    if len(raw) > MAX_PERIODIC_REPORT_INPUT_BYTES:
+        raise ValueError(
+            "periodic report input exceeds the 16777216-byte limit"
+        )
+    payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError(f"{path_text} must contain a JSON object")
     return payload

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from loopx.capabilities.periodic_report import build_periodic_report_run
+from loopx.capabilities.periodic_report import cli as periodic_report_cli
 from loopx.cli import main
 
 
@@ -230,3 +233,30 @@ def test_periodic_report_cli_composes_json(tmp_path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == "periodic_report_v0"
     assert payload["run_state"]["status"] == "pending"
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+def test_periodic_report_json_input_is_bounded(tmp_path, monkeypatch, source):
+    monkeypatch.setattr(
+        periodic_report_cli,
+        "MAX_PERIODIC_REPORT_INPUT_BYTES",
+        8,
+        raising=False,
+    )
+    if source == "file":
+        request_path = tmp_path / "oversized.json"
+        request_path.write_bytes(b'{"ok":1} ')
+        source_text = str(request_path)
+    else:
+        monkeypatch.setattr(
+            periodic_report_cli.sys,
+            "stdin",
+            SimpleNamespace(
+                buffer=io.BytesIO(b'{"ok":1} '),
+                read=lambda: '{"ok":1} ',
+            ),
+        )
+        source_text = "-"
+
+    with pytest.raises(ValueError, match="periodic report input exceeds"):
+        periodic_report_cli._load_json_object(source_text)
