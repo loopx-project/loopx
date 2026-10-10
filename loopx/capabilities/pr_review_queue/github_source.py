@@ -50,7 +50,15 @@ PR_LIST_FIELDS = (
 )
 
 
-def run_gh_json(args: list[str], *, cwd: Path | None = None) -> Any:
+DEFAULT_GH_JSON_TIMEOUT_SECONDS: float = 60.0
+
+
+def run_gh_json(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout_seconds: float = DEFAULT_GH_JSON_TIMEOUT_SECONDS,
+) -> Any:
     proc = subprocess.run(
         ["gh", *args],
         cwd=cwd,
@@ -60,6 +68,7 @@ def run_gh_json(args: list[str], *, cwd: Path | None = None) -> Any:
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=max(1.0, float(timeout_seconds)),
     )
     return json.loads(proc.stdout or "null")
 
