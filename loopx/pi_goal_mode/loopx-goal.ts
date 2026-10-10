@@ -97,7 +97,8 @@ type StartGoalPacket = {
     goal_id?: unknown;
     agent_id?: unknown;
     registry_path?: unknown;
-    project_connection?: { registry?: unknown };
+    project_connection?: { registry?: unknown; connection_state?: unknown };
+    recommended_next_step?: { kind?: unknown; summary?: unknown };
     host_loop_activation?: {
       activation_allowed?: unknown;
       agent_id?: unknown;
@@ -116,6 +117,36 @@ function parseJsonObject(stdout: string): StartGoalPacket | null {
   } catch {
     return null;
   }
+}
+
+// A widget is a fixed-height area near the editor, so a long packet preview has
+// to be summarized into a few clamped lines; the full text stays in the
+// `loopx-packet` session entry.
+const STATUS_WIDGET_LINE_MAX = 96;
+
+function widgetLine(text: string): string {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  return value.length > STATUS_WIDGET_LINE_MAX
+    ? `${value.slice(0, STATUS_WIDGET_LINE_MAX - 1)}…`
+    : value;
+}
+
+function buildLoopxStatusWidget(packet: StartGoalPacket | null): string[] | undefined {
+  if (!packet) return undefined;
+  const connection = packet.project_connection || {};
+  const next = packet.recommended_next_step || {};
+  const project = typeof packet.project === "string" ? packet.project : "";
+  const goalId = typeof packet.goal_id === "string" ? packet.goal_id : "";
+  const state = typeof connection.connection_state === "string" ? connection.connection_state : "";
+  const nextText =
+    typeof next.summary === "string" ? next.summary : typeof next.kind === "string" ? next.kind : "";
+  return [
+    widgetLine(`LoopX · ${goalId || "(no goal id)"}`),
+    widgetLine(
+      `state: ${state || "unknown"}${project ? ` · ${project.split("/").filter(Boolean).pop()}` : ""}`,
+    ),
+    widgetLine(`next: ${nextText || "-"}`),
+  ];
 }
 
 function buildPiSessionAuthority(packet: StartGoalPacket): PiSessionAuthority {
@@ -295,8 +326,13 @@ export default function (pi: ExtensionAPI) {
         }
       }
       const display = typeof packet?.message === "string" ? packet.message : stdout;
-      ctx.ui.setWidget("loopx", display.split("\n").slice(0, 24));
-      ctx.ui.notify("LoopX packet ready (widget above the editor).", "info");
+      // The packet preview is a long multi-section document. A widget is a
+      // fixed-height area near the editor, so dumping the preview into it gets
+      // chopped mid-sentence and covers the working indicator. Show a compact
+      // status summary and keep the full text in the session entry instead.
+      const status = buildLoopxStatusWidget(packet);
+      if (status) ctx.ui.setWidget("loopx", status, { placement: "belowEditor" });
+      ctx.ui.notify("LoopX packet ready (status widget below the editor).", "info");
       pi.appendEntry("loopx-packet", { text: display });
     } catch (error) {
       ctx.ui.notify(
@@ -312,6 +348,9 @@ export default function (pi: ExtensionAPI) {
     store: ReturnType<typeof createBindingStore>,
     ctx: ExtensionContext,
   ) => {
+    // A status widget from an earlier /loopx preview would otherwise keep
+    // floating while the guided start packet renders its own summary.
+    ctx.ui.setWidget("loopx", undefined);
     try {
       const stdout = await runLoopxCli(
         [
@@ -577,18 +616,32 @@ export default function (pi: ExtensionAPI) {
     await loop.interrupt(key);
   });
 
-  // User-driven prompts pause the auto loop; only prompts we injected for the
-  // same goal keep auto-resume armed.
+  // Pi runs its own context work (compaction, overflow recovery, retry) after a
+  // turn and then starts another run with its own prompt. That prompt is not the
+  // owner typing, so the next before_agent_start must not be read as user input;
+  // otherwise a compaction disarms the loop silently and only /loopx resume
+  // brings it back.
+  let hostGeneratedPromptPending = false;
+  pi.on("session_compact", async () => {
+    hostGeneratedPromptPending = true;
+  });
+
+  // User-driven prompts pause the auto loop; only prompts the loop injected for
+  // the same goal keep auto-resume armed. Host-generated prompts are passed
+  // through so the runtime can tell them apart.
   pi.on("before_agent_start", async (event, ctx) => {
     const { key } = bindContext(ctx);
-    await loop.userPrompt(key, String(event.prompt || ""));
+    const hostGenerated = hostGeneratedPromptPending;
+    hostGeneratedPromptPending = false;
+    await loop.userPrompt(key, String(event.prompt || ""), { hostGenerated });
   });
 
   // Session shutdown / session replacement: atomically dispose the whole
   // extension instance. Every timer is cancelled and an in-flight quota probe
   // returns to the runtime's disposed guard, so the old session cannot send a
   // follow-up or reschedule past this boundary.
-  pi.on("session_shutdown", async (_event, _ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    ctx.ui.setWidget("loopx", undefined);
     loop.dispose();
   });
 }

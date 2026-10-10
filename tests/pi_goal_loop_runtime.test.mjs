@@ -333,12 +333,15 @@ test("a user-driven prompt pauses auto-resume and cancels the scheduled timer", 
   await fixture.activate("session-pause")
   await fixture.loop.settle("session-pause")
   assert.equal(fixture.scheduled.length, 1)
+  const notifyBefore = fixture.calls.notify
 
   await fixture.loop.userPrompt("session-pause", "change direction")
 
   const binding = await fixture.store.read("session-pause")
   assert.equal(binding.autoResume, false)
+  assert.equal(binding.pauseReason, "user_prompt")
   assert.equal(fixture.scheduled[0].cleared, true)
+  assert.equal(fixture.calls.notify, notifyBefore + 1)
 
   const probesBefore = fixture.calls.quota
   await fixture.loop.settle("session-pause")
@@ -357,6 +360,7 @@ test("an aborted Pi run pauses durably and cancels the scheduled timer", async (
 
   const binding = await fixture.store.read("session-abort")
   assert.equal(binding.autoResume, false)
+  assert.equal(binding.pauseReason, "aborted")
   assert.equal(fixture.scheduled[0].cleared, true)
 
   const probesBefore = fixture.calls.quota
@@ -365,6 +369,7 @@ test("an aborted Pi run pauses durably and cancels the scheduled timer", async (
 
   fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
   await fixture.loop.resume("session-abort")
+  assert.equal((await fixture.store.read("session-abort")).pauseReason, "")
   await fixture.loop.settle("session-abort")
   assert.equal(fixture.calls.quota, probesBefore + 1)
   assert.equal(fixture.calls.send, 1)
@@ -416,6 +421,28 @@ test("an injected follow-up prompt keeps auto-resume armed", async () => {
 
   const binding = await fixture.store.read("session-injected")
   assert.equal(binding.autoResume, true)
+})
+
+
+test("a host-generated prompt keeps auto-resume armed", async () => {
+  const fixture = harness(backoffDecision())
+  fixture.loop.bind("session-host-generated", fixture.services)
+  await fixture.activate("session-host-generated")
+  await fixture.loop.settle("session-host-generated")
+  assert.equal(fixture.scheduled.length, 1)
+  const notifyBefore = fixture.calls.notify
+
+  // Pi restarts the run with its own prompt after compacting its context. That
+  // prompt is not the owner typing, so it must not pause the loop.
+  await fixture.loop.userPrompt("session-host-generated", "## Goal\n- compacted context", {
+    hostGenerated: true,
+  })
+
+  const binding = await fixture.store.read("session-host-generated")
+  assert.equal(binding.autoResume, true)
+  assert.notEqual(binding.pauseReason, "user_prompt")
+  assert.equal(fixture.scheduled[0].cleared, false)
+  assert.equal(fixture.calls.notify, notifyBefore)
 })
 
 
