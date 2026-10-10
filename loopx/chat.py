@@ -8,6 +8,7 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import unquote
 
 from .control_plane.todos.mutation_api import add_goal_todo
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
 from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
@@ -744,15 +745,18 @@ def _todo_no_write_receipt(
     *,
     goal_id: str,
     current_preview: dict[str, Any],
+    write_attempted: bool = False,
+    state_revision: str | None = None,
 ) -> dict[str, Any]:
     receipt = {
         "schema_version": CHAT_TODO_NO_WRITE_RECEIPT_SCHEMA_VERSION,
         "goal_id": goal_id,
         "status": "not_applied",
         "outcome": "preview_stale",
-        "write_attempted": False,
-        "current_preview_id": _todo_preview_fingerprint(current_preview),
-        "state_revision": _todo_revision(current_preview),
+        "write_attempted": write_attempted,
+        **({"current_preview_id": _todo_preview_fingerprint(current_preview)}
+            if not write_attempted else {}),
+        "state_revision": state_revision or _todo_revision(current_preview),
     }
     receipt["receipt_id"] = _stable_digest(receipt)
     return receipt
@@ -765,6 +769,7 @@ def _add_review_todo(
     text: str,
     priority: str | None = None,
     dry_run: bool,
+    expected_provider_revision: str | None = None,
 ) -> dict[str, Any]:
     return add_goal_todo(
         registry_path=registry_path,
@@ -775,6 +780,8 @@ def _add_review_todo(
         task_class="advancement_task",
         action_kind=CHAT_TODO_ACTION_KIND,
         dry_run=dry_run,
+        **({"expected_provider_revision": expected_provider_revision}
+            if expected_provider_revision is not None else {}),
     )
 
 
@@ -820,13 +827,28 @@ def apply_todo_review_preview(
                 current_preview=current_preview,
             ),
         )
-    applied = _add_review_todo(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        text=text,
-        priority=priority,
-        dry_run=False,
-    )
+    try:
+        applied = _add_review_todo(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            text=text,
+            priority=priority,
+            dry_run=False,
+            **({"expected_provider_revision": _todo_revision(current_preview)}
+                if current_preview.get("decision_read_from_provider") is True else {}),
+        )
+    except LocalCoordinationAuthorityUnavailable as exc:
+        if exc.code != "provider_revision_mismatch":
+            raise
+        # Only a conclusive owner rejection proves no write. Unknown commit
+        # responses keep their existing original-operation recovery contract.
+        receipt = _todo_no_write_receipt(goal_id=goal_id,
+            current_preview=current_preview, write_attempted=True,
+            state_revision=exc.payload.get("current_provider_revision"))
+        raise TodoReviewPreviewConflict(
+            "stale todo preview; preview the proposal again before applying",
+            receipt=receipt,
+        ) from exc
     compact = _compact_todo_payload(applied, applied=True)
     compact["receipt"] = _todo_write_receipt(
         preview_id=preview_id,

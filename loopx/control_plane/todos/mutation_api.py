@@ -22,6 +22,7 @@ from .contract import (
 from .active_state_editing import TODO_SECTION_HEADINGS
 from .addition import require_replan_successor_scope
 from . import completion_validation as completion_validation_module
+from .completion_validation_projection import completion_validation_declaration
 from . import monitor_metadata as todo_monitor_metadata
 from .text import plan_todo_priority
 from .authoring_scope import plan_todo_authoring_scope
@@ -77,8 +78,10 @@ def add_goal_todo(
     state_file: Path | None = None,
     dry_run: bool = False,
     operation_id: str | None = None,
+    expected_provider_revision: str | None = None,
 ) -> dict[str, Any]:
     call = dict(locals())
+    call.pop("expected_provider_revision")
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
         raise ValueError("todo role must be one of: user, agent")
@@ -92,7 +95,7 @@ def add_goal_todo(
         explore_result_node_refs=explore_result_node_refs,
     )
     normalized_status = normalize_todo_status(status) if status else TODO_STATUS_OPEN
-    if status and not normalized_status:
+    if not normalized_status:
         raise ValueError("todo status must be one of: open, done, blocked, deferred")
     priority_plan = plan_todo_priority({}, {"text": text, **({"priority": priority} if priority is not None else {})})
     todo_text = str(priority_plan["text"])
@@ -156,6 +159,7 @@ def add_goal_todo(
     )
     canonical_create = create_canonical_todo_if_promoted(
         operation_id=operation_id,
+        expected_provider_revision=expected_provider_revision,
         registry_path=registry_path,
         runtime_root=shadow_runtime_root,
         goal_id=goal_id,
@@ -201,6 +205,8 @@ def add_goal_todo(
     )
     if canonical_create is not None:
         return canonical_create
+    if expected_provider_revision is not None:
+        raise ValueError("reviewed provider revision requires canonical authority")
     if operation_id is not None:
         raise ValueError("todo add --operation-id requires promoted canonical authority")
     from ...todos import _add_goal_todo_legacy
@@ -221,6 +227,63 @@ def add_goal_todo(
         "todo_text": todo_text,
         "updated_at": updated_at,
     })
+
+
+def _update_completion_validation_declaration(
+    *, validation_command: str | None, validation_command_json: str | None,
+    validation_label: str | None, validation_timeout_seconds: int | None,
+    update_operation_id: str | None, update_expected_provider_revision: str | None,
+    agent_id: str | None,
+) -> dict[str, Any] | None:
+    """Decode the optional revision declaration before either mutation route."""
+    if validation_command and validation_command_json:
+        raise ValueError(
+            "--validation-command and --validation-command-json are mutually exclusive"
+        )
+    validation_argv = completion_validation_module.normalize_validation_command_json(
+        validation_command_json
+    )
+    validation_revision_requested = any(
+        value is not None
+        for value in (
+            validation_command,
+            validation_command_json,
+            validation_label,
+            validation_timeout_seconds,
+        )
+    )
+    validation_revision_declaration = None
+    if validation_revision_requested:
+        if bool(validation_command) == (validation_argv is not None):
+            raise ValueError(
+                "completion validation revision requires exactly one command form"
+            )
+        if validation_timeout_seconds is not None and not (
+            1 <= validation_timeout_seconds
+            <= completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS
+        ):
+            raise ValueError(
+                "--validation-timeout-seconds must be between 1 and "
+                f"{completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS}"
+            )
+        if not update_operation_id or not update_expected_provider_revision or not agent_id:
+            raise ValueError(
+                "completion validation revision requires update operation id, "
+                "expected provider revision, and actor agent id"
+            )
+        validation_revision_declaration = (
+            completion_validation_declaration(
+                {
+                    "validation_command": validation_command,
+                    "validation_command_argv": validation_argv,
+                    "validation_label": validation_label,
+                    "validation_timeout_seconds": validation_timeout_seconds,
+                }
+            )
+        )
+        if validation_revision_declaration is None:
+            raise ValueError("completion validation revision declaration is empty")
+    return validation_revision_declaration
 
 
 def update_goal_todo(
@@ -286,53 +349,12 @@ def update_goal_todo(
     if priority is not None and clear_priority:
         raise ValueError("provide either priority or clear_priority, not both")
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
-    if validation_command and validation_command_json:
-        raise ValueError(
-            "--validation-command and --validation-command-json are mutually exclusive"
-        )
-    validation_argv = completion_validation_module.normalize_validation_command_json(
-        validation_command_json
+    validation_revision_declaration = _update_completion_validation_declaration(
+        validation_command=validation_command, validation_command_json=validation_command_json,
+        validation_label=validation_label, validation_timeout_seconds=validation_timeout_seconds,
+        update_operation_id=update_operation_id,
+        update_expected_provider_revision=update_expected_provider_revision, agent_id=agent_id,
     )
-    validation_revision_requested = any(
-        value is not None
-        for value in (
-            validation_command,
-            validation_command_json,
-            validation_label,
-            validation_timeout_seconds,
-        )
-    )
-    validation_revision_declaration = None
-    if validation_revision_requested:
-        if bool(validation_command) == (validation_argv is not None):
-            raise ValueError(
-                "completion validation revision requires exactly one command form"
-            )
-        if validation_timeout_seconds is not None and not (
-            1 <= validation_timeout_seconds
-            <= completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS
-        ):
-            raise ValueError(
-                "--validation-timeout-seconds must be between 1 and "
-                f"{completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS}"
-            )
-        if not update_operation_id or not update_expected_provider_revision or not agent_id:
-            raise ValueError(
-                "completion validation revision requires update operation id, "
-                "expected provider revision, and actor agent id"
-            )
-        validation_revision_declaration = (
-            completion_validation_module.completion_validation_declaration(
-                {
-                    "validation_command": validation_command,
-                    "validation_command_argv": validation_argv,
-                    "validation_label": validation_label,
-                    "validation_timeout_seconds": validation_timeout_seconds,
-                }
-            )
-        )
-        if validation_revision_declaration is None:
-            raise ValueError("completion validation revision declaration is empty")
     if claim_only and any(value is not None for value in (
         update_operation_id, update_expected_provider_revision, update_expected_registry_sha256,
     )):
@@ -452,7 +474,7 @@ def update_goal_todo(
             expected_registry_sha256=update_expected_registry_sha256,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
-            monitor_observation=monitor_metadata if monitor_intent["observation"] is not None else None,
+            monitor_observation=monitor_metadata if isinstance(monitor_metadata, todo_monitor_metadata.MonitorPollObservation) else None,
             completion_validation_revision=validation_revision_declaration,
             planning_intent={**planning_intent, **(
                 {"monitor_metadata": monitor_intent["metadata"]} if monitor_intent["metadata"] else {}
