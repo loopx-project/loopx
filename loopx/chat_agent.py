@@ -640,6 +640,8 @@ class CodexChatAgentSession:
     _message_dispatch_lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False
     )
+    _command_items: dict[str, set[str]] = field(default_factory=dict, repr=False)
+    _command_items_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _host_model_auth: Any = field(default=None, repr=False)
 
     @classmethod
@@ -1046,7 +1048,29 @@ class CodexChatAgentSession:
                 message = self._next_message(deadline=deadline)
                 if self._route_response(message):
                     continue
+                self._observe_command_item(message)
                 return message
+
+    def _observe_command_item(self, message: dict[str, Any]) -> None:
+        # Native history can omit an aborted command. Keep its wire identity,
+        # including completed items, until the next Turn binds. This is not an
+        # OS PID or an inference from a command string.
+        if _event_thread_id(message) != self.thread_id:
+            return
+        turn_id = _event_turn_id(message)
+        params = message.get("params")
+        if not turn_id or not isinstance(params, dict):
+            return
+        method = message.get("method")
+        item = params.get("item")
+        item_id = None
+        if method in {"item/started", "item/completed"} and isinstance(item, dict) and item.get("type") == "commandExecution":
+            item_id = item.get("id")
+        elif method == "item/commandExecution/outputDelta":
+            item_id = params.get("itemId")
+        if isinstance(item_id, str) and item_id:
+            with self._command_items_lock:
+                self._command_items.setdefault(turn_id, set()).add(item_id)
 
     def _check_server_gate(self, message: dict[str, Any]) -> bool:
         if message.get("id") is not None and message.get("method") == "account/chatgptAuthTokens/refresh" and self._host_model_auth is not None:
@@ -1134,6 +1158,7 @@ class CodexChatAgentSession:
         params: dict[str, Any],
         *,
         request_id: int | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         if request_id is None:
             with self._request_id_lock:
@@ -1144,8 +1169,11 @@ class CodexChatAgentSession:
             self._response_waiters[request_id] = waiter
         try:
             self._write({"id": request_id, "method": method, "params": params})
-            deadline = time.monotonic() + self.response_timeout_sec
+            response_deadline = time.monotonic() + self.response_timeout_sec
+            deadline = min(deadline, response_deadline) if deadline is not None else response_deadline
             while True:
+                if time.monotonic() >= deadline:
+                    raise self._timeout_error("response_timeout", "Codex app-server timed out.")
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
@@ -1186,6 +1214,7 @@ class CodexChatAgentSession:
                             if message.get("id") != request_id:
                                 if self._check_server_gate(message):
                                     continue
+                                self._observe_command_item(message)
                                 self._pending_events.put(message)
                                 continue
                     finally:
@@ -1232,19 +1261,85 @@ class CodexChatAgentSession:
         return turn_id
 
     def interrupt(self, turn_id: str | None = None) -> None:
-        selected_turn_id = str(turn_id or self.current_turn_id or "")
+        selected_turn_id = str(turn_id or self.current_turn_id or "").strip()
         if not selected_turn_id:
             return
-        with self._request_id_lock:
-            request_id = self.next_request_id
-            self.next_request_id += 1
-        self._write(
-            {
-                "id": request_id,
-                "method": "turn/interrupt",
-                "params": {"threadId": self.thread_id, "turnId": selected_turn_id},
-            }
-        )
+        deadline = time.monotonic() + self.response_timeout_sec
+        interrupted = False
+        while True:
+            native_turn = next((turn for turn in self._control_items(
+                "thread/turns/list", {"sortDirection": "desc", "itemsView": "summary"}, deadline
+            ) if turn.get("id") == selected_turn_id), None)
+            if native_turn is None:
+                raise self._runtime_error("Codex could not confirm the selected Turn.")
+            if native_turn.get("status") in {"completed", "interrupted", "failed"}:
+                break
+            if native_turn.get("status") != "inProgress":
+                raise self._runtime_error("Codex returned an unknown Turn status.")
+            if not interrupted:
+                self._request("turn/interrupt", {
+                    "threadId": self.thread_id, "turnId": selected_turn_id,
+                }, deadline=deadline)
+                interrupted = True
+            # Wait for the producer to stop before inventorying its terminals;
+            # an acknowledged interrupt alone still allows late command items.
+            self._control_wait(deadline)
+
+        with self._command_items_lock:
+            owned_items = set(self._command_items.get(selected_turn_id, set()))
+        for entry in self._control_items("thread/items/list", {"turnId": selected_turn_id}, deadline):
+            item = entry.get("item")
+            if entry.get("turnId") != selected_turn_id or not isinstance(item, dict):
+                raise self._runtime_error("Codex returned items outside the selected Turn.")
+            if item.get("type") == "commandExecution":
+                item_id = item.get("id")
+                if not isinstance(item_id, str) or not item_id:
+                    raise self._runtime_error("Codex returned an unbound command item.")
+                # Completed command items can still own a background terminal.
+                owned_items.add(item_id)
+
+        def owned_terminals() -> list[dict[str, Any]]:
+            terminals = list(self._control_items("thread/backgroundTerminals/list", {}, deadline))
+            for terminal in terminals:
+                if not isinstance(terminal.get("itemId"), str) or not isinstance(terminal.get("processId"), str):
+                    raise self._runtime_error("Codex returned an unbound background terminal.")
+            return [terminal for terminal in terminals if terminal["itemId"] in owned_items]
+
+        for terminal in owned_terminals():
+            result = self._request("thread/backgroundTerminals/terminate", {
+                "threadId": self.thread_id, "processId": terminal["processId"],
+            }, deadline=deadline)
+            if not isinstance(result.get("terminated"), bool):
+                raise self._runtime_error("Codex did not acknowledge terminal cancellation.")
+        # A false receipt can mean the process exited concurrently. Only the
+        # native inventory readback, never transport closure, confirms stop.
+        while owned_terminals():
+            self._control_wait(deadline)
+
+    def _control_items(self, method: str, params: dict[str, Any], deadline: float) -> Iterator[dict[str, Any]]:
+        cursor = None
+        seen_cursors: set[str] = set()
+        while True:
+            result = self._request(method, {
+                "threadId": self.thread_id, "limit": 100, **params,
+                **({"cursor": cursor} if cursor is not None else {}),
+            }, deadline=deadline)
+            data = result.get("data")
+            if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+                raise self._runtime_error("Codex returned an unreadable control inventory.")
+            yield from data
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise self._runtime_error("Codex returned an invalid control inventory cursor.")
+            seen_cursors.add(cursor)
+
+    def _control_wait(self, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._timeout_error("response_timeout", "Codex stop was not confirmed before the deadline.")
+        time.sleep(min(0.05, remaining))
 
     def send(
         self,
@@ -1299,6 +1394,8 @@ class CodexChatAgentSession:
         )
         turn_id = _extract_id(turn_result, "turn", "turnId")
         self.current_turn_id = turn_id
+        with self._command_items_lock:
+            self._command_items = {turn_id: self._command_items.get(turn_id, set())}
         if on_event:
             on_event("turn.started", {"upstream_turn_id": turn_id})
         parts: list[str] = []
