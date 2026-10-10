@@ -171,7 +171,7 @@ def test_execution_exclusion_owner_unavailable_does_not_write(execution_exclusio
     effect = authoring_scope.effect_runtime_result
 
     def unavailable(method, params, **kwargs):
-        if method == "todo.authoring_scope.plan" and params.get("command") == "create":
+        if method == "todo.creation_scope.plan":
             raise EffectRuntimeStartupError(
                 "isolated authoring owner unavailable", diagnostic_code="node_unavailable"
             )

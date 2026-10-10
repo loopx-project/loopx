@@ -288,6 +288,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.source.inspect", lazyHandler(() => Promise.all([import("./coordination/cold_source_inspection.ts"), import("./coordination/source_transfer.ts")]), ([{inspectColdCoordinationSource}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.source.inspect", inspectColdCoordinationSource))],
     ["coordination.source.inspect_storage", lazyHandler(() => Promise.all([import("./coordination/cold_source_inspection.ts"), import("./coordination/source_transfer.ts")]), ([{inspectColdCoordinationStorage}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.source.inspect_storage", inspectColdCoordinationStorage))],
     ["todo.monitor_metadata.plan", lazyHandler(() => import("./todos/monitor_metadata.ts"), ({planMonitorMetadata}) => planMonitorMetadata)],
+    ["todo.creation_scope.plan", lazyHandler(() => import("./todos/creation_scope.ts"), ({planTodoCreationScope}) => planTodoCreationScope)],
     ["todo.authoring_scope.plan", lazyHandler(() => import("./todos/authoring_scope.ts"), ({planTodoAuthoringScope}) => planTodoAuthoringScope)],
     ["todo.contract_diagnostics.evaluate", lazyHandler(() => import("./todos/authoring_scope.ts"), ({evaluateTodoContractDiagnostics}) => evaluateTodoContractDiagnostics)],
     [

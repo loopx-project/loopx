@@ -35,6 +35,30 @@ def plan_todo_authoring_scope(
     return result
 
 
+def plan_todo_creation_scope(
+    *, role: str, intent: dict[str, Any], registered_agents: list[str],
+    goal_id: str, unblocks_todo_id: str | None,
+    unblocks_todo_id_declared: bool, monitor_metadata: dict[str, Any] | None,
+    generated_at: str,
+) -> dict[str, Any]:
+    """Transport one fresh draft; the existing typed owners compose admission."""
+    try:
+        result = effect_runtime_result("todo.creation_scope.plan", {
+            "schema_version": "todo_creation_scope_request_v0",
+            "role": role, "intent": intent, "registered_agents": registered_agents,
+            "goal_id": goal_id, "unblocks_todo_id": unblocks_todo_id,
+            "unblocks_todo_id_declared": unblocks_todo_id_declared,
+            "monitor_metadata": monitor_metadata, "generated_at": generated_at,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if (not isinstance(result, dict)
+            or result.get("schema_version") != "todo_creation_scope_result_v0"
+            or not isinstance(result.get("monitor_metadata"), dict)):
+        raise RuntimeError("TypeScript Todo creation scope result shape mismatch")
+    return result
+
+
 def require_user_todo_task_class(
     *, role: str, task_class: str | None, blocks_agent: str | None = None,
     global_gate: bool | None = None,
