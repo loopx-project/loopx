@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .todos import complete_goal_todo, update_goal_todo
+from .control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 from .control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )

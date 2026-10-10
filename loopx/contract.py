@@ -262,7 +262,7 @@ LOCAL_PRIVATE_STATE_FILE_NAMES = {"ACTIVE_GOAL_STATE.md", "ACTIVE_GOAL_STATE.md.
 TERMINAL_TODO_STATUSES = {TODO_STATUS_DONE, TODO_STATUS_DEFERRED, "completed", "closed", "archived"}
 
 
-def _git_probe(path: Path) -> dict[str, Any]:
+def _git_worktree_root(path: Path) -> Path | None:
     path = path.resolve()
     target = path if path.is_dir() else path.parent
     try:
@@ -275,9 +275,15 @@ def _git_probe(path: Path) -> dict[str, Any]:
             check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return {"inside_worktree": False, "tracked": False, "ignored": False}
+        return None
+    return Path(root).resolve()
 
-    repo_root = Path(root).resolve()
+
+def _git_probe(path: Path) -> dict[str, Any]:
+    path = path.resolve()
+    repo_root = _git_worktree_root(path)
+    if repo_root is None:
+        return {"inside_worktree": False, "tracked": False, "ignored": False}
     try:
         rel_path = str(path.relative_to(repo_root))
     except ValueError:
@@ -317,7 +323,7 @@ def _is_local_private_state_path(path: Path, scan_root: Path) -> bool:
         relative = path.relative_to(scan_root)
     except ValueError:
         relative = path
-    parts = set(relative.parts)
+    parts = set(relative.parts) | {scan_root.name}
     return bool(parts & LOCAL_PRIVATE_STATE_PARTS) or path.name in LOCAL_PRIVATE_STATE_FILE_NAMES
 
 
@@ -816,20 +822,9 @@ def _active_state_projection_gap_warnings(
 
 def _tracked_scan_files(scan_root: Path) -> list[Path]:
     scan_root = scan_root.resolve()
-    target = scan_root if scan_root.is_dir() else scan_root.parent
-    try:
-        root = subprocess.run(
-            ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    repo_root = _git_worktree_root(scan_root)
+    if repo_root is None:
         return []
-
-    repo_root = Path(root).resolve()
     try:
         rel_root = str(scan_root.resolve().relative_to(repo_root.resolve()))
     except ValueError:
@@ -906,6 +901,7 @@ def scan_public_boundary(
     missing_scan_roots: list[str] = []
     files: list[Path] = []
     file_roots: dict[Path, Path] = {}
+    private_files: set[Path] = set()
     for scan_root in scan_roots:
         resolved_scan_root = scan_root.resolve()
         if not resolved_scan_root.exists():
@@ -914,9 +910,23 @@ def scan_public_boundary(
             missing_scan_roots.append(str(scan_root))
             continue
         display_root = resolved_scan_root.parent if resolved_scan_root.is_file() else resolved_scan_root
+        classification_root = display_root
+        if set(resolved_scan_root.parts) & LOCAL_PRIVATE_STATE_PARTS:
+            # A narrow explicit input cannot erase private ancestry. A real
+            # worktree is its own namespace, even beneath a private parent;
+            # outside Git, retain the complete canonical ancestry.
+            classification_root = (
+                _git_worktree_root(resolved_scan_root) or Path(resolved_scan_root.anchor)
+            )
         for file_path in iter_scan_files(resolved_scan_root):
             files.append(file_path)
-            file_roots[file_path] = display_root
+            if _is_local_private_state_path(file_path, classification_root):
+                private_files.add(file_path)
+            previous_root = file_roots.get(file_path)
+            if previous_root is None or (
+                len(display_root.parts), str(display_root)
+            ) < (len(previous_root.parts), str(previous_root)):
+                file_roots[file_path] = display_root
     files = sorted(set(files))
     policy = _public_boundary_policy(registry or {})
     private_file_git: dict[Path, dict[str, Any]] = {}
@@ -927,7 +937,7 @@ def scan_public_boundary(
         # stay here, in the existing scan owner, not in the I/O adapter.
         for path in files:
             root = file_roots.get(path, path)
-            if _is_local_private_state_path(path, root):
+            if path in private_files:
                 git = _git_probe(path)
                 if not git.get("tracked"):
                     skipped_private_state_files.append(rel_or_abs(path, root))

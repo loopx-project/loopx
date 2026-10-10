@@ -11,7 +11,7 @@ import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {TODO_OWNERSHIP_INTENT_FIELDS} from "../todos/authoring_scope.ts";
 import {evaluateCoordinationTodoMutationDecision,
   COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
-import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection, isBoundUserActionMetadataUpdate} from "./task_lease_proof.ts";
+import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection, isBoundUserActionMetadataUpdate, isSoftClaimReleasedCopyUpdate} from "./task_lease_proof.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
@@ -162,6 +162,18 @@ export function todoUpdateAdmissionRejection(
   if (mode === "hard_lease" && boundUserActionMetadata && lease === undefined &&
       input.lease_idempotency_key == null && input.lease_expected_version == null) {
     return null;
+  }
+  // Policy migration retains released execution history. It must not force a
+  // soft-claim owner to acquire a lease that this mode forbids. Explicit proof,
+  // including partial proof, still goes through the current execution fence.
+  if (mode === "soft_claim" && input.lease_idempotency_key == null &&
+      input.lease_expected_version == null) {
+    try {
+      if (isSoftClaimReleasedCopyUpdate(todo, lease, input)) return null;
+    } catch (error) {
+      return reject("invalid_coordination_projection",
+        error instanceof Error ? error.message : "invalid retained lease facts");
+    }
   }
   if (!delegatedUnleasedOverride && (lease !== undefined || mode === "hard_lease" ||
       input.lease_idempotency_key != null || input.lease_expected_version != null)) {

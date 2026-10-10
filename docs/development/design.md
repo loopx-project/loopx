@@ -78,6 +78,12 @@ consolidated, and verify keyboard access and return to the original context.
 Record this in the PR's visual evidence section. The repository first-screen
 preview approval gate still applies.
 
+Review proportions as well as typography. Within a workspace view, align the
+greeting, summaries, work list, and composer to one content frame. An overview
+board may be wider than a conversation's reading column. Keep ready-state
+runtime details alongside their model context, allow failures to expand, and
+size empty summaries to their content rather than filling large decorative cards.
+
 ## Source Of Truth
 
 - Use this file as the default visual contract for all new LoopX UI work.
@@ -148,9 +154,9 @@ Dashboard (`apps/presentation/dashboard/src/styles.css`):
 
 ```css
 --font-sans:
-  "Geist Variable", "Geist", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  "Geist Variable", "Geist", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
   sans-serif;
---font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+--font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
 ```
 
 Marketing site (`apps/presentation/site/src/styles.css`):
@@ -189,6 +195,26 @@ that are genuinely optional may keep a fallback (`var(--pw-surface, #fff)`).
 
 Use 600 for headings, 500 for controls and labels, and 400 for body copy.
 Avoid decorative italics, ultra-light text, and black weights.
+
+The Personal Workspace, settings and answer reader share the Dashboard's
+`--text-*` and `--leading-*` tokens. Use caption (`12px / 16px`) for metadata,
+body (`14px / 20px`) for default copy and controls, lead (`16px / 24px`) for
+reading copy, heading (`20px / 28px`) for panels, title (`24px / 32px`) for
+operator page titles, and display (`32px / 40px`) for major headings and counts.
+Prose uses `--leading-prose` (`1.7`) for multiline Chinese and English text.
+Tokens use rem units so browser text preferences apply. Do not introduce
+fractional pixel sizes or sub-12px UI copy. Themes share this scale and font
+families; they may change color, borders and surfaces. Controls inherit the
+same family, including textareas. CJK fallback names are shared by prose and
+code; Latin code remains Geist Mono. This intentionally replaces the older
+12px primary choices and 9–11.5px auxiliary copy with readable body and caption
+roles across Goal, Task, Chat, settings and result surfaces.
+
+![Personal Workspace proportions and typography](assets/personal-workspace-layout.jpg)
+
+Illustrative synthetic state rendered with the workspace sidebar, header, brief
+components and packaged styles. It shows mixed-language text, quiet summaries
+and an unavailable Goal; it is a composition example, not runtime evidence.
 
 ## Spacing And Layout
 

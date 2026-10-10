@@ -267,6 +267,14 @@ def normalize_progress_review_receipt(value: Any) -> dict[str, Any]:
         or float(recorded_at) < 0
     ):
         raise TypeError("receipt.recorded_at must be a non-negative epoch number")
+    scope = None
+    if "evidence_scope" in value:
+        from ...control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRejected
+        try:
+            scope = effect_runtime_result("progress_review.evidence_scope", {"scope": value["evidence_scope"],
+                "goal_id": value.get("goal_id"), "run": value.get("run")})["scope"]
+        except EffectRuntimeRejected as exc:
+            raise ValueError("invalid progress-review evidence scope") from exc
     event_id = _hex64(value.get("event_id"), field="event_id")
     return {
         "schema_version": PROGRESS_REVIEW_RECEIPT_SCHEMA_VERSION,
@@ -291,6 +299,7 @@ def normalize_progress_review_receipt(value: Any) -> dict[str, Any]:
         "usage": usage,
         "recorded_at": float(recorded_at),
         "authority": "none",
+        **({"evidence_scope": scope} if scope is not None else {}),
     }
 
 
@@ -426,6 +435,8 @@ def progress_review_receipt_summary(
                 "drift_signal": dict(receipt["drift_signal"]),
                 "model": receipt["model"],
                 "question_version": receipt["question_version"],
+                **({"evidence_scope": receipt["evidence_scope"]} if "evidence_scope" in receipt else {}),
+                **({"criterion_current": receipt["criterion_current"]} if "criterion_current" in receipt else {}),
             }
     summary: dict[str, Any] = {
         "schema_version": "progress_review_status_v0",

@@ -1,6 +1,7 @@
 """Real CLI consumers with SQLite authority and no Markdown source."""
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -9,7 +10,7 @@ import pytest
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.coordination_state_contract import TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
@@ -138,3 +139,117 @@ def test_promotion_failure_evidence_survives_real_python_runtime(tmp_path, monke
     assert result["decision_read_from_provider"] is False and result["legacy_fallback_used"] is False
     assert durable_bytes() == before
     assert not list((runtime / "authority-transition").rglob("legacy-writer-fence-*.json"))
+
+
+def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_path, monkeypatch):
+    """Join the shipped creation, ordinary work and reversible-exit owners."""
+    from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    registry = project / ".loopx/registry.json"
+    goal, agent, turn = "trial-goal", "trial-agent", "trial-turn"
+
+    def command(*args, expected_code=0):
+        result = subprocess.run(
+            [sys.executable, "-I", "-m", "loopx.entrypoint", "--registry", str(registry),
+             "--runtime-root", str(runtime), "--format", "json", *args],
+            cwd=project, capture_output=True, text=True, timeout=90,
+        )
+        assert result.returncode == expected_code, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    def todos():
+        return command("todo", "list", "--goal-id", goal)
+
+    try:
+        created = command("bootstrap", "--project", str(project), "--goal-id", goal,
+                          "--objective", "Validate reversible ordinary work", "--no-global-sync")
+        assert created["storage_selection"]["provider"] == "sqlite"
+        assert created["storage_selection"]["handoff_mode"] == "hard_lease"
+        command("configure-goal", "--goal-id", goal, "--registered-agent", agent,
+                "--quota-compute", "1", "--execute")
+        task = command("todo", "add", "--goal-id", goal, "--role", "agent",
+                       "--claimed-by", agent, "--text", "Check ordinary work",
+                       "--priority", "P1", "--task-class", "advancement_task",
+                       "--action-kind", "validate", "--note", "Retain exact metadata",
+                       "--operation-id", "trial-create-todo")
+        todo = task["todo_id"]
+        lease = command("task-lease", "acquire", "--goal-id", goal, "--todo-id", todo,
+                        "--owner", agent, "--idempotency-key", "trial-work")
+        proof = ["--task-lease-idempotency-key", "trial-work",
+                 "--task-lease-expected-version", str(lease["lease"]["version"])]
+        guard_args = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+                      "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
+                      "--scan-path", str(project)]
+        guard = command(*guard_args)
+        assert guard["normal_delivery_allowed"] is True
+        identity = guard["heartbeat_receipt"]["settlement_identity"]
+        update = ["todo", "update", "--goal-id", goal, "--todo-id", todo,
+                  "--agent-id", agent, "--note", "Validated ordinary work; retain on exit",
+                  "--update-operation-id", "trial-update", *proof]
+        assert command(*update)["source_authority"] == "sqlite_v0"
+        refresh_args = ["refresh-state", "--goal-id", goal, "--agent-id", agent,
+                        "--todo-id", todo, "--turn-instance-id", turn,
+                        "--classification", "validated_progress", "--delivery-batch-scale", "test_only",
+                        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
+                        "--vision-state", "vision_on_track", "--vision-summary", "Continue reversible qualification.",
+                        "--vision-acceptance", "Preserve later writes and exact once-only settlement."]
+        refresh = command(*refresh_args)
+        # Consume the original owner-generated continuation, not reconstructed spend flags.
+        spend_args = shlex.split(refresh["settlement_owed"]["command"])[1:]
+        spent = command(*spend_args)
+        assert spent["settlement_progress"]["state"] == "settled"
+        restart_effect_runtime()
+        assert command(*update)["status"] == "replayed"
+        replay = command(*spend_args)
+        assert replay["idempotent_replay"] is True and replay["appended"] is False
+        settled = command(*guard_args)
+        assert settled["heartbeat_receipt"]["settlement_identity"] == identity
+        assert settled["normal_delivery_allowed"] is False
+        assert settled["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+        # Pausing turns is not lease settlement; exit must refuse the live grant.
+        command("configure-goal", "--goal-id", goal, "--quota-compute", "0", "--execute")
+        refused_plan = tmp_path / "unsettled-exit-plan.json"
+        before_refusal = todos()
+        refusal = command("authority-archive", "plan-migration", "--goal-id", goal,
+                          "--provider", "file", "--plan", str(refused_plan), expected_code=1)
+        assert "settled task leases" in refusal["reason"]
+        assert not refused_plan.exists() and todos() == before_refusal
+        command("task-lease", "release", "--goal-id", goal, "--todo-id", todo,
+                "--owner", agent, "--idempotency-key", "trial-work",
+                "--expected-version", str(lease["lease"]["version"]))
+        before_exit = todos()
+        assert before_exit["authority_read"]["source_authority"] == "sqlite_v0"
+        assert before_exit["authority_read"]["legacy_fallback_used"] is False
+        rows = before_exit["todos"]
+        assert len(rows) == 1 and rows[0]["todo_id"] == todo
+        assert rows[0]["note"] == "Validated ordinary work; retain on exit"
+        assert rows[0]["claimed_by"] == agent and rows[0]["priority"] == "P1"
+
+        plan = tmp_path / "current-exit-plan.json"
+        preview = command("authority-archive", "plan-migration", "--goal-id", goal,
+                          "--provider", "file", "--plan", str(plan))
+        apply = ["authority-archive", "migrate", "--goal-id", goal, "--plan", str(plan),
+                 "--plan-sha256", preview["plan_sha256"], "--execute"]
+        command(*apply)
+        restart_effect_runtime()
+        assert command(*apply)["status"] == "already_applied"
+        returned = todos()
+        assert returned["authority_read"]["source_authority"] == "file_v0"
+        assert returned["authority_read"]["legacy_fallback_used"] is False
+        assert returned["todos"] == rows
+        # Restore the reviewed prior quota after readback, so a paused lane
+        # cannot conceal a lost settlement behind quota_skip.
+        command("configure-goal", "--goal-id", goal, "--quota-compute", "1", "--execute")
+        after_exit = command(*guard_args)
+        assert after_exit["effective_action"] == "heartbeat_settled_skip"
+        assert after_exit["heartbeat_receipt"]["settlement_identity"] == identity
+        assert after_exit["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+        runs = [json.loads(line) for line in
+                (runtime / "goals" / goal / "runs/index.jsonl").read_text().splitlines()]
+        assert sum(row.get("classification") == "quota_slot_spent" for row in runs) == 1
+        assert sum(row.get("classification") == "validated_progress" for row in runs) == 1
+    finally:
+        restart_effect_runtime()

@@ -17,6 +17,7 @@ class Transport:
         self.transport_ref = ref
         self.calls = []
         self.available = True
+        self.started = False
 
     def observe(self):
         self.calls.append("observe")
@@ -33,6 +34,7 @@ class Transport:
         return {"reply_verified": False, "verification_performed": True}
 
     def start(self, server):
+        self.started = True
         self.calls.append(("start", server))
 
     def close(self):
@@ -184,6 +186,16 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
     entered = threading.Event()
     captured = []
     external = Transport("external-owner")
+    return_service_start_observations = []
+    if installed:
+        from loopx.capabilities.manager_context import roundtrip
+        original_return_service_start = roundtrip.ReturnService.start
+
+        def record_return_service_start(service):
+            return_service_start_observations.append(external.started)
+            original_return_service_start(service)
+
+        monkeypatch.setattr(roundtrip.ReturnService, "start", record_return_service_start)
     class Server(chat.ChatHTTPServer):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -204,6 +216,7 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
         if installed:
             assert server.manager_return_service.args[3] is server.conversation_transports
             assert server.conversation_transports.bindings is server.runtime_controller.project_contexts.conversation_bindings
+            assert return_service_start_observations == [True]
         else:
             from loopx.extensions.lark.manager_returns import LarkManagerReturnTransport
             assert not hasattr(server, "conversation_transports")

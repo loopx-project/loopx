@@ -19,6 +19,7 @@ const LONG_ANSWER = [
   "| B | 无验收记录 | 成本与风险 |",
   "",
   "依据：[公开报告](https://example.org/report)。这是记录里的结论；生产状态仍需独立读回。",
+  "读回命令：`loopx status`。",
   "填写地址：https://example.org/forms/community。English: https://example.org/forms/en。",
   "",
   "<script>window.pwned=true</script>",
@@ -30,6 +31,24 @@ const SHORT_ANSWER = "方案 A 的公开来源：https://example.org/report。";
 async function send(page, prompt) {
   await page.getByLabel("向 LoopX 发送消息").fill(prompt);
   await page.getByRole("button", { name: "发送", exact: true }).click();
+}
+
+async function assertAnswerTypography(answer) {
+  const type = await answer.evaluate((node) => {
+    const body = node.querySelector('.personal-md p:not(.personal-md-heading)');
+    const heading = node.querySelector('.personal-md-heading.is-h2');
+    const code = node.querySelector('.personal-md-code');
+    return {
+      body: parseFloat(getComputedStyle(body).fontSize),
+      heading: parseFloat(getComputedStyle(heading).fontSize),
+      codeFamily: getComputedStyle(code).fontFamily,
+      codeSize: parseFloat(getComputedStyle(code).fontSize),
+    };
+  });
+  if (type.body < 14 || type.heading <= type.body || type.codeSize < 14
+    || !type.codeFamily.includes('Geist Mono')) {
+    throw new Error(`Answer typography lost readable prose, heading hierarchy or code isolation: ${JSON.stringify(type)}`);
+  }
 }
 
 export const answerPresentationScenario = {
@@ -47,6 +66,7 @@ export const answerPresentationScenario = {
         hasText: "建议先验证方案 A",
       });
       await answer.waitFor({ state: "visible", timeout: 15_000 });
+      await assertAnswerTypography(answer);
       if (await answer.locator("table").count() !== 1) throw new Error("Steward answer table was not rendered");
       if (await answer.locator('a[href="https://example.org/report"]').count() !== 1) {
         throw new Error("Steward evidence link was lost");
@@ -65,6 +85,7 @@ export const answerPresentationScenario = {
       await page.screenshot({ path: resolve(outputDir, "answer-presentation-desktop.png"), fullPage: false, animations: "disabled" });
 
       await page.setViewportSize({ width: 390, height: 844 });
+      await assertAnswerTypography(answer);
       await answer.scrollIntoViewIfNeeded();
       const overflow = await answer.evaluate((node) => ({
         card: node.scrollWidth > node.clientWidth + 1,
@@ -163,6 +184,7 @@ export const answerPresentationScenario = {
         hasText: "建议先验证方案 A",
       });
       await goalAnswer.waitFor({ state: "visible" });
+      await assertAnswerTypography(goalAnswer);
       const goalReportHref = await goalAnswer.getByRole("link", { name: "单独阅读完整答复" }).getAttribute("href");
       if (!goalReportHref) throw new Error("Goal answer has no stable reading link");
       const goalId = new URL(page.url()).searchParams.get("goalId");
