@@ -274,6 +274,7 @@ def _ensure_sqlite_row(
 def _resolve_bound_thread_id(
     goal: dict[str, Any],
     *,
+    goal_id: str,
     agent_id: str,
     automation_id: str,
 ) -> str:
@@ -296,11 +297,18 @@ def _resolve_bound_thread_id(
         if thread_id:
             matches.append(thread_id)
     if len(matches) != 1:
+        # The recovery command must be runnable as printed: ``bind-agent-thread``
+        # is registered at the root, and without ``--execute`` it only previews
+        # the binding it is asked to write.
         raise SystemExit(
             f"{automation_id}: expected exactly one bound host thread for agent "
-            f"{agent_id!r}, found {len(matches)}; bind it with `loopx registry "
-            "bind-agent-thread` (or unbind the extra bindings) before installing "
-            "the Codex App automation"
+            f"{agent_id!r}, found {len(matches)}; bind one with "
+            f"`loopx bind-agent-thread --goal-id {goal_id} --agent-id {agent_id} "
+            "--host-surface codex-app --thread-id <host-thread-id> --execute`, or "
+            "remove an extra binding with "
+            f"`loopx unbind-agent-thread --goal-id {goal_id} --agent-id {agent_id} "
+            "--host-surface codex-app --thread-id <host-thread-id> --execute`, "
+            "before installing the Codex App automation"
         )
     return matches[0]
 
@@ -323,6 +331,7 @@ def _ensure_automation(
     goal = _load_registry_goal(registry, goal_id)
     thread_id = _resolve_bound_thread_id(
         goal,
+        goal_id=goal_id,
         agent_id=agent_id,
         automation_id=automation_id,
     )
