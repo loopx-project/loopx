@@ -20,7 +20,13 @@ It polls at most four distinct repository-qualified dependencies per invocation,
 with a durable 30-minute cadence for successful and failed attempts. A missing
 repository binding is reported for repair; it never guesses from PR numbers.
 An exact merged observation appends the existing native `pr_merge` fact so the
-original condition becomes satisfied. Queue disappearance, closed-without-merge
+original condition becomes satisfied. Resume readback uses the same complete
+retained Goal log as observation, before any recent-event display limit. The
+typed resume owner keeps one original merge proof per exact dependency; more
+than 500 unrelated events or 256 other dependencies cannot evict that proof.
+List, status, quota and archived reads keep their bounded presentation, and
+restarts need neither repeated remote reads nor rewritten merge timestamps.
+Queue disappearance, closed-without-merge
 and provider failures cannot satisfy it. This observation changes no Todo status,
 requirements, claims, leases or Goal acceptance. Deferred ready work still needs
 its normal lifecycle transition.
@@ -40,7 +46,10 @@ this heartbeat adoption does not claim that every Turn host already polls them.
 原生 `heartbeat-prequota --goal-id GOAL --agent-id AGENT` 从完整 Todo 源选择
 精确的未完成 PR 依赖（含 deferred），每次最多核验四个不同仓库限定的依赖。
 成功和失败均保留 30 分钟核验节奏，重启后仍有效。仓库缺失需要修复，不能按编号猜测。
-真实合并观察写入既有 `pr_merge`，原条件自然满足；离开 open 列表、关闭未合并或
+真实合并观察写入既有 `pr_merge`，原条件自然满足。回读与观察共用完整保留的 Goal
+日志，在最近事件展示裁剪前由 TS resume owner 保留每项精确依赖的原始合并证明；
+超过 500 条无关事件或 256 项其他依赖不能挤走它。list、status、quota 与归档读取
+仍保留原展示边界，重启不需要重复远端读取或改写合并时间。离开 open 列表、关闭未合并或
 provider 失败不能解除等待。观察不修改 Todo 状态、要求、认领、lease 或 Goal 验收；
 已满足条件的 deferred Todo 仍走正常生命周期转换。
 生成的 heartbeat 仅在声明 `--available-capability external_evidence_poll` 时加入

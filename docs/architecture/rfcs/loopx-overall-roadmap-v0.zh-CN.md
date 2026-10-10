@@ -466,6 +466,15 @@ executor/profile 检查启动条件。任务准入、当前 pinned 验收绑定�
 表达；未探测的通用/云端运行时保留未知。CLI、已启用 MCP 和新 Chat 工具共用此
 检查，不新增状态账本，也不启动执行。
 
+[#6163](https://github.com/loopx-project/loopx/pull/6163) 拟交付 S2/S7/S10
+PR 依赖观察切片：既有 opt-in heartbeat prequota 不依赖 open review 队列成员，
+Todo 类型化 owner 从完整保留的事实选择精确未完成等待及持久核验节奏。恢复回读
+在展示裁剪前复用同一源，历史增长和重启保留原合并证明，不清要求、不改认领、
+lease 或状态。真实 File/SQLite CLI 的增长／重启及仓库／失败负例只验收本批；
+安装态 host 采用、TurnEnvelope 核验分别跟踪，不关闭 legacy 退役或 authority
+持续运行资格。参见
+[Todo 回读](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察)。
+
 [#5283](https://github.com/loopx-project/loopx/pull/5283) 是拟交付的 S2/S10
 只读预检成本切片：摘要与继承验证共用既有 TS owner 请求，空继承行跳过传输；
 读模型与写适配器分离，未选中的报告、Lark、扩展及 Host 路由延迟加载。兼容导出
@@ -488,15 +497,19 @@ R2 持续运行、真实调用方采用、冷 CLI/p95 与 provider 准入仍是�
 此 PR 不代表 Python 规划退役或机器默认切换。
 
 English:
-[PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
-S2/S7/S10 PR 等待观察 checkpoint：依赖核验进入既有 opt-in heartbeat prequota
-路径，不依赖 open review 队列成员。Todo 类型化 owner 选择仓库限定的未完成等待
-及有界持久节奏；issue-fix provider 将紧凑公开元数据写入既有 merge 事实。
-未观察的 PR 标识不能豁免交付监督。File/SQLite 恢复、原要求不变、关闭／失败负例
-及重启节奏只验收本批；本机 host 能力接入和 TurnEnvelope 核验接入分别跟踪。
-这不关闭 legacy 退役或 authority 持续运行资格。参见
-[Todo 回读](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察)。
+[PR #6163](https://github.com/loopx-project/loopx/pull/6163) proposes the
+S2/S7/S10 PR dependency observation slice in the existing opt-in heartbeat
+prequota path, independent of open review-queue membership. The Todo typed owner
+selects exact unfinished waits and durable polling cadence from complete
+retained facts. Resume readback shares that source before display compaction,
+retaining the original merge proof through history growth and restart without
+clearing requirements or changing claims, leases or status. Real File/SQLite
+CLI growth/restart and repository/failure negatives qualify this bounded slice;
+installed host adoption and TurnEnvelope polling remain distinct. It does not
+close legacy retirement or sustained authority qualification. See
+[Todo readback](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察).
 
+[PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
 S2/S10 read-preview cost slice. Summary and succession validation share the
 existing TS owner request; empty succession skips transport. Read models are
 isolated from mutation adapters, and unselected report, Lark, extension and Host
