@@ -953,6 +953,32 @@ Validation stability is scoped to this task, its current claim/lifecycle, select
 
 A revision can have current task acceptance and valid requester adoption while independent-verifier evidence is missing. These are distinct facts. The correction path explicitly says **Independent verification · evidence not provided**; neither `responds_to`, a reviewer's name nor a successful validator is an exact-version independent-verifier receipt.
 
+In the original Goal conversation or Team execution report, expand **Confirm
+adoption into a downstream result**. Find an accepted result using the displayed
+version, read it, then explicitly confirm adoption. Discovery and reading never
+record the decision. The operation reuses `delegation adopt` with the configured
+coordinator's existing grants; it rechecks current task acceptance, receiver
+inputs and output versions. It starts no task, resumes no paused coordinator,
+and supplies no independent-verifier evidence. A lost acknowledgement triggers
+one readback; an unresolved response keeps the same source/consumer pair for an
+explicit retry. Reload reads the durable receipt. Changed input or revoked
+bindings withdraw current adoption or reject confirmation.
+
+中文：在原 Goal 对话或团队执行的报告详情展开「确认采用于后续结果」，查找使用
+当前版本的已验收结果，阅读后显式确认。查找、阅读、刷新均不自动采用；复用既有
+协调身份、grant 和 `delegation adopt`，重新核验输入与产物版本，不启动任务或恢复
+暂停的协调员。丢失回执先读回；仍未确认时仅重试同一版本与结果。输入变化或绑定
+撤销会使采用失效或拒绝确认，采用不补足独立验收。
+
+These packaged desktop and 390px views use synthetic workspace navigation with
+the real isolated SQLite/HTTP adoption owner. The same journey verifies lost
+acknowledgement recovery and withdrawal after a receiver input changes. It
+does not qualify live-model correction or the installed native App.
+
+![Confirmed requester adoption through the packaged report reader](../assets/personal-workspace/team-adoption-confirmed-desktop.png)
+
+![390px readback of the same confirmed adoption](../assets/personal-workspace/team-adoption-confirmed-mobile.png)
+
 The following packaged transport-fixture views show current check records and their withdrawal. A separate isolated production SQLite/HTTP/CLI journey exercises the same reader with actual host checks, missing output and explicit restoration. All data is synthetic; these checks do not qualify a live-model correction or the installed native App.
 
 ![Packaged validation detail: host check time and stable declared output versions](../assets/personal-workspace/team-check-records-desktop.png)

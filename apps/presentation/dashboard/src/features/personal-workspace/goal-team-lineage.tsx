@@ -1,8 +1,10 @@
 import type {DelegationReadback} from "../../data/chat";
+import {GoalTeamAdoption} from "./goal-team-adoption";
 
 /** Request intent, accepted output and requester decision retain distinct strength. */
-export function GoalTeamLineage({result, zh, onInspect}: {
+export function GoalTeamLineage({result, zh, onInspect, sessionId, onObservation}: {
   result: DelegationReadback; zh: boolean; onInspect: (operationId: string) => void;
+  sessionId: string; onObservation: (result: DelegationReadback | null) => void;
 }) {
   const relations = zh ? {responds_to: "回应此版本", revises: "修订此版本", uses: "使用此版本"}
     : {responds_to: "Respond to this version", revises: "Revise this version", uses: "Use this version"};
@@ -31,5 +33,6 @@ export function GoalTeamLineage({result, zh, onInspect}: {
         {row.consumer_artifacts.map(artifact => <code key={`result:${artifact.ref}`}>{zh ? "结果" : "Result"}: {artifact.ref} · sha256:{artifact.sha256}</code>)}
       </details>
     </li>)}</ul> : <p>{zh ? "尚无请求方采用记录。" : "No requester adoption is recorded."}</p>}
+    <GoalTeamAdoption sessionId={sessionId} result={result} zh={zh} onObservation={onObservation}/>
   </section>;
 }
