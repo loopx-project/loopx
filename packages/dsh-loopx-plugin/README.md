@@ -148,16 +148,19 @@ never opens a browser or configures a model provider.
 
 ## Maintainer release and marketplace handoff
 
-A DSH plugin release needs an immutable prebuilt GitHub asset, a qualified
-marketplace install channel, and an update pull request against the upstream
+A DSH plugin release needs an immutable prebuilt GitHub asset and a qualified
+install channel in each marketplace named in its closeout. The
 [`awesome-dsh-plugin`](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
-marketplace. Marketplace maintainers retain merge authority; publishing a
-LoopX release does not grant authority over that catalog. Released DSH Hub
-[v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14) supports
-pinned GitHub release packages, so this route does not require publishing the
-LoopX plugin on npm. Its installed-state matcher still needs
-[Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) to be merged
-and released. Qualification must read the online catalog back, select the
+directory and [DSH Plugin Hub](https://github.com/dshplugin/dsh-plugin-hub)
+have distinct published catalogs. Current Hub releases read
+`https://api.dsh-plugin.org/plugins.en.json` and `plugins.zh.json`; updating
+the awesome directory does not update those consumers. Marketplace maintainers
+retain authority over their own catalogs.
+
+Pinned GitHub release installation does not require publishing LoopX on npm.
+Release-URL installed-state matching shipped in
+[Hub 1.5.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.5.0).
+Qualification must read the actual marketplace's catalog back, select the
 pinned package, install it, recognize the installed row, update it and remove
 it successfully. The optional npm channel retains its separate account and
 trusted-publisher requirements.
@@ -204,15 +207,19 @@ For every DSH plugin release:
    The workflow requires a merged tag, consumes its GitHub asset without
    rebuilding, and verifies npm bytes and discovery. It neither creates a
    GitHub release nor replaces npm account ownership or the release guide gate.
-5. In a clean fork branch of `awesome-dsh-plugin`, update only
+5. For the awesome directory, in a clean fork branch of `awesome-dsh-plugin`, update only
    `data/plugins/loopx-project__loopx--packages-dsh-loopx-plugin.yml` to the new
    immutable asset URL. Confirm the URL resolves, then run
    `node scripts/generate-readme.mjs --check` and `git diff --check`.
-6. Open an upstream marketplace pull request and link it from the release
-   closeout. Do not describe the release as marketplace-published until that
-   pull request is merged by the upstream maintainers and the installed
-   marketplace resolves the released package. A catalog listing alone does
-   not prove that its installer consumes the pinned release command.
+6. Open the upstream directory pull request and link it from the release
+   closeout. Separately verify the installed Hub's catalog source at the
+   released Hub revision. Read both language feeds and the website's install
+   command; for the LoopX row, check the `ic` and `igc` targets against the
+   immutable release URL. Route stale Hub metadata to its existing
+   [data-correction issue channel](https://github.com/dshplugin/dsh-plugin-hub/issues).
+   Keep that marketplace's adoption open until its actual consumer resolves
+   and installs the released package. A merged directory PR, another catalog's
+   listing, or an upgraded Hub cannot establish that postcondition.
 
 ## Shadow observer (default off)
 
