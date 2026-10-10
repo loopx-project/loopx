@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -399,6 +399,13 @@ def test_automation_rrule_interval_reads_only_minutely_intervals() -> None:
     assert _automation_rrule_interval_minutes("INTERVAL=3;FREQ=MINUTELY") == 3
     assert _automation_rrule_interval_minutes("FREQ=MINUTELY; INTERVAL = 7") == 7
     assert _automation_rrule_interval_minutes("FREQ=MINUTELY;INTERVAL=5;INTERVAL=9") == 9
+    assert _automation_rrule_interval_minutes(
+        f"FREQ=MINUTELY;INTERVAL={2**53 - 1}"
+    ) == 2**53 - 1
+    # Leading zeros are not part of the value, and must not be converted.
+    assert _automation_rrule_interval_minutes(
+        "FREQ=MINUTELY;INTERVAL=" + "0" * 5000 + "5"
+    ) == 5
     # Anything this adapter cannot read reports no interval rather than one.
     assert _automation_rrule_interval_minutes("FREQ=HOURLY;INTERVAL=2") is None
     assert _automation_rrule_interval_minutes("FREQ=MINUTELY;INTERVAL=0") is None
@@ -422,6 +429,31 @@ def test_automation_rrule_interval_reads_only_minutely_intervals() -> None:
 )
 def test_an_unreadable_automation_rrule_never_reports_a_cadence(rrule: str) -> None:
     assert _automation_rrule_interval_minutes(rrule) is None
+
+
+@pytest.mark.parametrize(
+    "interval",
+    [
+        "9" * 16,  # one digit past the safe integer range
+        str(2**53),
+        "1" * 4301,  # past the interpreter's own decimal digit limit
+        "0" * 5000,  # leading zeros the interpreter still counts as digits
+        "-" + "1" * 4301,
+    ],
+    ids=["16-nines", "safe-plus-one", "4301-digits", "5000-zeros", "negative-4301"],
+)
+def test_an_out_of_range_interval_is_reported_without_converting_it(
+    interval: str,
+) -> None:
+    """The provider must not ask the interpreter for a value it refuses to build.
+
+    ``int()`` raises above ``sys.get_int_max_str_digits()``, and the status route
+    turns any local projection failure into one 500 for the whole workspace.
+    """
+
+    assert _automation_rrule_interval_minutes(
+        f"FREQ=MINUTELY;INTERVAL={interval}"
+    ) is None
 
 
 def _install_automation(
@@ -621,6 +653,121 @@ def test_status_route_never_reports_fresh_from_an_unreadable_cadence(
 
     assert window["state"] == "unknown"
     assert window["reason"] == "no_expectation"
+
+
+def _just_now() -> str:
+    """A host timestamp seconds old, in the rollout's own format.
+
+    The status route reads the wall clock, so a healthy lane can only be
+    measured as fresh against activity this recent.
+    """
+
+    stamp = datetime.now(timezone.utc) - timedelta(seconds=30)
+    return f"{stamp:%Y-%m-%dT%H:%M:%S}.{stamp.microsecond // 1000:03d}Z"
+
+
+def _route_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Run the real status route once; any error response fails the test."""
+
+    monkeypatch.setattr(chat_status_api, "collect_status", lambda **_kwargs: payload)
+    sent: list[dict[str, Any]] = []
+
+    class Handler(chat_status_api.ChatStatusRequestMixin):
+        path = "/status.json"
+        server = SimpleNamespace(
+            selected_goal_id=None,
+            registry_path=tmp_path / "registry.json",
+            runtime_root_override=None,
+            scan_roots=[],
+            runtime_root=tmp_path / "runtime",
+            limit=10,
+            goal_subagent_configuration_enabled=False,
+        )
+
+        def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
+            sent.append(payload)
+
+        def _send_error(self, message: str, **kwargs: Any) -> None:
+            raise AssertionError(f"the status route errored: {message} {kwargs}")
+
+    Handler()._status()
+    assert len(sent) == 1, "the route must answer once with the workspace projection"
+    return sent[0]
+
+
+def _lane_window(payload: dict[str, Any]) -> dict[str, Any]:
+    threads = payload["run_history"]["goals"][0]["host_thread_activity"]["threads"]
+    return threads[0]["delivery_window"]
+
+
+@pytest.mark.parametrize("oversized_lane", ["own", "unrelated"])
+def test_an_oversized_interval_cannot_take_down_the_workspace_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oversized_lane: str
+) -> None:
+    """One unreadable manifest must not cost the whole workspace its readback."""
+
+    home = CodexHome(tmp_path / ".codex")
+    home.thread("t-open", [_event(_just_now(), "task_complete")])
+    oversized = "FREQ=MINUTELY;INTERVAL=" + "1" * 4301
+    if oversized_lane == "own":
+        _install_automation(
+            home, automation_id="lane", goal_id="bound", agent_id="a",
+            rrule=oversized, target_thread_id="t-open",
+        )
+    else:
+        _install_automation(
+            home, automation_id="lane", goal_id="bound", agent_id="a",
+            rrule="FREQ=MINUTELY;INTERVAL=5", target_thread_id="t-open",
+        )
+        _install_automation(
+            home, automation_id="other", goal_id="unrelated", agent_id="z",
+            rrule=oversized, target_thread_id="t-other",
+        )
+    monkeypatch.setenv("LOOPX_CODEX_HOMES", str(home.root))
+
+    window = _lane_window(
+        _route_response(
+            tmp_path,
+            monkeypatch,
+            _status({"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-open"}),
+        )
+    )
+
+    if oversized_lane == "own":
+        # Unreadable is unknown; it is never a guessed cadence.
+        assert window == {
+            "schema_version": "loopx_host_delivery_window_v0",
+            "state": "unknown",
+            "reason": "no_expectation",
+        }
+    else:
+        # The unrelated manifest is skipped, so the healthy lane keeps its window.
+        assert window["state"] == "fresh"
+        assert window["expected_interval_minutes"] == 5
+
+
+def test_correcting_an_oversized_interval_restores_the_lane_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    home.thread("t-open", [_event(_just_now(), "task_complete")])
+    _install_automation(
+        home, automation_id="lane", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=" + "1" * 4301, target_thread_id="t-open",
+    )
+    monkeypatch.setenv("LOOPX_CODEX_HOMES", str(home.root))
+    payload = _status({"agent_id": "a", "host_surface": "codex-app", "thread_id": "t-open"})
+
+    assert _lane_window(_route_response(tmp_path, monkeypatch, payload))["state"] == "unknown"
+
+    _install_automation(
+        home, automation_id="lane", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=5", target_thread_id="t-open",
+    )
+
+    assert _lane_window(_route_response(tmp_path, monkeypatch, payload))["state"] == "fresh"
 
 
 def _offered_scopes(payload: dict[str, Any]) -> list[HostDeliveryScope]:

@@ -47,6 +47,7 @@ _ROLLOUT_CACHE_LIMIT = 256
 # The canonical rrule parser reads INTERVAL with JavaScript's integer
 # conversion, which reports no value outside this range.
 _MAX_SAFE_INTEGER = 2**53 - 1
+_MAX_SAFE_INTEGER_DIGITS = len(str(_MAX_SAFE_INTEGER))
 
 _rollout_cache: dict[tuple[str, int, int], HostThreadActivity] = {}
 
@@ -337,7 +338,20 @@ def _automation_rrule_interval_minutes(rrule: Any) -> int | None:
     raw_interval = parts.get("INTERVAL", "")
     if re.fullmatch(r"[+-]?[0-9]+", raw_interval) is None:
         return None
-    interval = int(raw_interval)
+    # Rule the value out by its significant digits before asking the interpreter
+    # to build it. Python refuses an integer of more than
+    # ``sys.get_int_max_str_digits()`` digits, and an unreadable manifest must
+    # never escape this provider: the status route turns a local projection
+    # failure into one 500 for the whole workspace, so a single oversized
+    # manifest would hide every healthy lane. The canonical parser reports no
+    # value for anything this large either.
+    negative = raw_interval.startswith("-")
+    digits = raw_interval.lstrip("+-").lstrip("0")
+    if len(digits) > _MAX_SAFE_INTEGER_DIGITS:
+        return None
+    # Convert the significant digits only: the interpreter's limit counts
+    # leading zeros too, so the length check above must bound what is converted.
+    interval = int(("-" if negative else "") + digits) if digits else 0
     if interval > _MAX_SAFE_INTEGER or interval < -_MAX_SAFE_INTEGER:
         return None
     return interval if interval > 0 else None
