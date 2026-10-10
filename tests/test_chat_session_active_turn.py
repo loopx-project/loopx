@@ -1698,6 +1698,7 @@ def test_resume_with_unhealthy_adapter_fails_interrupted_turn_before_restore(
         client_turn_id="interrupted-resume-turn",
         message="fail this interrupted turn",
     )
+    store.update_turn(session_id, str(turn["turn_id"]), status="starting")
     runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
     unhealthy_adapter = _HealthyChatAdapter()
     monkeypatch.setattr(unhealthy_adapter, "healthcheck", lambda: False)
