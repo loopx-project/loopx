@@ -847,7 +847,10 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     for rel_path in tracked.stdout.split("\0"):
         if not rel_path:
             continue
-        path = (repo_root / rel_path).resolve()
+        path = repo_root / rel_path
+        if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+            continue
+        path = path.resolve()
         if path.name.endswith(".local.json"):
             continue
         if path.is_file() and path.suffix in DEFAULT_SCAN_SUFFIXES:
@@ -879,7 +882,10 @@ def iter_scan_files(scan_root: Path) -> list[Path]:
             and not os.path.isfile(current_dir / name / "pyvenv.cfg")
         ]
         for file_name in file_names:
-            path = (current_dir / file_name).resolve()
+            path = current_dir / file_name
+            if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+                continue
+            path = path.resolve()
             if path.name.endswith(".local.json"):
                 continue
             if not path.is_file():

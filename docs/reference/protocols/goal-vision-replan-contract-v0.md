@@ -941,6 +941,23 @@ receipt proves only context access. If projected evidence is empty, stale, or
 contradictory, the agent may use bounded public-safe search and write back
 source references with the typed observation.
 
+The default evidence display reduces a repeated accounting continuation only
+when a `quota_spend_commit_receipt_v0` matches the same complete
+`quota_settlement_identity_v0` as a typed work observation and their complete
+continuation text matches. The matching work must also be displayed. Different
+health or outcome evidence remains visible; a receipt-only row with no additional
+displayed facts can be omitted. Unpaired, legacy, mismatched and actual-progress
+rows retain their existing display. Grouped occurrences require a match for every
+underlying occurrence, rather than proof for only the newest one.
+
+This is presentation reduction at the existing TypeScript replan owner, not
+history deletion, quota accounting or a new completion rule. Source counts,
+coverage, obligation identity and immutable history reference resolution remain
+unchanged. Internal matching facts do not enter public reference digests. The
+codec transmits complete-text digests so equal bounded prefixes cannot hide
+different obligations in the tail. This adds no option or caller action to CLI,
+frontend or Lark, and does not establish model latency or task-quality gains.
+
 ## Write / Correction Mechanism
 
 For optional history drill-down, `history --goal-id ... --agent-id ... --limit N`

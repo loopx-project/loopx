@@ -1318,11 +1318,15 @@ def test_reserved_managed_start_recovers_after_death_before_the_first_journal_wr
     assert [
         (row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)
     ] == [("reserved", f"{turn_key}:1")]
-    assert not list((runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json"))
+    assert not [
+        path
+        for path in (runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json")
+        if not path.name.endswith(".lock.holder.json")
+    ]
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 1))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
@@ -1368,7 +1372,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 1))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common

@@ -562,6 +562,13 @@ class ChatActionService(
     ) -> dict[str, Any]:
         from .control_plane.effect_runtime import effect_runtime_result
 
+        def require_first_turn_readback(turn: dict[str, Any]) -> None:
+            plan = effect_runtime_result("presentation.action_review_plan.compile", {
+                "proposal": {**proposal, "first_turn_readback": turn},
+            })
+            if plan.get("reason") == "readback_unverified":
+                raise ValueError("The original first Turn ended before Host dispatch; inspect its original Session instead of starting another")
+
         current_fingerprint = self._registry_fingerprint()
         heartbeat = (
             parameters.get("heartbeat")
@@ -733,6 +740,7 @@ class ChatActionService(
             turn = turn_store.load_turn(session_id, turn_id) if session is not None else None
             if session is None or session.get("goal_id") != goal_id or session.get("agent_id") != agent_id or turn is None:
                 raise ValueError("The recorded first Turn is unavailable; restore its original Session instead of starting another")
+            require_first_turn_readback(turn)
             turn_result = {"turn_id": turn_id, "status": str(turn["status"]), "created": False}
         first_turn_gate: dict[str, Any] | None = None
         try:
@@ -811,6 +819,7 @@ class ChatActionService(
                 work_dir=project,
                 objective=objective,
             )
+            require_first_turn_readback(first_turn)
             turn_result = {
                 "turn_id": _opaque(first_turn.get("turn_id"), field="turn_id"),
                 "status": str(first_turn.get("status") or "queued"),

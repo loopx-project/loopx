@@ -436,6 +436,170 @@ def test_app_creation_reuses_real_session_turn_after_response_loss(environment, 
         controller.close()
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("refusal", ["resume", "missing_host", "foreign_session", "terminal_before_start"])
+def test_original_creation_waits_for_its_host_before_first_turn(environment, app, monkeypatch, provider, refusal):
+    """An empty upstream thread is not authority to replace accepted work.
+
+    Real canonical stores and the production HTTP/controller persist the
+    original operation. The protocol fixture independently refuses resume;
+    restoring that same Host then dispatches the original queued request once.
+    This is transport characterization, not actual model qualification.
+    """
+    import runpy
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, _, _, project, runtime = environment
+    actions, request, service = app
+    configure(provider, mode="hard_lease")
+    capture, refuse = runtime / "requests.jsonl", runtime / "resume-unavailable"
+    fake = runtime / "synthetic-codex"
+    source = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))["FAKE_CODEX"]
+    source = source.replace('    method = request.get("method")',
+        f'    with open({str(capture)!r}, "a") as output:\n        output.write(json.dumps(request) + "\\n")\n'
+        '    method = request.get("method")\n'
+        f'    if method == "thread/resume" and __import__("os").path.exists({str(refuse)!r}):\n'
+        '        print(json.dumps({"id": request["id"], "error": {"code": -32600, "message": "Synthetic upstream refuses this empty thread"}}), flush=True)\n'
+        '        continue')
+    fake.write_text(source)
+    fake.chmod(0o700)
+    chat = ChatSessionStore(runtime / "chat")
+
+    def controller_for(binary):
+        return ChatRuntimeController(store=chat, codex_bin=str(binary), registry_path=service.registry_path,
+            project_contexts=ChatProjectContexts([project]))
+
+    controller = controller_for(fake)
+    service.chat_store, service.runtime_controller = chat, controller
+    try:
+        code, preview = request("/api/actions/preview", {
+            "action_kind": "goal.create", "summary": "Create a recoverable Goal",
+            "normalized_parameters": {"goal_id": "pre-first-turn", "title": "Original creation",
+                "objective": "Retain the original work before Host dispatch", "workspace_ref": "current",
+                "agent_id": "codex", "heartbeat": {"enabled": False}, "initial_todos": ["Original task"]},
+            "context": {"kind": "goal_channel"}, "idempotency_key": "pre-first-turn",
+        })
+        assert code == 201, preview
+        proposal_id = preview["proposal"]["proposal_id"]
+        path = f"/api/actions/{proposal_id}/apply"
+        save = actions.save_checkpoint
+
+        def interrupt_after_session(*args, **kwargs):
+            result = save(*args, **kwargs)
+            if kwargs.get("step") == "first_session_opened":
+                raise TimeoutError("Interrupted after the original Session checkpoint")
+            return result
+
+        monkeypatch.setattr(actions, "save_checkpoint", interrupt_after_session)
+        assert request(path, {})[0] == 424
+        monkeypatch.setattr(actions, "save_checkpoint", save)
+        proposal = actions.load(proposal_id)
+        session_id = proposal["checkpoint"]["steps"]["first_session_opened"]["session_id"]
+        session = chat.load_session(session_id)
+        client_turn_id = f"goal-start-{proposal_id}"
+        assert chat.turn_for_client(session_id, client_turn_id) is None
+        canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="pre-first-turn", include_leases=True)
+        goal = next(g for g in json.loads(service.registry_path.read_text())["goals"] if g["id"] == "pre-first-turn")
+        assert canonical["source_authority"] == f"{provider}_v0"
+        assert len(canonical["todos"]) == 1
+        controller.close()
+        restart_effect_runtime()
+        configure("sqlite" if provider == "file" else "file", mode="soft_claim")
+        if refusal in {"resume", "terminal_before_start"}:
+            refuse.touch()
+        elif refusal == "foreign_session":
+            # The public store forbids rebinding a Goal Session. Model an
+            # independently corrupted file in this disposable fixture only.
+            with pytest.raises(ValueError, match="only the owner manager"):
+                chat.update_session(session_id, goal_id="another-goal")
+            chat._session_path(session_id).write_text(json.dumps({**session, "goal_id": "another-goal"}))
+        controller = controller_for(runtime / "missing-codex" if refusal == "missing_host" else fake)
+        service.runtime_controller = controller
+        pending = None
+        if refusal == "terminal_before_start":
+            # Preserve a failure already recorded by an older interrupted
+            # controller. Same-client terminal replay cannot mean startup.
+            assert request(path, {})[0] == 424
+            original = chat.turn_for_client(session_id, client_turn_id)
+            pending = chat.update_turn(session_id, original["turn_id"], status="failed", error_code="server_restarted")
+            chat.release_active_turn(session_id, original["turn_id"], last_activity_at=pending["last_activity_at"], last_error_code="server_restarted")
+        for _ in range(2):
+            code, failed = request(path, {})
+            assert code == (424 if refusal == "resume" else 400), failed
+            current = chat.turn_for_client(session_id, client_turn_id)
+            if refusal == "resume":
+                assert current["status"] == "queued"
+                assert current["started_at"] is None and current["upstream_turn_id"] is None
+                assert chat.load_session(session_id)["last_error_code"] == "resume_failed"
+                if pending is not None:
+                    assert current == pending
+                pending = current
+                # Packaged App session readback resumes this same Session before
+                # the user retries creation. It must not settle unstarted work.
+                from loopx.chat_agent import CodexChatAgentError
+                with pytest.raises(CodexChatAgentError, match="could not be restored"):
+                    controller.resume_session(session_id=session_id, work_dir=project, objective=preview["proposal"]["normalized_parameters"]["objective"])
+                assert chat.turn_for_client(session_id, client_turn_id) == pending
+                # Opening the existing conversation is another packaged App
+                # readback route through the same adapter preparation boundary.
+                with pytest.raises(CodexChatAgentError, match="could not be restored"):
+                    controller.open_session(goal_id="pre-first-turn", agent_id="codex",
+                        goal_instance_id=session.get("goal_instance_id"), work_dir=project,
+                        objective=preview["proposal"]["normalized_parameters"]["objective"],
+                        mode="resume_latest", channel_id="goal.pre-first-turn")
+                assert chat.turn_for_client(session_id, client_turn_id) == pending
+                assert len(chat.list_sessions(goal_id="pre-first-turn")) == 1
+            elif refusal == "terminal_before_start":
+                assert "ended before Host dispatch" in failed["error"]
+                assert current == pending
+                assert current["status"] == "failed" and current["started_at"] is None
+            else:
+                assert current is None
+            assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="pre-first-turn", include_leases=True) == canonical
+            assert next(g for g in json.loads(service.registry_path.read_text())["goals"] if g["id"] == "pre-first-turn") == goal
+            assert actions.load(proposal_id)["checkpoint"]["steps"] == proposal["checkpoint"]["steps"]
+            assert chat.load_session(session_id)["upstream_thread_id"] == session["upstream_thread_id"]
+        assert len(chat.list_sessions()) == 1
+        assert request(f"/api/actions/{proposal_id}/regenerate", {})[0] == 409
+        before_dispatch = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(r.get("method") == "thread/start" for r in before_dispatch) == 1
+        assert not any(r.get("method") == "turn/start" for r in before_dispatch)
+
+        if refusal == "terminal_before_start":
+            assert actions.load(proposal_id)["status"] == "failed"
+            assert actions.load(proposal_id)["receipt"] is None
+            return
+
+        # Restore the original Host/identity, without changing the creation,
+        # provider, Session or client request. A refusal is not terminal success.
+        controller.close()
+        restart_effect_runtime()
+        refuse.unlink(missing_ok=True)
+        if refusal == "foreign_session":
+            chat._session_path(session_id).write_text(json.dumps(session))
+        controller = controller_for(fake)
+        service.runtime_controller = controller
+        code, recovered = request(path, {})
+        assert code == 202, recovered
+        resources = recovered["proposal"]["receipt"]["resource_ids"]
+        assert resources["session_id"] == session_id
+        if pending is not None:
+            assert resources["turn_id"] == pending["turn_id"]
+        completed = controller.wait_for_turn(session_id=session_id, turn_id=resources["turn_id"], timeout_sec=10)
+        assert completed["status"] == "completed"
+        assert request(path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="pre-first-turn", include_leases=True) == canonical
+        rpc = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(r.get("method") == "thread/start" for r in rpc) == 1
+        assert sum(r.get("method") == "turn/start" for r in rpc) == 1
+        assert len(list((chat.root / "sessions" / session_id / "turns").glob("*.json"))) == 1
+    finally:
+        controller.close()
+
+
 @pytest.mark.parametrize("seed_count", [0, 2])
 def test_app_creation_selects_server_configured_non_git_workspace(environment, app, seed_count):
     _, bootstrap, _, project, _ = environment
@@ -603,11 +767,12 @@ def test_app_creation_cannot_adopt_a_competing_goal(environment, app, monkeypatc
         before["files"] = {str(p): p.read_bytes() for p in other_project.rglob("*.md")}
 
     if collision == "during_bootstrap":
-        real_bootstrap = chat_actions.bootstrap_project
+        from loopx import bootstrap as bootstrap_owner
+        real_bootstrap = bootstrap_owner.bootstrap_project
         def race(**kwargs):
             create_competitor()
             return real_bootstrap(**kwargs)
-        monkeypatch.setattr(chat_actions, "bootstrap_project", race)
+        monkeypatch.setattr(bootstrap_owner, "bootstrap_project", race)
     else:
         create_competitor()
 

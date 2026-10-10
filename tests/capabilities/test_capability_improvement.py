@@ -105,6 +105,53 @@ def test_corrupt_policy_is_visible_fail_open_and_clearable(registry):
     assert configuration_summary(json.loads(registry.read_text())["goals"][0]) is None
 
 
+def test_real_cli_trial_feedback_keeps_failed_inputs_out_of_retry_advice(registry):
+    cli(registry, "configure-goal", "--goal-id", "example",
+        "--capability-improvement-mode", "bounded", "--execute")
+    command = ["agent-context", "--goal-id", "example", "--agent-id", "coordinator",
+               "--phase", "before_plan", "--capability-gap-ref", "example/gap"]
+    candidate = {"capability_id": "example-source", "applicable": True, "enabled": False,
+                 "configuration_ref": "owner/config-v1", "effect_ref": "experiment/baseline-v1",
+                 "rollback_ref": "owner/rollback", "candidate_revision": "revision-v1"}
+
+    def observe(*candidates):
+        args = command.copy()
+        for item in candidates:
+            args.extend(["--capability-candidate-json", json.dumps(item)])
+        return cli(registry, *args)
+
+    before = registry.read_bytes()
+    first = contribution(observe(candidate))["facts"]
+    assert first["recommendation"] == "propose_reversible_trial"
+    failed = {**candidate, "trial_feedback": {
+        "outcome_ref": "owner/outcome-v1", "trial_basis_digest": first["trial_basis_digest"],
+        "status": "failed"}}
+    facts = contribution(observe(failed))["facts"]
+    assert facts["reason_code"] == "prior_trial_failed"
+    assert facts["recommendation"] == "continue_current_work"
+    assert facts["outcome_ref"] == "owner/outcome-v1"
+    assert contribution(observe({**failed, "configuration_ref": "owner/config-v2"}))["facts"]["reason_code"] == "trial_feedback_stale"
+    success = {**candidate, "trial_feedback": {**failed["trial_feedback"], "status": "succeeded"}}
+    assert contribution(observe(success))["facts"]["recommendation"] == "inspect_trial_outcome"
+    fresh = {**candidate, "candidate_revision": "revision-v2"}
+    independent = contribution(observe(failed, fresh))["facts"]
+    assert independent["recommendation"] == "propose_reversible_trial"
+    assert independent["trial_basis_digest"] != first["trial_basis_digest"]
+    # Invalid feedback only loses this optional contribution. A fresh original
+    # owner read can recover it; neither call changes the registry or admission.
+    broken = {**failed, "trial_feedback": {**failed["trial_feedback"], "status": "accepted"}}
+    invalid = observe(broken)["agent_context"]
+    assert invalid["contributions"] == []
+    assert invalid["failures"][0]["code"] == "context_provider_failed"
+    assert contribution(observe(candidate))["facts"]["recommendation"] == "propose_reversible_trial"
+    assert registry.read_bytes() == before
+    cli(registry, "configure-goal", "--goal-id", "example",
+        "--capability-improvement-mode", "off", "--execute")
+    off_before = registry.read_bytes()
+    assert observe(broken)["agent_context"] is None
+    assert registry.read_bytes() == off_before
+
+
 class SettingsHandler(GoalConfigurationRequestMixin):
     def __init__(self, registry, body):
         self.path = CHAT_GOAL_CONFIGURATION_PREVIEW_PATH

@@ -341,14 +341,23 @@ It uses the authoritative catalog command and does not require publishing this
 provider to npm. [The beta.6 GitHub package](https://github.com/loopx-project/loopx/releases/tag/dsh-loopx-plugin-v0.1.1-beta.6)
 is published from merged commit `5eee730c2`; downloaded bytes match the built
 artifact. Its [personal illustrated upgrade guide](https://my.feishu.cn/docx/Q8pOdO1jco0y10xBDCkce87Xngc)
-was read back with three real DSH screenshots. The live catalog still selects
-beta.5 as of 2026-10-07; [catalog PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
-remains open. [Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98)
-is merged and shipped in [Hub 1.5.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.5.0).
+was read back with three real DSH screenshots.
+[Catalog PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+merged on 2026-10-08; its deployed awesome directory selects beta.6.
+However, on 2026-10-10 the [DSH Hub website](https://dsh-plugin.org/plugins/loopx-project/loopx)
+and both `api.dsh-plugin.org/plugins.en.json` and `plugins.zh.json` still
+select beta.5 in the LoopX row's `ic` and `igc` commands. Current Hub releases
+consume those separate feeds, not the awesome directory. This is an unresolved
+consumer metadata gap, tracked in [Hub #146](https://github.com/dshplugin/dsh-plugin-hub/issues/146);
+neither the directory merge nor a Hub upgrade establishes its adoption.
+[Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98)
+shipped in [Hub 1.5.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.5.0).
 The npm-published 1.5.0 backend and Client helpers passed beta.6 install,
 installed identity, pinned update and removal through native DSH 0.2 HTTP routes
-with the proposed catalog URL. This qualifies published Hub bytes, not adoption
-of beta.6 by the live catalog.
+with the proposed catalog URL. A fresh isolated macOS DSH 0.2.0-rc.2 profile
+also installed the published beta.6 URL with pnpm 11.25.0 and Hub 1.6.4;
+both package versions, all four LoopX rows and real web-host loading were read
+back. These direct-install results do not qualify the stale Hub feed's route.
 
 New [#5786](https://github.com/loopx-project/loopx/issues/5786) and
 [#5796](https://github.com/loopx-project/loopx/issues/5796) report
@@ -359,10 +368,13 @@ pnpm 12.6.0; `--force` and `--fix-lockfile` also fail. Preserving the old
 lockfile and resolving again restores the checksum and installation with
 integrity checks enabled. The reports do not establish how their lockfiles
 lost the checksum. [Hub #102](https://github.com/dshplugin/dsh-plugin-hub/pull/102)
-proposes accurate policy diagnostics, English/Chinese recovery copy and
-backend-recorded command reporting. Its packed candidate passed the real
-macOS DSH failure dialog and persisted notification readback; it remains an
-upstream proposal, not a released repair for the reported Windows profiles.
+merged on 2026-10-07; current published Hub 1.6.4 includes the policy diagnostics,
+English/Chinese recovery copy and backend-recorded command reporting. Its
+earlier packed candidate passed the real macOS failure dialog and persisted
+notification readback. Shipping that guidance does not repair existing
+lockfiles or establish the origin of the reported Windows failures.
+[LoopX #6053](https://github.com/loopx-project/loopx/issues/6053) still attempts
+beta.5 with Hub 1.6.3; its wrapper alone cannot identify the inner pnpm error.
 
 The published package passed native CLI URL installation, beta.5-on-compatible-0.1.5
 to beta.6-on-0.2 upgrade/removal, and offline plugin-tarball installation/removal.
@@ -377,9 +389,17 @@ model turn. This does not qualify Windows desktop market installation,
 initialization, control, upgrade/removal or model-driven continuation. Network
 recovery still depends on external connectivity; an offline plugin archive
 requires compatible host/CLI dependencies or their caches. Native browser hot
-uninstall disconnected the Web service while the dependency remained; it is a
-failed journey, not covered by the passing CLI removal. Close DSH before CLI
-removal and restart it afterwards. [Issue #5671](https://github.com/loopx-project/loopx/issues/5671)
+uninstall failed again on 2026-10-10 with published beta.6 and Hub 1.6.4: the
+dependency was removed, but withdrawing `loopxBootstrap` stopped the shared Web
+rows and disconnected the browser. A follow-up source candidate removes those
+shared dependencies while retaining the native Loader readiness wait and
+LoopX-owned Host/Driver gating. Its packed real 0.2.0-rc.2 and 0.1.5-rc.2 smokes
+passed delayed initialization before readiness, live-disable with a surviving
+Web host and retired LoopX route, and cold boot with the package disabled. Real
+macOS Hub 1.6.4 browser uninstall completed, removed the dependency and preserved
+the host through page refresh. This candidate is not a new published release;
+for published beta.6, close DSH before CLI removal and restart it afterwards.
+[Issue #5671](https://github.com/loopx-project/loopx/issues/5671)
 also reports a missing Windows desktop-host CLI module before plugin loading;
 that host packaging failure needs its own Windows/upstream readback. The L1 observer still
 consumes only

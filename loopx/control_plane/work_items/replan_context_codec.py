@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+import hashlib
 import shlex
 from typing import Any
 
@@ -62,6 +63,21 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             text = public_safe_compact_text(run.get(key), limit=240)
             if text:
                 row[key] = text
+        if "settlement_identity" in run or "quota_spend_commit" in run:
+            # Transport facts, not a Python eligibility decision. Complete-text
+            # digests prevent a shared display prefix from erasing distinct tails.
+            # This private wire metadata is excluded from public reference identity.
+            source: dict[str, Any] = {key: run.get(key) for key in (
+                "goal_id", "agent_id", "todo_id", "turn_instance_id")}
+            for key, fields in (("settlement_identity", (
+                "schema_version", "goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id")),
+                ("quota_spend_commit", ("schema_version", "effect_id"))):
+                value = run.get(key)
+                source[key] = {field: value.get(field) for field in fields} if isinstance(value, Mapping) else None
+            for key in ("recommended_action", "health_check", "delivery_outcome"):
+                value = run.get(key)
+                source[key + "_digest"] = hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
+            row["_source_facts"] = source
         rows.append(row)
     return rows
 

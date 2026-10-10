@@ -28,6 +28,30 @@ Progress fingerprint codecs, obligation assembly, frontier settlement and broade
 capture/provider qualification retain their owners. No new model observer,
 provider selection, frontend configuration or optional capability is introduced.
 
+## Receipt-backed evidence display correction
+
+The replan evidence consumer could repeat the same continuation once for work
+and once for its quota debit. The existing TypeScript work-item owner now uses
+scoped settlement and spend-receipt facts to remove that repetition. Python
+transports identities and complete-text digests; it does not classify eligibility.
+The additional facts stay outside the public row hash, so previously delivered
+history references still resolve the original immutable record.
+
+Reduction requires matching complete Goal/Agent/Todo/Turn/effect identity, an
+actual typed progress observation and the same complete continuation. Every
+grouped occurrence needs its own match, and the matching work must survive the
+display bound. Different health remains visible; different outcomes, missing or
+unsupported receipts, identity mismatches and distinct continuation tails retain
+their prior presentation. Raw counts, negative coverage and obligation identity
+are unchanged. No shared vocabulary, capability, store or authority is added.
+
+Qualification uses disposable real File/SQLite quota CLI fixtures, immutable
+history-reference CLI reads, inline/snapshot parity and typed negative cases.
+This bounded correction reduces consumer repetition; complete history still
+requires O(history) transport and processing, with additional identity bytes.
+Installed adoption, model token/time effects, whole-task effectiveness and the
+remaining T3/provider qualification are not established by these checks.
+
 ## Long-history transport correction
 
 The earlier 600-row rehearsal did not qualify long-lived Goals. Although prose

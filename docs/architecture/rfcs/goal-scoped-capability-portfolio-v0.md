@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal; existing catalog, hooks and external-evidence slices are partial prerequisites
 - **Authors / owners:** LoopX capability and control-plane maintainers
 - **Created:** 2026-09-21
-- **Last normative revision:** 2026-09-26
+- **Last normative revision:** 2026-10-10
 - **Implementation baseline:** `65afc4872db67d36f74625a9e53ae63da2bc619c`
 - **Related contracts:** [overall roadmap](loopx-overall-roadmap-v0.md),
   [research exploration](research-exploration-control-plane-v0.md),
@@ -444,6 +444,24 @@ stale/unavailable dependencies and next review trigger. Direct work adds no
 Portfolio prompt section. Full catalog/history and owner joins stay behind
 on-demand inspect. Cache bounded declarations by their existing revision;
 configuration/provider/receipt drift invalidates only affected entries.
+
+### Bounded improvement-intent feedback slice
+
+The existing `goal_capability_organization` provider consumes optional declared
+trial feedback through `before_plan`. Its proposal digest binds Goal/Agent/Todo,
+gap, candidate revision and original configuration/effect/rollback references.
+When matching `failed` or `no_evidence` feedback is supplied, advice must not
+suggest that unchanged trial again. Omitted feedback preserves legacy behavior;
+this optional consumer cannot enforce a persistent retry prohibition.
+Success requests original-owner review; changed inputs make prior feedback stale.
+Independent candidates and enabled direct routes remain available; optional
+feedback failure stays isolated. The [capability contract](../../../loopx/capabilities/goal_capability_organization/README.md)
+defines the bounded wire format and identity semantics.
+
+This backend slice adds no authentication, adoption store, installer, composition
+language or authority, and does not fulfill the portfolio lifecycle or connector
+milestones. Qualification, useful effects, transfer and total development/evaluation
+cost require separate evidence; deterministic tests are not an adoption decision.
 
 ### Long-running responsibility, disclosure and memory evolution
 

@@ -51,6 +51,15 @@ target behavior. Existing Goals keep their recorded selection. See the
 This is the source candidate, not certification of installed adoption, a released
 default, full shared Goal intent or D2/D3. Do not rebuild a creation/default owner.
 
+Canonical Todo entrypoint separation (T4): all five mutation facades now share
+`todos/mutation_api.py`; historic imports are lazy and the unpromoted writer is
+isolated in `todos/legacy_mutation.py`. The installed File/SQLite oracle can
+remove the whole writer module while exercising lifecycle and settlement
+recovery. This prepares last-caller deletion without claiming code retirement:
+bootstrap, handoff, team-plan and Monitor still have supported source callers;
+keep capture/outbox and historical recovery until their own exits. [Caller and
+rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
@@ -2235,6 +2244,48 @@ there is no persisted cache, new packet field or changed execution authority.
 The same real File/SQLite entrypoints must qualify functional parity and the
 original full-CLI cost gate together. Fewer crossings alone do not explain a
 whole-CLI tail regression or complete writer/backup/default-provider retirement.
+
+Fresh public-boundary scanning retains its specialized Python regex / Host IO
+owner. Characterization covers all eleven `splitlines`
+separators, Unicode regex folding, casefold expansion false positives, ordered
+multi-rule hits, credential references, the public-host exception and literal
+metacharacters. These are scanner semantics, not a new decision owner or cache.
+
+A folded-literal union intervention reduced the exact quota scan population's
+median wall / CPU cost by 8.5% / 6.9% with complete scanner payload parity.
+Its fixed 32 alternating full-CLI pairs per provider still produced File p95
+976.33 → 986.84 ms (+10.52 ms / 1.08%) and SQLite p95 936.00 → 962.34 ms
+(+26.33 ms / 2.81%). The latter misses the unchanged unexplained 25 ms target,
+so the runtime candidate was withdrawn. All samples remain evidence; profiler
+observations do not establish the tail cause or waive the qualification.
+Further full-payload controls rejected folded-line reuse and literal regex
+disjunctions; composing the existing direct-loop and line-union interventions
+improved scanner wall time by only 3.6%. An independent fixed 32-pair A/A control
+per provider, with identical runtime bytes and the same complete CLI workload,
+still differed by -8.20 ms / -0.84% File p95 and -85.95 ms / -9.90% SQLite p95
+between checkout contexts. All 128 commands retained the expected selection and
+frontier. This identifies a comparison confound, not its cause or an optimizer
+qualification; the earlier failed candidate and all observations remain.
+A same-checkout cold/warm control then isolated runtime startup: all 32 cold
+samples changed the setup PID and were slower than their warm partner; warm
+samples retained substantial variability. This explains a startup contribution,
+not the historical A/A tail difference.
+
+The next intervention rejects unsupported regular filenames before repeated
+canonical resolution in both Git enumeration and directory traversal. Symlinks
+still resolve before suffix/local-name eligibility; tracked pruned-directory
+files, explicit file roots and fresh retargets retain their original behavior.
+On the unchanged package-root workload it removed 602 of 3,281 resolution calls
+with full payload parity; eight alternating scan pairs improved median wall
+time by 5.1%. Fixed 32-pair full quota CLI comparisons per provider used one
+physical checkout and verified warm setup PID reuse in every sample. File
+p50/p95 was 708.70/891.78 → 689.04/856.32 ms; SQLite was
+758.55/1036.27 → 769.41/1026.34 ms. Both pass the original additive 25 ms and
+5% tail budgets, while SQLite's slightly higher median limits the improvement
+claim. This qualifies this enumeration intervention, not the withdrawn filter,
+the historical frontier/direct-loop holds or a frozen multi-command deadline.
+Preserve those separately from new-Goal defaults, recoverable imports, the
+developer trial and last-caller retirement.
 
 2026-09-24: [Typed complete-source assembly and remaining delivery packages](ledger/shared-goal-authority-state-provider-v0/2026-09-24-source-capture.md) unify source construction, identity rejection and current-graph membership; L7/D2/D3 and provider defaults remain open.
 

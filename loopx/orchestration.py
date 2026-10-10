@@ -85,11 +85,14 @@ def _int_number(value: Any, *, default: int = 0) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return default
     if isinstance(value, str):
         try:
             return int(value.strip())
-        except ValueError:
+        except (ValueError, OverflowError):
             return default
     return default
 

@@ -233,11 +233,12 @@ the interval. The local CLI remains a same-UID trust boundary.
 A managed start is two-phase in the same store: admission reserves the interval
 slot, and the Turn executor confirms that reservation only after the host
 attempt is durable in its journal. A crash between the two leaves the
-reservation resumable by the same Turn identity once the floor is reached, so a
-reserved-but-unstarted start never strands a Turn; a confirmed start stays
-fail-closed for the same identity, and an explicit manual reason cannot bypass
-that. A store record written without the phase field is read as an attempted
-start, so an older or hand-edited file fails closed rather than resuming.
+reservation immediately resumable by the same Turn identity without moving the
+original interval anchor, so a reserved-but-unstarted start never strands a
+Turn. A confirmed start stays fail-closed for the same identity, and an explicit
+manual reason cannot bypass that. A store record written without the phase field
+is read as an attempted start, so an older or hand-edited file fails closed
+rather than resuming.
 
 The M3 settings companion presents the quota-owned Goal/agent/automation policy
 through one explicit Save backed by revision-locked preview, apply and readback,

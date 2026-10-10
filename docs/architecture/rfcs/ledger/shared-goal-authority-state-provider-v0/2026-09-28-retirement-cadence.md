@@ -216,6 +216,47 @@ soak evidence from #4224 by source and changed boundary before deciding which
 parts need rerunning; an unrelated commit does not erase elapsed time. The
 current public record does not establish a completed applicable soak result.
 
+The non-model Host checkpoint at `c2b17b3e1` qualifies a narrower entry boundary:
+an independently installed wheel and rebuilt packaged App on macOS arm64,
+CPython 3.12.15, Node 24.21.0 / embedded SQLite 3.53.4, and Codex CLI
+0.162.0-alpha.2. Initial and repeated wheel builds contain the same 1,561
+product Python/TypeScript files as source; no retired source file survives.
+Installed CLI creation selects SQLite/`hard_lease`. Native `turn plan` retains
+the exact selected Todo and canonical revision across Effect-process reopen,
+without Host invocation, writes, scheduler ACK or quota spending. The packaged
+App exposes the available Codex endpoint and unavailable alternative endpoints;
+the actual Codex adapter initializes and reads the existing login without a
+model Turn. These facts qualify inspection/startup, not successful model work.
+
+Original empty-session resume is **not qualified**: installed-adapter attempts
+include both success and `no rollout found` refusal after process exit. A
+separate native probe also rejects full Turn-list reading as unsupported in this
+Host version. Keep these observations distinct from SQLite recovery and from
+the earlier packaged App current-write-preserving exit. The next qualification
+step must establish the original LoopX Session/operation's behavior across this
+pre-first-Turn interruption before claiming its recovery. Do not repair the
+evidence by copying history, changing credentials or silently replacing the
+Session. Real model completion, natural cohort operation, other runtime profiles,
+Lark and frozen D2 failures/missing axes remain separate. Reuse the
+[trial operation sheet](../../../../reference/sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用)
+and the existing R5/T4 task; startup alone does not enroll participants or approve
+a release default.
+
+`c2b17b3e1` 的非模型 Host checkpoint 仅验收更窄的入口：独立安装包与重建 App，
+macOS arm64、CPython 3.12.15、Node 24.21.0 / SQLite 3.53.4、Codex CLI
+0.162.0-alpha.2。初次及重复构建的 1,561 个产品 Python/TypeScript 文件与源码
+相符，无已退役源码残留。安装 CLI 新建选 SQLite/`hard_lease`；原生只读
+`turn plan` 在 Effect 进程重开后保留选定 Todo 与 canonical revision，不启动
+Host、写状态、ACK 或扣额度。打包 App 显示可用 Codex 与不可用其他 endpoint；
+真实 Codex adapter 可初始化并读已有登录，未执行模型 Turn。
+
+空 Session 的原身份恢复尚未合格：安装 adapter 在进程退出后的尝试既有成功，
+也有 `no rollout found` 拒绝；独立原生探针还读回该版本不支持完整 Turn 列表。
+这些结果不能混作 SQLite 恢复失败，也不能由此前 App 保留新写入的退出覆盖。
+下一步须证明首轮前中断时原 LoopX Session/操作的恢复行为；不复制历史、改凭据
+或悄悄另建 Session 来通过。真实模型完成、自然试用、其他 runtime、Lark 与冻结
+D2 的失败/未测继续分开，复用既有 R5/T4 Todo；启动成功不代表入组或发布默认。
+
 ### One reusable validation matrix
 
 Record candidate and independent control revisions, actual runtime, complete
@@ -229,7 +270,7 @@ Effect processes. Do not truncate metadata, history or decision inputs to win.
 | Backup and complete data | Verify online SQLite snapshot and logical archive restore. Compare full Todo JSON, absent/null/false, unknown metadata, role/task class, archived dependencies, validation contracts/revisions, claims/lease generations, original events/receipts/cursors and the supported Goal/source state. Enumerate every stored family; counts or a final-head hash alone are insufficient. | `test_authority_archive.py`, `authority_archive_audit.test.ts`, archive crash/restore and migration suites |
 | Forward and reverse migration | File→SQLite; add/update/complete and replay a real new operation; restart; export to File; assert all old facts **and the new writes** survive. Lost responses and identical retries return original outcomes; a different intent with the same operation ID rejects. | `local_authority_migration.test.ts`, archive and reviewed-cutover CLI suites |
 | Mutation and ownership | Create/claim/update/complete/supersede/archive; quota selection→refresh→spend; same-Todo contention, stale revision/epoch, lease renew/release and applicable policy migration. One commit/effect/settlement, no ownership invention. | Real File/SQLite command suites; `test_quota_authority_settlement_journey.py` joins legacy→hard migration, rejected unleased edit, leased write, returned settlement retry, migration replay after work and next-Turn admission with the Markdown source absent. #5413/#5436/#5466 cover adjacent migration/lifetime boundaries; shared changes also use isolated real PostgreSQL. |
-| Interruption and recovery | Process death before/after durable commit and selector publication; provider unavailable/busy, disk-full injection, stalled projection and lagged consumer. Reopen/retry settles once and permits legitimate subsequent work. A still-running child cannot be called stopped/settled. | Existing crash/migration/process suites; #5308's affected Host lane |
+| Interruption and recovery | Process death before/after durable commit and selector publication; provider unavailable/busy, disk-full injection, stalled projection and lagged consumer. Reopen/retry settles once and permits legitimate subsequent work. A still-running child cannot be called stopped/settled. For pre-first Host loss, restore the same accepted queued request before adapter preparation; an unstarted terminal replay cannot certify first-Turn startup. | Existing crash/migration/process suites; #5308's affected Host lane; `test_original_creation_waits_for_its_host_before_first_turn` covers real File/SQLite stores, Session-readback/creation-retry interleaving, unavailable Host, foreign identity, terminal replay and one dispatch after protocol-fixture restoration. This non-model regression does not qualify actual upstream empty-thread recovery. |
 | Installed consumers | CLI `status`, quota, Todo list/detail; packaged App list/inspector and ordinary mutation; Lark when included. Counts, metadata, freshness, error/recovery feedback and original-route results agree with canonical facts. Test restart and old page resource loading. | Existing projection/consumer tasks and packaged frontend smokes; #5398 where affected |
 | Cost and endurance | Same data, history, durability and commands: cold full CLI versus warm store, p50/p95/p99/sample count, RSS, database/WAL and write growth, lock contention and consumer lag. Preserve failed formal macOS cold-CLI and missing axes; disclose absolute and relative current-release regressions. | #4224, SQLite comparison/rehearsal runner and existing performance-diagnosis capability |
 | Deletion proof | Remove/disable the candidate old path in a disposable checkout; run real entrypoints and historical recovery. Inspect imports, dynamic handlers, packaging and fixtures for the last caller. Unsupported old input requests migration, never a Markdown fallback. | Implementation PR's retirement inventory and independent semantics/negative tests |

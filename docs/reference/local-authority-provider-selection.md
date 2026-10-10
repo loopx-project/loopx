@@ -138,12 +138,32 @@ workspace, conflicting identity or unavailable authority still stops recovery.
 Target-only historical creation retains its adapter; it does not gain the
 canonical transaction's response-loss guarantee.
 
+If the Host dies after Session acceptance but before upstream startup, the local
+queued Turn is still the original request. Session restoration replays it through
+the same Turn acceptance owner before preparing the adapter. A refused upstream
+resume retains that queued request and reports `resume_failed`; it must not turn
+it into a `server_restarted` outcome. A previously ended Turn without startup
+readback cannot qualify `first_turn_started` or a successful creation receipt.
+Keep the original operation and Session when the Host cannot restore its empty
+thread; do not fabricate a rollout, switch identity or repeat committed Todos.
+This affected Host profile remains unqualified for first-Turn recovery until its
+original resume works; CLI authority creation and unrelated profiles retain their
+own qualification boundaries.
+
 首 Host 启动失败或响应丢失时，App 保留原创建卡片，并分别展示已提交的 Goal、
 Agent 和首批任务。使用“重试原操作”在冻结的服务端工作区恢复，普通非 Git
 工作区同样适用。原生 File/SQLite 复用 Todo 操作身份与既有 Session/Turn
 接纳规则；已启动的 Turn 必须从原 Session 读回。创建步骤不代表模型运行或
 Goal 验收完成；原工作区、操作身份或 authority 不可用时仍须停止恢复。
 历史 target-only 创建保留其适配器，不获得原生事务的响应丢失恢复保证。
+
+Host 在 Session 接纳后、上游启动前退出时，本地排队 Turn 仍是原请求。
+Session 恢复须先通过既有 Turn 接纳 owner 重放该请求，再准备适配器。
+上游拒绝恢复时保留排队请求并报告 `resume_failed`，不能将其结算为
+`server_restarted`。已终止但没有启动读回的 Turn 不能生成
+`first_turn_started` 或成功创建回执。Host 无法恢复空会话时保留原操作与
+Session，不伪造 rollout、不换身份、不重建已提交的 Todo。该 Host 的首
+Turn 恢复支持仍待实测；CLI authority 创建与其他支持范围分别验收。
 
 <details>
 <summary>Settings and recovery views / 设置与恢复界面</summary>

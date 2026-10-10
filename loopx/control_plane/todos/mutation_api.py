@@ -35,6 +35,10 @@ from .update_intent import build_canonical_update_intent
 from .provider_create import create_canonical_todo_if_promoted
 from .provider_terminal_lifecycle import provider_first_terminal_lifecycle
 from ...paths import effective_runtime_root
+from ...status import MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
+
+
+ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = max(0, MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - 2)
 
 
 def add_goal_todo(
@@ -209,7 +213,7 @@ def add_goal_todo(
         raise ValueError("reviewed provider revision requires canonical authority")
     if operation_id is not None:
         raise ValueError("todo add --operation-id requires promoted canonical authority")
-    from ...todos import _add_goal_todo_legacy
+    from .legacy_mutation import _add_goal_todo_legacy
 
     return _add_goal_todo_legacy(**call, _prepared={
         "effective_agent_id": effective_agent_id,
@@ -487,7 +491,7 @@ def update_goal_todo(
         task_lease_idempotency_key is not None or task_lease_expected_version is not None
     ) and not (monitor_intent["observation"] is not None and status is None)):
         raise ValueError("update operation id and lease proof require a supported promoted update; no legacy write attempted")
-    from ...todos import _update_goal_todo_legacy
+    from .legacy_mutation import _update_goal_todo_legacy
 
     return _update_goal_todo_legacy(**call, _prepared={
         "monitor_intent": monitor_intent,
@@ -535,6 +539,58 @@ def complete_goal_todo(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     call = dict(locals())
-    from ...todos import _complete_goal_todo_legacy
+    from .legacy_mutation import _complete_goal_todo_legacy
 
     return _complete_goal_todo_legacy(**call)
+
+
+@provider_first_terminal_lifecycle("supersede")
+def supersede_goal_todo(
+    *,
+    registry_path: Path,
+    goal_id: str,
+    runtime_root_arg: str | None = None,
+    todo_id: str,
+    role: str | None = None,
+    reason: str | None = None,
+    successor_todo_ids: list[str] | None = None,
+    next_agent_todo: str | None = None,
+    next_user_todo: str | None = None,
+    next_user_task_class: str | None = None,
+    next_claimed_by: str | None = None,
+    next_task_class: str | None = None,
+    next_action_kind: str | None = None,
+    next_task_repository: str | None = None,
+    next_required_capabilities: list[str] | None = None,
+    next_continuation_policy: str | None = None,
+    next_excluded_agents: list[str] | None = None,
+    agent_id: str | None = None,
+    authority_reason: str | None = None,
+    task_lease_idempotency_key: str | None = None,
+    task_lease_expected_version: int | None = None,
+    project: Path | None = None,
+    state_file: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    call = dict(locals())
+    from .legacy_mutation import _supersede_goal_todo_legacy
+
+    return _supersede_goal_todo_legacy(**call)
+
+
+@provider_first_terminal_lifecycle("archive")
+def archive_completed_todos(
+    *,
+    registry_path: Path,
+    goal_id: str,
+    runtime_root_arg: str | None = None,
+    role: str = "agent",
+    max_active_done: int = ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+    project: Path | None = None,
+    state_file: Path | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    call = dict(locals())
+    from .legacy_mutation import _archive_completed_todos_legacy
+
+    return _archive_completed_todos_legacy(**call)

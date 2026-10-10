@@ -507,6 +507,43 @@ Markdown 投影、备份读取及活跃 Host IO 保留。真实 File/SQLite CLI 
 wheel 路径验证完成与结算恢复；本批不删除 Markdown writer/shadow，也不改变默认
 provider。代码回滚不需要转换数据或重写回执。
 
+## Canonical mutation entrypoint isolation
+
+Create, update, complete, supersede and archive share
+`control_plane/todos/mutation_api.py` and the existing TypeScript transaction
+owners. The historic `loopx.todos` imports remain available lazily. The
+unpromoted writer bodies live in `control_plane/todos/legacy_mutation.py`;
+canonical CLI registration and provider operations do not import that module.
+This is a mechanical separation, with no Python deletion payoff or new decision
+owner. Shared validation, successor intent and receipt adapters remain live.
+
+| Caller family | Current boundary and retained duty |
+| --- | --- |
+| CLI and App canonical Todo mutations | Existing provider-first create/update/terminal owners; missing selected authority fails without starting a Markdown writer. |
+| Unpromoted create/update/complete/supersede/archive | Load the isolated writer only after the existing provider owner declines an unpromoted request; preserve writer fence, capture preparation, original receipts and projection. |
+| Bootstrap, handoff, team-plan and Monitor source capture | Still have supported unpromoted callers; retain producers and outbox reconciliation until each caller exits. |
+| Markdown projection, source import and backup recovery | Retain qualified readers, historical bytes and Host IO; moving writer code does not grant deletion of these paths. |
+
+The File/SQLite lifecycle and settlement oracle removes the **whole isolated
+writer module**, line editor and four capture producers from a copy of the
+installed package. It covers original creation replay, update, completion,
+supersede/archive, leased settlement, restart recovery and provider loss.
+Retained Markdown interruption/capture tests guard the compatibility arm.
+Reverting the code move requires no data conversion or receipt rewriting.
+Whole-writer retirement still needs the declared support cutoff, last callers
+and pending outbox disposition; this separation does not force an upgrade or
+change a provider default.
+
+创建、更新、完成、替代和归档统一进入既有 `mutation_api.py` 与 TS 事务 owner，
+`loopx.todos` 保留惰性历史导入。未迁移 writer 已隔离到 `legacy_mutation.py`，
+canonical CLI 注册及 provider 操作不加载它；这只是机械隔离，不计作 Python
+删除收益，也不新增决策源。共享验证、successor intent 与原回执适配器仍有用途。
+安装包副本物理移除整个 writer、行编辑器及四个 capture producer 后，真实
+File/SQLite CLI 验证生命周期、租约结算、重启与 provider 失效恢复。未迁移
+Markdown 的中断／capture 反例继续保留，代码回滚不转换数据或重写回执。
+bootstrap、handoff、team-plan 和 Monitor 的旧源调用尚须分别退役，最终删除仍须
+支持截止及 outbox 处置；本批不强制升级或更改 provider 默认值。
+
 ## Monitor source-writer isolation
 
 Canonical Monitor polling also loads no Markdown line writer or source Todo

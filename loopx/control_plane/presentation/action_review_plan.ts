@@ -520,6 +520,14 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   // retain a historical gate; their existing status-based retry path is preserved.
   if ((lifecycle && proposal.gate != null) || proposal.status === "gated") return held("gated", "authority_gate");
   if ((lifecycle && proposal.stale != null) || proposal.status === "stale") return held("refresh", "stale_proposal");
+  // Host readback may return an immutable terminal replay which never started.
+  // Its acceptance id is still original, but cannot certify first-Turn startup.
+  const firstTurnReadback = objectValue(proposal.first_turn_readback);
+  if (proposal.action_kind === "goal.create" && firstTurnReadback
+      && (textValue(firstTurnReadback.completed_at) !== null || textValue(firstTurnReadback.error_code) !== null)
+      && textValue(firstTurnReadback.started_at) === null && textValue(firstTurnReadback.upstream_turn_id) === null) {
+    return held("repair", "readback_unverified");
+  }
   if (proposal.status === "applied") {
     if (operationFrame?.kind === "result" && operationFrame.resultKind === "unknown") {
       return held("repair", "readback_unverified");

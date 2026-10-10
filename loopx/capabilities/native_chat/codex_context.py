@@ -87,16 +87,20 @@ def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapp
 
 
 def disable_mcp_servers(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Disable effective native MCP servers, including project/managed layers.
+    """Disable private native tool sources, including project/managed layers.
 
     An empty map does not erase lower-layer entries. Only names are forwarded;
     commands, environment and credentials remain with the native config owner.
+    Apps connectors are a separate native source, so disable them explicitly.
     """
     effective = config.get("mcp_servers", {})
     requested = host_config.get("mcp_servers", {})
     if not isinstance(effective, dict) or not isinstance(requested, dict):
         raise ValueError("invalid native MCP server configuration")
-    return {**host_config, "mcp_servers": {
+    features = host_config.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError("invalid native feature configuration")
+    return {**host_config, "features": {**features, "apps": False}, "mcp_servers": {
         name: {"enabled": False} for name in effective.keys() | requested.keys()
     }}
 
@@ -126,4 +130,9 @@ def public_source_reader(config: Mapping[str, Any], host_config: Mapping[str, An
         "args": ["-I", str(Path(reader.__file__).resolve())],
         "env": {"PATH": os.defpath}, "env_vars": [],
         "startup_timeout_sec": 30, "tool_timeout_sec": 40,
+        # Workspace-only turns cannot ask for tool approval. Admit only these
+        # anonymous read operations, not the server's future tool inventory.
+        "enabled_tools": ["read_public_url", "read_public_image"],
+        "tools": {"read_public_url": {"approval_mode": "approve"},
+                  "read_public_image": {"approval_mode": "approve"}},
     }}}
