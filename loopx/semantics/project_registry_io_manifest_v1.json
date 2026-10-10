@@ -527,7 +527,7 @@
     },
     {
       "site": "loopx/chat_status_api.py::<module>.ChatStatusRequestMixin._status::codec_read:load_registry#1",
-      "line": 152,
+      "line": 158,
       "column": 28,
       "kind": "codec_read",
       "api": "load_registry",
@@ -535,7 +535,7 @@
     },
     {
       "site": "loopx/chat_status_api.py::<module>.ChatStatusRequestMixin._status::codec_read:load_registry#2",
-      "line": 179,
+      "line": 185,
       "column": 21,
       "kind": "codec_read",
       "api": "load_registry",
