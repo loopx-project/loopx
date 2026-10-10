@@ -319,6 +319,7 @@ export function createEffectRuntimeHandlers(
     ["todo.next_action.binding", lazyHandler(() => import("./todos/next_action.ts"), ({projectNextActionBinding}) => projectNextActionBinding)],
     ["todo.resume_condition.normalize", lazyHandler(() => import("./todos/resume_condition.ts"), ({normalizeTodoResumeWhen}) => normalizeTodoResumeWhen)],
     ["todo.resume_condition.evaluate", lazyHandler(() => import("./todos/resume_condition.ts"), ({evaluateTodoResumeConditions}) => evaluateTodoResumeConditions)],
+    ["goal.fallback_disposition.project", lazyHandler(() => import("./goals/goal_frontier/fallback_disposition.ts"), ({projectFallbackDisposition}) => projectFallbackDisposition)],
     ["todo.resume_planning.project", lazyHandler(() => import("./todos/resume_planning.ts"), ({projectTodoResumePlanning}) => projectTodoResumePlanning)],
     ["todo.quota_planning.project", lazyHandler(() => import("./todos/quota_selection.ts"), ({projectTodoQuotaPlanning}) => projectTodoQuotaPlanning)],
     ["todo.frontier_revision.project", lazyHandler(() => import("./todos/frontier_revision.ts"), ({projectAdvancementFrontier}) => projectAdvancementFrontier)],

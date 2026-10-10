@@ -1235,6 +1235,17 @@ Unidentifiable referenced history still needs explicit repair, not a post-promot
 Markdown fallback. This closes the demonstrated dependency omission, not all history
 import, provider qualification, soak, or D3 cutover requirements.
 
+Optional Vision fallback advice now composes resume evaluation and positive
+pending-target proof in `goal_frontier/fallback_disposition.ts`. Python retains
+persisted-input codecs, source I/O and presentation, not a second Monitor-wait or
+declaration aggregation rule. Live quota reads one complete canonical/legacy
+snapshot and selects at most 16 target/direct-dependency records, including
+archive; it no longer performs repeated per-Todo queries. Intentional corrections:
+alternatives resolve their own declaration symmetrically, uncertainty is scoped
+to unresolved declarations, and invalid/ambiguous wait evidence cannot suppress
+advice. This closes one T3 consumer, not all quota snapshot consistency or T1/T2;
+fallback declarations remain optional advisory input, never execution authority.
+
 - Audit Turn/quota, Dashboard, standing decisions, shared-goal alignment and
   amendment revision inputs. Reuse #4117's canonical source adapter and pass
   one snapshot through a decision; do not build another Todo inventory.

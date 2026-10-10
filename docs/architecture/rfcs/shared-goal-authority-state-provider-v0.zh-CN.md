@@ -2424,6 +2424,12 @@ Scoped fallback 的选择与门禁关系也已复用同一 TS decision owner，�
 不是新 provider，也不代表 D1–D3 已资格化。来源适配、永久投影和 promotion hold
 不变；具体规则见 TS 执行卡及 decision-scope 协议。
 
+可选 fallback 提示改为消费一次来源快照（含直接归档依赖），由 TS 复用既有 resume
+语义判断去向，退役逐 Todo 来源读取与 Python 等待／聚合规则。没有新增 provider、
+放宽 fence 或完成持久化资格化；promotion 后 Markdown 不恢复 authority。读取失败
+仍为 uncertainty，不能回退陈旧展示。候选去向的有意修正见 TS RFC 的 T3 说明；
+D1–D3 与永久投影规划不变。
+
 **D1 — 资格化永久投影交付，可与 T1/T2 重叠推进。**
 
 Todo 摘要现由一个 TS 批次决定范围、lanes、计数、claim 展示分配和收尾证明，删除

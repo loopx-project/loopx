@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..goals.goal_frontier.fallback_disposition import FallbackTodoSource
 
 from ...materials import goal_state_path
 
@@ -518,6 +521,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
     receipt_bound_replan_guard_scoped: bool = False,
+    authoritative_fallback_todo_items: FallbackTodoSource = None,
 ) -> _QuotaDecisionPreparation:
     quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
@@ -830,6 +834,8 @@ def _prepare_quota_should_run_item(
             project_asset.get("agent_todos") if project_asset else None,
             include_terminal=True,
         ),
+        fallback_todo_source_items=authoritative_fallback_todo_items,
+        available_capabilities=effective_available_capabilities,
         work_lane_contract=work_lane_contract,
         neutral_replan_ack_classifications=AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
         registered_agent_ids=registered_agent_ids,

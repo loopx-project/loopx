@@ -868,6 +868,14 @@ user role。历史节点不会进入活动工作或 lease lane。无法识别的
 不得恢复 promotion 后的 Markdown fallback。本批闭合已复现的依赖遗漏，不代表所有
 历史导入、provider 资格化、soak 或 D3 cutover 条件均完成。
 
+可选 Vision fallback 提示在 `goal_frontier/fallback_disposition.ts` 内组合已有
+resume evaluator 与合法 pending target 正向证明。Python 仅保留持久输入 codec、
+来源 I/O 和展示，删除独立 Monitor 等待分支与声明聚合规则。Live quota 一次读取
+完整 canonical/legacy 快照，再选择最多 16 个目标／直接依赖记录（含归档），不再
+逐 Todo 重复查询。有意修正：候选对称地消除所属声明，uncertainty 仅属于尚未解决
+的声明，非法／含混等待证据不能隐藏提示。这只闭合一个 T3 consumer，不代表整个
+quota 的快照一致性或 T1/T2 完成；声明仍是可选 advisory，不是执行 authority。
+
 - 分别审计 Turn/quota、Dashboard、standing decision、shared-goal alignment、
   amendment revision 输入。复用 #4117 canonical source adapter，一次决策传递一份
   snapshot，不新增 Todo inventory。

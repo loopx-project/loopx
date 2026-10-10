@@ -772,6 +772,37 @@ rule uses existing acceptance/lineage facts regardless of the optional advisory
 relationships, and it grants no additional authority. Ownership, exclusions,
 capabilities, user gates, and quota remain independent execution constraints.
 
+For optional fallback advice, live quota takes one complete Todo source snapshot:
+canonical provider records after promotion, otherwise one legacy source read.
+Only the declared targets/successors and one layer of direct resume dependencies
+are transported to the typed projection (at most 16 records, including archived
+prerequisites). Deeper chains do not expand the selection or add reads. No
+declarations means no additional source read. This does not promise an atomic
+snapshot across the entire quota/status packet.
+Existing typed resume, ownership, and lifecycle rules decide availability.
+An unavailable, ambiguous, or malformed source read produces
+`vision_fallback_lookup_uncertain`; compact display evidence cannot override a
+failed authority read. Only absence from a complete source proves not-found.
+Pending `todo_done:<continuous_monitor>` keeps an unresolved fallback; a valid
+`monitor_changed` generation condition may establish a wait. `fallback_gaps`
+remains advisory and adds no replan obligation.
+
+Disposition is per declaration, not per candidate: a runnable, validly waiting,
+or bounded create/reopen alternative resolves its own declaration regardless of
+the other candidate's order, absence or uncertainty. It cannot clear a different
+declaration. Unavailable source/provider evidence stays uncertain; it is not proof of a
+valid wait. Waiting uses the shared positive target/generation/repository proof;
+an unbound PR reference, archived fallback itself, or contradictory done flag
+cannot suppress the advisory. Archived completed prerequisites remain valid
+evidence. No fallback declaration is required to discover canonical work, and
+none grants execution, user-decision or settlement authority.
+
+可选 fallback 提示从一次完整来源快照读取，最多输送 16 个直接相关记录，保留归档
+依赖；无声明不额外读取。按整条声明判断：一个可执行或有合法等待证据的候选即可
+消除该声明的提示，但不能替其他声明清账。候选顺序、另一个候选缺失或不确定不再
+误伤有效去向。等待复用 TS 的目标、generation 和仓库绑定正向证明；这仍是 advisory，
+不要求 Agent 为发现 canonical 工作额外维护声明，也不授予执行、审批或结算权限。
+
 等待资格现在逐项检查已有 acceptance 的 Todo 关联，并在展示裁剪前从完整来源计算。
 A 的等待不能遮住尚未落实的 B；有可执行工作则继续，相关工作都具有合法等待证据才暂缓。
 无需另外维护 fallback 声明；无关 Todo 的数量和顺序不应改变决策。

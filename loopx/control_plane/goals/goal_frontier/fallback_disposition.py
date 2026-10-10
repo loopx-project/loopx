@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from ...todos.contract import (
+    normalize_todo_claimed_by,
+    normalize_todo_excluded_agents,
     normalize_todo_id,
+    normalize_todo_resume_when,
+    normalize_todo_status,
 )
-from ...todos.resume_planning import project_todo_resume_planning
+from ...effect_runtime import effect_runtime_result
+from ...todos.resume_planning import build_todo_resume_planning_request
 from ...todos.todo_semantics import (
     agent_scoped_selectable_advancement_todo_ids,
+    todo_item_has_removed_continuation_policy,
+    todo_item_task_class,
+)
+from ...todos.resume_condition import (
+    build_todo_resume_evaluation_request,
+    normalize_todo_generation,
 )
 from ..goal_vision_read_model import (
     VISION_FRONTIER_TODO_DELTA_ACTIONS as VISION_FRONTIER_TODO_DELTA_ACTIONS,
@@ -21,21 +33,33 @@ from ..goal_vision_state import goal_vision_state_is_closed
 # fallback disposition on their own; activate/resume/retain entries only link
 # the vision to existing Todos and still need a selectable frontier match.
 VISION_TODO_DELTA_SUCCESSOR_ACTIONS = frozenset({"create", "reopen"})
-VISION_TODO_DELTA_LINKAGE_ACTIONS = frozenset(
-    VISION_FRONTIER_TODO_DELTA_ACTIONS - VISION_TODO_DELTA_SUCCESSOR_ACTIONS
-)
 VISION_FALLBACK_DECLARATION_ENTRY_LIMIT = 4
-VISION_FALLBACK_DECLARATION_FIELDS = ("target_todo_id", "successor_todo_id")
 VISION_FALLBACK_GAP_TRIGGER = "vision_fallback_unresolved"
 VISION_FALLBACK_GAP_REASON_CODE = "declared_fallback_without_runnable_or_terminal"
+VISION_FALLBACK_LOOKUP_UNCERTAIN_TRIGGER = "vision_fallback_lookup_uncertain"
+VISION_FALLBACK_LOOKUP_UNCERTAIN_REASON_CODE = (
+    "declared_fallback_authoritative_lookup_unavailable"
+)
 VISION_FALLBACK_TERMINAL_PATH_OUTCOME = "stop"
-VISION_FALLBACK_RUNNABLE_ITEM_LIMIT = 3
 VISION_FALLBACK_RECOMMENDED_ACTION = (
     "resolve the declared fallback direction: link or retain a runnable "
     "successor Todo referencing it, declare a bounded create/reopen "
     "successor, or record an explicit terminal no-follow-up disposition; "
     "do not invent a user gate"
 )
+VISION_FALLBACK_LOOKUP_UNCERTAIN_ACTION = (
+    "retry the fallback disposition from the complete canonical Todo source; "
+    "do not infer absence from a bounded presentation lane or invent a user gate"
+)
+
+
+class FallbackTodoReadState(Enum):
+    UNAVAILABLE = "unavailable"
+
+
+# None is an omitted source from a legacy caller; UNAVAILABLE is a failed
+# authority read, which compact display evidence must not override.
+FallbackTodoSource = list[dict[str, Any]] | FallbackTodoReadState | None
 
 
 @dataclass(frozen=True)
@@ -53,14 +77,13 @@ class FallbackDeclaration:
             for todo_id in (
                 self.target_todo_id,
                 self.successor_todo_id,
-                self.declaration_id,
             )
             if todo_id
         }
 
     @property
     def unresolved_todo_id(self) -> str:
-        return self.target_todo_id or self.declaration_id
+        return self.target_todo_id or self.successor_todo_id or self.declaration_id
 
 
 def _compact_text(value: Any, *, limit: int) -> str:
@@ -112,60 +135,31 @@ def parse_fallback_declarations(
     return declarations
 
 
-def _blocked_successor_todo_ids(
-    agent_todo_summary: dict[str, Any] | None,
-    *,
-    agent_id: str | None,
-) -> set[str]:
-    """Ids the blocked-successor wait state itself is waiting on."""
-
-    if not isinstance(agent_todo_summary, dict):
-        return set()
-    return {
-        todo_id
-        for todo_id in (
-            normalize_todo_id(item.get("todo_id"))
-            for item in project_todo_resume_planning(
-                agent_todo_summary,
-                agent_id=agent_id,
-            )["blocked_successor_items"]
-            if isinstance(item, dict)
-        )
-        if todo_id
-    }
-
-
-def _blocked_primary_waiting(
-    agent_todo_summary: dict[str, Any] | None,
-    *,
-    agent_id: str | None,
-) -> bool:
-    """Reuse the blocked-successor wait scope as the primary-blocked signal."""
-
-    if not isinstance(agent_todo_summary, dict):
-        return False
-    blocker_items = agent_todo_summary.get("current_agent_blocker_items")
-    if isinstance(blocker_items, list) and blocker_items:
-        return True
-    return bool(
-        project_todo_resume_planning(
-            agent_todo_summary,
-            agent_id=agent_id,
-        )["blocked_successor_items"]
-    )
-
-
-def _vision_has_terminal_disposition(agent_vision: dict[str, Any]) -> bool:
-    """Terminal evidence: closed-family state or path_delta.outcome=stop."""
-
-    if goal_vision_state_is_closed(agent_vision.get("state")):
-        return True
-    path_delta = agent_vision.get("path_delta")
-    path_delta = path_delta if isinstance(path_delta, dict) else {}
-    return (
-        str(path_delta.get("outcome") or "").strip().lower()
-        == VISION_FALLBACK_TERMINAL_PATH_OUTCOME
-    )
+def select_fallback_source_items(
+    source: list[dict[str, Any]], requested: set[str],
+) -> FallbackTodoSource:
+    """Bound transport for every caller, including already-loaded writeback sources."""
+    if not isinstance(source, list) or any(not isinstance(item, dict) for item in source):
+        return FallbackTodoReadState.UNAVAILABLE
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    for item in source:
+        todo_id = normalize_todo_id(item.get("todo_id"))
+        if todo_id:
+            by_id.setdefault(todo_id, []).append(item)
+    selected = set(requested)
+    for todo_id in requested:
+        for item in by_id.get(todo_id, []):
+            resume = normalize_todo_resume_when(item.get("resume_when"))
+            kind, _, target = (resume or "").partition(":")
+            if kind in {"todo_done", "monitor_changed"}:
+                dependency = normalize_todo_id(target)
+                if dependency:
+                    selected.add(dependency)
+    # Four declarations name at most eight alternatives and eight direct
+    # dependencies. Do not follow dependency chains or re-read another revision.
+    if any(len(by_id.get(todo_id, [])) > 1 for todo_id in selected):
+        return FallbackTodoReadState.UNAVAILABLE
+    return [by_id[todo_id][0] for todo_id in sorted(selected) if todo_id in by_id]
 
 
 def declared_fallback_gap_from_agent_vision(
@@ -173,96 +167,90 @@ def declared_fallback_gap_from_agent_vision(
     *,
     agent_todo_summary: dict[str, Any] | None,
     agent_id: str | None,
+    agent_todo_source_items: FallbackTodoSource = None,
+    rollout_events: list[dict[str, Any]] | None = None,
+    available_capabilities: Any = None,
 ) -> dict[str, Any] | None:
-    """Project one advisory gap for an unresolved declared fallback.
-
-    A fallback direction is declared structurally via the agent vision's
-    typed ``fallback_declarations`` contract, which the TS-owned Vision
-    prepare validates and persists. Prose mentions never declare a
-    fallback, and generic ``todo_delta`` actions are not fallback
-    declarations on their own.
-
-    The declared direction is resolved when one of:
-    1. A linked Todo sits on the authoritative agent-scoped selectable
-       advancement frontier (peer-claimed primary-path Todos do not);
-    2. A bounded successor Todo is created or reopened specifically for
-       this fallback direction; or
-    3. The vision records an explicit terminal disposition (closed-family state
-       or path_delta.outcome=stop).
-
-    When the primary path is blocked and none of the resolutions holds, the
-    declared fallback would otherwise disappear silently behind the
-    blocked-successor wait state, which clears the ordinary acceptance gaps.
-    This advisory gap stays in the independent ``fallback_gaps`` projection
-    field and never enters the acceptance-gap replan stream.
-    """
-
-    if not isinstance(agent_vision, dict):
-        return None
-    if _vision_has_terminal_disposition(agent_vision):
-        return None
-    if not _blocked_primary_waiting(
-        agent_todo_summary,
-        agent_id=agent_id,
-    ):
-        return None
-
+    """Encode persisted facts; TypeScript owns the advisory disposition."""
     declarations = parse_fallback_declarations(agent_vision)
     if not declarations:
         return None
-
-    selectable_ids = agent_scoped_selectable_advancement_todo_ids(
-        agent_todo_summary,
-        agent_id=agent_id,
+    assert isinstance(agent_vision, dict)
+    summary = agent_todo_summary if isinstance(agent_todo_summary, dict) else {}
+    source = agent_todo_source_items
+    if isinstance(source, list):
+        source = select_fallback_source_items(source, {
+            todo_id for entry in declarations for todo_id in entry.candidate_todo_ids
+        })
+    items = [
+        {
+            **item,
+            "todo_id": normalize_todo_id(item.get("todo_id")),
+            "status": normalize_todo_status(item.get("status")) or "open",
+            "task_class": todo_item_task_class(item),
+            "claimed_by": normalize_todo_claimed_by(item.get("claimed_by")),
+            "excluded_agents": normalize_todo_excluded_agents(item.get("excluded_agents")),
+            "done": item.get("done") is True,
+            "removed_continuation": todo_item_has_removed_continuation_policy(item),
+            "resume_when": normalize_todo_resume_when(item.get("resume_when")),
+            "resume_monitor_generation": normalize_todo_generation(item.get("resume_monitor_generation")),
+        }
+        for item in source if isinstance(item, dict) and normalize_todo_id(item.get("todo_id"))
+    ] if isinstance(source, list) else []
+    resume_request = build_todo_resume_evaluation_request(
+        items, source_items=items, rollout_events=rollout_events,
+        available_capabilities=available_capabilities,
     )
-    waiting_todo_ids = _blocked_successor_todo_ids(
-        agent_todo_summary,
-        agent_id=agent_id,
-    )
-    todo_delta = parse_vision_todo_delta_entries(agent_vision.get("todo_delta"))
-    created_or_reopened_ids = {
-        todo_id
-        for action, todo_id in todo_delta
-        if action in VISION_TODO_DELTA_SUCCESSOR_ACTIONS
-    }
-
-    unresolved_ids: set[str] = set()
-    for declaration in declarations:
-        candidate_ids = declaration.candidate_todo_ids - waiting_todo_ids
-        if not candidate_ids:
-            continue
-        # Disposition 1: Runnable on authoritative selectable advancement frontier
-        if candidate_ids & selectable_ids:
-            continue
-        # Disposition 2: Bounded successor created/reopened specifically for this fallback
-        if candidate_ids & created_or_reopened_ids:
-            continue
-        if (
-            declaration.successor_todo_id
-            and declaration.successor_todo_id in created_or_reopened_ids
-        ):
-            continue
-
-        unresolved_id = declaration.unresolved_todo_id
-        if unresolved_id not in waiting_todo_ids:
-            unresolved_ids.add(unresolved_id)
-
-    if not unresolved_ids:
-        return None
-
-    gap: dict[str, Any] = {
-        "kind": VISION_FALLBACK_GAP_TRIGGER,
-        "source": "latest_agent_vision",
-        "agent_id": agent_vision.get("agent_id"),
-        "state": agent_vision.get("state"),
-        "reason_code": VISION_FALLBACK_GAP_REASON_CODE,
-        "recommended_action": VISION_FALLBACK_RECOMMENDED_ACTION,
-    }
-    unresolved_todo_ids = [todo_id for todo_id in sorted(unresolved_ids) if todo_id][
-        :VISION_FALLBACK_RUNNABLE_ITEM_LIMIT
+    # Reuse the resume codec's bounded evidence, never send arbitrary Todo prose
+    # or raw rollout events into this read-only projection.
+    facts = [
+        {**row, **{key: item[key] for key in
+                   ("excluded_agents", "done", "removed_continuation")}}
+        for row, item in zip(resume_request["source_items"], items, strict=True)
     ]
-    if unresolved_todo_ids:
-        gap["unresolved_todo_ids"] = unresolved_todo_ids
+    path = agent_vision.get("path_delta")
+    path = path if isinstance(path, dict) else {}
+    result = effect_runtime_result("goal.fallback_disposition.project", {
+        "schema_version": "goal_fallback_disposition_request_v0",
+        "terminal": goal_vision_state_is_closed(agent_vision.get("state"))
+        or str(path.get("outcome") or "").strip().lower() == VISION_FALLBACK_TERMINAL_PATH_OUTCOME,
+        "agent_id": normalize_todo_claimed_by(agent_id),
+        "blocker_present": bool(summary.get("current_agent_blocker_items")),
+        "resume_planning": build_todo_resume_planning_request(summary, agent_id=agent_id),
+        "source_state": "complete" if isinstance(source, list) else
+            "unavailable" if source is FallbackTodoReadState.UNAVAILABLE else "omitted",
+        "items": facts,
+        "resume_evaluation": {
+            key: value for key, value in resume_request.items()
+            if key not in {"items", "source_items"}
+        },
+        "legacy_selectable_ids": sorted(agent_scoped_selectable_advancement_todo_ids(
+            summary, agent_id=agent_id,
+        )) if source is None else [],
+        "declarations": [
+            {"candidate_ids": sorted(entry.candidate_todo_ids),
+             "unresolved_id": entry.unresolved_todo_id}
+            for entry in declarations
+        ],
+        "created_or_reopened_ids": sorted({
+            todo_id for action, todo_id in parse_vision_todo_delta_entries(agent_vision.get("todo_delta"))
+            if action in VISION_TODO_DELTA_SUCCESSOR_ACTIONS
+        }),
+    })
+    if not isinstance(result, dict) or result.get("schema_version") != "goal_fallback_disposition_v0":
+        raise RuntimeError("TypeScript fallback disposition shape mismatch")
+    if result["kind"] == "resolved":
+        return None
+    uncertain = result["kind"] == VISION_FALLBACK_LOOKUP_UNCERTAIN_TRIGGER
+    gap = {
+        "kind": result["kind"], "source": "latest_agent_vision",
+        "agent_id": agent_vision.get("agent_id"), "state": agent_vision.get("state"),
+        "reason_code": VISION_FALLBACK_LOOKUP_UNCERTAIN_REASON_CODE if uncertain else VISION_FALLBACK_GAP_REASON_CODE,
+        "recommended_action": VISION_FALLBACK_LOOKUP_UNCERTAIN_ACTION if uncertain else VISION_FALLBACK_RECOMMENDED_ACTION,
+    }
+    for key in ("unresolved_todo_ids", "lookup_uncertain_todo_ids"):
+        if result[key]:
+            gap[key] = result[key]
     generated_at = _compact_text(agent_vision.get("generated_at"), limit=80)
     if generated_at:
         gap["generated_at"] = generated_at

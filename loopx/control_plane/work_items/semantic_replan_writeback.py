@@ -284,6 +284,7 @@ def qualify_replan_writeback(
         user_todo_summary=user_todos,
         agent_todo_summary=agent_todos,
         agent_todo_source_items=agent_todo_source_items,
+        fallback_todo_source_items=agent_todo_source_items,
         work_lane_contract=build_work_lane_context_contract(
             {"progress_scope": "primary_goal"},
             agent_todo_summary=agent_todos,

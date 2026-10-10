@@ -10,6 +10,7 @@ from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry
 from ..agent_context import project_agent_context, project_goal_agent_context
 from ..runtime.time import now_utc_iso
+from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
     dispatch_interaction_projection_hooks,
@@ -608,6 +609,13 @@ def build_live_quota_should_run_decision(
         agent_id=agent_id,
         observed_at=now_utc_iso(),
     )
+    authoritative_fallback_todo_items = live_fallback_authority_items(
+        decision_status_payload,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+    )
     payload = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
@@ -636,6 +644,7 @@ def build_live_quota_should_run_decision(
         runtime_root=runtime_root,
         workspace_path=workspace_path,
         goal_ref=goal_ref,
+        authoritative_fallback_todo_items=authoritative_fallback_todo_items,
     )
     _apply_retained_action_selection_reentry(
         payload,
