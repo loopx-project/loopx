@@ -778,6 +778,37 @@ def test_peer_update_rejects_another_results_read_and_consumption_receipts(scena
     consumed.write_bytes((folder / "conclusion.consumed.json").read_bytes())
     with pytest.raises(ValueError, match="receipt scope"):
         returns(root, "delivery", "builder")
+
+
+def test_a_failed_input_readiness_leaves_no_read_receipt(scenario, monkeypatch):
+    """A read that did not complete is not a delivered read.
+
+    #5511 reported that the Windows readiness crash left the request already
+    looking read in `reads/`. That ordering was real: 025be07e3 later committed
+    inbox reads after response validation instead of before it, and nothing has
+    held the new ordering since. A receipt is evidence of a completed read only,
+    so a raising readiness probe must leave `reads/` untouched and the next
+    completed read must record it.
+    """
+
+    from loopx.control_plane.collaboration import peers
+    from loopx.control_plane.collaboration.inbox import _root
+
+    root, registry, _, _, _, _, request_id = scenario
+    receipt = _root(root) / "reads" / f"{request_id}.json"
+
+    def _fail_readiness(*args, **kwargs):
+        raise AttributeError("module 'os' has no attribute 'O_NONBLOCK'")
+
+    monkeypatch.setattr(peers, "_input_readiness_for_goal", _fail_readiness)
+    with pytest.raises(AttributeError, match="O_NONBLOCK"):
+        peers.read_inbox(root, registry, "delivery", "builder")
+    assert not receipt.exists()
+
+    monkeypatch.undo()
+    assert peers.read_inbox(root, registry, "delivery", "builder")["items"]
+    assert receipt.is_file()
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 extended path regression")
 def test_peer_exchange_survives_long_private_store_paths(scenario):
     root, registry, brief, *_ = scenario

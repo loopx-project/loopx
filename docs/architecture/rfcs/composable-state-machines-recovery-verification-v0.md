@@ -310,7 +310,7 @@ The table tracks independent composition boundaries within M2/M3 and roadmap R2/
 | --- | --- | --- |
 | Unavailable declared ancestry prevents current use | `Delegations.read/start`, `delegation_results.py`, `delegation_result_use.ts` | `current_use` separates historical completion from present eligibility. New dispatch, adoption and settlement share ancestry checks; same-operation replay only reads back. Real File/SQLite three-level counterexamples and the packaged team reader cover withdrawal, cause/input references and restored readback. |
 | Independent check failure reaches an actionable original-task recovery journey | `executor._task_validation_stage`, `ValidatedTurnReceipt`, canonical `turn_loop_controller_contract_v0.json`, `turn_journal.ts` | Preserve qualified failure scope and repair/replan detail; complete bounded repair or verifier-only retry, current validation and original-effect settlement. Host assertions cannot become trusted validation. |
-| Optional semantic review explains its evidence and coverage | Existing progress-review receipt/loader and canonical Goal acceptance inspection | Bind a selected criterion and evidence coverage in shadow readback; show missing/stale basis and separate judgment dimensions. Model quality and intervention qualify separately. |
+| Shadow review explains criteria and coverage | progress-review receipt/context, `progress_review_evidence.ts`, canonical acceptance inspect | Select current canonical task criteria; exact GoalRef preserves instance identity, while changed tasks or recreated instances withdraw old judgments. Independent older cores retain only the legacy manual-study shape; canonical scope never downgrades. Show separate dimensions, declared-file net change, missing evidence and unreadable storage. Default off and existing assist trigger rules retain their semantics. |
 
 For the second outcome, `_task_validation_stage` already saves the independent
 result and blocks settlement. `ValidatedTurnReceipt` omits that validation's
@@ -349,6 +349,15 @@ further checks; an already running validator retains its configured timeout.
 This is not a 15-second HTTP deadline. Exhaustion is unavailable, never saved
 success. Coverage is explicit local delegation inputs, not undeclared memory or
 arbitrary reasoning; multiple sources are not an atomic snapshot.
+
+An optional `acceptance_scope` refers only to registry/runtime paths inside the
+selected workspace. Criteria come from the current owner; private commands and
+paths stay out of model questions. Hashes, versions and declared coverage are
+observations, not proof of model correctness, a durable business checkpoint or
+whole-task completion. Existing team evidence and capability settings carry App
+readback, and CLI/MCP share the owner; no Lark-specific protocol is introduced.
+Live correction, remote exactly-once, takeover, observer quality and intervention
+retain their existing RFC acceptance owners.
 
 ## 12. Open decisions
 

@@ -61,6 +61,19 @@ Frozen failures/missing evidence remain visible. T4 deletes proven redundant
 owners alongside implementation, without waiting for R6 or all Python to vanish.
 This replaces stale current-count estimates, not historical execution evidence.
 
+Public-scan privacy checkpoint: the retained Python filesystem/regex owner
+classifies canonical inputs before reader submission, independently of display
+paths. Overlapping roots cannot remove a private classification; reports use the
+widest requested root consistently. Narrow explicit files/directories retain
+private ancestry. Git-verified worktrees remain their own namespace beneath
+private parent directories, while a directory merely named `.git` grants no
+exception. Outside a worktree, explicit inputs beneath private state remain
+excluded. Tracked-file policy, fresh symlink resolution and existing error rules
+remain in this owner; no second control-plane decision source or new setting is
+introduced. This safety repair does not qualify scanner latency, SQLite release
+defaults or whole T4 retirement. CLI checks and quota preparation use the rule;
+App status continues to report repository scanning as deferred.
+
 ## Native authority qualification and prototype retirement (2026-09-26)
 
 The coverage-only Python coordination executor, head codec, File provider and

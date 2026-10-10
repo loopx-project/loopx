@@ -2,28 +2,28 @@
 .answer-report-shell { max-width: 920px; margin: 0 auto; }
 .answer-report-header { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 84px; border-bottom: 1px solid #e7e7e7; }
 .answer-report-header > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
-.answer-report-brand { font-size: 17px; font-weight: 700; letter-spacing: -.04em; }
-.answer-report-context { color: #777; font-size: 13px; overflow-wrap: anywhere; }
-.answer-report-header button, .answer-report-heading button { min-height: 44px; border: 1px solid #d7d7d7; border-radius: 8px; background: #fff; color: #171717; padding: 8px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+.answer-report-brand { font-size: var(--text-heading); line-height: var(--leading-heading); font-weight: 600; letter-spacing: -.04em; }
+.answer-report-context { color: #777; font-size: var(--text-body); line-height: var(--leading-body); overflow-wrap: anywhere; }
+.answer-report-header button, .answer-report-heading button { min-height: 44px; border: 1px solid #d7d7d7; border-radius: 8px; background: #fff; color: #171717; padding: 8px 14px; font: inherit; font-size: var(--text-body); cursor: pointer; }
 .answer-report-header button:hover, .answer-report-heading button:hover { border-color: #8f8f8f; }
 .answer-report-page button:focus-visible, .answer-report-page summary:focus-visible { outline: 2px solid #0070f3; outline-offset: 3px; }
 .answer-report-body { padding: 48px min(5vw, 56px) 56px; margin: 28px 0 0; background: #fff; border: 1px solid #ebebeb; border-radius: 14px; min-width: 0; }
 .answer-report-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid #ebebeb; padding-bottom: 24px; margin-bottom: 28px; }
-.answer-report-heading small { color: #666; font-size: 12px; }
-.answer-report-heading h1 { font-size: clamp(24px, 3vw, 32px); letter-spacing: -.035em; line-height: 1.25; margin: 6px 0 8px; }
-.answer-report-heading p { color: #777; margin: 0; font-size: 12px; }
+.answer-report-heading small { color: #666; font-size: var(--text-caption); line-height: var(--leading-caption); }
+.answer-report-heading h1 { font-size: clamp(var(--text-title), 3vw, var(--text-display)); font-weight: 600; letter-spacing: -.035em; line-height: 1.25; margin: 6px 0 8px; }
+.answer-report-heading p { color: #777; margin: 0; font-size: var(--text-caption); line-height: var(--leading-caption); }
 .answer-report-content { min-width: 0; overflow-wrap: anywhere; }
-.answer-report-content .personal-md { display: grid; gap: 18px; font-size: 15px; line-height: 1.8; }
+.answer-report-content .personal-md { display: grid; gap: 18px; font-size: var(--text-lead); line-height: var(--leading-prose); }
 .answer-report-content .personal-md p { margin: 0; font-size: inherit; line-height: inherit; }
-.answer-report-content .personal-md-heading.is-h1 { font-size: 24px; font-weight: 650; }
-.answer-report-content .personal-md-heading.is-h2 { font-size: 19px; font-weight: 600; }
+.answer-report-content .personal-md-heading.is-h1 { font-size: var(--text-title); line-height: var(--leading-prose); font-weight: 600; }
+.answer-report-content .personal-md-heading.is-h2 { font-size: var(--text-heading); line-height: var(--leading-prose); font-weight: 600; }
 .answer-report-content .personal-md-table-scroll { max-width: 100%; overflow-x: auto; }
-.answer-report-body footer { border-top: 1px solid #ebebeb; margin-top: 40px; padding-top: 16px; color: #666; font-size: 12px; line-height: 1.6; }
+.answer-report-body footer { border-top: 1px solid #ebebeb; margin-top: 40px; padding-top: 16px; color: #666; font-size: var(--text-caption); line-height: var(--leading-caption); }
 .answer-report-body footer summary { cursor: pointer; min-height: 36px; align-content: center; }
 .answer-report-body footer dl { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
 .answer-report-body footer dd { margin: 0; overflow-wrap: anywhere; }
-.answer-report-body footer code { font-size: 11px; }
-.personal-answer-link { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--pw-blue-ink, #0070f3); text-decoration: none; }
+.answer-report-body footer code { font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-answer-link { display: inline-block; margin-top: 8px; font-size: var(--text-caption); line-height: var(--leading-caption); color: var(--pw-blue-ink, #0070f3); text-decoration: none; }
 .personal-answer-link:hover { text-decoration: underline; }
 .personal-answer-link:focus-visible { outline: 2px solid #0070f3; outline-offset: 3px; }
 @media (max-width: 640px) { .answer-report-page { padding: 0 12px 28px; } .answer-report-header { min-height: 68px; } .answer-report-body { margin-top: 12px; padding: 28px 16px 36px; } }

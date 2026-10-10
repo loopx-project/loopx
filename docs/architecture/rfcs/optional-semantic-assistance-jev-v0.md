@@ -238,24 +238,29 @@ delay, false intervention against legitimate work and missed failures. Sample
 cases that never generated an alert as well as alerted cases; alert-only review
 cannot estimate missed failures.
 
-Source recheck at `44931b6d22a50b949d43354e6ea498fb6b68d231`:
-the optional `packages/loopx-jev` capture reads a declared file set and its net
-change; it does not observe every intermediate assertion. Core
-[`external_progress_review_trigger`](../../../loopx/control_plane/work_items/external_progress_review.py)
-consumes attributable receipts at a pinned assessment revision. In `assist`, a
-qualified streak can open the existing replan obligation; a newer completed
-non-triggering verdict can end that streak. This is the current signal policy,
-not a business-correctness certificate. The
-[`progress-review` contract](../../../loopx/capabilities/progress_review/README.md)
-and its owner retain off/shadow/assist compatibility. Any change to the combined
-signal or its clearing policy needs explicit disclosure and counterexamples;
-this design does not silently change it.
+The local candidate now binds an explicitly selected canonical task criterion
+through [`progress_review_evidence.ts`](../../../loopx/control_plane/work_items/progress_review_evidence.ts).
+The optional observer's `acceptance_scope` reads the existing acceptance owner;
+private registry/runtime references stay outside the model packet. A manual
+basis remains an `operator_study`. Receipts declare selected-file net-change
+coverage. Capture and core receipt decoding require the canonical Goal/Agent/Todo
+scope to match the actual run; mismatches never reach model dispatch or drift
+consumption. Core readback also rechecks bindings against current criteria. A changed or unavailable basis withdraws that receipt's signal without
+rewriting its history. Legacy receipt handling and default-off isolation remain.
 
-The downstream contract is [evidence invalidation in shared work](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers)
+The packaged capability editor separately displays relationship and increment,
+criterion origin, coverage, stale/missing/unavailable states and an explicit
+refresh. `off_goal` plus `new_evidence` does not become an on-Goal verdict; a
+non-triggering combined signal retains the existing streak behavior. File/SQLite
+canonical criterion edits and the production HTTP/frontend journey have local
+validation; no new live model-quality experiment or automatic intervention was
+performed. See the [capability contract](../../../loopx/capabilities/progress_review/README.md)
+and [observer guide](../../../packages/loopx-jev/DRIFT_SHADOW.md).
+
+These observations connect to [shared evidence invalidation](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers)
 and [recovery qualification](composable-state-machines-recovery-verification-v0.md#detection-containment-and-recovery-evidence).
-First connect existing verifier results and dependency readback to those owners.
-Additional model inference is conditional on the comparison in section 6; it is
-not a prerequisite for fixing a demonstrated deterministic gap.
+Model reasoning remains subject to the comparisons in section 6 and is not a
+prerequisite for repairing an evidenced deterministic gap.
 
 ### 5.3 Provider facts and deferred mechanisms
 

@@ -255,7 +255,7 @@ PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 
 | --- | --- | --- |
 | 声明来源链失效阻断当前使用 | `Delegations.read/start`、`delegation_results.py`、`delegation_result_use.ts` | `current_use` 区分历史完成和当前资格。新派发、采用与结算共用来源链检查；原 operation 重放只读回。File/SQLite 三层来源反例和打包团队证据页验证撤回、原因、输入引用与修复后重读。 |
 | 独立检查失败进入原任务可操作的恢复旅程 | `executor._task_validation_stage`、`ValidatedTurnReceipt`、canonical `turn_loop_controller_contract_v0.json`、`turn_journal.ts` | 传递已资格化失败范围与 repair/replan 细节；完成有界修复或只运行 verifier 的重试、当前验证与原效果结算。Host 声明不能冒充可信验证。 |
-| 可选语义审查说明证据和覆盖范围 | 既有 progress-review receipt/loader 与 canonical Goal acceptance inspect | 在 shadow 读回绑定选中 criterion 和证据覆盖；显示缺失/陈旧依据及独立判断维度。模型质量和干预另行资格化。 |
+| shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；精确 GoalRef 保持实例身份，任务变化或实例重建撤回旧判断。独立旧核心只保留手工研究的旧格式；规范 scope 不降级。显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
 
 第二项中，`_task_validation_stage` 已保存独立结果并阻断结算；`ValidatedTurnReceipt`
 未携带该验证的 `recovery_kind`，canonical controller 有意将 legacy
@@ -283,6 +283,13 @@ result，只重跑 validation，不再次调用 Host。**实际修复工作**需
 15 秒经过时间预算停止发起后续检查；已启动的 validator 仍受其配置超时约束，
 这不是 15 秒 HTTP 响应承诺。预算耗尽返回不可用，不以缓存成功回退。该路径只
 覆盖明确声明的本地委派输入；跨来源不是原子快照，未声明的记忆或任意推理仍不在范围内。
+
+规范审查 basis 的 `acceptance_scope` 只引用选定 workspace 内的 registry/runtime，
+条款内容从当前 owner 读取，原命令及私有路径不进入模型问题。criterion hash、
+版本和覆盖是来源观察，不证明模型答案正确、完整业务 checkpoint 或全部任务完成。
+前端沿既有团队证据和能力设置入口读回；受影响 CLI/MCP 共用 owner，未新增
+Lark 专有协议。真实模型纠错、远端 exactly-once、接管、observer 质量与受控干预
+仍由原 RFC 验收所有者负责。
 
 ## 12. 未决事项
 

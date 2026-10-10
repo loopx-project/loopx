@@ -410,8 +410,9 @@ with a new execution key and the current version, rather than reusing the old
 execution receipt. Keep the supervisor/OS transport: writer retirement does not
 remove its process-exit and current-execution proof duties.
 This qualifies operator-led POSIX reactivation of synthetic work, not automatic
-Host discovery/stop, pending outbox disposition, live model sessions, App startup
-or identity adoption after full-history restore. The cold-import CLI reuses the
+Host discovery/stop, pending outbox disposition, live model sessions or identity
+adoption after full-history restore. The App loading boundary is qualified
+separately below. The cold-import CLI reuses the
 selected command dispatcher and
 the existing Goal path resolver; its File/SQLite import and original-receipt
 recovery run with `todos.py`, `bootstrap.py`, `runtime_shadow_writer_adapter.py`
@@ -424,15 +425,31 @@ with both capture modules absent. Pure runtime-root routing now belongs to
 `paths.effective_runtime_root`; canonical Todo, terminal lifecycle, acceptance,
 Chat and CLI callers import that owner directly. The old adapter reexports the
 same function for supported capture callers. Source and fresh-wheel File/SQLite
-HTTP import, process restart, original-operation recovery, later writes and
-canonical prose checks use the same oracle with both capture modules present
-and physically absent. Project-relative routes, explicit override precedence,
-source identity, maintenance, Todo/handoff, JSON type and failed-write protections
-remain intact. Historical outbox disposition and independent data/history
-recovery retain their separate qualifications; authorized reactivation and
-remaining App writer callers still need their original acceptance. This stage
-does not qualify supported old-writer retirement,
-release default or historical support cutoff.
+qualification runs the complete `serve_chat`
+entrypoint with all four modules physically absent. The packaged Goal settings
+journey performs backup/preview, reload and original-operation readback before
+explicit confirmation. Full current and archived requirements survive import;
+subsequent reviewed App creation, editing and completion work with the explicitly
+selected `soft_claim` policy. Restart/replay preserves those later writes.
+Missing selected storage and missing `hard_lease` execution proof still refuse
+without a Markdown fallback. App reads use the existing readback owner, and
+shared input transport reaches the existing typed mutation owners. Reviewed
+canonical Todo creates use request v2 to bind the preview's provider
+revision to the existing command identity and transaction CAS. Concurrent
+changes reject the stale request; original-operation recovery runs first and
+retains subsequent writes. Unreviewed v0/v1 callers keep their existing intent
+and receipt identity. Import and original-receipt recovery refresh current
+ownership independently on the same settings screen, including retryable read
+failures; a saved receipt does not substitute for today's policy.
+Supported old APIs reexport the same functions; their real Markdown writers and bootstrap
+operations remain for actual callers. This qualifies the bounded import/loading
+journey, not retirement of every writer, full-state identity adoption, D2 or a
+released SQLite default.
+
+已审核的 canonical Todo 创建使用请求 v2，将预览的 provider revision 绑定到既有
+命令身份和事务 CAS；并发修改会拒绝过期请求。原操作恢复先于当前 head 校验，保留
+之后的新写入；未审核的 v0/v1 调用保留原有意图和回执身份。导入或原回执恢复后，
+同一设置页面独立回读当前所有权，读取失败时可重试；保存的回执不代替当前策略。
 Source checks accept registered runtime directory aliases only when both paths
 resolve to the same physical directory. Retargeting an alias after preview still
 rejects before the import fence; original source observations are not rewritten.

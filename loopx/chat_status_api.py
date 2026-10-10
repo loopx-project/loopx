@@ -39,7 +39,7 @@ from .status_server import (
     ExtensionPresentationRequestMixin,
     parse_goal_activation_filter,
 )
-from .todos import list_goal_todos
+from .control_plane.todos.list_readback import list_goal_todos
 
 
 def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:

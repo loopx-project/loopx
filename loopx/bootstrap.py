@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-import re
 from uuid import uuid4
 from pathlib import Path
 
 from .capabilities.machine_configuration.goal_storage import new_goal_storage_target, initialize_goal_storage_target
+from .control_plane.projects.identity import (
+    GoalCreationConflictError as GoalCreationConflictError,
+    slugify_goal_id as slugify_goal_id,
+    default_goal_id as default_goal_id,
+    derive_goal_display_name as derive_goal_display_name,
+)
 from .registry import find_registry_goal
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from .control_plane.coordination.legacy_writer_fence import require_registry_source_write_allowed
@@ -16,7 +21,6 @@ from .control_plane.projects.registry_codec import (
 from typing import Any
 
 from .control_plane.runtime.time import now_local_iso
-from .control_plane.runtime.public_safety import public_safe_compact_text
 from .control_plane.runtime.document_io import atomic_write_state_text
 from .control_plane.todos.active_state_editing import (
     TODO_SECTION_HEADINGS,
@@ -54,25 +58,6 @@ from .registry_writability import probe_registry_write_path
 DEFAULT_OBJECTIVE = "Improve this project through bounded, verified goal segments."
 DEFAULT_DOMAIN = "project-goal-control-plane"
 DEFAULT_NEXT_ACTION = "Initial routing is owned by the connected domain adapter."
-
-
-class GoalCreationConflictError(ValueError):
-    """A create-only bootstrap cannot adopt another registry operation."""
-
-
-def slugify_goal_id(value: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
-    return slug or "project-goal"
-
-
-def default_goal_id(project: Path) -> str:
-    return f"{slugify_goal_id(project.name)}-goal"
-
-
-def derive_goal_display_name(goal_text: str | None) -> str | None:
-    """Derive a public-safe display title from user-supplied goal text."""
-
-    return public_safe_compact_text(goal_text, limit=132)
 
 
 def now_iso() -> str:

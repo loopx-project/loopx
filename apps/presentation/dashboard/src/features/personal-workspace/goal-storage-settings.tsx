@@ -21,6 +21,8 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
   const [invalidSaved, setInvalidSaved] = useState(false);
   const inFlight = useRef(false);
   const generation = useRef(0);
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
   useEffect(() => {
     const token = ++generation.current;
     setCurrent(null); setCold(undefined); setResult(null); setCarrier(null); setConfirmed(false); setMode(""); setInvalidSaved(false); setError(null); setBusy(true);
@@ -45,6 +47,9 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
           if (token !== generation.current) return;
           setResult(recovered);
           if (recovered.current !== undefined) setCurrent(recovered.current);
+          // Original-operation recovery may observe a cutover whose reply was
+          // lost. Sibling ownership must read today's policy independently.
+          if (recovered.ok && recovered.current?.canonical) onChangedRef.current();
           if (!recovered.ok) setError(t("storage.rejected"));
           else if (!recovered.current) setError(t("storage.unavailable"));
         }

@@ -1654,6 +1654,20 @@ export const capabilityConfigurationEditorSchema = z.object({
   read_only_reason: z.string().optional(),
 });
 
+export const progressReviewObservationSchema = z.object({
+  mode: z.string(), read_state: z.enum(["observed", "missing", "unavailable"]), read_error: z.string().optional(),
+  receipt_count: z.number(), rejected_receipts: z.number(), stale_receipts: z.number(),
+  contract_revision: z.string().nullable(), authority: z.literal("none"),
+  latest: z.object({status: z.string(), event_id: z.string(), evidence_id: z.string(),
+    judgments: z.object({choice: z.object({relation: z.string().nullable(), increment: z.string().nullable()}).nullable(),
+      noul: z.object({serves_acceptance: z.number().nullable(), evidence_increment: z.number().nullable(), behavior_change: z.number().nullable()}).nullable()}),
+    criterion_current: z.boolean().optional(),
+    evidence_scope: z.object({coverage: z.literal("declared_file_net_change"), files: z.array(z.string()),
+      criterion_binding: z.object({origin: z.enum(["operator_study", "goal_acceptance"]), criteria_sha256: z.string(),
+        todo_id: z.string().optional(), contract_digest: z.string().optional(), contract_revision: z.number().optional(),
+        criterion_ids: z.array(z.string()).optional()})}).optional(),
+  }).nullable(),
+});
 export const capabilityConfigurationCatalogSchema = z.object({
   schema_version: z.literal("capability_configuration_catalog_v0"),
   capabilities: z.array(z.object({
@@ -1679,6 +1693,7 @@ export const capabilityConfigurationCatalogSchema = z.object({
       effective_revision: z.string(),
     }).optional(),
     documentation: z.record(z.string(), z.unknown()).optional(),
+    observation: progressReviewObservationSchema.optional(),
     context_contribution: z.object({
       supported_phases: z.array(z.enum(["before_plan", "before_delegate", "after_delegate_result"])),
       target: z.literal("coordinator"),

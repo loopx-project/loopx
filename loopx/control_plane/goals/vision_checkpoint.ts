@@ -95,7 +95,10 @@ export function visionAuthoringContract(): JsonObject {
         evidence_refs: ["evidence:verified-result"],
       },
     },
-    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit.",
+    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
+      "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+      "checkpoint-context is only for recovery after the original committed Turn writeback; " +
+      "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,
     unchanged_reason_limit: VISION_UNCHANGED_REASON_LIMIT,
     path_delta: {

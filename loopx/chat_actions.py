@@ -9,7 +9,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
-from .bootstrap import GoalCreationConflictError, bootstrap_project
+from .control_plane.projects.identity import GoalCreationConflictError
 from .capabilities.machine_configuration.goal_storage import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
 from .chat_action_normalization import ChatActionNormalizationMixin
@@ -34,7 +34,7 @@ from .paths import resolve_runtime_root
 from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
 from .registry import registry_goals
-from .todos import add_goal_todo, update_goal_todo
+from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
@@ -630,6 +630,8 @@ class ChatActionService(
             result = {"ok": True}
         else:
             try:
+                from .bootstrap import bootstrap_project
+
                 result = bootstrap_project(
                     project=project,
                     creation_operation_id=proposal_id,

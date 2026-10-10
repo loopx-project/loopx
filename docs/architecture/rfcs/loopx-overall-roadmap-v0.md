@@ -952,8 +952,9 @@ import replay preserves that active grant and its later native settlement;
 a stale token refuses before launch even while the same Todo has a fresh active
 lease. Process exit remains separate from lease release after cutover as well.
 This qualifies the existing POSIX supervisor/lease reactivation boundary with
-synthetic work. App startup, full-state identity adoption, automatic Host
-discovery and live model use remain separate acceptance gaps.
+synthetic work. Full-state identity adoption, automatic Host discovery and live
+model use remain separate acceptance gaps; the App loading checkpoint below
+qualifies its own synthetic import boundary.
 Proved original Todo outbox disposition now composes with cold import on both
 File and SQLite: four interrupted-write windows retain pending-source backups,
 exact original receipts and revision-bound rollback archives. Active capture
@@ -978,15 +979,27 @@ the source partition projector has one shared owner, with compatible old
 imports. Configuration and direct guard checks run without both capture modules.
 Pure runtime-root routing and its actual canonical Todo, acceptance, Chat and
 CLI callers now use the existing paths owner, with an identical compatibility
-reexport for capture callers. Source and fresh-wheel File/SQLite App HTTP import,
-process restart, original-operation recovery, later canonical writes and prose
-checks pass the same oracle with both capture modules present and physically
-absent. Source/maintenance identity, Todo/handoff invariance, JSON types,
-project-relative routing and failed-write behavior remain unchanged. Historical
-outbox disposition and independent data/history recovery retain their separate
-qualifications below; authorized reactivation and remaining App writer callers
-stay open. This stage does not retire the supported old writer or qualify a
-released default.
+reexport for capture callers. Source and fresh-wheel File/SQLite qualification
+now uses the full `serve_chat`
+entrypoint with all four Todo/bootstrap/capture producer modules physically
+absent. Shared Todo input transport calls the existing typed create/update/
+terminal owners; pure readback and Goal identity no longer load the old writers.
+The compatibility facade reexports the same APIs and retains its real Markdown
+write bodies and bootstrap effects. Reviewed App import, source/backup drift
+refusal, original-operation restart/replay, full current/archive readback and
+later App create/edit/complete preserve the provider head under an explicitly
+selected `soft_claim` policy. Missing selected storage and absent `hard_lease`
+execution proof still refuse without Markdown fallback. The packaged settings
+journey uses backup, preview, reload/readback and explicit confirmation.
+Reviewed canonical Todo creation carries its provider revision into the existing
+typed command identity and provider transaction, rejecting concurrent writes
+without applying the stale request. Original-operation recovery precedes that
+current-head check and preserves later writes. After import or receipt recovery,
+the same settings screen independently rereads current ownership; a failed read
+shows a retryable error instead of retaining the pre-import policy.
+This qualifies the bounded App import/loading path, not deletion of remaining
+bootstrap/Host/history callers, full-state identity adoption, D2 or a released
+default. Keep those existing acceptances open.
 The shared TS source check admits runtime directory aliases by physical identity,
 preserving the original snapshot and foreign-source rejection. File/SQLite HTTP
 joins alias-bound import, externally configured registry backup, later writes and original-operation recovery; a

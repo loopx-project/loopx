@@ -59,7 +59,9 @@ def private_return(steward, request, return_root, monkeypatch):  # noqa: F811
     _write(_root(return_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
         session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]], "targets": [target]}}})
     source_id = row["request_ref"] if request.param == "native" else "lark:" + event["message_id"]
-    delivered = deliver(return_root, runtime.registry_path, session=session, turn=turn, request=target)
+    # Mirror Chat handoff: the trusted source store pins the original host.
+    delivered = deliver(return_root, runtime.registry_path, session=session, turn=turn,
+                        request=target, source_store=store)
     route = {**target, "request_id": delivered["request_id"], "session_id": session["session_id"], "source_id": source_id}
     original_runner = provider.__call__
     replies = []
