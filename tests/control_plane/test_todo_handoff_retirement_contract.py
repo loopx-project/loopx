@@ -9,12 +9,15 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import subprocess
-import sys
 
 import pytest
 
 from canonical_authority_fixture import promoted_create_fixture
-from test_canonical_todo_writer_isolation import without_source_todo_writers  # noqa: F401
+from test_canonical_todo_writer_isolation import (  # noqa: F401
+    isolated_todo_distribution,
+    retirement_wheel,
+    without_source_todo_writers,
+)
 from loopx.control_plane.todos.handoff_note import (
     attach_todo_handoff_note,
     build_todo_handoff_note,
@@ -94,8 +97,9 @@ def test_unicode_compaction_and_bounded_evidence_keep_existing_semantics():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.usefixtures("without_source_todo_writers")
-def test_canonical_handoff_readback_without_legacy_writers(tmp_path, provider):
+def test_canonical_handoff_readback_without_legacy_writers(
+    tmp_path, provider, without_source_todo_writers,  # noqa: F811 - pytest fixture injection
+):
     registry, _runtime, state = promoted_create_fixture(tmp_path, provider=provider)
     registry_payload = json.loads(registry.read_text())
     registry_payload["goals"][0].update({
@@ -106,7 +110,7 @@ def test_canonical_handoff_readback_without_legacy_writers(tmp_path, provider):
 
     def cli(*args):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            [*without_source_todo_writers, "--format", "json", "--registry", str(registry),
              *args], cwd=tmp_path, capture_output=True, text=True, timeout=45)
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
