@@ -329,11 +329,36 @@ apply refuses it after runtime restart, recovery remains read-only, and native
 lease release still requires a fresh plan because settlement changed the source.
 The native capture-disposition journey retains prepared outbox bytes in its own
 archive before provider cutover; an earlier plan cannot bypass a newer capture.
-These are local canonical continuity checks, not proof of real Host process stop,
-complete legacy Markdown capture, pending projection delivery, isolated checkpoint
-import or whole-Goal recovery. Those wider acceptance boundaries, D2 and
-release-default decisions require their own qualification; do not treat the
-settings journey as forced legacy migration.
+The POSIX process journey in
+`tests/control_plane/test_local_provider_host_recovery.py` now starts and stops
+an actual supervised Host in both migration directions. Refusing cutover leaves
+that process alive; observed exit does not release its lease. Native settlement
+invalidates the old preview, and a fresh plan carries the retained lease history
+across providers. A stale execution proof cannot launch a process. A fresh lease
+advances version/epoch and starts legitimate work; replay of the original
+migration cannot revoke it. Reverse migration retains the new lease generation.
+The journey reuses the existing Host transport and canonical provider owners;
+it adds no automatic Host discovery or stop authority.
+The frozen SQLite V1 migration case also holds a real write transaction: busy
+refusal leaves all original history intact; release permits a verified upgrade
+and idempotent retry. Unsupported formats still refuse fallback creation.
+
+At `d9f27b077`, a fresh independently installed wheel passes the 23 CLI/HTTP/Host
+cases, with all 1,666 package members unchanged before and after execution.
+Its packaged App and real workspace/status/storage backend also pass explicit
+confirmation, post-commit response loss, process restart and original-preview
+read-only recovery. A new acknowledged SQLite write survives return to File
+with its complete domain transactions and original add receipt. Desktop/mobile
+readback distinguishes historical completion from the currently selected File
+provider without another apply. No source product is on the installed Python
+import path and no active Goal is switched.
+
+These are bounded local canonical continuity and POSIX execution controls, not
+proof of live attached-Host adoption, complete legacy Markdown capture, pending
+projection delivery, isolated checkpoint import, cross-platform operation or
+whole-Goal recovery. Those wider acceptance boundaries, D2 and release-default
+decisions require their own qualification; do not treat the settings journey as
+forced legacy migration.
 
 These are proposed engineering windows from a frozen candidate, not promised
 release dates. Run faults on disposable runtimes and detached verified copies;
