@@ -27,6 +27,66 @@ function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 24);
 }
 
+function objectOrNull(value: unknown): JsonObject | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
+}
+
+function sameSourceDigest(left: JsonObject, right: JsonObject, field: string): boolean {
+  const value = objectOrNull(left._source_facts)?.[field + "_digest"];
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) &&
+    value === objectOrNull(right._source_facts)?.[field + "_digest"];
+}
+
+/** Identity evidence is eligibility input only, never a new settlement authority. */
+function accountingMatchKey(row: JsonObject): string | null {
+  const source = objectOrNull(row._source_facts);
+  const identity = objectOrNull(source?.settlement_identity);
+  if (!source || identity?.schema_version !== "quota_settlement_identity_v0") return null;
+  const keys = ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"];
+  if (keys.some(key => typeof identity[key] !== "string" || !identity[key])) return null;
+  if (keys.slice(0, 4).some(key => identity[key] !== source[key]) ||
+      ["goal_id", "agent_id", "todo_id"].some(key => identity[key] !== row[key])) return null;
+  if (typeof source.recommended_action_digest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(source.recommended_action_digest) || !row.recommended_action) return null;
+  return JSON.stringify([...keys.map(key => identity[key]), source.recommended_action_digest]);
+}
+
+function repeatedAccounting(rows: JsonObject[]): Map<JsonObject, JsonObject> {
+  const work = new Map<string, JsonObject[]>();
+  for (const row of rows) {
+    const key = accountingMatchKey(row);
+    if (key && row.progress_observation && row.classification !== "quota_slot_spent") {
+      const matches = work.get(key);
+      if (matches) matches.push(row);
+      else work.set(key, [row]);
+    }
+  }
+  const repeated = new Map<JsonObject, JsonObject>();
+  for (const row of rows) {
+    const source = objectOrNull(row._source_facts);
+    const identity = objectOrNull(source?.settlement_identity);
+    const receipt = objectOrNull(source?.quota_spend_commit);
+    const key = accountingMatchKey(row);
+    if (row.classification !== "quota_slot_spent" || row.progress_observation !== null || !key ||
+        receipt?.schema_version !== "quota_spend_commit_receipt_v0" ||
+        receipt.effect_id !== String(identity?.effect_id) + "#quota_spend") continue;
+    const match = work.get(key)?.find(candidate => row.recommended_action === candidate.recommended_action &&
+      (!row.delivery_outcome || sameSourceDigest(row, candidate, "delivery_outcome")));
+    if (match) repeated.set(row, match);
+  }
+  return repeated;
+}
+
+function publicEvidenceRow(row: JsonObject): JsonObject {
+  const {observed_at: _time, _source_facts: _source, ...publicRow} = row;
+  return publicRow;
+}
+
+function evidenceFactsKey(row: JsonObject): string {
+  const {generated_at: _time, evidence_ref: _ref, ...facts} = publicEvidenceRow(row);
+  return digest(facts);
+}
+
 function coreGoal(value: unknown): JsonObject {
   const facts = value == null ? {} : requireJsonObject(value, "goal_facts");
   const active = facts.active_state_objective;
@@ -101,10 +161,10 @@ export function projectReplanContext(value: unknown): JsonObject {
     }
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
-    JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    JSON.stringify(publicEvidenceRow(a)).localeCompare(JSON.stringify(publicEvidenceRow(b))));
   const unique = new Map<string, JsonObject>();
   for (const row of rows) {
-    const {observed_at: _time, ...publicRow} = row;
+    const publicRow = publicEvidenceRow(row);
     const ref = "replan-evidence-" + digest(publicRow);
     if (!unique.has(ref)) unique.set(ref, {...publicRow, evidence_ref: ref});
   }
@@ -117,6 +177,18 @@ export function projectReplanContext(value: unknown): JsonObject {
       "evidence reference is unavailable in this Goal and Agent history window; refresh replan_context",
       "replan_evidence_unavailable");
     return {ok: true, goal_id: goal, agent_id: agent, evidence: match};
+  }
+  const repeated = repeatedAccounting(rows);
+  const repeatedByGroup = new Map<string, {workKey: string; healthRepeated: boolean} | null>();
+  for (const row of rows) {
+    const key = evidenceFactsKey(row);
+    const work = repeated.get(row);
+    const proof = work ? {workKey: evidenceFactsKey(work),
+      healthRepeated: !row.health_check || sameSourceDigest(row, work, "health_check")} : null;
+    // A grouped span can include unpaired Turns with the same display text.
+    // Reduce it only if every underlying occurrence has the same shown proof.
+    if (!repeatedByGroup.has(key)) repeatedByGroup.set(key, proof);
+    else if (JSON.stringify(repeatedByGroup.get(key)) !== JSON.stringify(proof)) repeatedByGroup.set(key, null);
   }
   const coverage = new Map<string, JsonObject>();
   for (const row of evidence) {
@@ -134,8 +206,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   const prefix = request.read_prefix === undefined ? "loopx" : requireNonEmptyString(request.read_prefix, "read_prefix");
   const groups = new Map<string, {row: JsonObject; count: number; first: unknown}>();
   for (const row of evidence) {
-    const {generated_at: _time, evidence_ref: _ref, ...facts} = row;
-    const key = digest(facts);
+    const key = evidenceFactsKey(row);
     const group = groups.get(key);
     if (group) { group.count++; group.first = row.generated_at; }
     else groups.set(key, {row, count: 1, first: row.generated_at});
@@ -159,16 +230,23 @@ export function projectReplanContext(value: unknown): JsonObject {
   }
   const chosen = candidates.filter(candidate => selected.has(candidate));
   const omitted = candidates.filter(candidate => !selected.has(candidate));
-  const shown = chosen.map(({row, count, first}) => ({
-    generated_at: row.generated_at,
-    evidence_ref: row.evidence_ref,
-    summary: [...new Set([row.health_check, row.recommended_action].filter(Boolean))].join(" ") ||
-      row.classification || "Recorded observation",
-    ...(row.delivery_outcome ? {delivery_outcome: row.delivery_outcome} : {}),
-    ...(row.progress_observation ? {coverage_ref: (row.progress_observation as JsonObject).fingerprint} : {}),
-    ...(count > 1 ? {occurrences: count, first_observed_at: first} : {}),
-    ...(agent ? {read_action: `${prefix} --format json history --goal-id ${goal} --agent-id ${agent} --evidence-ref ${row.evidence_ref}`} : {}),
-  }));
+  const shownWorkKeys = new Set(chosen.map(({row}) => evidenceFactsKey(row)));
+  const shown = chosen.flatMap(({row, count, first}) => {
+    const repeat = repeatedByGroup.get(evidenceFactsKey(row));
+    // Never remove an action whose matching work was omitted by the display cap.
+    const represented = repeat && shownWorkKeys.has(repeat.workKey);
+    if (represented && repeat.healthRepeated) return [];
+    return [{
+      generated_at: row.generated_at,
+      evidence_ref: row.evidence_ref,
+      summary: [...new Set([row.health_check, represented ? null : row.recommended_action].filter(Boolean))].join(" ") ||
+        row.classification || "Recorded observation",
+      ...(row.delivery_outcome ? {delivery_outcome: row.delivery_outcome} : {}),
+      ...(row.progress_observation ? {coverage_ref: (row.progress_observation as JsonObject).fingerprint} : {}),
+      ...(count > 1 ? {occurrences: count, first_observed_at: first} : {}),
+      ...(agent ? {read_action: `${prefix} --format json history --goal-id ${goal} --agent-id ${agent} --evidence-ref ${row.evidence_ref}`} : {}),
+    }];
+  });
   const selectedCoverage = new Set(chosen.flatMap(({row}) => row.progress_observation
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
