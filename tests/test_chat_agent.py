@@ -243,7 +243,8 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         assert Path(env["HOME"]) != Path.home()
         assert Path(env["CODEX_HOME"]) != tmp_path / "account-codex"
         environment = params["config"]["shell_environment_policy"]
-        assert environment["inherit"] == "none" and environment["include_only"] == ["PATH"]
+        assert environment["inherit"] == "none"
+        assert environment["include_only"] == ["PATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"]
         assert environment["experimental_use_profile"] is False
         expected_path = "/usr/bin:/bin:/usr/sbin:/sbin"
         if safe_toolchain:
@@ -337,12 +338,19 @@ def test_project_git_configuration_preserves_local_config_without_account_inheri
     try:
         request = next(json.loads(line) for line in process.stdin.getvalue().splitlines()
                        if json.loads(line).get("method") == "thread/start")
-        settings = request["params"]["config"]["shell_environment_policy"]["set"]
+        policy = request["params"]["config"]["shell_environment_policy"]
+        settings = policy["set"]
         assert host_config == snapshot
         if isolated:
-            assert run("--version", environment={**control_env, **settings}).returncode == 0
-            assert run("rev-parse", "HEAD", environment={**control_env, **settings}).stdout.strip() == expected_head
-            assert run("config", "--get", "fixture.origin", environment={**control_env, **settings}).stdout.strip() == "workspace"
+            # Codex filters include_only after applying set, including on
+            # resumed threads. The resulting tool environment must retain the
+            # host's two public Git settings, without inheriting account state.
+            tool_env = {key: value for key, value in settings.items()
+                        if key in policy["include_only"]}
+            assert set(tool_env) == {"PATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"}
+            assert run("--version", environment=tool_env).returncode == 0
+            assert run("rev-parse", "HEAD", environment=tool_env).stdout.strip() == expected_head
+            assert run("config", "--get", "fixture.origin", environment=tool_env).stdout.strip() == "workspace"
         else:
             assert settings == snapshot["shell_environment_policy"]["set"]
             assert run("rev-parse", "HEAD", environment={**control_env, **settings}).returncode != 0

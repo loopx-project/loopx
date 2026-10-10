@@ -713,7 +713,9 @@ class CodexChatAgentSession:
                 **environment["set"],
                 "GIT_CONFIG_GLOBAL": os.devnull,
                 "GIT_CONFIG_NOSYSTEM": "1",
-            }}
+            }, "include_only": [
+                *environment["include_only"], "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
+            ]}
             host_config = _workspace_system_tools(host_config, permissions_profile)
             # The native filesystem helper re-executes this binary. A symlink
             # under the user's home must not require opening that directory.
