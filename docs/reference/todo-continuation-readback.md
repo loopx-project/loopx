@@ -121,6 +121,25 @@ rejects the new request instead of silently losing classification or edges. Exis
 historical capture/promotion receipts are not rewritten or upgraded in place.
 Requalify capture on this runtime before a future promotion.
 
+Todo mutation adapters take the existing archive limit and headroom from
+`completed_archive`, avoiding a reverse import of the status collector. Both
+canonical transport and the retained unpromoted writer keep the command's
+default of ten completed records; status compatibility exports remain intact.
+
+Handoff display is another live compatibility boundary. Status/index, summary
+and selected-work consumers still use the Python handoff adapter; its stable
+identity, nested-field precedence, bounded source references and credential
+rejection must survive retirement. Credential assignments are rejected before
+display truncation; ordinary discussion of token budgets remains readable.
+Canonical exact-Todo reads return the source record, while status adds derived
+handoff context. Neither context grants execution authority or proves completion.
+The [handoff characterization tests](../../tests/control_plane/test_todo_handoff_retirement_contract.py)
+exercise these distinctions and real File/SQLite CLI readback with legacy
+mutation modules absent. They enable a later whole-consumer typed migration;
+they do not qualify adapter removal, installed-package recovery or final writer
+retirement. Preserve the existing adapter until that migration replaces its real
+callers, rather than adding a projection RPC for every displayed Todo.
+
 Use existing read commands; no activation or new option is needed:
 
 ```bash
@@ -163,3 +182,14 @@ old read policies can again misclassify these cases.
 本阶段关闭一组 T3/L5 读语义及其 L7 捕获依赖，不代表 D1 投影投递、D2 耐久性、
 D3 整 Goal 切换完成，也不修改默认 provider。PostgreSQL 使用相同规则，服务部署与
 资格仍独立。复杂 fixture 和只读快照演练不是长期 soak 或生产晋升许可。
+
+handoff 展示仍有真实 Python 调用方，退役时必须保留稳定身份、嵌套字段优先级、
+有界源引用及截断前的凭据拒绝；普通 token budget 讨论仍可展示。canonical 精确
+Todo 读取返回源记录，status 才加入派生交接上下文，两者都不授予执行权限或证明
+完成。上述测试覆盖旧 mutation 模块缺席时的真实 File/SQLite CLI 读回，只为后续
+整组消费者迁入 TS 建立兼容基线，不能证明打包恢复或最终 writer 退役。替代真实
+调用方前保留既有适配器，不为每个展示 Todo 新增一次投影 RPC。
+
+Todo mutation 适配器直接复用 `completed_archive` 的既有阈值与余量，消除对 status
+collector 的反向导入；canonical transport 与保留的旧 writer 仍默认保留十个完成
+记录，status 的兼容导出不变。
