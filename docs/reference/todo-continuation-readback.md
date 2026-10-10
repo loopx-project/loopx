@@ -136,9 +136,31 @@ handoff context. Neither context grants execution authority or proves completion
 The [handoff characterization tests](../../tests/control_plane/test_todo_handoff_retirement_contract.py)
 exercise these distinctions and real File/SQLite CLI readback with legacy
 mutation modules absent. They enable a later whole-consumer typed migration;
-they do not qualify adapter removal, installed-package recovery or final writer
-retirement. Preserve the existing adapter until that migration replaces its real
+the same fixture also takes a normally built wheel, installs it into an isolated target and
+runs its installed console entrypoint against both real providers, with the old
+writer modules and four shadow capture producers physically removed. Module,
+distribution and packaged TypeScript provenance are checked before those CLI
+journeys. Creation recovery preserves later writes and the original provider;
+provider loss refuses admission, while leased settlement and monitor retries
+retain their original receipts without repeating effects. This is a disposable
+retirement oracle, not adoption on an active Goal, old-backup import/restore
+qualification or final writer retirement. Preserve the existing adapter until
+that migration replaces its real
 callers, rather than adding a projection RPC for every displayed Todo.
+
+Ordinary pytest runs keep the source arm. To require the installed retirement
+arm, first prepare the qualified Chat bundle and build the wheel through the
+normal distribution build, then supply that artifact explicitly. A supplied
+missing/invalid wheel fails the run; it is never converted to a source-only pass.
+
+```bash
+LOOPX_TODO_RETIREMENT_WHEEL=path/to/built.whl uv run --extra test python -m pytest tests/control_plane/test_canonical_todo_writer_isolation.py tests/control_plane/test_todo_handoff_retirement_contract.py -q
+```
+
+This variable selects test coverage only; it grants no production access or
+feature authority. No setting is installed or persisted. Omit the variable to
+run the ordinary source arm. Installed test results qualify only the supplied
+artifact and removed paths.
 
 Use existing read commands; no activation or new option is needed:
 
@@ -187,8 +209,18 @@ handoff 展示仍有真实 Python 调用方，退役时必须保留稳定身份�
 有界源引用及截断前的凭据拒绝；普通 token budget 讨论仍可展示。canonical 精确
 Todo 读取返回源记录，status 才加入派生交接上下文，两者都不授予执行权限或证明
 完成。上述测试覆盖旧 mutation 模块缺席时的真实 File/SQLite CLI 读回，只为后续
-整组消费者迁入 TS 建立兼容基线，不能证明打包恢复或最终 writer 退役。替代真实
-调用方前保留既有适配器，不为每个展示 Todo 新增一次投影 RPC。
+整组消费者迁入 TS 建立兼容基线。同一 fixture 还将正常构建的 wheel 安装到隔离目录，
+用其实际 console 入口在两种真实 provider 上运行；旧 writer 模块与四个 shadow
+capture producer 物理移除，先核对模块、distribution 和打包 TS 来源。创建重试
+保留后来写入与原 provider，provider 缺失拒绝准入，lease 结算和 monitor 重试
+保持原回执且不重复效果。这是一次性隔离退役验收，不是活跃 Goal 的安装采用、
+旧备份导入恢复或最终 writer 退役。替代真实调用方前保留既有适配器，不为每个
+展示 Todo 新增一次投影 RPC。
+
+普通 pytest 保留源码验证。完成 Chat bundle 的正常构建并生成 wheel 后，用上文
+`LOOPX_TODO_RETIREMENT_WHEEL` 指定产物，才运行安装态退役验证；指定的 wheel
+缺失或无效会失败，不降级为源码通过。此变量只选择测试覆盖，无生产或功能授权，
+不持久化配置；省略变量恢复源码验证。结论仅覆盖指定产物与实际移除路径。
 
 Todo mutation 适配器直接复用 `completed_archive` 的既有阈值与余量，消除对 status
 collector 的反向导入；canonical transport 与保留的旧 writer 仍默认保留十个完成
