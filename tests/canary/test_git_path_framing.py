@@ -63,3 +63,25 @@ def test_run_git_name_only_keeps_one_record_per_path(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert result["changed_files"] == [name]
+
+
+def test_run_git_name_only_handles_timeout(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    res = _run_git_name_only(tmp_path, ["diff"], timeout=0.1)
+    assert res["ok"] is False
+    assert res["returncode"] == -1
+    assert "git execution failed" in str(res["stderr_tail"])
+
+
+def test_resolve_git_repo_root_handles_timeout(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    from loopx.cli_commands.canary import _resolve_git_repo_root
+
+    resolved = _resolve_git_repo_root(tmp_path, timeout=0.1)
+    assert resolved == tmp_path.resolve()

@@ -70,19 +70,29 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
-def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
+def _run_git_name_only(repo_root: Path, args: list[str], timeout: float = 30.0) -> dict[str, Any]:
     # `-z` frames each pathname on NUL. LF framing is only unambiguous while
     # `core.quotePath` escapes non-ASCII pathnames, and a repository may turn
     # that off, at which point a path can carry U+0085/U+2028/U+2029 raw and
     # `str.splitlines()` splits one path into two.
     command = ["git", "-C", str(repo_root), *args, "-z"]
-    completed = subprocess.run(
-        command,
-        check=False,
-        text=True, encoding="utf-8", errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True, encoding="utf-8", errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {
+            "ok": False,
+            "returncode": -1,
+            "command": command,
+            "changed_files": [],
+            "stderr_tail": f"git execution failed: {exc}",
+        }
     files = [name for name in completed.stdout.split("\0") if name]
     return {
         "ok": completed.returncode == 0,
@@ -93,14 +103,18 @@ def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     }
 
 
-def _resolve_git_repo_root(candidate: Path) -> Path:
-    completed = subprocess.run(
-        ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
-        check=False,
-        text=True, encoding="utf-8", errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+def _resolve_git_repo_root(candidate: Path, timeout: float = 30.0) -> Path:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+            check=False,
+            text=True, encoding="utf-8", errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return candidate.resolve()
     resolved = completed.stdout.strip()
     if completed.returncode == 0 and resolved:
         return Path(resolved).resolve()
