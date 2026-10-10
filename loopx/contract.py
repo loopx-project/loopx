@@ -273,8 +273,9 @@ def _git_worktree_root(path: Path) -> Path | None:
             errors="replace",
             capture_output=True,
             check=True,
+            timeout=20.0,
         ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return None
     return Path(root).resolve()
 
@@ -288,28 +289,36 @@ def _git_probe(path: Path) -> dict[str, Any]:
         rel_path = str(path.relative_to(repo_root))
     except ValueError:
         rel_path = str(path)
-    tracked = (
-        subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
-    )
-    ignored = (
-        subprocess.run(
-            ["git", "-C", str(repo_root), "check-ignore", "-q", "--", rel_path],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
-    )
+    try:
+        tracked = (
+            subprocess.run(
+                ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=20.0,
+            ).returncode
+            == 0
+        )
+    except subprocess.TimeoutExpired:
+        tracked = False
+    try:
+        ignored = (
+            subprocess.run(
+                ["git", "-C", str(repo_root), "check-ignore", "-q", "--", rel_path],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=20.0,
+            ).returncode
+            == 0
+        )
+    except subprocess.TimeoutExpired:
+        ignored = False
     return {
         "inside_worktree": True,
         "root": str(repo_root),
