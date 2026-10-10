@@ -49,11 +49,15 @@ PrintPayload = Callable[
 ]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
+_MAX_STDIN_JSON_BYTES = 16 * 1024 * 1024
 
 
 def _load_json_object(path_text: str) -> dict[str, Any]:
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        raw = sys.stdin.buffer.read(_MAX_STDIN_JSON_BYTES + 1)
+        if len(raw) > _MAX_STDIN_JSON_BYTES:
+            raise ValueError("stdin JSON input exceeds the 16 MiB limit")
+        payload = json.loads(raw.decode("utf-8"))
     else:
         payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
