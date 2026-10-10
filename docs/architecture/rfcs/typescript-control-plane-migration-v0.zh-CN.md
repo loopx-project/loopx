@@ -53,6 +53,17 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
 
+handoff／continuation 显示决策已归入既有 TypeScript Todo context owner。summary
+在同一个 batch 复用已归一化的身份、claim、exclusion 和任务类型事实；index 在单个
+原生 batch 保留先压缩源、再标注、最后合并审计事件的顺序。planning 与 quota
+收集器整组投影已选记录。过大的显示上下文按字节预算分批读取，计数、依赖决策与
+闭合仍由完整源 owner 处理。Python facade 保留共享 metadata codec 和历史
+元组／SHA-1 身份编码，没有 Python 决策回退。nested-empty 优先级、Unicode 空白／
+codepoint 上限和截断前凭证拒绝都是需要保留的兼容义务。File／SQLite CLI 与正常
+wheel 的恢复验收要求：Markdown 显示缺失或选定 provider 不可用时，完整源与
+provider revision 仍被保留。这项读模型退役不等于受支持的 mutation／Host 调用方
+已删除，也不认证已发布的 SQLite 默认值。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
