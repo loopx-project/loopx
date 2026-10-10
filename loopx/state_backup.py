@@ -12,7 +12,7 @@ import tempfile
 from typing import Any, Protocol
 
 from . import __version__
-from .paths import select_default_runtime_root
+from .paths import _is_redirected_path, select_default_runtime_root
 from .control_plane.effect_runtime import effect_runtime_result
 
 
@@ -79,7 +79,7 @@ def _path_stats(path: Path, exclude_roots: list[Path]) -> tuple[dict[str, int], 
             return
         stats["paths"] += 1
         stats["bytes"] += int(stat.st_size)
-        if item.is_symlink():
+        if _is_redirected_path(item):
             stats["symlinks"] += 1
             return
         if item.is_dir():
@@ -494,6 +494,8 @@ def _add_path_to_tar(
     staging: Path, snapshots: dict[Path, tuple[Path, dict[str, Any]]],
 ) -> None:
     if _should_skip(source, exclude_roots):
+        return
+    if not source.is_symlink() and _is_redirected_path(source):
         return
     if not source.is_symlink():
         for suffix in ("-wal", "-shm", "-journal"):
