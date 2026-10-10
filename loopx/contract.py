@@ -117,20 +117,28 @@ LEAK_RULES = {
             "author" + "ization:",
         ),
     ),
+    # The private roots take the host's own separator, so a Windows host
+    # writes the same path class natively with backslash separators. Allowing
+    # a run of separators also covers serialized text, where a JSON or source
+    # string literal escapes each backslash into two.
     "local_private_path": LeakRule(
         pattern=re.compile(
-            "("
-            + "/"
+            r"([\\/]+"
             + "Users"
-            + "/"
-            + r"[^/\s]+/(?:Documents|code"
+            + r"[\\/]+[^\\/\s]+[\\/]+(?:Documents|code"
             + "-"
-            + r"reading)|"
-            + "/ext"
-            + "_data/"
-            + ")"
+            + r"reading)|[\\/]+ext"
+            + "_data"
+            + r"[\\/]+)"
         ),
-        required_literals=("/" + "users/", "/ext" + "_data/"),
+        # Cheap necessary condition: every private root is followed by at
+        # least one separator, whatever the host or serialization chose.
+        required_literals=(
+            "users/",
+            "users\\",
+            "ext" + "_data/",
+            "ext" + "_data\\",
+        ),
     ),
     "internal_task_id": LeakRule(
         pattern=re.compile(r"\bt-" + r"20\d{12}-[a-z0-9]+\b"),
