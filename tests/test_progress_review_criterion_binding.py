@@ -1,7 +1,7 @@
 """Version-bound requester decisions through real Turn acceptance and durable IO."""
 import json
+from pathlib import Path
 import subprocess
-import sys
 
 import pytest
 
@@ -10,11 +10,30 @@ from test_local_delegation import service as delegation_service
 service = delegation_service
 
 
-def test_shadow_basis_uses_current_canonical_criteria_and_withdraws_after_task_edit(service):
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages/loopx-jev/src"))
+@pytest.fixture(autouse=True)
+def provider_imports(monkeypatch):
+    package = Path(__file__).resolve().parents[1] / "packages/loopx-jev"
+    monkeypatch.syspath_prepend(str(package / "src"))
+    monkeypatch.syspath_prepend(str(package / "tests"))
+
+
+def bind_exact_goal(runner):
+    from loopx.control_plane.goals.acceptance import transition_goal_acceptance_lifecycle
+    registry = json.loads(runner.registry.read_text())
+    goal = next(row for row in registry["goals"] if row["id"] == runner.goal_id)
+    goal["goal_instance_id"] = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    runner.registry.write_text(json.dumps(registry))
+    transition_goal_acceptance_lifecycle(runtime_root=runner.root, goal_id=runner.goal_id,
+        operation_id="bind-review-instance", transition={"kind": "bind_existing",
+            "goal_ref": {"goal_id": runner.goal_id, "goal_instance_id": goal["goal_instance_id"]}})
+    return goal
+
+
+@pytest.mark.parametrize("exact_instance", [False, True])
+def test_shadow_basis_uses_current_canonical_criteria_and_withdraws_after_task_edit(service, exact_instance):
     from loopx_jev.runner import read_basis
     root, runner = service
+    registered_goal = bind_exact_goal(runner) if exact_instance else {"id": runner.goal_id}
     manifest = root / "basis.json"
     manifest.write_text(json.dumps({"goal_id": runner.goal_id, "objective": "Review declared task change",
         "acceptance": ["Operator claim must not replace the canonical criterion"], "evidence": [],
@@ -28,7 +47,7 @@ def test_shadow_basis_uses_current_canonical_criteria_and_withdraws_after_task_e
     from tests.capabilities.test_progress_review import receipt
     from loopx.capabilities.progress_review.receipt import write_progress_review_receipt
     from loopx.capabilities.progress_review.context import external_progress_review_context
-    goal = {"id": runner.goal_id, "control_plane": {"progress_review": {"mode": "shadow"}}}
+    goal = {**registered_goal, "control_plane": {"progress_review": {"mode": "shadow"}}}
     canonical_receipt = receipt(goal_id=runner.goal_id,
         evidence_scope={"criterion_binding": basis["criterion_binding"], "coverage": "declared_file_net_change", "files": ["output.json"]})
     canonical_receipt["run"].update(agent_id="analyst", todo_id="todo_analyst-initial")
@@ -42,11 +61,13 @@ def test_shadow_basis_uses_current_canonical_criteria_and_withdraws_after_task_e
     assert rejected_context["receipts"] == []
     write_progress_review_receipt(runner.root, runner.goal_id, canonical_receipt)
     assert external_progress_review_context(goal, runner.root)["summary"]["latest"]["criterion_current"] is True
+    if exact_instance:
+        wrong_instance = {**goal, "goal_instance_id": "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+        assert external_progress_review_context(wrong_instance, runner.root)["summary"]["latest"]["criterion_current"] is False
     # Exercise the real consumer too: canonical revisions include the owner
     # binding, so comparing only the unchanged manifest digest would reject all jobs.
     from loopx_jev import drift
     from loopx_jev.store import atomic_json
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages/loopx-jev/tests"))
     from drift_fixtures import response
     def git(*args):
         subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
@@ -101,4 +122,65 @@ def test_shadow_basis_uses_current_canonical_criteria_and_withdraws_after_task_e
     assert latest["status"] == "stale" and latest["criterion_current"] is False
     assert latest["drift_signal"] == {"noul": None, "choice": None}
 
+
+def test_scoped_basis_never_downgrades_an_unsupported_core_to_manual(service, monkeypatch):
+    from loopx.control_plane import effect_runtime
+    from loopx_jev.runner import read_basis
+    root, runner = service
+    manifest = root / "scoped-basis.json"
+    manifest.write_text(json.dumps({"goal_id": runner.goal_id, "objective": "Review the declared task",
+        "acceptance": ["Manual wording cannot replace canonical criteria"],
+        "acceptance_scope": {"registry_ref": "registry.json", "runtime_ref": "runtime", "agent_id": "analyst",
+            "todo_id": "todo_analyst-initial", "criterion_ids": ["analyst-initial"]}}))
+    original = effect_runtime.effect_runtime_result
+    def old_core(method, params, **kwargs):
+        if method == "progress_review.criterion_basis":
+            raise effect_runtime.EffectRuntimeRejected("Method unavailable", diagnostic_code="unsupported_method")
+        return original(method, params, **kwargs)
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", old_core)
+    with pytest.raises(effect_runtime.EffectRuntimeRejected):
+        read_basis(manifest, root)
+
+
+def test_recreated_goal_with_same_task_never_reuses_the_retired_observation(service):
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+    from loopx.control_plane.goals.source_session_recreation import RecreateGoalRequest, recreate_goal_instance
+    from loopx_jev.runner import read_basis
+    from tests.capabilities.test_progress_review import receipt
+    from loopx.capabilities.progress_review.receipt import write_progress_review_receipt
+    from loopx.capabilities.progress_review.context import external_progress_review_context
+
+    root, runner = service
+    goal = bind_exact_goal(runner)
+    goal["control_plane"] = {"progress_review": {"mode": "shadow"}}
+    source_registry = root / "source-registry.json"
+    payload = {"schema_version": "0.2", "registry_role": "project-local", "profile_id": "source_session_v1",
+        "common_runtime_root": str(runner.root), "projects": [], "goals": [goal],
+        "session_bindings": [], "session_receipts": [], "lifetime_receipts": [], "retired_goal_instances": []}
+    with source_session_registry_transaction(source_registry, operation="review-source-fixture", create=lambda: payload) as tx:
+        tx.commit(tx.payload_copy())
+    manifest = root / "source-basis.json"
+    manifest.write_text(json.dumps({"goal_id": runner.goal_id, "objective": "Review exact instance work",
+        "acceptance": ["Canonical basis required"], "acceptance_scope": {
+            "registry_ref": "registry.json", "runtime_ref": "runtime", "agent_id": "analyst",
+            "todo_id": "todo_analyst-initial", "criterion_ids": ["analyst-initial"]}}))
+    basis, current = read_basis(manifest, root)
+    observed = receipt(goal_id=runner.goal_id, evidence_scope={"criterion_binding": basis["criterion_binding"],
+        "coverage": "declared_file_net_change", "files": ["output.json"]})
+    observed["run"].update(agent_id="analyst", todo_id="todo_analyst-initial")
+    path = write_progress_review_receipt(runner.root, runner.goal_id, observed)
+    historical = path.read_bytes()
+    assert current()
+    assert external_progress_review_context(goal, runner.root)["summary"]["latest"]["criterion_current"] is True
+    recreated = recreate_goal_instance(RecreateGoalRequest(registry_path=source_registry,
+        goal_id=runner.goal_id, goal_instance_id=goal["goal_instance_id"], operation_id="recreate-review-instance"))
+    assert recreated["ok"] is True, recreated
+    assert recreated["goal_ref"]["goal_instance_id"] != goal["goal_instance_id"]
+    active = {**goal, "goal_instance_id": recreated["goal_ref"]["goal_instance_id"]}
+    assert not current()
+    for instance in (goal, active):
+        latest = external_progress_review_context(instance, runner.root)["summary"]["latest"]
+        assert latest["criterion_current"] is False and latest["status"] == "stale"
+        assert latest["drift_signal"] == {"noul": None, "choice": None}
+    assert path.read_bytes() == historical
 

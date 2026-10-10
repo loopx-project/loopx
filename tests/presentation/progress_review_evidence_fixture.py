@@ -29,12 +29,16 @@ def main():
             runner.config = config
             registry = json.loads(runner.registry.read_text())
             goal = next(row for row in registry["goals"] if row["id"] == runner.goal_id)
+            goal["goal_instance_id"] = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             goal.setdefault("control_plane", {})["progress_review"] = {"mode": "shadow"}
             runner.registry.write_text(json.dumps(registry))
             from tests.capabilities.test_progress_review import receipt
             from loopx.capabilities.progress_review.receipt import write_progress_review_receipt
             from loopx.control_plane.effect_runtime import effect_runtime_result
-            from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
+            from loopx.control_plane.goals.acceptance import inspect_goal_acceptance, transition_goal_acceptance_lifecycle
+            transition_goal_acceptance_lifecycle(runtime_root=runner.root, goal_id=runner.goal_id,
+                operation_id="bind-presented-review-instance", transition={"kind": "bind_existing", "goal_ref": {
+                    "goal_id": runner.goal_id, "goal_instance_id": goal["goal_instance_id"]}})
             requirements = inspect_goal_acceptance(registry_path=runner.registry, runtime_root=str(runner.root),
                 goal_id=runner.goal_id, agent_id="analyst", todo_id="todo_analyst-initial")["completion_requirements"]
             binding = effect_runtime_result("progress_review.criterion_basis", {
