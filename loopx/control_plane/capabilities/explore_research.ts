@@ -45,10 +45,11 @@ function digest(value: unknown): string {
       .sort(([a], [b]) => compare(a, b)).map(([key, child]) => [key, stable(child)])) : item;
   return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex").slice(0, 16);
 }
+export {id as researchIdentifier, digest as researchDigest};
 
 export function normalizeResearchObservation(params: JsonObject): JsonObject {
   const raw = object(params.observation, "research observation",
-    ["schema_version", "explore_node_id", "progress", "closure_basis", "composition_candidates", "input_observations", "fingerprint"]);
+    ["schema_version", "explore_node_id", "progress", "closure_basis", "composition_candidates", "input_observations", "execution_lineage", "composition_resolution", "fingerprint"]);
   requireStringLiteral(raw.schema_version, [OBSERVATION], "research observation schema");
   const node = id(raw.explore_node_id, "explore_node_id");
   // The Python transport composes its existing generic progress codec. This
@@ -109,8 +110,47 @@ export function normalizeResearchObservation(params: JsonObject): JsonObject {
   if (new Set(lineage.map(input => input.node_id)).size !== lineage.length || lineage.some(input => input.node_id === node)) {
     throw new EffectRuntimeRequestError("input observations must have distinct non-self node identities");
   }
+  let execution: JsonObject | null = null;
+  if (raw.execution_lineage !== undefined) {
+    const value = object(raw.execution_lineage, "execution_lineage", ["schema_version", "goal_id", "gap_id", "replan_obligation_id", "successor_todo_id", "agent_id"]);
+    requireStringLiteral(value.schema_version, ["research_execution_lineage_v0"], "execution lineage schema");
+    execution = {schema_version: value.schema_version};
+    for (const field of ["goal_id", "gap_id", "replan_obligation_id", "successor_todo_id", "agent_id"]) {
+      execution[field] = id(value[field], `execution_lineage.${field}`);
+    }
+    if (!/^research-composition-[a-f0-9]{16}$/.test(String(execution.gap_id))
+      || !/^replan-[a-f0-9]{16}$/.test(String(execution.replan_obligation_id))
+      || !/^todo_[A-Za-z0-9_-]+$/.test(String(execution.successor_todo_id))
+      || progress.work_item_id !== execution.successor_todo_id || lineage.length !== 2) {
+      throw new EffectRuntimeRequestError("execution lineage requires exact gap, obligation, Todo and binary input identities");
+    }
+  }
+  let resolution: JsonObject | null = null;
+  if (raw.composition_resolution !== undefined) {
+    const value = object(raw.composition_resolution, "composition_resolution",
+      ["schema_version", "disposition", "basis", "evidence_ids"]);
+    requireStringLiteral(value.schema_version, ["research_composition_resolution_v0"], "composition resolution schema");
+    const disposition = requireStringLiteral(value.disposition, ["dismissed", "deferred"], "resolution disposition");
+    const refs = ids(value.evidence_ids, "resolution evidence_ids");
+    if (execution === null || !refs.length || refs.some(ref => !evidence.includes(ref))) {
+      throw new EffectRuntimeRequestError("composition resolution requires execution lineage and attributable evidence");
+    }
+    resolution = {schema_version: value.schema_version, disposition, evidence_ids: refs};
+    if (disposition === "dismissed") {
+      if (result !== "no_followup" || closure?.disposition !== "no_followup") {
+        throw new EffectRuntimeRequestError("candidate dismissal requires coverage-backed no_followup and its closure basis");
+      }
+      resolution.basis = requireStringLiteral(value.basis, ["duplicate", "invalid", "unsafe", "outside_scope"], "dismissal basis");
+    } else if (result !== "blocked" || value.basis !== undefined
+      || progress.coverage_complete === true || closure?.disposition === "no_followup" || closure?.disposition === "exhausted"
+      || !/^todo_[A-Za-z0-9_-]+$/.test(String(progress.blocker_id))) {
+      throw new EffectRuntimeRequestError("temporary composition deferral requires blocked progress with a canonical blocker Todo id");
+    }
+  }
   const canonical: JsonObject = {schema_version: OBSERVATION, explore_node_id: node, progress,
     ...(lineage.length ? {input_observations: lineage} : {}),
+    ...(execution ? {execution_lineage: execution} : {}),
+    ...(resolution ? {composition_resolution: resolution} : {}),
     ...(closure ? {closure_basis: closure} : {}), composition_candidates: candidates};
   return {...canonical, fingerprint: digest(canonical)};
 }
@@ -124,7 +164,7 @@ function observationFor(node: JsonObject): JsonObject | null {
 function eligible(node: JsonObject | undefined): boolean {
   if (!node || !["resolved", "dead_end"].includes(String(node.status))) return false;
   const observation = observationFor(node);
-  return !!observation && TERMINAL.has(String((observation.progress as JsonObject).result_class));
+  return !!observation && !observation.composition_resolution && TERMINAL.has(String((observation.progress as JsonObject).result_class));
 }
 function evidenceFor(node: JsonObject): Set<string> {
   const observation = observationFor(node);
@@ -164,7 +204,8 @@ export function validateResearchAttribution(params: JsonObject): JsonObject {
   return observation;
 }
 
-export function projectResearchFrontier(params: JsonObject): JsonObject {
+/** Full internal candidate set; presentation compaction cannot hide a write gate. */
+export function researchCompositionGaps(params: JsonObject): JsonObject[] {
   const goal = id(params.goal_id, "goal_id");
   const nodeRows = rows(params.nodes, "nodes");
   const nodes = new Map(nodeRows.map(node => [String(node.node_id), node]));
@@ -206,23 +247,35 @@ export function projectResearchFrontier(params: JsonObject): JsonObject {
       return sets.every(set => refs.some(ref => set.has(ref))) && refs.every(ref => sets.some(set => set.has(ref)));
     });
     const experiments = experimentsByInputs.get(JSON.stringify(candidate.inputs)) ?? [];
-    const observed = allEligible && attributable && experiments.some(experiment => {
-      if (!eligible(experiment)) return false;
-      const lineage = observationFor(experiment)?.input_observations as JsonObject[] ?? [];
+    const terminal = allEligible && attributable ? experiments.filter(experiment => {
+      const outcome = observationFor(experiment);
+      if (!["resolved", "dead_end"].includes(String(experiment.status))
+        || !outcome || !TERMINAL.has(String((outcome.progress as JsonObject).result_class))) return false;
+      const lineage = outcome.input_observations as JsonObject[] ?? [];
       return JSON.stringify(lineage.map(input => input.node_id)) === JSON.stringify(candidate.inputs)
         && lineage.every(input => observationFor(nodes.get(String(input.node_id))!)?.fingerprint === input.fingerprint);
-    });
+    }) : [];
+    const observed = terminal.some(experiment => !observationFor(experiment)?.composition_resolution);
+    const dismissed = terminal.some(experiment => experiment.status === "dead_end"
+      && (observationFor(experiment)?.composition_resolution as JsonObject)?.disposition === "dismissed");
     const active = experiments.filter(node => ["open", "exploring"].includes(String(node.status)));
     gaps.push({gap_id: `research-composition-${identity}`, input_node_ids: candidate.inputs,
       input_observations: inputs.filter((node): node is JsonObject => !!node).map(node => ({node_id: node.node_id,
         fingerprint: observationFor(node)?.fingerprint ?? null})),
-      state: !allEligible || !attributable ? "ineligible" : observed ? "observed" : "pending",
+      state: !allEligible || !attributable ? "ineligible" : observed ? "observed" : dismissed ? "dismissed" : "pending",
       reason: !allEligible ? "terminal_input_observation_required" : !attributable ? "input_evidence_invalidated"
-        : observed ? "typed_experiment_outcome" : "joint_experiment_result_required",
+        : observed ? "typed_experiment_outcome" : dismissed ? "typed_candidate_dismissal" : "joint_experiment_result_required",
       interaction_kinds: [...new Set(candidate.claims.map(claim => String(claim.interaction_kind)))].sort(),
       experiment_node_ids: experiments.map(node => String(node.node_id)).sort(),
       active_experiment_node_ids: active.map(node => String(node.node_id)).sort()});
   }
+  return gaps;
+}
+
+export function projectResearchFrontier(params: JsonObject): JsonObject {
+  const goal = id(params.goal_id, "goal_id");
+  const nodeRows = rows(params.nodes, "nodes");
+  const gaps = researchCompositionGaps(params);
   const count = (state: string) => gaps.filter(gap => gap.state === state).length;
   const gapsByInput = new Map<string, JsonObject[]>();
   for (const gap of gaps) for (const input of gap.input_node_ids as string[]) {
@@ -239,12 +292,14 @@ export function projectResearchFrontier(params: JsonObject): JsonObject {
         progress ? `Research: ${String(progress.result_class).replaceAll("_", " ")}` : "Research: observation invalidated",
         ...(progress?.coverage_scope_id ? [`coverage ${progress.coverage_scope_id}`] : []),
         ...(basis ? [`closure ${basis.disposition}`] : []),
+        ...(observation?.composition_resolution ? [`composition resolution ${(observation.composition_resolution as JsonObject).disposition}`] : []),
         ...(related.length ? [`composition ${related.filter(gap => gap.state === "pending").length} pending, ${related.filter(gap => gap.state === "ineligible").length} ineligible, ${related.filter(gap => gap.state === "observed").length} observed`] : []),
       ].join("; ")};
     });
   return {schema_version: "research_frontier_projection_v0", goal_id: goal, mode: "read_only_shadow",
     candidate_count: gaps.length, pending_count: count("pending"), observed_count: count("observed"),
     ineligible_count: count("ineligible"), projected_count: Math.min(gaps.length, MAX_RESEARCH_GAPS),
+    ...(nodeRows.some(node => observationFor(node)?.composition_resolution) ? {dismissed_count: count("dismissed")} : {}),
     omitted_count: Math.max(0, gaps.length - MAX_RESEARCH_GAPS), gaps: gaps.slice(0, MAX_RESEARCH_GAPS),
     grants_execution_authority: false, node_summaries: nodeSummaries};
 }

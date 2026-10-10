@@ -194,6 +194,22 @@ under a fresh operation and current revision. Other execution fences remain:
 | Non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
 | Edit changes retained leased work requirements or status | Use the owning lifecycle transition; acquiring another lease cannot authorize the metadata edit. |
 
+The existing `open -> blocked -> open` lifecycle also accepts a typed
+prerequisite wait: use `todo update --status blocked --resume-when
+todo_done:<dependency-todo> --reason '<bounded cause>'` after the active holder
+releases its execution lease. This explicit wait form is newly supported for
+native hard-lease Todos; the prior clear-wait pause form is unchanged. A live
+lease or bundled execution proof still rejects the transition. Resume with
+`--status open --clear-resume-when --reason '<resume basis>'`; neither transition
+grants execution authority, and the next execution requires a fresh lease.
+
+既有 `open -> blocked -> open` lifecycle 也支持 typed 前置任务等待：active
+holder 先释放执行 lease，再用 `todo update --status blocked --resume-when
+todo_done:<dependency-todo> --reason '<bounded cause>'` 暂停。此显式 wait 形式
+新增支持 native hard-lease Todo；原 clear-wait pause 形式保持不变。有效 lease
+或附带执行 proof 仍被拒绝。用 `--status open --clear-resume-when --reason
+'<resume basis>'` 恢复；两次转换都不授予执行权限，下一次执行仍需新 lease。
+
 The recovery descriptor uses the standalone `loopx task-lease acquire` command.
 Combined `todo claim --task-lease-idempotency-key` is restricted to `hard_lease`
 and is not the recovery route for `legacy`. Acquire uses `--owner`, a **fresh**

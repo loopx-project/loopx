@@ -1002,6 +1002,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     current_transition_replan_ack: dict[str, Any] | None = None,
     acceptance_gaps: list[dict[str, Any]] | None = None,
     monitor_lane_semantically_valid: bool = True,
+    capability_obligation: dict[str, Any] | None = None,
     vision_settlement_query: bool = False,
     _frontier_counts: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
@@ -1115,6 +1116,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             current_agent_blocker_count=safe_non_negative_int(
                 (agent_todo_summary or {}).get("current_agent_blocker_count")
             ),
+            capability_gap_pending=bool(capability_obligation and capability_obligation.get("required") is True),
             monitor_no_change_streak_triggered=(
                 monitor_no_change_trigger is not None
             ),
@@ -1134,6 +1136,8 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     )
     if not replan_rule.derives_obligation:
         return None
+    if replan_rule.rule is GoalFrontierReplanRule.CAPABILITY_EVIDENCE_GAP:
+        return capability_obligation
     if replan_rule.rule is GoalFrontierReplanRule.TODO_SUCCESSION_GAP:
         settlement_items = succession_gap_items[:3]
         settlement_todo_ids = [
@@ -1694,8 +1698,13 @@ def build_goal_frontier_projection_context_from_status(
         monitor_lane_semantically_valid=not goal_vision_state_is_closed(
             (latest_agent_vision or {}).get("state")
         ),
+        capability_obligation=(status_payload.get("bounded_research_frontier") or {}).get("obligation"),
     )
-    frontier_transition_ack = replan_successor_transition_ack(
+    capability_transitions = (status_payload.get("bounded_research_frontier") or {}).get("settlement_transitions") or []
+    frontier_transition_ack = next((candidate.get("ack") for candidate in capability_transitions
+        if candidate.get("obligation", {}).get("obligation_id") == (frontier_replan_obligation or {}).get("obligation_id")), None) if (
+        frontier_replan_obligation or {}
+    ).get("capability_guard") else replan_successor_transition_ack(
         agent_todo_summary,
         agent_id=agent_id,
         replan_obligation=frontier_replan_obligation,
@@ -1795,7 +1804,7 @@ def build_goal_frontier_projection_context_from_status(
         "projected_replan_ack": projected_replan_ack,
         "replan_transition_ack": replan_transition_ack,
         "run_replan_transition_ack": run_replan_transition_ack,
-        "replan_transition_candidates": [run_transition_candidate, frontier_transition_candidate],
+        "replan_transition_candidates": [run_transition_candidate, frontier_transition_candidate, *capability_transitions],
     }
 
 

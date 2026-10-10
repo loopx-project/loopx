@@ -151,11 +151,11 @@ milestone status.
 
 | Gap | Consequence |
 |---|---|
-| No shared research write-time gate | The cold evidence codec cannot discharge or enforce a live composition obligation. |
-| No exact obligation/Todo/result lineage | A research receipt is not proof of an authorized Todo transition or accepted Goal closure. |
-| Cold shadow not adopted by hot status/frontier | The existing #3173 projection remains behavior-compatible; canonical research obligations still need M3 integration. |
-| No dismissal or deferral contract | Evidence invalidation is visible, but typed candidate retirement and resumption remain unimplemented. |
-| No experiment-result adoption gate | Negative evidence can be recorded without proving that the next bound decision used its scope, validity or uncertainty. Proposed single-experiment integration is defined in §11.5; current cold receipts do not enforce it. |
+| Mainline M3 write-time gate and exact lineage are not integrated | Open PR #5280 proposes an exact obligation/Todo/experiment/input gate. Its local receipt tests do not establish accepted Goal closure, and current-head CI, mergeability and maintainer effect acceptance remain open. |
+| Cold shadow not adopted by hot status/frontier on main | The existing #3173 projection remains behavior-compatible; the proposed M3 consumer adoption still needs integrated entrypoint qualification. |
+| Dismissal and deferral are not integrated | PR #5280 locally implements typed candidate dismissal, blocker waits and exact invalidated-duty retirement; review and mainline readback remain separate gates. |
+| No experiment-result adoption gate | Negative evidence can be recorded without proving that the next bound decision used its scope, validity or uncertainty. Proposed single-experiment integration is defined in §11.5; current cold receipts and PR #5280 do not enforce it. |
+| Execution attribution is not effect authority | An exact Todo/experiment/input receipt does not grant a task lease, effect permission or accepted Goal closure. |
 | Live qualification incomplete | Deterministic and real CLI/file-log tests establish state semantics, not model selection quality or scientific truth; no live Lark sync is qualified by projection tests. |
 | No promotion evidence for inferred combinations | Shared constraints are not known to be precise enough to trigger obligations. |
 
@@ -234,8 +234,9 @@ execution, and result into one ambiguous relation. This RFC rejects that shape.
 
 The research envelope and closure basis have an active CLI caller and the
 [versioned evidence protocol](../../reference/protocols/research-observation-v0.md).
-The action signature, shared write gate and model selection below remain design
-targets. The cold shadow does not promote them into current behavior.
+The opt-in M3 development path implements exact execution lineage and shared
+write gates and bounded retirement transitions. Model selection below
+remain design targets; the cold shadow does not activate enforcement.
 
 ### 7.1 Compose; do not mutate v0 silently
 
@@ -919,7 +920,7 @@ control-plane failures.
 | M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Accepted design |
 | M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Implemented evidence/CLI slice; live research qualification remains separate |
 | M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partial: #3173 legacy quota/successor; canonical binary cold shadow in CLI/Lark projection; hot status adoption and live Lark qualification remain |
-| M3 | Goal-frontier obligation, exact Todo/experiment lineage, shared write-time gate; proposed §11.5 single-experiment result/adoption prerequisite | State/replay matrix, real provider/state readback, default-off parity and packaged journey before enforcement | Not started; §11.5 is a design proposal, not delivered runtime |
+| M3 | Goal-frontier obligation, exact Todo/experiment lineage, shared write-time gate; proposed §11.5 single-experiment result/adoption prerequisite | State/replay matrix, real provider/state readback, default-off parity and packaged journey before enforcement | Proposed in open PR #5280, not integrated: local state/replay and premerge checks exist, while current-head CI, mainline conflict, public effect case and maintainer acceptance remain open. §11.5 is a design proposal, not delivered runtime |
 | M4 | Bounded multi-candidate cards, `composition_selection_v0`, real model-tool behavior qualification, and repeated live shadow | Model autonomously selects a legal semantic action from the delivered candidate set; selection quality is no worse than the declared fallback; compact receipts only | Not started |
 | M5 | Shared-constraint candidate ranking in shadow mode | Precision and cost evidence; no automatic trigger | Not started |
 | M6 | Optional inferred trigger | Explicit maintainer decision and measured promotion thresholds | Deferred |
@@ -953,6 +954,33 @@ milestone gaps here rather than create a parallel task tree.
 M3 is the first behavior-changing slice. It should be a separate PR so the
 obligation and write gate can be reviewed and reverted independently from the
 evidence schema.
+
+The M3 development boundary joins current same-agent Todo, experiment and input
+facts in the typed Explore owner. Goal policy is explicitly scoped and disabled
+by default; the existing capability editor and CLI share its configuration
+owner. Quota and refresh reuse one live frontier, with the original duty pinned
+through scalar rollout fields and both receipt adapters. Real CLI tests reject
+unrelated/deferred successors and invalidated writeback, then settle the original
+Turn through its exact successor. File/SQLite tests distinguish canonical Todos
+from stale display rows; packaged UI checks exercise policy preview, activation,
+disable, readback and narrow screens. Native actor/lease and CAS admission remain in force; a fixed IO host
+locks the graph while the typed owner qualifies and persists completion evidence.
+Real File/SQLite and legacy tests cover missing evidence, direct IPC self-approval,
+terminal-verb bypass, retained archive lineage and immutable completion replay.
+Agent-scoped status, Explore and existing Lark Summary fields use the same live
+facts. Typed candidate dismissal permits scoped terminal retirement; a fresh
+canonical blocker and common Todo resume condition defer the gap without closing
+it. Real CLI validates exact observed/dismissed/blocked progress source through
+the original Turn, with independent File/SQLite lease-safe wait/resume evidence.
+Invalidated input/scope/activation produces source-qualified retirement for the
+original duty. Common readback retains its guard and historical debit, closes
+that Turn without spend, and keeps the current frontier and runnable/paused work
+visible. IO assembly stays in existing CLI/refresh composition roots; the shared
+gate consumes supplied capability facts and the typed owner remains singular.
+The local state/replay matrix and 19 standard risk-selected premerge checks pass.
+Two existing scheduler ACK tests fail identically on the unchanged base under the
+same local runtime; this is retained as a baseline limitation, not called green.
+Maintainer-reviewed integration and independent live qualification remain.
 
 ## 17. Rejected Alternatives
 

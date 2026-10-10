@@ -3,6 +3,7 @@ import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
+import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {readCoordinationOwnership} from "./ownership_observation.ts";
@@ -1309,6 +1310,8 @@ export async function terminalLifecycleLocalCoordinationTodo(
       const store = await openRuntimeStore(root, goalId, dependencies);
       sourceAuthority = sourceAuthorityFor(store);
       providerEvidence.source_authority = sourceAuthority;
+      const researchEvidence = new ResearchTerminalEvidenceHost(root, goalId, requireJsonObject(input.registry_source, "registry source"));
+      try {
       return {...await executeCoordinationTodoTerminalLifecycle(store, {
         validation_source_provider_revision: input.validation_source_provider_revision == null
           ? null : requireAuthorityStoreId(input.validation_source_provider_revision, "validation source provider revision"),
@@ -1367,7 +1370,9 @@ export async function terminalLifecycleLocalCoordinationTodo(
             ? null : requireJsonObject(input.completion_policy_request, "completion_policy_request"),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
-      }, authoritySourcesCurrent, request => verifyReentrySettlement(root, request)), ...providerEvidence};
+      }, async () => await authoritySourcesCurrent() && researchEvidence.current(),
+        researchEvidence.qualify, request => verifyReentrySettlement(root, request)), ...providerEvidence};
+      } finally {await researchEvidence.close();}
     });
   } catch (error) {
     return {schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,

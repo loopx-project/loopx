@@ -213,6 +213,8 @@ def project_live_explore_composition_frontier(
     goal_id: str,
     agent_id: str | None,
     status_payload: Mapping[str, Any],
+    state_text: str | None = None,
+    capability_guard: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Read the goal's Explore graph for one live quota decision.
 
@@ -241,6 +243,12 @@ def project_live_explore_composition_frontier(
     )
     enabled = harness.get("enabled") is True
     log_path = explore_result_log_path(runtime_root, goal_id)
+    pinned_research = (capability_guard or {}).get("capability_id") == "explore"
+    if pinned_research and (not enabled or harness.get("composition_mode") != "explicit_only"):
+        from .research_frontier import build_research_composition_frontier, read_research_todo_history
+        return build_research_composition_frontier({"goal_id": goal_id, "nodes": [], "edges": []},
+            candidate_sources=[], harness=harness, todos=read_research_todo_history(
+                runtime_root=runtime_root, goal=dict(goal), state_text=state_text), agent_id=agent_id)
     if not enabled:
         return None
     try:
@@ -283,6 +291,15 @@ def project_live_explore_composition_frontier(
         if isinstance(project_asset.get("agent_todos"), Mapping)
         else {}
     )
+    if harness.get("composition_mode") == "explicit_only":
+        from .research_frontier import build_research_composition_frontier, read_research_todo_history
+        return build_research_composition_frontier(
+            projection, candidate_sources=[
+                {"node_id": event["result_id"], "research_observation": event["research_observation"]}
+                for event in events if event.get("research_observation")
+            ], harness=harness, todos=read_research_todo_history(
+                runtime_root=runtime_root, goal=dict(goal), state_text=state_text), agent_id=agent_id,
+        )
     return build_explore_composition_frontier(
         projection,
         todos=_todo_items(item_todos, asset_todos),

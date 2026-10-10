@@ -1130,6 +1130,12 @@ def _complete_goal_todo_legacy(
             )
         )
         completion_state = completion_transaction.get("completion_state")
+        from ...capabilities.explore.research_frontier import hold_research_completion_evidence
+        research_evidence = lease_fence_stack.enter_context(hold_research_completion_evidence(
+            registry_path=registry_path, runtime_root=shadow_runtime_root, goal_id=goal_id,
+            todo=completion_todo, state_text=original,
+            actor_agent_id=mutation_authority.get("actor_agent_id"),
+        ))
         completion_policy = completion_policy_from_transaction(completion_transaction)
         effective_claimed_by = completion_policy.effective_claimed_by
         registered_agents = completion_policy.registered_agents
@@ -1246,6 +1252,7 @@ def _complete_goal_todo_legacy(
         )
     result = {
         "ok": True,
+        **({"capability_completion_evidence": research_evidence} if research_evidence is not None else {}),
         "dry_run": dry_run,
         "completed": True,
         "goal_id": goal_id,
@@ -1352,6 +1359,11 @@ def _supersede_goal_todo_legacy(
             idempotency_key=task_lease_idempotency_key, expected_version=task_lease_expected_version,
             runtime_root=shadow_runtime_root,
         )
+        from ...capabilities.explore.research_frontier import hold_research_completion_evidence
+        research_completion_evidence = lease_fence_stack.enter_context(hold_research_completion_evidence(
+            registry_path=registry_path, runtime_root=shadow_runtime_root, goal_id=goal_id,
+            todo=authority_todo, state_text=original, actor_agent_id=mutation_authority.get("actor_agent_id"),
+        ))
         update_result = apply_todo_update_to_lines(
             lines,
             todo_id=todo_id,
@@ -1423,6 +1435,7 @@ def _supersede_goal_todo_legacy(
         "ok": True,
         "dry_run": dry_run,
         "superseded": True,
+        **({"capability_completion_evidence": research_completion_evidence} if research_completion_evidence else {}),
         "goal_id": goal_id,
         **update_result,
         "changed": changed,

@@ -1518,9 +1518,8 @@ def _build_active_quota_payload(
         next_action_warning=route.next_action_warning,
         replan_obligation=prepared.replan_obligation,
     )
-    bounded_research_frontier = _dict_field(
-        prepared.status_payload, "bounded_research_frontier"
-    )
+    frontier = _dict_field(prepared.status_payload, "bounded_research_frontier")
+    bounded_research_frontier = _dict_field(frontier or {}, "public_projection") or frontier
     _attach_truthy_fields(
         payload,
         bounded_research_frontier=bounded_research_frontier,
@@ -1657,7 +1656,8 @@ def _build_settled_quota_payload(
         missing_gates=prepared.item.get("missing_gates"),
         agent_todo_summary=compact_quota_todo_summary_for_payload(prepared.agent_todo_summary) if prepared.agent_todo_summary else None,
         user_todo_summary=compact_quota_todo_summary_for_payload(prepared.user_todo_summary) if prepared.user_todo_summary else None,
-        bounded_research_frontier=_dict_field(prepared.status_payload, "bounded_research_frontier"),
+        bounded_research_frontier=(_dict_field(_dict_field(prepared.status_payload, "bounded_research_frontier") or {}, "public_projection")
+                                  or _dict_field(prepared.status_payload, "bounded_research_frontier")),
     )
     if prepared.agent_scoped_user_todo_override:
         payload[str(prepared.agent_scoped_user_todo_override["kind"])] = prepared.agent_scoped_user_todo_override

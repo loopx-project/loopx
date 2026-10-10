@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -52,6 +53,18 @@ def _catalog_payload(*, explore_enabled: bool = False) -> dict[str, Any]:
         "registry": "/private/path/that/must/not/project",
         "backup_path": "/private/backup/that/must/not/project",
     }
+
+
+def test_explore_composition_options_keep_typed_scope_and_reject_coercion() -> None:
+    options = _goal_capability_options("explore_harness", {
+        "enabled": True, "composition_mode": "explicit_only", "composition_scope_id": "joint-scope",
+    })
+    assert options["explore_composition_mode"] == "explicit_only"
+    assert options["explore_composition_scope_id"] == "joint-scope"
+    assert _goal_capability_options("explore_harness", {"enabled": True, "composition_mode": ""})["explore_composition_mode"] == "disabled"
+    for field, value in [("composition_mode", True), ("composition_scope_id", 0), ("composition_scope_id", [])]:
+        with pytest.raises(TypeError, match="must be strings"):
+            _goal_capability_options("explore_harness", {"enabled": True, field: value})
 
 
 def _periodic_catalog_payload(*, override_present: bool) -> dict[str, Any]:
@@ -420,6 +433,62 @@ def test_goal_configuration_apply_rejects_stale_preview() -> None:
 
     assert handler.responses[0]["status_code"] == 409
     assert handler.responses[0]["error_code"] == "goal_configuration_preview_stale"
+
+
+def test_research_policy_api_applies_and_reads_real_source_and_shared_registry(tmp_path: Path) -> None:
+    project, runtime, shared = tmp_path / "project", tmp_path / "runtime", tmp_path / "shared"
+    registry = project / ".loopx" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": "goal-example", "repo": str(project), "status": "active",
+        "spawn_policy": {"explore_harness": {"enabled": False}},
+    }]}))
+
+    class RealHandler(_MutationHandler):
+        _goal_configuration_reader = GoalConfigurationRequestMixin._goal_configuration_reader
+        _goal_configuration_writer = GoalConfigurationRequestMixin._goal_configuration_writer
+
+        def __init__(self, body):
+            super().__init__(body)
+            self.server = SimpleNamespace(registry_path=registry, runtime_root=runtime,
+                                          runtime_root_override=str(shared))
+
+        def _goal_configuration_machine_namespaces(self):
+            return []
+
+    for configuration in [
+        {"mode": "planning", "composition_mode": "explicit_only", "composition_scope_id": "joint-scope"},
+        {"mode": "planning", "composition_mode": "disabled", "composition_scope_id": "joint-scope"},
+    ]:
+        body = {"goal_id": "goal-example", "capability_id": "explore_harness", "configuration": configuration}
+        before = registry.read_bytes()
+        preview = RealHandler(body)
+        preview._goal_configuration_update(execute=False)
+        plan = preview.responses[0]
+        assert plan["status_code"] == 201, plan
+        assert registry.read_bytes() == before
+        applied = RealHandler({**body, "expected_plan_revision": plan["plan_revision"]})
+        applied.path = CHAT_GOAL_CONFIGURATION_APPLY_PATH
+        applied._goal_configuration_update(execute=True)
+        receipt = applied.responses[0]
+        assert receipt["status_code"] == 200, receipt
+        assert receipt["readback_verified"] is True
+        assert {key: receipt["goal_configuration"][key] for key in configuration} == configuration
+        stored_goal = json.loads(registry.read_text())["goals"][0]
+        source = stored_goal["spawn_policy"]["explore_harness"]
+        mirror = json.loads((shared / "registry.global.json").read_text())["goals"][0]["spawn_policy"]["explore_harness"]
+        assert source["enabled"] is True
+        assert stored_goal["explore_graph"]["enabled"] is True
+        assert {key: source[key] for key in ("composition_mode", "composition_scope_id")} == {
+            key: configuration[key] for key in ("composition_mode", "composition_scope_id")
+        }
+        assert mirror == source
+        stale = RealHandler({**body, "expected_plan_revision": plan["plan_revision"]})
+        stale.path = CHAT_GOAL_CONFIGURATION_APPLY_PATH
+        after = registry.read_bytes(), (shared / "registry.global.json").read_bytes()
+        stale._goal_configuration_update(execute=True)
+        assert stale.responses[0]["status_code"] == 409
+        assert (registry.read_bytes(), (shared / "registry.global.json").read_bytes()) == after
 
 
 def test_goal_configuration_clear_override_is_revision_locked() -> None:

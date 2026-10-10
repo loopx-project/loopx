@@ -828,7 +828,7 @@ def refresh_state_run(
         operation="refresh-state",
         lock_legacy_index=not dry_run,
         handoff_legacy_index=not dry_run,
-    ) as source_admission:
+    ) as source_admission, ExitStack() as research_write_guard:
         settlement_identity = None
         settlement_result = None
         delivery_workspace_causality = None
@@ -947,6 +947,17 @@ def refresh_state_run(
             project_override=project,
             state_file_override=state_file,
         )
+        harness = ((registry_goal or {}).get("spawn_policy") or {}).get("explore_harness") or {}
+        capability_guard = (
+            (settlement_readback.semantic_replan_guard or {}).get("selected_capability_guard")
+            if settlement_readback is not None else None
+        )
+        if (harness.get("enabled") is True and harness.get("composition_mode") == "explicit_only") or capability_guard is not None:
+            from .capabilities.explore.result_log import explore_result_log_path
+            research_write_guard.enter_context(exclusive_file_lock(
+                explore_result_log_path(runtime_root, safe_goal_id),
+                agent_id=normalized_agent_id or None, operation="research-writeback",
+            ))
         planning_source = load_refresh_planning_source(
             runtime_root, safe_goal_id, resolved_state_file, require_display=False
         )
@@ -1054,7 +1065,15 @@ def refresh_state_run(
             and settlement_readback.semantic_replan_guard is not None
             else {}
         )
+        from .capabilities.explore.research_frontier import prepare_research_replan_evidence
+        capability_evidence = prepare_research_replan_evidence(
+            runtime_root=runtime_root, goal_id=safe_goal_id,
+            agent_id=normalized_agent_id, registry_goal=registry_goal, state_text=state_text,
+            capability_guard=settlement_replan_guard.get("selected_capability_guard"),
+        )
         replan_qualification = qualify_refresh_replan_writeback(
+            capability_evidence=capability_evidence,
+            guard_capability=settlement_replan_guard.get("selected_capability_guard"),
             todo_fields=todo_fields,
             autonomous_replan_recorded=autonomous_replan_recorded,
             requested_delta_kinds=normalized_repair_delta_kinds,

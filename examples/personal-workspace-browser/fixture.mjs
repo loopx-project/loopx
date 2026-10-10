@@ -172,9 +172,12 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
     goalCapability({
       capabilityId: "explore_harness",
       displayName: "Explore Harness",
+      defaultConfiguration: { mode: "off", profile: "generic", composition_mode: "disabled", composition_scope_id: null },
       fields: [
-        { key: "enabled", label: "Enabled", description: "", input_kind: "boolean", required: false },
+        { key: "mode", label: "Exploration mode", description: "Evidence only, or evidence with planning. Spawn authority is separate.", input_kind: "select", required: false, options: ["off", "evidence", "planning"] },
         { key: "profile", label: "Planner profile", description: "", input_kind: "select", required: false, options: ["generic"] },
+        { key: "composition_mode", label: "Composition policy", description: "Replan accepts an exact experiment successor or typed result.", input_kind: "select", required: false, options: ["disabled", "explicit_only"] },
+        { key: "composition_scope_id", label: "Research coverage scope", description: "An opaque coverage scope.", input_kind: "text", required: false, nullable: true },
       ],
     }),
     goalCapability({ capabilityId: "lark_kanban_heartbeat_sync", displayName: "Lark Kanban heartbeat sync" }),
@@ -396,7 +399,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
 
 export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null, userActionAttention = false, presentationApi = false } = {}) {
   let turnCounter = 0;
-  const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
+  const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), goalExploreConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
   const sessions = runtime.sessions;
   const messages = runtime.messages;
@@ -1306,7 +1309,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
                 machine_default_present: true,
                 effective_revision: "sha256:periodic-effective",
               },
-            }) : capability)],
+            }) : capability.capability_id === "explore_harness" && runtime.goalExploreConfigurations.has(goalId)
+              ? { ...capability, current: runtime.goalExploreConfigurations.get(goalId) } : capability)],
         },
       }, status: 200 });
       return;
@@ -1327,6 +1331,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (url.pathname === "/api/chat/goal-configuration/apply" && request.method() === "POST") {
       const body = request.postDataJSON();
       state.goalConfigurationRequests.push({ phase: "apply", ...body });
+      if (body.capability_id === "explore_harness") {
+        runtime.goalExploreConfigurations.set(body.goal_id, body.configuration);
+        await route.fulfill({ contentType: "application/json", json: {
+          ok: true, schema_version: "goal_configuration_transaction_v0", status: "applied",
+          goal_id: body.goal_id, capability_id: body.capability_id,
+          plan_revision: body.expected_plan_revision, applied_revision: "sha256:goal-explore-applied",
+          readback_verified: true, changed_fields: ["explore_harness"], goal_configuration: body.configuration,
+          capability_catalog: { schema_version: "capability_configuration_catalog_v0", capabilities: [] },
+        }, status: 200 });
+        return;
+      }
       if (body.capability_id === "multi_subagent") {
         runtime.goalSubagentConfigurations.set(body.goal_id, body.configuration.enabled ? {
           mode: "multi_subagent",

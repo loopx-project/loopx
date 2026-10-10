@@ -34,6 +34,7 @@ import {
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
+  isCapabilityRetirementWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
@@ -138,7 +139,7 @@ function settlementProgress(
   identity: SettlementResult, writeback: SettlementResult, spend: SettlementResult,
   writebackRun: JsonObject | null, spendRun: JsonObject | null,
   spendSource: unknown = "heartbeat",
-  blockedNoSpend = false,
+  noSpendKind: "typed_blocked_writeback_no_spend" | "capability_duty_retired_no_spend" | null = null,
 ): JsonObject {
   const source = spendSource ?? "heartbeat";
   if (source !== "heartbeat" && source !== "visible-goal") {
@@ -146,16 +147,16 @@ function settlementProgress(
   }
   const state: SettlementProgressState = identity.failure ? "identity_required"
     : writeback.failure ? (writebackRun ? "writeback_receipt_required" : "writeback_required")
-    : blockedNoSpend ? "settled"
+    : noSpendKind ? "settled"
     : spend.failure ? (spendRun ? "spend_receipt_required" : "spend_required")
     : "settled";
   return {
     schema_version: "quota_settlement_progress_v0", state,
     next_step: identity.failure ? "validation" : writeback.failure ? "durable_writeback"
-      : blockedNoSpend ? null : spend.failure ? "quota_spend" : null,
+      : noSpendKind ? null : spend.failure ? "quota_spend" : null,
     quota_spend_source: source,
-    ...(blockedNoSpend ? {
-      closeout_kind: "typed_blocked_writeback_no_spend",
+    ...(noSpendKind ? {
+      closeout_kind: noSpendKind,
     } : {}),
   };
 }
@@ -473,7 +474,10 @@ function runEffectMatches(
 export function projectSemanticReplanGuard(
   receiptDetails: JsonObject,
 ): JsonObject {
+  const hasCapability = ["semantic_replan_capability_id", "semantic_replan_gap_id", "semantic_replan_frontier_revision"]
+    .some(field => Object.hasOwn(receiptDetails, field));
   if (!Object.hasOwn(receiptDetails, "semantic_replan_obligation_id")) {
+    if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "legacy_unscoped",
@@ -482,6 +486,7 @@ export function projectSemanticReplanGuard(
   }
   const rawObligationId = receiptDetails.semantic_replan_obligation_id;
   if (rawObligationId === "" || rawObligationId === null) {
+    if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "turn_guard",
@@ -499,7 +504,24 @@ export function projectSemanticReplanGuard(
     schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
     scope: "turn_guard",
     selected_obligation_id: selectedObligationId,
+    ...(hasCapability ? {
+      selected_capability_guard: decodeCapabilityGuard({schema_version: "semantic_replan_capability_guard_v0",
+        capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,
+        frontier_revision: receiptDetails.semantic_replan_frontier_revision}),
+    } : {}),
   };
+}
+
+function decodeCapabilityGuard(value: unknown): JsonObject {
+  const guard = jsonObject(value);
+  if (!guard || guard.schema_version !== "semantic_replan_capability_guard_v0"
+    || typeof guard.capability_id !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(guard.capability_id)
+    || typeof guard.gap_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(guard.gap_id)
+    || typeof guard.frontier_revision !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(guard.frontier_revision)
+    || Object.keys(guard).some(key => !["schema_version", "capability_id", "gap_id", "frontier_revision"].includes(key))) {
+    throw new EffectRuntimeRequestError("heartbeat receipt capability guard is malformed", "malformed_settlement_state");
+  }
+  return guard;
 }
 
 function runMatchesBinding(run: JsonObject, identity: SettlementIdentity): boolean {
@@ -1105,9 +1127,15 @@ function readQuotaSettlementFromRequest(
       writebackRun.progress_observation,
       identity.todo_id,
     );
+  const semanticReplanGuard = projectSemanticReplanGuard(receiptDetails);
+  const retiredNoSpend = writeback.failure === null &&
+    spendRun === null && spendEvent === null &&
+    isCapabilityRetirementWriteback(writebackRun, identity, semanticReplanGuard.selected_capability_guard);
+  const noSpendKind = retiredNoSpend ? "capability_duty_retired_no_spend"
+    : blockedNoSpend ? "typed_blocked_writeback_no_spend" : null;
   const terminalCloseout = terminalResult(identity, completionEvent);
   const withWriteback = settlementBindReduce(identityResult, writeback);
-  const settled = blockedNoSpend ? withWriteback : settlementBindReduce(withWriteback, spend);
+  const settled = noSpendKind ? withWriteback : settlementBindReduce(withWriteback, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
   const monitorPoll = committedMonitorPollFromSnapshot(
     snapshot,
@@ -1129,7 +1157,6 @@ function readQuotaSettlementFromRequest(
   const workspaceCausality: DeliveryWorkspaceCausality | null =
     normalizeDeliveryWorkspaceCausality(nestedCausality, identity.todo_id) ??
     normalizeDeliveryWorkspaceCausality(flatCausality, identity.todo_id);
-  const semanticReplanGuard = projectSemanticReplanGuard(receiptDetails);
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
@@ -1148,13 +1175,13 @@ function readQuotaSettlementFromRequest(
   // reducer so completion, retirement or archival cannot reopen that Turn.
   const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
-    writeback_completes_binding: todoBoundReplan || blockedNoSpend || progressWriteback || replanWriteback,
+    writeback_completes_binding: todoBoundReplan || noSpendKind !== null || progressWriteback || replanWriteback,
     completion_receipt_present: completionEvent !== null,
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,
     durable_writeback_present: writeback.failure === null,
     quota_spend_present: spend.failure === null,
-    no_spend_closeout_present: blockedNoSpend,
+    no_spend_closeout_present: noSpendKind !== null,
   });
 
   const recovery = request.refresh_retry === null ? null : refreshRecovery(
@@ -1181,7 +1208,7 @@ function readQuotaSettlementFromRequest(
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
     progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source, blockedNoSpend),
+      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind),
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
     writeback_run: writebackRun,

@@ -483,13 +483,15 @@ def build_goal_configuration_catalog(
                 "current": {
                     "mode": explore["mode"],
                     "profile": harness.get("profile"),
+                    "composition_mode": harness.get("composition_mode", "disabled"),
+                    "composition_scope_id": harness.get("composition_scope_id"),
                 },
                 "profiles": list(explore_harness_profiles),
                 "consider_when": (
                     "The goal benefits from comparing alternative branches with explicit "
                     "evaluation criteria and guardrails."
                 ),
-                "effect": "Records durable exploration evidence, with optional read-only branch planning. Planning includes the evidence graph.",
+                "effect": "Records durable Explore evidence with optional read-only branch planning. Explicit composition replans require an exact experiment successor or typed result; task completion remains separate.",
                 "does_not": [
                     "grant permission to launch workers, claim todos, acquire leases or spend quota",
                 ],

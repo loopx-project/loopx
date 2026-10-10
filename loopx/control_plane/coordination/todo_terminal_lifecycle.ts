@@ -1,5 +1,11 @@
 import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
+
+/** Service-owned evidence admission, evaluated against the actual provider
+ * head. Public requests cannot supply this callback or an approval boolean. */
+export type TodoTerminalEvidenceGuard = (context: {
+  goal_id: string; todo: JsonObject; todos: JsonObject[]; actor_agent_id: string | null; command: string;
+}) => Promise<JsonObject>;
 import {normalizeTodoUpdateInput, prepareUpdatedTodo, type CoordinationTodoUpdateInput, type TodoCompletionEdit} from "./todo_update_intent.ts";
 import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
 import { createHash } from "node:crypto";
@@ -1032,6 +1038,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   store: AuthorityStore,
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  terminalEvidenceGuard: TodoTerminalEvidenceGuard | null = null,
   verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<void>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
@@ -1279,6 +1286,18 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "Use --evidence for a local artifact pointer, or bind approved Goal acceptance criteria before retrying --result-file.",
       {next_action: "Keep the same Todo/Turn and complete with --evidence, or configure approved bound Goal acceptance criteria."},
       "decision_rejection");
+  }
+  let capabilityCompletionEvidence: JsonObject | null = null;
+  if (terminalEvidenceGuard !== null && !(authority.outcome === "no_change" && todo.status === "done")) {
+    const evidenceGuard = await terminalEvidenceGuard({goal_id: input.goal_id, todo,
+      todos: [...projection.todos.values()], actor_agent_id: input.actor_agent_id, command: input.command});
+    if (evidenceGuard.allowed !== true) {
+      return terminalFailure(String(evidenceGuard.reason_code ?? "capability_completion_evidence_required"),
+        String(evidenceGuard.reason ?? "Current capability evidence is required before closeout"),
+        {capability_completion_guard: evidenceGuard}, "decision_rejection");
+    }
+    capabilityCompletionEvidence = evidenceGuard.evidence == null ? null
+      : canonicalAuthorityObject(evidenceGuard.evidence, "capability completion evidence");
   }
   const acceptanceBinding = acceptanceRequirements === null ? null
     : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
@@ -1652,6 +1671,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_receipt_id: target.todo.completion_receipt_id ?? null,
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
+    ...(capabilityCompletionEvidence === null ? {} : {capability_completion_evidence: capabilityCompletionEvidence}),
     // A preview that omits this would show an unconditional close for work the
     // real call still gates. Name the criteria the real call must run; never
     // their argv, which stays out of every projection.

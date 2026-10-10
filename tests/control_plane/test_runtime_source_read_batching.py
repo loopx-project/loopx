@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import os
 from pathlib import Path
 
@@ -10,8 +11,10 @@ from loopx.control_plane import effect_runtime as runtime
 
 
 def serial_fingerprint(root: Path) -> str:
-    """Independent reference: release identity, names, and raw source bytes."""
+    """Independent reference: selected adapter, release identity and source bytes."""
     digest = hashlib.sha256()
+    digest.update(sys.executable.encode("utf-8"))
+    digest.update(str(sys.version_info[:3]).encode("ascii"))
     digest.update(b"loopx_effect_runtime_source_instance_v1\0")
     digest.update(os.fsencode(os.path.normcase(os.fspath(root.resolve()))))
     digest.update(b"\0")

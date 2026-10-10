@@ -1613,7 +1613,16 @@ def spend_quota_slot(
                 "turn_instance_id": identity.turn_instance_id,
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
-                "reason": "quota spend receipt replayed for the same settlement identity",
+                **(
+                    {"settlement_progress": settlement_readback.progress}
+                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    else {}
+                ),
+                "reason": (
+                    "exact Turn closeout replayed without a quota debit"
+                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    else "quota spend receipt replayed for the same settlement identity"
+                ),
                 **(
                     {"goal_ref": dict(goal_ref)}
                     if goal_ref is not None
