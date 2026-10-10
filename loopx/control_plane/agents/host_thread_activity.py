@@ -16,7 +16,9 @@ from enum import Enum
 from typing import Any
 
 HOST_THREAD_ACTIVITY_SCHEMA_VERSION = "loopx_host_thread_activity_v0"
+HOST_DELIVERY_WINDOW_SCHEMA_VERSION = "loopx_host_delivery_window_v0"
 MAX_OBSERVED_THREADS_PER_GOAL = 32
+DEFAULT_DELIVERY_WINDOW_TOLERANCE = 2
 
 
 class HostThreadState(str, Enum):
@@ -138,3 +140,251 @@ def attach_host_thread_activity(
             ).value,
             "threads": threads,
         }
+
+
+class HostDeliveryWindowState(str, Enum):
+    # The lane produced activity inside the cadence it is expected to keep.
+    FRESH = "fresh"
+    # No activity was observed inside the expected window. This names the
+    # symptom only; it does not by itself name a cause.
+    STALE = "stale"
+    # No observation of this lane was available at all.
+    MISSING = "missing"
+    # The window could not be computed, so it is not reported as fresh.
+    UNKNOWN = "unknown"
+
+
+class HostDeliveryWindowUnknownReason(str, Enum):
+    NO_EXPECTATION = "no_expectation"
+    NO_OBSERVATION = "no_observation"
+    UNPARSEABLE_OBSERVATION = "unparseable_observation"
+
+
+_REASONED_DELIVERY_WINDOW_STATES = frozenset(
+    {HostDeliveryWindowState.MISSING, HostDeliveryWindowState.UNKNOWN}
+)
+
+
+@dataclass(frozen=True)
+class HostDeliveryExpectation:
+    """The cadence one bound lane is expected to produce activity at.
+
+    ``source`` names where the cadence came from, so a reader can tell an agreed
+    loopX cadence from a host-reported one without guessing.
+    """
+
+    expected_interval_minutes: int | None
+    source: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.expected_interval_minutes is not None
+            and self.expected_interval_minutes <= 0
+        ):
+            raise ValueError("expected_interval_minutes must be positive or null")
+        if not self.source.strip():
+            raise ValueError("source is required for a delivery expectation")
+
+
+@dataclass(frozen=True)
+class HostDeliveryScope:
+    """One bound lane a delivery window can be reported for."""
+
+    goal_id: str
+    agent_id: str
+    host_surface: str
+
+
+@dataclass(frozen=True)
+class HostDeliveryWindow:
+    state: HostDeliveryWindowState
+    reason: HostDeliveryWindowUnknownReason | None = None
+    last_observed_at: str | None = None
+    age_seconds: int | None = None
+    age_hours: float | None = None
+    expected_interval_minutes: int | None = None
+    window_minutes: int | None = None
+    tolerance: int | None = None
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        reasoned = self.state in _REASONED_DELIVERY_WINDOW_STATES
+        if reasoned != (self.reason is not None):
+            raise ValueError(
+                "a missing or unknown delivery window requires exactly one reason"
+            )
+
+    @classmethod
+    def unknown(
+        cls,
+        reason: HostDeliveryWindowUnknownReason,
+        *,
+        state: HostDeliveryWindowState = HostDeliveryWindowState.UNKNOWN,
+        source: str | None = None,
+    ) -> HostDeliveryWindow:
+        return cls(state=state, reason=reason, source=source)
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "schema_version": HOST_DELIVERY_WINDOW_SCHEMA_VERSION,
+            "state": self.state.value,
+            "reason": self.reason.value if self.reason else None,
+            "last_observed_at": self.last_observed_at,
+            "age_seconds": self.age_seconds,
+            "age_hours": self.age_hours,
+            "expected_interval_minutes": self.expected_interval_minutes,
+            "window_minutes": self.window_minutes,
+            "tolerance": self.tolerance,
+            "source": self.source,
+        }
+        return {key: value for key, value in payload.items() if value is not None}
+
+
+def _parse_observation_time(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def build_host_delivery_window(
+    activity: HostThreadActivity | None,
+    expectation: HostDeliveryExpectation | None,
+    *,
+    now: datetime | None = None,
+    tolerance: int = DEFAULT_DELIVERY_WINDOW_TOLERANCE,
+) -> HostDeliveryWindow:
+    """Compare one observed lane against the cadence it is expected to keep.
+
+    Absence of evidence is never reported as healthy: an unobserved lane is
+    ``missing`` and an incomputable window is ``unknown``. Neither is ``fresh``.
+    """
+
+    if tolerance < 1:
+        raise ValueError("tolerance must be at least one interval")
+    if expectation is None or not expectation.expected_interval_minutes:
+        return HostDeliveryWindow.unknown(HostDeliveryWindowUnknownReason.NO_EXPECTATION)
+    if activity is None or activity.state is HostThreadState.UNKNOWN:
+        return HostDeliveryWindow.unknown(
+            HostDeliveryWindowUnknownReason.NO_OBSERVATION,
+            state=HostDeliveryWindowState.MISSING,
+            source=expectation.source,
+        )
+    observed = _parse_observation_time(activity.last_event_at)
+    if observed is None:
+        return HostDeliveryWindow.unknown(
+            HostDeliveryWindowUnknownReason.UNPARSEABLE_OBSERVATION,
+            source=expectation.source,
+        )
+    window_minutes = expectation.expected_interval_minutes * tolerance
+    reference = now or datetime.now(timezone.utc)
+    age_seconds = max(0, int((reference - observed).total_seconds()))
+    return HostDeliveryWindow(
+        state=(
+            HostDeliveryWindowState.FRESH
+            if age_seconds <= window_minutes * 60
+            else HostDeliveryWindowState.STALE
+        ),
+        last_observed_at=activity.last_event_at,
+        age_seconds=age_seconds,
+        age_hours=round(age_seconds / 3600, 2),
+        expected_interval_minutes=expectation.expected_interval_minutes,
+        window_minutes=window_minutes,
+        tolerance=tolerance,
+        source=expectation.source,
+    )
+
+
+# Maps bound lanes to the cadence each is expected to keep; lanes it cannot
+# resolve are omitted rather than guessed.
+HostDeliveryExpectationProvider = Callable[
+    [Iterable[HostDeliveryScope]], Mapping[HostDeliveryScope, HostDeliveryExpectation]
+]
+
+
+def attach_host_delivery_windows(
+    status_payload: dict[str, Any],
+    *,
+    expectations: HostDeliveryExpectationProvider,
+    tolerance: int = DEFAULT_DELIVERY_WINDOW_TOLERANCE,
+    now: datetime | None = None,
+) -> None:
+    """Add ``delivery_window`` to each observed lane of ``host_thread_activity``.
+
+    This reads the projection that ``attach_host_thread_activity`` already
+    produced, so no host record is read twice. A lane the expectation provider
+    cannot resolve is reported as ``unknown``, never as healthy.
+    """
+
+    run_history = status_payload.get("run_history")
+    goals = run_history.get("goals") if isinstance(run_history, Mapping) else None
+    if not isinstance(goals, list):
+        return
+    rows_by_goal: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    scopes: list[HostDeliveryScope] = []
+    for goal in goals:
+        if not isinstance(goal, dict):
+            continue
+        activity = goal.get("host_thread_activity")
+        threads = activity.get("threads") if isinstance(activity, Mapping) else None
+        if not isinstance(threads, list):
+            continue
+        rows = [row for row in threads if isinstance(row, dict)]
+        if not rows:
+            continue
+        goal_id = str(goal.get("id") or "").strip()
+        rows_by_goal.append((goal, rows))
+        for row in rows:
+            agent_id = str(row.get("agent_id") or "").strip()
+            host_surface = str(row.get("host_surface") or "").strip()
+            if goal_id and agent_id and host_surface:
+                scopes.append(
+                    HostDeliveryScope(
+                        goal_id=goal_id,
+                        agent_id=agent_id,
+                        host_surface=host_surface,
+                    )
+                )
+    resolved = expectations(scopes) if scopes else {}
+    for goal, rows in rows_by_goal:
+        goal_id = str(goal.get("id") or "").strip()
+        for row in rows:
+            scope = HostDeliveryScope(
+                goal_id=goal_id,
+                agent_id=str(row.get("agent_id") or "").strip(),
+                host_surface=str(row.get("host_surface") or "").strip(),
+            )
+            row["delivery_window"] = build_host_delivery_window(
+                _activity_from_row(row),
+                resolved.get(scope),
+                now=now,
+                tolerance=tolerance,
+            ).to_payload()
+
+
+def _activity_from_row(row: Mapping[str, Any]) -> HostThreadActivity:
+    state_value = str(row.get("state") or "")
+    try:
+        state = HostThreadState(state_value)
+    except ValueError:
+        return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+    reason_value = str(row.get("reason") or "")
+    reason: HostThreadUnknownReason | None = None
+    if reason_value:
+        try:
+            reason = HostThreadUnknownReason(reason_value)
+        except ValueError:
+            reason = HostThreadUnknownReason.RECORD_UNRECOGNIZED
+    return HostThreadActivity(
+        state=state,
+        reason=reason,
+        turn_started_at=row.get("turn_started_at"),
+        last_turn_ended_at=row.get("last_turn_ended_at"),
+        last_event_at=row.get("last_event_at"),
+    )

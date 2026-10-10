@@ -13,11 +13,14 @@ import json
 import os
 import re
 import sqlite3
+import tomllib
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from .control_plane.agents.host_thread_activity import (
+    HostDeliveryExpectation,
+    HostDeliveryScope,
     HostThreadActivity,
     HostThreadObserver,
     HostThreadState,
@@ -26,6 +29,10 @@ from .control_plane.agents.host_thread_activity import (
 
 # Remote surfaces such as codex-app-ssh keep their store on another machine.
 CODEX_LOCAL_STORE_SURFACES = frozenset({"codex-app", "codex-cli-tui", "codex-ide-plugin"})
+
+# An installed app automation drives the app surface; the home's other local
+# surfaces keep their own loop, so the automation cadence is not theirs to carry.
+CODEX_APP_BINDING_SURFACE = "codex-app"
 CODEX_HOMES_ENV = "LOOPX_CODEX_HOMES"
 
 _STATE_DB_RE = re.compile(r"^state_(\d+)\.sqlite$")
@@ -293,3 +300,80 @@ def codex_thread_observers(homes: list[Path] | None = None) -> dict[str, HostThr
         return observe_codex_threads(thread_ids, homes=homes)
 
     return {surface: observe for surface in CODEX_LOCAL_STORE_SURFACES}
+
+
+def _automation_rrule_interval_minutes(rrule: Any) -> int | None:
+    """Read the interval a minutely automation rrule asks for.
+
+    The canonical parse lives in the TypeScript scheduler
+    (``scheduler/state_store.ts``); this reads the same ``INTERVAL=`` field from
+    the installed automation so that a status projection needs no scheduler
+    runtime. An rrule this adapter cannot read reports no interval, never one.
+    """
+
+    text = str(rrule or "").strip().upper()
+    if "FREQ=MINUTELY" not in text:
+        return None
+    match = re.search(r"\bINTERVAL=(\d+)\b", text)
+    if match is None:
+        # A minutely rrule without INTERVAL fires every minute.
+        return 1
+    interval = int(match.group(1))
+    return interval if interval > 0 else None
+
+
+def _installed_automation_intervals(
+    homes: list[Path] | None = None,
+) -> dict[tuple[str, str], int]:
+    """Map each installed app automation to the interval it will fire at."""
+
+    from .upgrade import infer_agent_id_from_prompt, infer_goal_id_from_prompt
+
+    intervals: dict[tuple[str, str], int] = {}
+    for home in codex_homes() if homes is None else homes:
+        for path in sorted((home / "automations").glob("*/automation.toml")):
+            try:
+                item = tomllib.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                continue
+            if str(item.get("status") or "").upper() != "ACTIVE":
+                continue
+            prompt = item.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                continue
+            goal_id = infer_goal_id_from_prompt(prompt)
+            agent_id = infer_agent_id_from_prompt(prompt)
+            interval = _automation_rrule_interval_minutes(item.get("rrule"))
+            if not goal_id or not agent_id or interval is None:
+                continue
+            intervals[(goal_id, agent_id)] = interval
+    return intervals
+
+
+def codex_delivery_expectations(
+    scopes: Iterable[HostDeliveryScope],
+    *,
+    homes: list[Path] | None = None,
+) -> dict[HostDeliveryScope, HostDeliveryExpectation]:
+    """Resolve each bound app lane's cadence from its installed automation.
+
+    A lane the installed automations cannot place is omitted, so its window is
+    reported as ``unknown`` rather than measured against a guessed cadence.
+    """
+
+    wanted = list(scopes)
+    if not any(scope.host_surface == CODEX_APP_BINDING_SURFACE for scope in wanted):
+        return {}
+    intervals = _installed_automation_intervals(homes)
+    expectations: dict[HostDeliveryScope, HostDeliveryExpectation] = {}
+    for scope in wanted:
+        if scope.host_surface != CODEX_APP_BINDING_SURFACE:
+            continue
+        interval = intervals.get((scope.goal_id, scope.agent_id))
+        if interval is None:
+            continue
+        expectations[scope] = HostDeliveryExpectation(
+            expected_interval_minutes=interval,
+            source="codex_app_automation_rrule",
+        )
+    return expectations
