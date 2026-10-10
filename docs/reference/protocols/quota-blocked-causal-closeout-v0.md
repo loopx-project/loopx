@@ -58,8 +58,19 @@ Dry-run changes nothing; retry replays the receipt. Ownership, scope, work
 requirements and completion validation cannot be amended through this path.
 Monitor-driven automatic waiting retains `status=open`; its existing authoring
 contract rejects deferral so a generation change can make it runnable again.
-Reopen explicitly deferred work with `--status open --clear-resume-when` and acquire a fresh execution
-lease before work; the old proof remains invalid.
+Reopen explicitly deferred work with `--status open --clear-resume-when`.
+The next edit follows the current mode's admission; the old proof remains invalid.
+Submit this resume separately from note/evidence or work-requirement edits,
+using a fresh `--update-operation-id` and current
+`--update-expected-provider-revision`. Review the wait's resolution first;
+the diagnostic retry is not evidence that it resolved. The existing lifecycle
+retires inactive lease lineage atomically while preserving its version/epoch.
+A live lease must be released first. A bundled edit's recovery names this
+separate resume only when the current lifecycle fence permits it; explicit old
+proof and foreign/excluded/bound actors remain rejected. After resuming, acquire
+a fresh lease and use its returned proof for the pending edit when the mode
+requires execution fencing. Under `soft_claim`, a permitted owner copy edit uses
+no old proof or replacement lease; other edits retain their own admission.
 
 A `pr_merged` condition is still a valid Todo scheduling condition, but a PR
 number alone is not a qualified blocked-closeout proof. Register a real
@@ -107,7 +118,14 @@ TS 在一个 provider CAS 内同时延期 Todo、释放租约；保留租约历�
 模式也适用。Dry-run 不写入，重试重放原回执，不允许夹带任务内容、权限或验收修改。
 `monitor_changed` 的自动等待仍须保持 open，代际变化后才能自动进入可执行队列；
 其原有 authoring 规则继续拒绝延期。显式延期的普通依赖任务恢复时用
-`--status open --clear-resume-when`，执行前重新获取租约，旧证明仍失效。
+`--status open --clear-resume-when`；剩余编辑遵循当前模式的准入，旧证明仍失效。
+恢复应与 note/evidence、工作要求编辑分开，使用新的
+`--update-operation-id` 和当前 `--update-expected-provider-revision`。
+先核实等待条件已解决；诊断中的重试入口不证明条件已满足。既有生命周期以同一
+CAS 结清非活跃租约，并保留 version/epoch；活跃租约须先释放。只有当前生命周期
+允许时，捆绑编辑的拒绝结果才指出单独恢复路径；显式旧证明、外来 claimant、
+excluded/bound 限制仍拒绝。恢复后，模式要求执行 fencing 时获取新租约，以返回的新证明提交剩余编辑。
+`soft_claim` 中允许的 owner 文案编辑不使用旧证明，也不获取替代租约；其他编辑仍按原准入规则。
 
 `pr_merged` 仍是合法的调度等待条件，但 PR 编号本身不能证明阻塞结算所需的
 真实依赖。应登记实际 monitor／依赖 Todo，以 `monitor_changed`／`todo_done`

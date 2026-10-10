@@ -309,20 +309,17 @@ The table tracks independent composition boundaries within M2/M3 and roadmap R2/
 | Bounded outcome | Existing entry and owner | Current checkpoint and decisive exit |
 | --- | --- | --- |
 | Unavailable declared ancestry prevents current use | `Delegations.read/start`, `delegation_results.py`, `delegation_result_use.ts` | `current_use` separates historical completion from present eligibility. New dispatch, adoption and settlement share ancestry checks; same-operation replay only reads back. Real File/SQLite three-level counterexamples and the packaged team reader cover withdrawal, cause/input references and restored readback. |
-| Independent check failure reaches an actionable original-task recovery journey | `executor._task_validation_stage`, `ValidatedTurnReceipt`, canonical `turn_loop_controller_contract_v0.json`, `turn_journal.ts` | Preserve qualified failure scope and repair/replan detail; complete bounded repair or verifier-only retry, current validation and original-effect settlement. Host assertions cannot become trusted validation. |
+| Independent failure can recheck the original task | `executor`, `task_validation_failure.ts`, canonical controller JSON, `Delegations.revalidate` | Qualified postcondition failures retain repair/replan; legacy detail still routes to generic repair. Explicit CLI/MCP/App revalidation uses the original Turn's cached result: unchanged failure remains rejected, repaired artifacts continue original settlement without repeating Host work. A retained recheck intent and original committed receipts recover response loss through the same operation; replay produces no new Host or quota effects. |
 | Shadow review explains criteria and coverage | progress-review receipt/context, `progress_review_evidence.ts`, canonical acceptance inspect | Select current canonical task criteria; exact GoalRef preserves instance identity, while changed tasks or recreated instances withdraw old judgments. Independent older cores retain only the legacy manual-study shape; canonical scope never downgrades. Show separate dimensions, declared-file net change, missing evidence and unreadable storage. Default off and existing assist trigger rules retain their semantics. |
 
-For the second outcome, `_task_validation_stage` already saves the independent
-result and blocks settlement. `ValidatedTurnReceipt` omits that validation's
-`recovery_kind`; the canonical controller intentionally maps legacy
-`validation_failed` to generic repair. Preserving a trusted validator's replan
-request is a disclosed contract extension, not a violation of today's rule.
-Change the canonical contract, `scripts/generate_turn_contract.py` and the
-existing `validation_failed`/`repair` definitions in
-`loopx/semantics/vocabulary_v0.json`, retaining legacy omitted detail as generic
-repair. Do not hand-edit generated code or add
-a parallel Python decision source. Review missing, malformed and contradictory
-detail and old/new reader compatibility before selecting a wire change.
+`validation_failed` extension updates canonical JSON, the generator and
+existing vocabulary definitions; generated bindings are regenerated. Conflicting
+independent detail is rejected and a Host format error is not a postcondition
+failure. `revalidate` is an explicit effectful recovery operation: success may
+continue existing settlement. Actual code repair still requires current execution
+authority; this operation does not edit code, rerun a model or switch Agents.
+Unknown effects remain subject to the original journal's reconciliation rule.
+A replacement validator cannot erase them.
 
 Failed-Turn retry at `validation_stage=task_postcondition` already reuses the
 cached Host result and reruns validation without invoking the Host again.

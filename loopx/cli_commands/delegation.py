@@ -22,7 +22,7 @@ def register_delegation(
         "delegation", help="Launch and recover authorized peer work; returns JSON."
     )
     add_format(parser)
-    parser.add_argument("delegation_action", choices=("list", "operations", "inspect", "start", "read", "wait", "resume", "adopt", "stop"))
+    parser.add_argument("delegation_action", choices=("list", "operations", "inspect", "start", "read", "wait", "resume", "revalidate", "adopt", "stop"))
     parser.add_argument("--goal-id", required=True)
     parser.add_argument("--agent-id", required=True, help="Calling registered Agent, not the worker.")
     parser.add_argument("--execution-config", type=Path, required=True,
@@ -34,7 +34,7 @@ def register_delegation(
     parser.add_argument("--parent-request-id", help="For start: the request received by this coordinator.")
     parser.add_argument("--limit", type=int, help="For operations: page size, 1–50 (default 20).")
     parser.add_argument("--cursor", help="For operations: next_cursor returned by the previous page.")
-    parser.add_argument("--execute", action="store_true", help="Required for start/resume/adopt/stop; grants no additional authority.")
+    parser.add_argument("--execute", action="store_true", help="Required for start/resume/revalidate/adopt/stop; grants no additional authority.")
 
 
 def handle_delegation(
@@ -45,10 +45,10 @@ def handle_delegation(
 
     action = args.delegation_action
     try:
-        if action in {"start", "resume", "adopt", "stop"} and not args.execute:
+        if action in {"start", "resume", "revalidate", "adopt", "stop"} and not args.execute:
             raise ValueError(f"delegation {action} requires --execute")
-        if action not in {"start", "resume", "adopt", "stop"} and args.execute:
-            raise ValueError("--execute is only valid for start/resume/adopt/stop")
+        if action not in {"start", "resume", "revalidate", "adopt", "stop"} and args.execute:
+            raise ValueError("--execute is only valid for start/resume/revalidate/adopt/stop")
         if action not in {"list", "operations", "inspect"} and not args.operation_id:
             raise ValueError(f"delegation {action} requires --operation-id")
         if action in {"list", "operations", "inspect"} and args.operation_id:
@@ -82,6 +82,8 @@ def handle_delegation(
             result = service.operations(limit=20 if args.limit is None else args.limit, cursor=args.cursor)
         elif action == "adopt":
             result = service.adopt_result(args.operation_id, args.consumer_operation_id)
+        elif action == "revalidate":
+            result = service.revalidate(args.operation_id)
         elif action == "read":
             result = service.read(args.operation_id)
         elif action == "wait":

@@ -213,9 +213,9 @@
         "wait": "The receipt settled with nothing to do now; the controller dispositions wait.",
         "iteration_failed": "The iteration itself failed rather than the work it carried. This is the only result kind that stops the outer loop.",
         "host_failure": "Routed by the controller protocol as a retryable or legacy failure class; retention is decided in RFC Section 12.",
-        "validation_failed": "Legacy failure class per turn-loop-controller-v0; always routes to repair.",
-        "writeback_failed": "Legacy failure class per turn-loop-controller-v0; always routes to repair.",
-        "quota_spend_failed": "Legacy failure class per turn-loop-controller-v0; always routes to repair.",
+        "validation_failed": "Failure class per turn-loop-controller-v0; legacy or absent independent detail routes to repair. Qualified independent task-postcondition replan_required detail routes to replan.",
+        "writeback_failed": "Writing back a validated Turn failed. This settlement failure routes to repair.",
+        "quota_spend_failed": "Spending quota for a validated Turn failed. This settlement failure routes to repair.",
         "terminal_closeout_failed": "Closing out a terminal Turn failed. It joins the other failed receipt classes and routes to repair."
       },
       "input_producer": "loopx/control_plane/turn_driver/transaction.py::_result_kind",
@@ -314,8 +314,8 @@
         "wait": "Route wait or blocked, a wait receipt, or a host failure whose retry budget is still available.",
         "stop": "Reached only from an iteration_failed receipt. It stops the outer loop instead of asking for repair.",
         "user_action_required": "The fresh route or the last receipt says a human must act before the loop continues.",
-        "repair": "A repair_required receipt, a host failure routed to repair or out of retries, or any failed receipt class: host_failure, validation_failed, writeback_failed, quota_spend_failed, terminal_closeout_failed.",
-        "replan": "A replan_required receipt, a host failure routed to replan, or validated progress whose budget is exhausted.",
+        "repair": "A repair_required receipt, a host failure routed to repair or out of retries, or failed receipt classes including legacy validation_failed without qualified replan detail, host_failure, writeback_failed, quota_spend_failed and terminal_closeout_failed.",
+        "replan": "A replan_required receipt, a host failure routed to replan, qualified independent task-postcondition validation_failed requesting replan, or validated progress whose budget is exhausted.",
         "terminal": "A terminal action with no prior receipt, or a validated completion declaring the no_followup continuation."
       },
       "producers": [

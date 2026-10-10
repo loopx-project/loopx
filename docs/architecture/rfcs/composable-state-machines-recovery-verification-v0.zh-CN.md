@@ -254,17 +254,15 @@ PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 
 | 有界结果 | 既有入口与 owner | 当前 checkpoint 与决定性出口 |
 | --- | --- | --- |
 | 声明来源链失效阻断当前使用 | `Delegations.read/start`、`delegation_results.py`、`delegation_result_use.ts` | `current_use` 区分历史完成和当前资格。新派发、采用与结算共用来源链检查；原 operation 重放只读回。File/SQLite 三层来源反例和打包团队证据页验证撤回、原因、输入引用与修复后重读。 |
-| 独立检查失败进入原任务可操作的恢复旅程 | `executor._task_validation_stage`、`ValidatedTurnReceipt`、canonical `turn_loop_controller_contract_v0.json`、`turn_journal.ts` | 传递已资格化失败范围与 repair/replan 细节；完成有界修复或只运行 verifier 的重试、当前验证与原效果结算。Host 声明不能冒充可信验证。 |
+| 独立检查失败可复核原任务 | `executor`、`task_validation_failure.ts`、canonical controller JSON、`Delegations.revalidate` | 已资格化 task-postcondition 失败保留 repair/replan；旧记录仍 generic repair。CLI/MCP/App 显式复核原 Turn 的缓存结果，未修复继续失败，修复产物后沿原效果结算；持久化复核意图及原提交回执支持响应丢失后的同一执行恢复，不重复 Host 或扣额度。 |
 | shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；精确 GoalRef 保持实例身份，任务变化或实例重建撤回旧判断。独立旧核心只保留手工研究的旧格式；规范 scope 不降级。显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
 
-第二项中，`_task_validation_stage` 已保存独立结果并阻断结算；`ValidatedTurnReceipt`
-未携带该验证的 `recovery_kind`，canonical controller 有意将 legacy
-`validation_failed` 统一映射 generic repair。保留可信 validator 的 replan 请求是
-须披露的合同扩展，不是当前实现违反规则。修改 canonical 合同、
-`scripts/generate_turn_contract.py` 与 `loopx/semantics/vocabulary_v0.json` 中
-既有 `validation_failed`/`repair` 定义，旧记录缺少 detail 时继续 generic repair；
-不手改 generated code，不新增平行 Python 决策源。选择 wire 变更前审查缺失、非法、
-矛盾细节以及新旧 reader 兼容。
+`validation_failed` 的 controller 扩展来自 canonical JSON、生成器和既有词汇定义；
+未手改 generated code。独立细节须来自原 validation 边界，矛盾状态不被接纳；
+Host 格式错误不会冒充后置条件失败。`revalidate` 是显式有副作用的恢复操作，
+不是只读检查：通过后会继续原有结算。实际代码修复仍须当前执行权限；本次复核
+不会编辑代码、自动重跑模型或换 Agent。未解决的 unknown effect 仍由原 journal
+恢复规则对账，替代 validator 不能清除它。
 
 `validation_stage=task_postcondition` 的 failed-Turn retry 已会复用缓存 Host
 result，只重跑 validation，不再次调用 Host。**实际修复工作**需要自己的当前有界

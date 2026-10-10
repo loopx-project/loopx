@@ -103,6 +103,29 @@ test("failed trials do not hide independent candidates or enabled direct paths",
   }, scope).recommendation, "inspect_direct_capability");
 });
 
+test("trial feedback requires an exact lowercase enveloped digest", () => {
+  const plan = (trial_basis_digest: unknown) => planCapabilityImprovement(policy, {
+    gap_ref: "example/gap", candidates: [{ ...trial, trial_feedback: {
+      trial_basis_digest, status: "failed", outcome_ref: "owner/outcome-v1",
+    } }],
+  }, scope);
+  const basis = planCapabilityImprovement(policy, {
+    gap_ref: "example/gap", candidates: [trial],
+  }, scope).trial_basis_digest;
+  assert.equal(plan(basis).reason_code, "prior_trial_failed");
+  for (const hex of ["a".repeat(64), "0".repeat(64), "0123456789abcdef".repeat(4)]) {
+    assert.equal(plan(`sha256:${hex}`).reason_code, "trial_feedback_stale");
+  }
+  const hex = "a".repeat(64);
+  for (const digest of [null, 1, {}, [], "", hex, `SHA256:${hex}`, `sha256:${hex.toUpperCase()}`,
+    `sha256:${"a".repeat(63)}`, `sha256:${"a".repeat(65)}`, `sha256:${"g".repeat(64)}`,
+    ` sha256:${hex}`, `sha256:${hex} `, `sha256:${hex}\n`, `sha256:${hex}\r\n`,
+    `sha256:${hex}\u2028`, `sha256:${hex}\u2029`, `sha256:${hex}\u0000`,
+    `sha256:${"ａ".repeat(64)}`, `sha256:${hex}\ud800`]) {
+    assert.throws(() => plan(digest), /capability trial feedback requires an outcome reference, basis digest and receipt status/);
+  }
+});
+
 test("malformed feedback is isolated and off advice never reads it", () => {
   for (const trial_feedback of ["invalid", { status: ["failed"] }, {
     status: "failed", trial_basis_digest: `sha256:${"a".repeat(64)}`, outcome_ref: "/private/result",

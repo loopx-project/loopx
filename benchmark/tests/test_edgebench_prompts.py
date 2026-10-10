@@ -1,10 +1,13 @@
 from pathlib import Path
 from types import SimpleNamespace
 import shlex
+import subprocess
 
 import pytest
 
-from benchmark.edgebench.prompts import blind_task_prompt, best_only_task_prompt
+from benchmark.edgebench.prompts import (
+    blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
+)
 
 
 def test_blind_retains_optimization_contract_without_judge_or_background_signal():
@@ -53,18 +56,32 @@ def test_restricted_wrapper_leaves_grading_and_final_selection_to_task(render, p
 @pytest.mark.parametrize("profile", [
     "official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore",
 ])
-@pytest.mark.parametrize("feedback", ["blind", "best-only"])
-def test_each_worker_receives_and_records_restricted_prompt(tmp_path, monkeypatch, profile, feedback):
+@pytest.mark.parametrize("feedback", ["native", "blind", "best-only"])
+def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch, profile, feedback):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
 
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
-    render = best_only_task_prompt if feedback == "best-only" else blind_task_prompt
-    prompt = render("Complete the supplied task.", ["solver.py"])
+    workspace = tmp_path / "worker's workspace"
+    workspace.mkdir()
+    agents = workspace / "AGENTS.md"
+    agents.write_text("Task-owned instructions: preserve the interface.\n")
+    instructions = None
+    if feedback == "native":
+        prompt = native_task_prompt("Complete the supplied task.", ["solver.py"],
+            submission_cooldown=3600, eval_interval=0, internet=False,
+            selection="pass_rate_first", score_direction="maximize")
+        instructions = native_task_instructions(["solver.py"],
+            submission_cooldown=3600, eval_interval=0, internet=False,
+            selection="pass_rate_first", score_direction="maximize")
+    else:
+        render = best_only_task_prompt if feedback == "best-only" else blind_task_prompt
+        prompt = render("Complete the supplied task.", ["solver.py"])
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-                         profile=profile, cwd="/task", feedback_prompt=prompt, feedback=feedback)
+                         profile=profile, cwd=str(workspace), feedback_prompt=prompt,
+                         feedback=feedback, workspace_instructions=instructions)
     started = []
     worker.backend = SimpleNamespace(start_feedback=lambda handle: started.append(handle))
     worker.handle = "worker-handle"
@@ -80,8 +97,8 @@ def test_each_worker_receives_and_records_restricted_prompt(tmp_path, monkeypatc
             uploads.append(target)
 
         async def exec(self, command):
-            assert shlex.split(command) == ["cat", str(remote)]
-            return SimpleNamespace(return_code=0, stdout=remote.read_text())
+            result = subprocess.run(["/bin/bash", "-c", command], capture_output=True, text=True)
+            return SimpleNamespace(return_code=result.returncode, stdout=result.stdout)
 
     async def prepare(environment, text, **kwargs):
         received.append(text)
@@ -99,7 +116,20 @@ def test_each_worker_receives_and_records_restricted_prompt(tmp_path, monkeypatc
     worker.format_run_cmd(str(remote), internet=False)
     assert remote.read_text() == prompt == (tmp_path / "agent_prompt.md").read_text()
     assert received == ([] if profile in {"official", "single"} else [prompt])
+    if feedback == "native":
+        assert agents.read_text().startswith("Task-owned instructions: preserve the interface.\n")
+        assert agents.read_text().endswith(instructions)
+        assert prompt.startswith(instructions)
+        assert (tmp_path / "workspace-AGENTS.md").read_text() == agents.read_text()
+        worker.instructions_installed = False  # Safe readback retry does not duplicate the block.
+        worker._install_workspace_instructions()
+        assert agents.read_text().count("<!-- EdgeBench native feedback policy -->") == 1
+    else:
+        assert agents.read_text() == "Task-owned instructions: preserve the interface.\n"
+        assert not (tmp_path / "workspace-AGENTS.md").exists()
+    agents.write_text(agents.read_text() + "\nLater task work.\n")
     worker.format_run_cmd(str(remote), internet=False, resume=True)
+    assert agents.read_text().endswith("Later task work.\n")
     assert len(started) == (2 if feedback == "best-only" else 0)
     assert len(uploads) == 1  # Resume does not replace a live task context.
 
@@ -130,3 +160,86 @@ def test_best_only_wrapper_preserves_task_and_limits_signal_meaning():
                    "automatically adds", "acceptance criteria", "source_archive", "do not need to poll"]:
         assert clause in text
     assert "sforge-submit" not in text
+
+
+@pytest.mark.parametrize("internet,interval", [(False, 0), (True, 600)])
+@pytest.mark.parametrize("selection,direction", [
+    ("score_first", "maximize"), ("pass_rate_first", "minimize"),
+])
+def test_native_candidate_prompt_describes_actual_feedback_and_preserves_objective(
+        internet, interval, selection, direction):
+    query = "TASK: prioritize metric A; B is a hard constraint.\nDo not change task scoring."
+    text = native_task_prompt(query, ["candidate.py", "output.json"],
+        submission_cooldown=3600, eval_interval=interval, internet=internet,
+        selection=selection, score_direction=direction)
+    assert text.endswith("---\n\n" + query + "\n")
+    wrapper = text.removesuffix(query + "\n")
+    for clause in ["**3600 seconds**", "first accepted submission", "not from result arrival",
+                   "ties and regressions", "make a new submission", "without creating a new evaluation",
+                   "current promising candidate", "separate checkpoint", "every local proxy metric",
+                   "original objective", "hard constraints", "not necessarily your current files",
+                   "Do not idle", "not zero scores", f"`{selection}`", f"`{direction}`"]:
+        assert clause in wrapper
+    assert "current best solution" not in wrapper
+    assert ("NO internet access" in wrapper) is (not internet)
+    assert ("every 600 seconds" in wrapper) is (interval > 0)
+    assert ("Periodic automatic evaluation is disabled" in wrapper) is (interval == 0)
+    assert "not a score-only filter" in wrapper
+
+
+@pytest.mark.parametrize("existing", ["absent", "partial", "symlink", "directory"])
+def test_workspace_feedback_instructions_preserve_files_and_fail_closed(tmp_path, monkeypatch, existing):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agents = workspace / "AGENTS.md"
+    outside = tmp_path / "outside.md"
+    outside.write_text("Do not overwrite.\n")
+    if existing == "partial":
+        agents.write_text("Original task.\n<!-- EdgeBench native feedback policy -->\npartial")
+    elif existing == "symlink":
+        agents.symlink_to(outside)
+    elif existing == "directory":
+        agents.mkdir()
+    class Environment:
+        async def exec(self, command):
+            result = subprocess.run(["/bin/bash", "-c", command], capture_output=True, text=True)
+            return SimpleNamespace(return_code=result.returncode, stdout=result.stdout)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="official", cwd=str(workspace), feedback_prompt="Resolved native policy.\nNative task",
+        workspace_instructions="Resolved native policy.\n")
+    worker.environment, worker.log_dir = Environment(), tmp_path
+    if existing == "absent":
+        worker._install_workspace_instructions()
+        assert agents.read_text().endswith("Resolved native policy.\n")
+        assert (tmp_path / "workspace-AGENTS.md").read_text() == agents.read_text()
+    else:
+        with pytest.raises(RuntimeError, match="AGENTS.md"):
+            worker._install_workspace_instructions()
+        assert not worker.instructions_installed
+        assert not (tmp_path / "workspace-AGENTS.md").exists()
+        if existing == "partial":
+            assert agents.read_text().endswith("partial")
+    assert outside.read_text() == "Do not overwrite.\n"
+
+
+@pytest.mark.parametrize("feedback,prompt,instructions", [
+    ("blind", None, None), ("best-only", None, None),
+    ("native", "Native task", "Different policy"), ("native", None, "Policy"),
+    ("native", "Native task", ""), ("blind", "Policy task", "Policy"),
+])
+def test_workspace_policy_cannot_drift_from_feedback_mode_or_startup(
+        monkeypatch, feedback, prompt, instructions):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    with pytest.raises(ValueError):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+            profile="official", cwd="/task", feedback=feedback,
+            feedback_prompt=prompt, workspace_instructions=instructions)

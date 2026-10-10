@@ -369,6 +369,16 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
                                      "consumer_operation_id": "consumer", "binding_id": "other"})["error"] == "collaboration_request_rejected"
 
+        revalidations = []
+        def revalidate(bound, operation):
+            revalidations.append((bound.agent_id, operation))
+            return {"operation_id": operation}
+        monkeypatch.setattr(Delegations, "revalidate", revalidate)
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original"})["ok"]
+        assert revalidations == [(settings["agent_id"], "original")]
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original",
+                                     "binding_id": "other"})["error"] == "collaboration_request_rejected"
+
         # Pause persists before attempting potentially slow provider interruption.
         def interrupt(**_):
             assert service.store.load_session(sid)["loopx_mode"]["paused"]
@@ -385,6 +395,8 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
                                      "consumer_operation_id": "consumer"})["error"] == "conversation_execution_inactive"
         assert len(decisions) == 1
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original"})["error"] == "conversation_execution_inactive"
+        assert len(revalidations) == 1
         with pytest.raises(Exception, match="active conversation execution"):
             apply(mode, "message", delivery_mode="queue", message="After pause")
         assert adapter.session.read_tool_handler("loopx_context_read", {}) == {

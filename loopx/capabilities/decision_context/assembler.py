@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,7 +67,7 @@ def _positive_number(value: float, *, field_name: str) -> float:
         number = float(value)
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{field_name} must be a positive number") from exc
-    if number <= 0:
+    if not math.isfinite(number) or number <= 0:
         raise ValueError(f"{field_name} must be a positive number")
     return number
 

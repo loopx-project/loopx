@@ -494,7 +494,7 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         "allowed_terminal",
         "planning_guidance",
     }
-    assert len(packet["planning_guidance"]) == 3
+    assert len(packet["planning_guidance"]) == 5
     assert all(
         isinstance(instruction, str) and instruction
         for instruction in packet["planning_guidance"]

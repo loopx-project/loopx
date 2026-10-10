@@ -1560,15 +1560,22 @@ class ChatRuntimeController:
                 if key in self.cancelled_turns:
                     self.cancelled_turns.discard(key)
                     return True
-            # interrupt_turn clears its in-memory marker after a bounded wait.
-            # A late reader must still honor the persisted stop and cannot
-            # borrow the claim of a newer Turn in the same Session.
+            # The persisted stop also fences a late reader after its in-memory
+            # marker is consumed; it cannot borrow a newer Turn's claim.
             return not managed_turn_execution_allowed(
                 self.store.load_session(session_id),
                 self.store.load_turn(session_id, turn_id),
             )
 
         def event_sink(kind: str, payload: dict[str, Any]) -> None:
+            if kind == "turn.started" and payload.get("upstream_turn_id"):
+                # Bind even if stop won the starting race. This is identity
+                # evidence only: it must not revive an interrupting Core Turn.
+                self.store.update_turn(
+                    session_id, turn_id,
+                    expected_statuses={"starting", "running", "interrupting"},
+                    upstream_turn_id=payload["upstream_turn_id"],
+                )
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:
                     return
@@ -1810,7 +1817,7 @@ class ChatRuntimeController:
             interrupting = self.store.update_turn(
                 session_id,
                 turn_id,
-                expected_statuses={"queued", "starting", "running"},
+                expected_statuses={"queued", "starting", "running", "interrupting"},
                 status="interrupting",
             )
         if interrupting is None:
@@ -1830,33 +1837,43 @@ class ChatRuntimeController:
             event_buffer = self.turn_event_buffers.get((session_id, turn_id))
             done_event = self.turn_done_events.get((session_id, turn_id))
             self.cancelled_turns.add((session_id, turn_id))
-        if adapter is not None and target_is_active:
-            try:
-                adapter.interrupt_turn(str(turn.get("upstream_turn_id") or "") or None)
-            except Exception:
-                pass
+        try:
+            if target_is_active:
+                with self._session_adapter_lock(session_id):
+                    upstream_turn_id = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
+                    if isinstance(adapter, CodexAppServerAdapter) and adapter.goal_driver is None:
+                        # Never fall back to the preceding native Turn while a
+                        # turn/start request is still binding the current one.
+                        deadline = time.monotonic() + adapter.session.response_timeout_sec
+                        while not upstream_turn_id and done_event is not None and not done_event.is_set():
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("native Turn identity was not confirmed")
+                            done_event.wait(timeout=0.02)
+                            upstream_turn_id = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
+                        if upstream_turn_id:
+                            adapter.interrupt_turn(upstream_turn_id)
+                    elif adapter is not None:
+                        adapter.interrupt_turn(upstream_turn_id or None)
+                    elif upstream_turn_id or turn.get("status") in {"running", "interrupting"}:
+                        raise RuntimeError("active Turn transport is unavailable")
+            if done_event is not None and not done_event.wait(timeout=5.0):
+                raise TimeoutError("Turn worker has not acknowledged stop")
+        except Exception as exc:
+            message = "停止尚未确认；当前会话仍保留执行屏障，请重试停止。"
+            self.store.update_turn(session_id, turn_id, expected_statuses={"interrupting"},
+                                   error_code="runtime_error", error=message)
+            self.store.append_message(session_id, role="error", text=message, turn_id=turn_id)
+            raise CodexChatAgentError(message, gate=None, error_code="runtime_error") from exc
         if event_buffer is not None:
             event_buffer.close()
-        if done_event is not None and not done_event.wait(timeout=5.0):
-            # A notification-only interrupt can be lost when an upstream runtime
-            # is unhealthy. Stop that transport before making the Session ready;
-            # the next Turn will resume the persisted upstream thread on a fresh
-            # adapter instead of racing two readers on one event stream.
-            if adapter is not None and target_is_active:
-                try:
-                    adapter.close_session()
-                except Exception:
-                    pass
-            with self.lock:
-                if target_is_active and self.adapters.get(session_id) is adapter:
-                    self.adapters.pop(session_id, None)
-            done_event.wait(timeout=1.0)
         completed = utc_now()
         updated = self.store.update_turn(
             session_id,
             turn_id,
             expected_statuses={"interrupting"},
             status="interrupted",
+            error_code=None,
+            error=None,
             completed_at=completed,
             last_activity_at=completed,
         )

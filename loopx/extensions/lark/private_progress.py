@@ -36,14 +36,21 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str
             elif payload.get("method") == "turn/started":
                 state["label"] = "已开始处理"
             label = {"reasoning": "正在思考", "command": "正在执行命令", "tool": "正在调用工具",
-                     "search": "正在检索资料", "file_change": "正在修改文件"}.get(kind)
-            if label:
+                     "search": "正在检索资料", "file_change": "正在修改文件"}.get(kind) if isinstance(kind, str) else None
+            if label and isinstance(step, Mapping):
                 if step.get("state") == "completed":
                     label = "已结束当前步骤，继续处理"
                 elif step.get("state") == "failed":
                     label = "当前步骤失败，Agent 正在处理"
                 elif kind == "command" and step.get("verb") == "read":
                     label = "正在读取内容"
+                if step.get("state") == "running" and payload.get("method") in {
+                    "item/commandExecution/outputDelta", "item/mcpToolCall/progress",
+                }:
+                    duration = step.get("duration_ms")
+                    if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+                        observed = "收到新输出" if kind == "command" else "收到工具进展"
+                        label = f"{label} · {observed}（已运行 {duration // 1000} 秒）"
                 state["label"] = label
             elif payload.get("method") == "item/started":
                 # Older adapters emit only this fixed vocabulary, without steps.

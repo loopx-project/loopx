@@ -108,7 +108,7 @@ def _iso_timestamp(value: Any, *, field: str) -> str:
 def _score(value: Any, *, field: str) -> float:
     try:
         score = float(value)
-    except (TypeError, ValueError) as exc:
+    except (OverflowError, TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be a number") from exc
     if not math.isfinite(score) or not 0.0 <= score <= 1.0:
         raise ValueError(f"{field} must be finite and between 0 and 1")

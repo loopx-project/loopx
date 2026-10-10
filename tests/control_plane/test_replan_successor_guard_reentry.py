@@ -15,6 +15,7 @@ from test_replan_successor_durable_ack import AGENT, GOAL, history
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.goals.goal_vision import compact_goal_vision_packet, normalize_goal_vision_packet
+from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 
 
 TURN = "turn-periodic-successor-review"
@@ -95,6 +96,30 @@ def _add(call, obligation_id: str):
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
         "--operation-id", "periodic-source-successor", "--replan-obligation-id", obligation_id)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_mcp_replan_delivers_objective_and_evidence_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    _fixture(tmp_path, monkeypatch, provider, later_vision=True)
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig(server_name="synthetic-replan", runtime_profile="claude_code",
+                          legacy_host_surface="claude_code"),
+        lambda: {"goal_id": GOAL, "agent_id": AGENT, "registry": str(tmp_path / "registry.json")},
+    )
+    # Select the test checkout's real CLI, rather than an unrelated global install.
+    control.command_prefix = lambda: [sys.executable, "-m", "loopx.cli"]
+    packet = json.loads(control.should_run())
+    assert packet["ok"] is True
+    assert packet["decision"] == "autonomous_replan_required"
+    guidance = " ".join(packet["replan_action_packet"]["planning_guidance"])
+    assert "provisional agent-created candidate rules" in guidance
+    assert "Do not relax frozen acceptance" in guidance
+    assert "executed path and current artifact" in guidance
+    assert "scope negative results to tested conditions" in guidance
+    assert packet["autonomous_replan_obligation"]["required"] is True
+    assert packet["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -281,6 +306,13 @@ def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
     # A real empty-frontier CLI wake still receives the scoped next-step review.
     assert any("An empty Todo queue is not a scope limit" in item
                for item in guard["replan_action_packet"]["planning_guidance"])
+    # The real provider/CLI entry delivers objective and evidence advice while
+    # retaining the same independently covered frontier and single-debit path.
+    guidance = " ".join(guard["replan_action_packet"]["planning_guidance"])
+    assert "provisional agent-created candidate rules" in guidance
+    assert "Do not relax frozen acceptance" in guidance
+    assert "executed path and current artifact" in guidance
+    assert "scope negative results to tested conditions" in guidance
     binding = ("--goal-id", GOAL, "--agent-id", AGENT,
                "--turn-instance-id", TURN, "--replan-obligation-id", identity["replan_obligation_id"])
     vision = tmp_path / "covered-vision.json"

@@ -1148,6 +1148,9 @@ export type DelegationReadback = {
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>};
+  task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
+    recovery_kind: "repair_required" | "replan_required"; summary: string; validator_kind: string;
+    turn_key: string; resume_mode: "revalidate_cached_result"};
   current_use?: {state: "current" | "unavailable"; checked_operation_count: number;
     reason?: "input_unavailable" | "source_unavailable" | "source_version_changed" | "dependency_cycle" | "verification_budget_exhausted";
     blocking_operation_id?: string; blocking_input_ref?: string; path?: string[]};
@@ -1156,6 +1159,11 @@ export type DelegationReadback = {
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
   return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
+  });
+}
+export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {
+  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+    method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),
   });
 }
 export type ManagedGoalResultRow = {

@@ -6,7 +6,10 @@ Context receipt, launch observation, receiver adoption and return stay separate.
 
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
 
 from ...agent_registry import load_goal_from_registry
 from ...collaboration_mcp import Delegations
@@ -167,10 +170,20 @@ def handoff_response(
     response: dict[str, Any],
     source_authorized: Callable[[], bool],
     execution_allowed: Callable[[], bool],
-    source_store=None,
+    source_store: "ChatSessionStore | None" = None,
 ) -> dict[str, Any]:
-    """Present context delivery and separately admitted execution on one path."""
+    """Append receipt-backed status to the existing audience-processed answer.
+
+    This presentation adapter does not reinterpret model prose as execution
+    evidence or replace the answer already shown by the Chat stream.
+    """
     from . import deliver
+
+    answer = response.get("message")
+    answer = answer if isinstance(answer, str) and answer.strip() else ""
+
+    def present(notice: str) -> str:
+        return answer + "\n\n" + notice if answer else notice
 
     try:
         if not source_authorized():
@@ -182,8 +195,8 @@ def handoff_response(
                              execution_allowed=execution_allowed)
         return {**response, "proposals": [], "gate": None,
                 "context_handoff_receipt": receipt, "context_execution": execution,
-                "message": handoff_message(receipt, execution,
-                                           brief=response["context_handoff"].get("brief"))}
+                "message": present(handoff_message(receipt, execution,
+                    brief=None if answer else response["context_handoff"].get("brief")))}
     except (OSError, ValueError):
         return {**response, "proposals": [], "gate": None,
-                "message": "材料尚未转交：目标绑定、来源授权或持久收件回读未通过。需要修复交接链路；没有改动任务或优先级。"}
+                "message": present("材料尚未转交：目标绑定、来源授权或持久收件回读未通过。需要修复交接链路；没有改动任务或优先级。")}

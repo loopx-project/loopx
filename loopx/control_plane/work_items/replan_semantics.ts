@@ -40,6 +40,14 @@ const REPLAN_PLANNING_GUIDANCE = [
     "If a reasonable in-scope next step remains, continue or replan without waiting for an assigned successor. " +
     "An empty Todo queue is not a scope limit. Otherwise explain why no such step remains; " +
     "do not invent work, exceed authority or consume budget merely to stay active.",
+  "Preserve the requested priorities and optimization direction. Distinguish user requirements " +
+    "and hard constraints from provisional agent-created candidate rules; revisit the latter " +
+    "when they obstruct the goal. Do not relax frozen acceptance, authority, budget or stops, " +
+    "or rewrite criteria after failure.",
+  "Before widening repeated validation, check that the changed intervention reaches the " +
+    "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
+    "scope negative results to tested conditions and local proxies to their coverage. " +
+    "Reuse still-applicable evidence instead of repeating checks without a new uncertainty.",
 ];
 
 function object(value: unknown): JsonObject {

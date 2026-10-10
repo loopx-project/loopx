@@ -25,6 +25,7 @@ import time
 
 active_turn = None
 turn_count = 0
+turn_status = {}
 assert "goals" not in sys.argv, sys.argv
 for line in sys.stdin:
     request = json.loads(line)
@@ -45,9 +46,11 @@ for line in sys.stdin:
     elif method == "turn/start":
         turn_count += 1
         active_turn = f"durable-turn-{turn_count}"
+        turn_status[active_turn] = "inProgress"
         print(json.dumps({"method": "turn/started", "params": {"threadId": "durable-thread", "turn": {"id": active_turn}}}), flush=True)
         print(json.dumps({"id": request_id, "result": {"turn": {"id": active_turn, "status": "running"}}}), flush=True)
         if "typed terminal failure" in json.dumps(request.get("params") or {}):
+            turn_status[active_turn] = "failed"
             print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)
             print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": active_turn, "status": "failed", "error": {"codexErrorInfo": "cyberPolicy", "message": "private-fixture-upstream-detail"}}}}), flush=True)
             continue
@@ -61,6 +64,7 @@ for line in sys.stdin:
         }) + '</loopx-review-json>'
         print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": response}}), flush=True)
         print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": active_turn}}}), flush=True)
+        turn_status[active_turn] = "completed"
         continue
     elif method == "turn/steer":
         assert request["params"]["expectedTurnId"] == active_turn, request
@@ -73,6 +77,7 @@ for line in sys.stdin:
         }) + '</loopx-review-json>'
         print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": response}}), flush=True)
         print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": active_turn}}}), flush=True)
+        turn_status[active_turn] = "completed"
         continue
     elif method == "turn/interrupt":
         interrupted_turn = active_turn
@@ -80,8 +85,14 @@ for line in sys.stdin:
         print(json.dumps({"id": request_id, "result": result}), flush=True)
         time.sleep(0.15)
         if interrupted_turn:
+            turn_status[interrupted_turn] = "interrupted"
             print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": interrupted_turn, "status": "interrupted"}}}), flush=True)
         continue
+    elif method == "thread/turns/list":
+        result = {"data": [{"id": turn_id, "status": status}
+                           for turn_id, status in reversed(list(turn_status.items()))]}
+    elif method in {"thread/items/list", "thread/backgroundTerminals/list"}:
+        result = {"data": []}
     else:
         result = {}
     print(json.dumps({"id": request_id, "result": result}), flush=True)

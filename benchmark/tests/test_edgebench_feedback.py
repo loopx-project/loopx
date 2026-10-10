@@ -338,8 +338,9 @@ def test_best_only_accepts_native_rankings_without_changing_task_policy(policy):
 
 
 @pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
-@pytest.mark.parametrize("mode", [None, "blind", "native"])
-def test_cli_default_and_explicit_controls_reach_native_registration(tmp_path, monkeypatch, profile, mode):
+@pytest.mark.parametrize("mode", [None, "blind", "native", "best-only"])
+@pytest.mark.parametrize("override", [False, True])
+def test_cli_native_default_and_explicit_controls_reach_registration(tmp_path, monkeypatch, profile, mode, override):
     pytest.importorskip("harbor")
     from benchmark.edgebench import run
     monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
@@ -361,13 +362,23 @@ def test_cli_default_and_explicit_controls_reach_native_registration(tmp_path, m
         return SimpleNamespace(image_exists=lambda image: True)
     monkeypatch.setattr(run, "RecordingDockerBackend", backend)
     def handoff(**kwargs):
-        selected = mode or "best-only"
+        selected = mode or "native"
         assert kwargs["agent"].feedback == selected
         assert kwargs["max_submissions"] == (None if selected == "native" else 0)
         assert (constructed["feedback"] is not None) == (selected == "best-only")
         assert constructed["blind_api_endpoint"] == (None if selected == "native" else ("192.0.2.1", 9090))
-        assert (kwargs["agent"].feedback_prompt is None) == (selected == "native")
-        assert kwargs["eval_interval"] == 300
+        prompt = kwargs["agent"].feedback_prompt
+        assert prompt.endswith("---\n\nComplete the task\n")
+        interval = 600 if override else 0 if selected == "native" else 300
+        cooldown = 42 if override else 3600 if selected == "native" else 120
+        assert kwargs["eval_interval"] == interval
+        assert kwargs["submission_cooldown"] == cooldown
+        if selected == "native":
+            assert f"**{cooldown} seconds**" in prompt
+            assert "current promising candidate" in prompt
+            assert prompt.startswith(kwargs["agent"].workspace_instructions)
+        else:
+            assert kwargs["agent"].workspace_instructions is None
         assert kwargs["disable_auto_eval"] == (selected == "best-only")
         raise RuntimeError("synthetic launch boundary")
     monkeypatch.setattr(run, "run_agent", handoff)
@@ -376,7 +387,23 @@ def test_cli_default_and_explicit_controls_reach_native_registration(tmp_path, m
             "--judge-url", "http://192.0.2.1:8080", "--api-proxy-url", "http://192.0.2.1:9090"]
     if mode:
         args += ["--feedback", mode]
+    if override:
+        args += ["--eval-interval", "600", "--submission-cooldown", "42"]
     with pytest.raises(RuntimeError, match="synthetic launch boundary"):
         run.main(args)
     receipt = json.loads((tmp_path / "runs/run/fixture/runtime-receipt.json").read_text())
-    assert receipt["feedback"] == (mode or "best-only")
+    selected = mode or "native"
+    assert receipt["feedback"] == selected
+    assert receipt["eval_interval"] == (600 if override else 0 if selected == "native" else 300)
+    assert receipt["submission_cooldown"] == (42 if override else 3600 if selected == "native" else 120)
+
+
+@pytest.mark.parametrize("option", ["--submission-cooldown", "--eval-interval"])
+def test_negative_intervals_fail_before_attempt_creation(tmp_path, option):
+    from benchmark.edgebench import run
+    args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+            "--run-id", "run", "--worker", "official", "--model", "fixture", "--effort", "xhigh",
+            "--judge-url", "http://192.0.2.1:8080", option, "-1"]
+    with pytest.raises(SystemExit):
+        run.main(args)
+    assert not (tmp_path / "runs").exists()

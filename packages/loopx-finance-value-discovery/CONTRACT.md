@@ -519,3 +519,69 @@ The direct `assess-cash --input-json` command and schema-selected stdin runtime
 call the same assessment. Malformed input fails with the existing error packet;
 well-formed incomplete/ineligible/conflicting results are successful assessments
 with `ok: true`, not successful financial admission.
+
+# Cumulative flow difference (extension 0.8.11)
+
+`finance_flow_difference_input_v1` has exactly `schema_version`, `total`,
+`prefix`, and `compatibility`. This local Finance schema adds one operation to
+the existing optional provider; it introduces no catalog or Core authority.
+The specialized Decimal calculation reuses the existing period, statement-basis,
+numeric-accuracy and canonical-digest owners. Source collection and method
+decisions remain with the source/consumer provider.
+
+Each operand has exactly the existing `source_digest`, `context`,
+`economic_period`, `statement_basis`, plus `aggregation_kind` and `accuracy`.
+`statement_basis` is null or the existing eight-field declaration: `subject_ref`,
+`metric_ref`, `filing_ref`, `version_ref`, `scope_ref`, `evidence_ref`, `unit`,
+and `value`. Original nullable fields retain their missing-evidence reasons.
+Amounts and currency/scale use the same bounded number/unit rules as cash
+reconciliation. A missing value requires null accuracy, not an invented zero.
+
+`aggregation_kind` is the local Finance vocabulary `flow`, `stock`, `average`,
+or `ratio`. Only two declared flows can enter subtraction. The producer must
+verify classification: values alone cannot identify it. Average subtraction
+is invalid without a separate weighting method, and ratio subtraction is
+invalid without transforming its operands; numeric coincidence grants neither.
+
+The original period owner must qualify both duration declarations and the same
+economic role. Normalized absolute starts must match, and the prefix end must
+be strictly earlier than the total end. Tail boundaries are the exclusive end
+of the prefix and the exclusive end of the total, reported with
+`start_inclusive_end_exclusive` convention. Date-to-exclusive-end conversion and
+timezone normalization remain in the existing period owner. Missing timezone,
+unproven source binding, overlapping origins, equal/reversed ends and incompatible
+roles refuse derivation rather than inventing a quarter.
+
+Subject, metric and unit must match exactly. Within one source digest and
+filing/version, distinct declared period-column scopes are allowed.
+Cross-artifact or cross-version inputs need explicit `compatibility` with
+exactly `evidence_ref`, `total`, `prefix`; each pin has `source_digest`,
+`filing_ref`, `version_ref`, and `scope_ref` matching its current operand.
+Null means no additional compatibility declaration. References and matching
+pins are caller assertions, not independent authentication or proof that a
+reclassification is compatible. Reclassified rows require upstream admission
+and separately frozen compatible input; this operation does not repair them.
+
+This first version requires the numeric owner's `producer_declared_exact`
+state for both operands (`decimals` or `precision` of `INF`). Finite declarations
+and unknown accuracy remain in the result but refuse a qualified value.
+There is no implicit rounding/error propagation policy; exact lexical
+subtraction does not establish true measurement accuracy.
+
+`finance_flow_difference_assessment_v1` retains operands, period assessment,
+accuracy assessments, compatibility declaration, canonical input hash and
+sorted reason codes. `candidate_lexical_difference` is available only for
+known identity-compatible flows and amounts; it is a diagnostic even if period,
+version or accuracy evidence is absent. `derived_value` and `derived_period`
+are present only when `derivation_evidence_eligible` is true. Missing amounts
+or incompatible identities omit the candidate too. Replay of a frozen input
+is deterministic, not a new source-lifecycle check.
+
+The direct `assess-period-difference --input-json` command and schema-selected
+stdin invoke this same assessment. Semantic refusal is a successful process
+with an ineligible result; malformed/unknown fields use the existing typed
+error packet and nonzero exit. No external reads/writes occur. Source
+authentication, lifecycle/PIT, financial admission and trading remain false.
+Existing period and cash operations are unchanged; old providers reject this
+new schema. App/Lark interaction, source-consumer adoption and financial utility
+are independent remaining qualifications.

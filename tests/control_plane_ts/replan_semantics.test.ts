@@ -306,7 +306,12 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
     "external_progress_review_drift", "goal_acceptance_stale", "vision_successor_required"]) {
     const source = {triggers: [{kind}]};
     const projection = projectReplanSemantics({operation: "requirements", obligation: source});
-    assert.equal((projection.planning_guidance as string[]).length, 3);
+    const guidance = projection.planning_guidance as string[];
+    assert.equal(guidance.length, 5);
+    assert.match(guidance[3], /provisional agent-created candidate rules/);
+    assert.match(guidance[3], /Do not relax frozen acceptance/);
+    assert.match(guidance[4], /executed path and current artifact/);
+    assert.match(guidance[4], /scope negative results to tested conditions/);
     const refusal = projectReplanSemantics({operation: "qualify", obligation: source,
       planning_guidance: projection.planning_guidance});
     assert.equal(refusal.accepted, false);

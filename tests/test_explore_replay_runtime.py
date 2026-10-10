@@ -1452,6 +1452,21 @@ def test_adaptive_planner_filters_costly_and_invalid_positions() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "invalid_minutes",
+    [True, False, float("nan"), float("inf"), float("-inf"), 10**400],
+)
+def test_replay_cost_rejects_non_finite_or_non_numeric_minutes(invalid_minutes) -> None:
+    with pytest.raises(ValueError, match="capture_minutes must be a finite non-negative number"):
+        ReplayPositionCost(
+            "planning-event-1",
+            2,
+            ReplayFidelity.SEMANTIC_EQUIVALENT,
+            capture_minutes=invalid_minutes,
+            restore_minutes=0.0,
+        )
+
+
 def test_full_scope_composes_adaptive_children_risk_and_promotion() -> None:
     trace = TraceLog("trace-full-scope", "branch-main")
     prefix = TraceEvent(

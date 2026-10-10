@@ -517,6 +517,13 @@ receipt → observed work or actionable failure → readable answer in the same 
   upstream observations; never simulate phases, expose hidden reasoning, or
   infer progress from elapsed time. A period without new events has an explicit
   waiting caption, not an invented failure or continually changing animation.
+- Generate the visible answer once, then append a complete hidden review envelope
+  with `message: ""`. The production parser reuses the preceding Markdown and
+  applies the same redaction and typed metadata normalization. Legacy nonempty
+  envelope messages remain authoritative; missing/null messages do not select
+  this convention. Codex uses the completed final answer item, excluding earlier
+  commentary. Incomplete or malformed envelopes still drop action metadata.
+  Removing duplicate generation does not qualify end-to-end response latency.
 - Before dispatch, cancel only session preparation and state that the request
   was not submitted. After acceptance, existing exact-turn steering/interrupt
   controls own effects; stopping observation is not stopping the worker.

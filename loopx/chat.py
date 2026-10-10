@@ -598,6 +598,12 @@ def parse_agent_response(
         except json.JSONDecodeError:
             payload = None
         if isinstance(payload, dict):
+            # An explicitly empty message reuses the already streamed answer.
+            # Resolve only inside a complete envelope, then use the same
+            # redaction and typed metadata normalization as legacy responses.
+            if payload.get("message") == "":
+                visible = raw_text[:start].split(CHAT_REVIEW_OPEN_TAG, 1)[0].strip()
+                payload = {**payload, "message": visible}
             return normalize_agent_response(
                 payload,
                 protected_paths=protected,

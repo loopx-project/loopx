@@ -72,6 +72,149 @@ class _FakeAppServerProcess:
         self.returncode = -1
 
 
+def _stop_server(tmp_path, monkeypatch, *, failure=None):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="stop-thread", work_dir=tmp_path,
+        response_timeout_sec=.3)
+    state = {"status": "inProgress", "calls": [], "terminals": [
+        {"itemId": "old-command", "processId": "old-pty"},
+        {"itemId": "current-command", "processId": "current-pty"},
+        {"itemId": "late-command", "processId": "late-pty"},
+    ]}
+
+    def write(packet):
+        method, params = packet["method"], packet["params"]
+        state["calls"].append((method, params))
+        assert params["threadId"] == "stop-thread"
+        if failure == method:
+            session.messages.put({"id": packet["id"], "error": {"message": "rejected"}})
+            return
+        if method == "thread/turns/list":
+            result = {"data": [{"id": "current-turn", "status": state["status"]}]}
+        elif method == "turn/interrupt":
+            assert params["turnId"] == "current-turn"
+            state["status"] = "interrupted"
+            result = {}
+        elif method == "thread/items/list":
+            assert state["status"] == "interrupted" and params["turnId"] == "current-turn"
+            item_id = "late-command" if params.get("cursor") else "current-command"
+            result = {"data": [{"turnId": "current-turn", "item": {
+                "type": "commandExecution", "id": item_id, "status": "completed"}}],
+                "nextCursor": None if params.get("cursor") else "second-items"}
+        elif method == "thread/backgroundTerminals/list":
+            result = {"data": list(state["terminals"])}
+        elif method == "thread/backgroundTerminals/terminate":
+            state["terminals"] = [row for row in state["terminals"] if row["processId"] != params["processId"]]
+            result = {"terminated": True}
+        else:
+            pytest.fail(method)
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    return session, state
+
+
+def test_stop_cancels_completed_and_late_command_items_but_preserves_older_terminal(tmp_path, monkeypatch):
+    session, state = _stop_server(tmp_path, monkeypatch)
+    session.interrupt("current-turn")
+    assert state["terminals"] == [{"itemId": "old-command", "processId": "old-pty"}]
+    before_retry = len(state["calls"])
+    session.interrupt("current-turn")
+    assert all(method not in {"turn/interrupt", "thread/backgroundTerminals/terminate"}
+               for method, _ in state["calls"][before_retry:])
+
+
+@pytest.mark.parametrize("failure", ["turn/interrupt", "thread/items/list",
+                                    "thread/backgroundTerminals/list", "thread/backgroundTerminals/terminate"])
+def test_stop_rejected_control_rpc_does_not_claim_success(tmp_path, monkeypatch, failure):
+    session, state = _stop_server(tmp_path, monkeypatch, failure=failure)
+    with pytest.raises(chat_agent.CodexChatAgentError, match="rejected"):
+        session.interrupt("current-turn")
+    assert {row["processId"] for row in state["terminals"]} == {"old-pty", "current-pty", "late-pty"}
+
+
+@pytest.mark.parametrize("fault", ["wrong-turn", "cursor-cycle", "missing-data", "false-receipt"])
+def test_stop_requires_complete_scoped_inventory_and_terminal_readback(tmp_path, monkeypatch, fault):
+    session, state = _stop_server(tmp_path, monkeypatch)
+    original = session._write
+
+    def write(packet):
+        method = packet["method"]
+        if method == "thread/items/list" and fault in {"wrong-turn", "cursor-cycle", "missing-data"}:
+            result = {} if fault == "missing-data" else {"data": [{
+                "turnId": "old-turn" if fault == "wrong-turn" else "current-turn",
+                "item": {"type": "commandExecution", "id": "current-command"}}],
+                "nextCursor": "repeat" if fault == "cursor-cycle" else None}
+            session.messages.put({"id": packet["id"], "result": result})
+        elif method == "thread/backgroundTerminals/terminate" and fault == "false-receipt":
+            session.messages.put({"id": packet["id"], "result": {"terminated": False}})
+        else:
+            original(packet)
+
+    monkeypatch.setattr(session, "_write", write)
+    with pytest.raises(chat_agent.CodexChatAgentError):
+        session.interrupt("current-turn")
+    assert len(state["terminals"]) == 3
+
+
+def test_stop_waits_for_native_turn_terminal_before_command_inventory(tmp_path, monkeypatch):
+    session, state = _stop_server(tmp_path, monkeypatch)
+    original = session._write
+    reads = 0
+
+    def write(packet):
+        nonlocal reads
+        if packet["method"] == "thread/turns/list":
+            reads += 1
+            state["status"] = "interrupted" if reads >= 3 else "inProgress"
+        original(packet)
+        if packet["method"] == "turn/interrupt":
+            state["status"] = "inProgress"
+
+    monkeypatch.setattr(session, "_write", write)
+    session.interrupt("current-turn")
+    assert reads == 3 and len(state["terminals"]) == 1
+
+
+def test_stop_uses_scoped_wire_items_when_native_history_omits_aborted_commands(tmp_path, monkeypatch):
+    session, state = _stop_server(tmp_path, monkeypatch)
+    original = session._write
+    # The same item ID on another thread or Turn cannot authorize cancellation.
+    for thread, turn, item in [("foreign", "current-turn", "old-command"),
+                               ("stop-thread", "old-turn", "old-command"),
+                               ("stop-thread", "current-turn", "current-command")]:
+        session.messages.put({"method": "item/completed", "params": {
+            "threadId": thread, "turnId": turn,
+            "item": {"type": "commandExecution", "id": item, "status": "completed"}}})
+
+    def write(packet):
+        if packet["method"] == "turn/interrupt":
+            session.messages.put({"method": "item/commandExecution/outputDelta", "params": {
+                "threadId": "stop-thread", "turnId": "current-turn", "itemId": "late-command", "delta": "tick"}})
+        if packet["method"] == "thread/items/list":
+            session.messages.put({"id": packet["id"], "result": {"data": []}})
+        else:
+            original(packet)
+
+    monkeypatch.setattr(session, "_write", write)
+    session.interrupt("current-turn")
+    assert state["terminals"] == [{"itemId": "old-command", "processId": "old-pty"}]
+
+
+def test_control_deadline_still_expires_when_event_dispatch_is_contended(tmp_path, monkeypatch):
+    session, _ = _stop_server(tmp_path, monkeypatch)
+    monkeypatch.setattr(session, "_write", lambda _: None)
+    session._message_dispatch_lock.acquire()
+    try:
+        started = time.monotonic()
+        with pytest.raises(chat_agent.CodexChatAgentError):
+            session.interrupt("current-turn")
+        assert time.monotonic() - started < .8
+        assert not session._response_waiters
+    finally:
+        session._message_dispatch_lock.release()
+
+
 def _system_toolchain_fixture(monkeypatch, *, selected="/Library/Developer/CommandLineTools",
                               uid=0, writable=False, symlink=False, mutable_parent=False,
                               unsafe_path=None, unsafe_kind="mode"):
@@ -710,6 +853,52 @@ def test_structured_turn_cannot_promote_nonfinal_json_to_a_final_result(monkeypa
     monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
     with pytest.raises(chat_agent.CodexChatAgentError, match="structured output"):
         session.send("Return the structured result.", output_schema={"type": "object"})
+
+
+@pytest.mark.parametrize("final_phase", [None, "final_answer"])
+def test_ordinary_turn_compact_answer_uses_final_item_not_commentary(monkeypatch, tmp_path, final_phase):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(), thread_id="thread-fixture",
+        work_dir=tmp_path,
+    )
+    final_text = 'Actual answer.\n<loopx-review-json>{"message":"","proposals":[]}</loopx-review-json>'
+    final = {"type": "agentMessage", "text": final_text}
+    if final_phase is not None:
+        final["phase"] = final_phase
+    upstream = iter([
+        {"method": "item/agentMessage/delta", "params": {"delta": "I will check."}},
+        {"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "commentary", "text": "I will check."}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Actual ans"}},
+        {"method": "item/completed", "params": {"item": final}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    events = []
+    response = session.send("Answer.", on_event=lambda kind, data: events.append((kind, data)))
+    assert response["message"] == "Actual answer."
+    assert not any(kind == "protocol.warning" for kind, _ in events)
+    assert events[-1] == ("answer.final", {"response": response})
+
+
+def test_ordinary_turn_cannot_adopt_a_commentary_envelope(monkeypatch, tmp_path):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(), thread_id="thread-fixture",
+        work_dir=tmp_path,
+    )
+    text = 'Plan.\n<loopx-review-json>{"message":"","proposals":[{"kind":"todo","text":"must not run"}]}</loopx-review-json>'
+    upstream = iter([
+        {"method": "item/agentMessage/delta", "params": {"delta": text}},
+        {"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "commentary", "text": text}}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    response = session.send("Answer.")
+    assert response["message"] == ""
+    assert response["proposals"] == []
 
 
 def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(

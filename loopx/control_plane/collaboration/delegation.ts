@@ -493,6 +493,16 @@ export function decideDelegationStop(params: JsonObject): DelegationStopStep {
     : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement");
 }
 
+/** Same-operation recovery after an explicitly requested independent recheck.
+ * Admission supplies a qualified committed receipt and proves no Host reinvocation. */
+export function recoverRevalidatedDelegation(params: JsonObject): JsonObject {
+  requireThat(params.from === "rejected" && params.original_task_failure === true,
+    "revalidation recovery requires the original task failure");
+  requireThat(params.committed_progress === true && params.host_reinvoked === false,
+    "revalidation recovery requires committed progress without repeating Host work");
+  return {status: "turn_returned"};
+}
+
 /** Whether an accepted result may produce a wake intent at all.
  *
  * Only an operation started from a conversation can be continued there. An

@@ -85,6 +85,7 @@ class SForgeWorker(CodexAgent):
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
                  feedback_prompt: str | None = None,
                  feedback: str = "native",
+                 workspace_instructions: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  replan_after_turns: int | None = None,
@@ -130,10 +131,17 @@ class SForgeWorker(CodexAgent):
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
             raise ValueError("Unknown feedback mode")
-        if (feedback == "native") != (feedback_prompt is None):
+        if feedback != "native" and feedback_prompt is None:
             raise ValueError("Restricted feedback requires its task wrapper")
+        if workspace_instructions is not None and (
+            feedback != "native" or not workspace_instructions.strip()
+            or feedback_prompt is None or not feedback_prompt.startswith(workspace_instructions)
+        ):
+            raise ValueError("Workspace feedback instructions must match the native task wrapper")
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
+        self.workspace_instructions = workspace_instructions
+        self.instructions_installed = False
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
         # Let one call use the trial budget. The shared worker recomputes the
@@ -201,7 +209,8 @@ class SForgeWorker(CodexAgent):
                 replan_after_todos=self.replan_after_todos,
             )
             asyncio.run(self.runtime.install(self.environment))
-        if self.feedback_prompt is not None:
+        # Prompt replacement describes the policy; the feedback mode owns access.
+        if self.feedback != "native":
             result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")
             if result.exit_code:
                 raise RuntimeError("Could not remove unavailable submission entrypoint")
@@ -250,6 +259,8 @@ class SForgeWorker(CodexAgent):
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
+        if self.workspace_instructions is not None and not self.instructions_installed:
+            self._install_workspace_instructions()
         if self.feedback_prompt is not None and not self.prompt_installed:
             with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
                 prompt = Path(directory) / "task.md"
@@ -303,6 +314,29 @@ class SForgeWorker(CodexAgent):
             '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc',
             execution_start_marker=started,
         )
+
+    def _install_workspace_instructions(self):
+        """Preserve task instructions and verify the policy before model entry."""
+        path = shlex.quote(str(PurePosixPath(self.cwd) / "AGENTS.md"))
+        marker = "<!-- EdgeBench native feedback policy -->"
+        block = f"\n\n{marker}\n\n{self.workspace_instructions}"
+        check = f"test ! -L {path} && {{ test ! -e {path} || test -f {path}; }}"
+        read = asyncio.run(self.environment.exec(f"{check} && {{ test ! -f {path} || cat {path}; }}"))
+        if read.return_code:
+            raise RuntimeError("Workspace AGENTS.md must be a readable regular file or absent")
+        if marker in read.stdout and not read.stdout.endswith(block):
+            raise RuntimeError("Workspace AGENTS.md has conflicting or partial feedback instructions")
+        expected = read.stdout if read.stdout.endswith(block) else read.stdout + block
+        if expected != read.stdout:
+            written = asyncio.run(self.environment.exec(
+                f"{check} && printf '%s' {shlex.quote(block)} >> {path}"))
+            if written.return_code:
+                raise RuntimeError("Could not append workspace feedback instructions")
+        observed = asyncio.run(self.environment.exec(f"cat {path}"))
+        if observed.return_code or observed.stdout != expected:
+            raise RuntimeError("Workspace feedback instruction readback failed")
+        (self.log_dir / "workspace-AGENTS.md").write_text(observed.stdout)
+        self.instructions_installed = True
 
     def _execution_command(self, command, *, execution_start_marker=None):
         if getattr(self, "backend", None) is not None:

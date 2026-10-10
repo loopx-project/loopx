@@ -3,7 +3,7 @@ import {GoalTeamEpisode} from "./goal-team-episode";
 import {GoalTeamComparison} from "./goal-team-comparison";
 import {TeamArtifactReport} from "./team-artifact-content";
 import {useEffect, useRef, useState} from "react";
-import {delegationStateLabel, readLoopXTeamWork, sendLoopXMessage, type DelegationReadback, type LoopXModeSnapshot} from "../../data/chat";
+import {delegationStateLabel, readLoopXTeamWork, revalidateLoopXTeamWork, sendLoopXMessage, type DelegationReadback, type LoopXModeSnapshot} from "../../data/chat";
 
 type FeedbackAttempt = {id: string; text: string; message: string};
 
@@ -45,11 +45,11 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
     void read();
     return () => {generation.current++;};
   }, [sessionId, operationId]);
-  async function read() {
+  async function read(revalidate = false) {
     const current = ++generation.current;
     setResult(null); setObservedAt(""); setError(""); setBusy(true);
     try {
-      const value = await readLoopXTeamWork(sessionId, operationId);
+      const value = await (revalidate ? revalidateLoopXTeamWork(sessionId, operationId) : readLoopXTeamWork(sessionId, operationId));
       if (current === generation.current) {
         setResult(value); setObservedAt(new Date().toLocaleTimeString());
       }
@@ -122,6 +122,17 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
         <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/></details>
         : <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>}
       {result.error ? <p role="alert">{result.error}</p> : null}
+      {result.status === "rejected" && result.recovery_required && !result.task_failure ? <section aria-label={zh ? "原执行需要对账" : "Original execution reconciliation"}>
+        <p>{zh ? "原执行已有持久化恢复依据，返回状态尚未同步。可沿原执行完成对账。" : "The original execution has durable recovery evidence; reconcile its pending return state."}</p>
+        <button type="button" disabled={busy} onClick={() => void read(true)}>{zh ? "恢复原执行" : "Recover original execution"}</button>
+      </section> : null}
+      {result.task_failure ? <section aria-label={zh ? "原任务验收失败" : "Original task validation failure"}>
+        <p><strong>{result.task_failure.recovery_kind === "replan_required" ? (zh ? "需要重新规划" : "Replan required") : (zh ? "需要修复原任务" : "Repair the original task")}</strong></p>
+        <p>{result.task_failure.summary}</p>
+        <p>{zh ? "先修复任务产物或验收环境，再复核原执行。此操作复用原 Host 结果；检查通过后继续原结算，可能写回状态并扣除原任务额度。它不自动修复代码。" : "Repair the artifact or validation environment, then recheck the original Host result. Passing checks continue pending settlement, including state writeback and the original quota charge. This does not edit code."}</p>
+        <button type="button" disabled={busy} onClick={() => void read(true)}>{zh ? "复核原任务" : "Revalidate original task"}</button>
+        <details><summary>{zh ? "原执行标识" : "Original execution identity"}</summary><code>{result.task_failure.turn_key}</code></details>
+      </section> : null}
       {result.status === "accepted" && result.current_use?.state !== "unavailable" && !result.error && !result.recovery_required ? <details>
         <summary>{zh ? "本次验收依据" : "Current validation basis"}</summary>
         {result.validation ? <>

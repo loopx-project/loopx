@@ -49,7 +49,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "adopt", "messages"],
+                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "revalidate", "adopt", "messages"],
             },
             "binding_id": {"type": "string"},
             "operation_id": {"type": "string"},
@@ -69,6 +69,7 @@ GUIDANCE = (
     "yourself; no business-phase script is provided. Members may delegate through the same "
     "service when authorized. Only currently usable accepted results returned by that service establish "
     "member completion. Synthesize their actual artifacts and report remaining gaps here. "
+    "For task_failure, repair the original artifact or validation environment before action=revalidate; it reruns checks without Host work. "
     "When current_use.state=unavailable, repair the declared source or receiver input and read again; do not propagate those artifacts as current facts. Read action=messages between work steps for owner inbox additions. "
     "Do not claim the whole canonical Goal is complete. Keep independent analysis substantive. "
     "Before completing or blocking, return a self-contained report with substantive accepted findings, "
@@ -301,7 +302,21 @@ class ChatLoopXMode:
             result = service.operations(limit=body.get("limit", 10), cursor=body.get("cursor"))
         return {"ok": True, **result}
 
+    def revalidate_team(self, session_id, body):
+        """Owner-requested original-task checks and existing settlement recovery."""
+        if set(body) != {"operation", "operation_id"}:
+            raise ValueError("revalidation requires only the original operation identity")
+        session = self._session(session_id)
+        settings = (session.get("loopx_mode") or {}).get("settings") or {}
+        if not settings.get("agent_id"):
+            raise ValueError("configure a coordinator identity before revalidation")
+        service, _, _, _ = self._execution(session, settings)
+        from .control_plane.collaboration.peers import require_operation_id
+        return {"ok": True, **service.revalidate(require_operation_id(body["operation_id"]))}
+
     def apply(self, session_id, body, *, work_dir, objective):
+        if body.get("operation") == "revalidate":
+            return self.revalidate_team(session_id, body)
         if body.get("operation") in {"inspect", "operations", "read"}:
             return self.read_team(session_id, body)
         if set(body) - {
@@ -846,9 +861,12 @@ class ChatLoopXMode:
                     arguments.get("brief", {}),
                     conversation={"session_id": session_id, "turn_id": turn_id},
                 )
-            elif action in {"read", "wait", "resume"}:
+            elif action in {"read", "wait", "resume", "revalidate"}:
+                if action == "revalidate" and set(arguments) != {"action", "operation_id"}:
+                    raise ValueError("revalidate requires only the original operation identity")
                 result = (
-                    service.resume(operation_id)
+                    service.revalidate(operation_id)
+                    if action == "revalidate" else service.resume(operation_id)
                     if action == "resume"
                     else service.read(operation_id)
                 )

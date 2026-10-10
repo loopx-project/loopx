@@ -10,7 +10,7 @@ import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 import {decideTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
-import {isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
+import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
@@ -147,7 +147,7 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
         agent_id: input.actor_agent_id,
         requires_flags: ["--update-operation-id", "--update-expected-provider-revision"]}};
   }
-  // A blocked Todo cannot acquire execution authority. A bundled edit must
+  // A blocked/deferred Todo cannot acquire execution authority. A bundled edit must
   // first use the existing administrative reopen, rather than reconcile a
   // claim/acquire a lease that the blocked status itself makes ineligible.
   // This is a diagnostic probe only; the actual retry rechecks owner admission
@@ -155,15 +155,21 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   const reopen = {...input, patch: {}, clear_fields: [], planning_intent: {
     status: "open", reason: "Reviewed lifecycle recovery", clear_resume_when: true,
   }};
-  if (mode === "hard_lease" && intent.status === "open" &&
-      isBlockedLifecycleTransition(reopen, todo) &&
-      blockedLifecycleRejection({goal_id: input.goal_id, todo_id: input.todo_id,
-        actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
-        lease: lease === null ? undefined : index.leases.get(input.todo_id),
-        lease_idempotency_key: input.lease_idempotency_key ?? null,
-        lease_expected_version: input.lease_expected_version ?? null, now: input.now}) === null) {
+  const lifecycleFacts = {goal_id: input.goal_id, todo_id: input.todo_id,
+    actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
+    lease: lease === null ? undefined : index.leases.get(input.todo_id),
+    lease_idempotency_key: input.lease_idempotency_key ?? null,
+    lease_expected_version: input.lease_expected_version ?? null, now: input.now};
+  const canReopen = mode === "hard_lease" && isBlockedLifecycleTransition(reopen, todo) &&
+    blockedLifecycleRejection(lifecycleFacts) === null;
+  const canResume = (mode === "hard_lease" || lease !== null) && isDeferredReopen(reopen, todo) &&
+    deferredReopenRejection(lifecycleFacts) === null;
+  if (intent.status === "open" && (canReopen || canResume)) {
+    const nextEdit = mode === "soft_claim"
+      ? "Then retry only a permitted owner copy edit without either lease proof flag. Planning, ownership and terminal edits keep their own admission; do not acquire a lease in soft_claim."
+      : "Then claim/acquire a fresh execution lease before retrying the remaining edit.";
     return {...base, action: "resolve_lifecycle_edit",
-      reason: "Reopen this blocked Todo separately with only status, clear-resume-when and a reviewed reason. Do not bundle notes, evidence, work requirements or ownership. Then claim/acquire a fresh execution lease before retrying the remaining edit; reopening alone grants no execution authority.",
+      reason: `Reopen this ${todo.status} Todo separately with only status, clear-resume-when and a reviewed reason. Do not bundle notes, evidence, work requirements or ownership. Use a fresh update operation and current provider revision after reviewing the wait. ${nextEdit} Reopening alone grants no execution authority.`,
       retry: {command: "loopx todo update --status open --clear-resume-when --reason '<reviewed reason>'",
         goal_id: input.goal_id, todo_id: input.todo_id, agent_id: input.actor_agent_id,
         requires_flags: ["--status", "--clear-resume-when", "--reason"],

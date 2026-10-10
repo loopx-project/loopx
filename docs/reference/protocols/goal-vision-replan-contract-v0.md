@@ -238,7 +238,7 @@ other's active vision.
 
 ### Replan planning guidance
 
-The shared `replan_action_packet.planning_guidance` carries two short Agent
+The shared `replan_action_packet.planning_guidance` carries five Agent
 instructions through full/compact quota and the host Turn envelope:
 
 - Preserve the requested end state under current user direction. A bounded
@@ -250,6 +250,21 @@ instructions through full/compact quota and the host Turn envelope:
   Missing, stale or indirect evidence leaves completion unproven. An empty Todo
   list, a passing subset or a settled replan is insufficient; blocked, exhausted
   and superseded outcomes remain distinct from achievement.
+- Before `no_followup`, review unmet acceptance against the original authorized
+  goal and evidence. Continue or replan if a reasonable in-scope step remains,
+  even without an assigned successor. An empty queue does not limit scope;
+  otherwise explain why no step remains without inventing work, exceeding
+  authority or consuming budget just to remain active.
+- Preserve requested priorities and optimization direction. Distinguish user
+  requirements and hard constraints from provisional agent-created candidate
+  rules; reconsider the latter when they obstruct the goal. This cannot relax
+  frozen acceptance, authority, budgets or stops, or rewrite criteria after a
+  failure.
+- Before expanding repeated validation, verify that the changed intervention
+  reaches the executed path and current artifact. Prefer a discriminating probe,
+  keep negative evidence scoped to tested conditions and proxies scoped to their
+  coverage, and reuse still-applicable evidence when no new uncertainty warrants
+  repetition.
 
 This guidance is included by default whenever a replan action packet is
 projected. It is Agent judgment guidance, not a new machine-enforced acceptance
@@ -258,12 +273,26 @@ non-replan turns are unchanged. The existing TypeScript replan owner supplies
 the text; CLI and host projections preserve it without a new setting or editor.
 Transport tests prove delivery and unchanged gates, not improved model behavior.
 
-共享 replan action packet 默认携带两条简短指引，并在完整/精简 quota 与
-Turn envelope 中保留：不能为了容易通过测试而悄悄缩小目标；宣布 Goal 达成前，
-须逐项核对当前要求与实际状态的权威证据。阶段成果保留剩余要求，证据缺失、
-过期或间接时保留未证实的缺口；阻塞、探索耗尽及被替代不等于达成。
-用户授权的范围调整、权限、预算和停止条件仍有效。这是 Agent 判断指引，
-不新增机器验收门禁或配置，不改变已有语义写回规则；投影测试不代表模型效果提升。
+共享 replan action packet 默认携带五条指引，并在完整/精简 quota 与
+Turn envelope 中保留：
+
+- 不能为了容易通过测试而缩小目标；阶段成果保留剩余要求，遵守用户范围、
+  权限、预算和停止条件。
+- 宣布 Goal 达成前，逐项核对当前要求与实际状态的权威证据。空 Todo 队列、
+  部分测试通过或完成重规划都不构成证明；阻塞、探索耗尽及被替代不等于达成。
+- 在 `no_followup` 前，结合原始授权目标和证据复查未满足的验收。有合理的范围内
+  下一步就继续或重规划，无需等待指定 successor；空队列不缩小范围。否则说明
+  为什么已无下一步，不虚构工作、越权或仅为维持活跃而消耗预算。
+- 保留用户要求的优先级和优化方向，区分硬约束与 Agent 暂定的候选筛选规则；
+  后者阻碍目标时应重新审视。不能放宽冻结验收、权限、预算或停止条件，
+  也不能因失败而事后改写标准。
+- 扩大重复验证前，确认改动进入实际执行路径和当前产物。优先选择能区分剩余
+  解释的探针；负证据只覆盖已测条件，局部代理指标只覆盖其代表的范围。
+  没有新不确定性时复用仍然适用的证据。
+
+这是 Agent 判断指引，不新增机器验收门禁、配置或权限，不改变已有语义写回
+规则及非重规划 Turn。文本复用既有 TypeScript owner；投影测试证明送达和
+门禁保持，不能证明模型采用或效果提升。
 
 ### Path Delta
 

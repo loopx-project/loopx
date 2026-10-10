@@ -197,7 +197,10 @@ def _safe_goal_id(value: Any) -> str:
 def _safe_confidence(value: Any) -> float | None:
     if value is None:
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("confidence must be a number") from exc
     if not 0.0 <= number <= 1.0:
         raise ValueError("confidence must be between 0 and 1")
     return round(number, 3)

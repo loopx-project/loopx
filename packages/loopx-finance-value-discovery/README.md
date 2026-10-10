@@ -333,6 +333,44 @@ view on PayPal or any control company.
 
 ## Install And Run
 
+### Cumulative flow difference (candidate 0.8.11)
+
+To derive a tail flow, provide a cumulative total and its prefix. The new
+`assess-period-difference` operation requires the same subject, metric, unit and
+economic role, source-bound finite duration contexts with a common absolute
+start, an earlier prefix end, compatible filing versions, and producer-declared
+exact accuracy on both amounts. The synthetic example derives 95 − 60 = 35
+over July through September. It checks declarations, never source truth or PIT.
+
+```bash
+loopx-finance-value-discovery assess-period-difference \
+  --input-json packages/loopx-finance-value-discovery/examples/flow-difference-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/flow-difference-v1.json \
+  --execute --format json
+```
+
+Both direct and schema-selected stdin use the same
+[Finance contract](CONTRACT.md#cumulative-flow-difference-extension-0811).
+Missing period/version/accuracy evidence keeps `derived_value` and
+`derived_period` null; a conditional `candidate_lexical_difference` remains a
+diagnostic. Missing amounts never become zero. Stocks, averages and ratios are
+refused even if their naive difference happens to match a desired result.
+Finite accuracy propagation, duration-weighted averages and EPS semantics are
+outside this v1. App/Lark result interaction and source-provider adoption remain
+companion work; this CLI/provider prerequisite is partial product delivery.
+
+Use the install/enable and disable commands below for explicit opt-in and
+restoration. To roll back, reinstall the prior pinned wheel and upgrade the
+runtime registration to its matching manifest. 0.8.10 rejects this new schema;
+existing period v1/v2, cash reconciliation and reducer inputs keep their routes.
+No default registration, account access, financial permission or trade changes.
+
+0.8.11 候选新增累计流量减前缀：只有同主体／指标／单位、共有绝对起点、
+兼容来源版本与已声明精确值齐备时，才输出尾段期间值。缺证继续保留 null，
+条件差额只作诊断；存量、平均量与比率不套用此算法。有限精度传播、时间加权、
+EPS、来源有效性／PIT 和 App/Lark 交互仍待对应 owner 验收。
+
 ### Disclosure and presentation basis (candidate 0.8.6)
 
 Same economic period does not establish the same filing version or row scope.

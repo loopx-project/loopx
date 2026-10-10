@@ -117,6 +117,56 @@ def test_native_preparation_is_visible_without_answer_or_private_labels():
         "phase": "unrecognized", "label": "private output"}}]) is None
 
 
+def test_observed_tool_progress_changes_the_view_without_exposing_output_or_inventing_activity():
+    state = {}
+    for kind, method, observed in [
+        ("command", "item/commandExecution/outputDelta", "收到新输出"),
+        ("tool", "item/mcpToolCall/progress", "收到工具进展"),
+    ]:
+        def update(seconds):
+            return {"event_id": f"{kind}-{seconds}", "kind": "agent.phase", "payload": {
+                "method": method, "label": "private host label", "step": {
+                    "id": kind, "kind": kind, "state": "running", "title": "private title",
+                    "detail": "private details", "duration_ms": seconds * 1000}}}
+        first = project_progress(state, [update(10)])
+        second = project_progress(state, [update(20)])
+        assert observed in first and "已运行 10 秒" in first
+        assert "已运行 20 秒" in second and second != first
+        assert project_progress(state, []) == second  # No timer-synthesized progress.
+        assert "private" not in second and "answer" not in state
+    done = {"event_id": "done", "kind": "agent.phase", "payload": {
+        "method": "item/completed", "step": {"id": "tool", "kind": "tool", "state": "failed"}}}
+    assert project_progress(state, [done]) == "⏳ **当前步骤失败，Agent 正在处理**"
+
+
+def test_output_activity_updates_the_original_post_then_preserves_terminal_answer(ordinary):  # noqa: F811
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        sid, tid = row["session_id"], row["turn_id"]
+        for duration in (10000, 20000):
+            store.append_event(sid, tid, kind="agent.phase", payload={
+                "method": "item/commandExecution/outputDelta", "step": {
+                    "id": "read", "kind": "command", "state": "running", "verb": "read",
+                    "title": "private command", "duration_ms": duration}})
+            allow_update(transport, row)
+            transport.reconcile()
+            assert f"已运行 {duration // 1000} 秒" in provider.edits[-1][2]
+            assert "第一段回答" in provider.edits[-1][2] and "private" not in provider.edits[-1][2]
+        count = len(provider.edits)
+        allow_update(transport, row)
+        transport.reconcile()
+        assert len(provider.edits) == count
+        runtime.adapters[sid].steer_turn("finish", store.load_turn(sid, tid)["upstream_turn_id"])
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        transport.reconcile()
+        assert provider.edits[-1][2] == "Steered response."
+        assert len(provider.writes) == 1 and {ref for _, ref, _ in provider.edits} == {"om_out_0"}
+        transport.reconcile()
+        assert len(provider.edits) == count + 1
+    finally:
+        runtime.close()
+
+
 def test_native_preparation_updates_original_post_before_model_output(ordinary):  # noqa: F811
     store, runtime, provider, transport = streaming(ordinary)
     # This host accepts the Turn, then waits without any answer/tool/reasoning event.

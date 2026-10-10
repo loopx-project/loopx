@@ -418,6 +418,12 @@ Chat, session, collaboration and presentation owners as R2/R3 integration work.
 Do not call a candidate catalog, spinner or queued inbox receipt a completed
 worker handoff. This checkpoint does not lower R1–R3 or G1 gates.
 
+Observed native command-output and MCP-progress notifications now refresh the
+existing Chat work step and bounded Lark post, without persisting their text or
+inventing activity during silence. See the same presentation checkpoint for
+coalescing, source isolation and the remaining packaged timing/stop/recovery
+qualification; this source repair does not close R2/R3.
+
 CLI and MCP receiver inbox guidance now composes the existing shared conversation answer
 instruction, making the verbatim requester-facing use of report text explicit.
 It preserves requested depth, evidence and material failures; it adds no

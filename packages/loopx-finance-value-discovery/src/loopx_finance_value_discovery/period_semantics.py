@@ -40,6 +40,10 @@ def _boundary(
     match = _LITERAL.fullmatch(literal.strip())
     if not match or (explicit_time and not match["time"]):
         raise ValueError("unsupported period date/dateTime encoding")
+    # Python 3.14 accepts 24:00:00 in fromisoformat. This finite source
+    # contract has always excluded it; interpreter upgrades must not widen it.
+    if match["time"] and int(match["time"][:2]) > 23:
+        raise ValueError("unsupported period date/dateTime encoding")
     zone = match["zone"]
     tz = None
     if zone == "Z":

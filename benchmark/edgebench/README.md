@@ -46,7 +46,7 @@ Only `benchmark/runtime` is overlaid from the runner archive; installed LoopX
 code remains at the product pin. Both revisions are recorded. Without separate
 runner settings, the existing single-checkout contract applies.
 
-For the best-only default, start the dedicated online judge with the same task
+For an explicitly selected best-only trial, start the dedicated online judge with the same task
 and private log roots. It requires a pinned SForge revision with bounded
 asynchronous judge capacity (`judge_max_concurrent` / `judge_max_pending`).
 Each slot reserves one solver (4 CPUs/16 GiB) and one evaluator (4 CPUs/8 GiB):
@@ -92,6 +92,7 @@ Then run:
 python -m benchmark.edgebench.run \
   --task TASK_ID --tasks-dir /data/tasks --log-dir /data/private-runs \
   --run-id UNIQUE_ATTEMPT --worker heartbeat-resume \
+  --feedback best-only \
   --model MODEL --effort xhigh --judge-url http://HOST:8080 \
   --api-proxy-url http://PROXY_IP:9090
 ```
@@ -127,20 +128,38 @@ or unknown exits, including an early exit with code 124, are `runner_failed` and
 do not publish `final_result.json`. Keep their captures and failure evidence;
 do not count an initial artifact's score as a solver outcome.
 
-Auto-evaluation uses **explicit `--eval-interval` → task defaults → 300 seconds**.
-All tasks, including Portfolio and Lean Analysis Proofs, default to **300 seconds
-(5 minutes)**. Lean previously defaulted to 1,800 seconds; use an explicit
-`--eval-interval 1800` when that slower sampling is needed. Defaults apply equally
-to every worker and feedback profile. Explicit `--eval-interval 0` disables periodic auto-evaluation in native/blind;
-`best-only` requires a positive interval. The resolved
-interval is passed to SForge and recorded in each attempt's runtime receipt.
+New native archive-submission trials default to **no periodic auto-evaluation**
+(`--eval-interval 0`) and **3,600 seconds between accepted active submissions**.
+The first submission is immediately eligible. The native judge measures cooldown
+from acceptance, not result arrival; unused intervals do not bank extra submissions.
+These defaults apply equally to all five workers. The startup prompt describes
+the resolved cooldown and keeps submission paths runnable as the current promising
+candidate, with a separate checkpoint of the best supported version. It does not
+require every local proxy metric to improve before exposing a candidate.
+The same policy body is appended to the task workspace's `AGENTS.md` before model
+entry, preserving the task's existing instructions. The runner reads it back as
+the ordinary worker and records `workspace-AGENTS.md` in the private trial log.
+Resume does not rewrite later task edits. A conflicting/partial policy block,
+symlink, non-file target, write failure or readback mismatch stops entry. This
+provides durable instructions across continuation and context compression;
+file delivery is not evidence that the model read or followed them.
+
+Blind and best-only retain **explicit `--eval-interval` → task defaults →
+300 seconds**, and their existing 120-second native submission setting. Best-only
+requires a positive interval. Native/blind permit zero; negative intervals or
+cooldowns are rejected before creating an attempt directory. Explicit values
+override these defaults and are passed to SForge and recorded in the runtime
+receipt. Native terminal evaluation and native final selection remain unchanged.
+An explicitly enabled periodic sampler can add hidden evaluations to native final
+selection; it is not a feedback-budget control or an independent holdout.
+
 These are research-adapter defaults. The upstream Codex leaderboard experiment
 [configuration](https://github.com/ByteDance-Seed/EdgeBench/blob/main/examples/all-tasks-k8s/experiment-codex.yaml)
 uses 1,800 seconds for these tasks. A native-agent `official` arm does not imply
 that all leaderboard settings are reproduced. Existing attempts keep their
 recorded sampling interval; new defaults never rewrite a running attempt or
 create historical snapshots. Sampling cadence does not set evaluator
-concurrency or replace the submission cooldown, which remains 120 seconds.
+concurrency or replace the submission cooldown.
 `--timeout`,
 `--eval-interval`, and `--submission-cooldown` support explicitly recorded
 qualification runs. The shared Harbor defaults are unchanged. Native task
@@ -166,16 +185,31 @@ behavior is unchanged. Record a new runner revision for new attempts; do not
 rewrite earlier `outer_resume` receipts. Explicit total timeouts can support diagnostics,
 but short probes are not a prerequisite for running the intended protocol.
 
-## Feedback protocol (new-run default: best-only)
+## Feedback protocol (new-run default: native)
 
-`--feedback best-only` is now the default for **new attempts across all five
-workers**. This is an explicit protocol change from native, not a demonstrated
-score improvement. Existing trials and pinned study manifests keep their modes.
-Selected improvements now include the complete official result API response,
-rather than the earlier notification-only payload. This changes the new-run
-best-only treatment; old pinned attempts must keep their original protocol.
-Use `--feedback native` to retain agent-requested evaluation or `--feedback blind` as
-an evaluator-feedback-free control. Harbor is unchanged.
+`--feedback native` is the default for **new attempts across all five workers**,
+replacing best-only. This changes new-run defaults, not existing trials or pinned
+study manifests, and does not establish a score improvement. Native feedback
+retains the provider's complete public result; a score-only API/artifact filter
+is not implemented. Freeze feedback content, cooldown, terminal selection and
+resource policy in the study manifest before launching a new comparison.
+Use explicit `--feedback best-only` to retain strict-improvement publication, or
+`--feedback blind` as an evaluator-feedback-free control. Harbor is unchanged.
+
+For native archive submission, start ordinary `sforge serve` and use the runner
+without `--feedback` to select the defaults. Explicit
+`--feedback native --submission-cooldown 120 --eval-interval 300` restores the
+previous native timing for a new attempt. Do not edit running receipts. Game
+tasks retain the provider's game prompt and API; the archive-submission cooldown
+does not limit game API calls.
+
+The pinned native judge's cooldown is in-memory session state. Server restart or
+fresh registration does not prove cooldown continuity or safe retry after an
+ambiguous response. Its capacity bound is aggregate, not a reserved evaluation
+lane per run. Qualify restart/reconciliation, per-run contention and infrastructure
+failure accounting before admitting a campaign; a one-hour cooldown alone does
+not establish fairness. This adapter change does not repair those provider gaps
+or change scoring, accepted-submission accounting, or final selection.
 
 | Mode | Agent-visible evaluator feedback | Evaluation access |
 | --- | --- | --- |
