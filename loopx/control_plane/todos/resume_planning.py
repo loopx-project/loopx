@@ -22,7 +22,9 @@ _SOURCE_KEYS = (
 
 
 def _planning_item(item: dict[str, Any]) -> dict[str, Any]:
-    payload = compact_todo_projection_item(item, text=str(item.get("text") or "").strip())
+    payload = compact_todo_projection_item(
+        item, text=str(item.get("text") or "").strip(), extra_fields=("content_revision",)
+    )
     condition = item.get("resume_condition")
     condition = condition if isinstance(condition, dict) else {}
     priority, index = todo_projection_sort_key(payload)

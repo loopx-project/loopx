@@ -102,6 +102,34 @@ loopx explore graph \
 
 展示包基于多个咨询信号推荐 `presentation_mode=canonical_only|dual_view`，而不是单一节点数阈值。当前 reason codes：`low_decision_density`、`excessive_terminal_branches`、`deep_decision_path`、`readability_check_failed`。静态图形形状可估算可读性风险（包括过度扁平的根拓扑）；调用方可额外提供重叠、文本溢出或异常画布扩张的渲染器观测。canonical 与 executive 视图都使用自上而下的证据时间线：稳定源顺序从顶部开始，有界 epoch 增加导航，后续证据向下扩展 board 而不是加宽第一层。每个原始 canonical 节点与边仍然存在。这些信号与布局选择只控制展示，绝不允许 canonical 截断。
 
+## 普通工作结果写回
+
+在 evidence 或 planning 模式，已绑定 Todo 的普通写回步骤通过能力 hook 提示
+可选 `explore_result` 附件。把验证后的结构化结果放入现有
+`--agent-vision-json` 的顶层 `explore_result` 字段，或使用
+`--explore-result-json <result.json>`。捕获可复用证据是可选行为，不是结算义务；
+普通工作无需附件，off 模式不增加附件提示或证据要求。
+
+对于 **`hard_lease` 下仍开放的 Todo**，让任务租约保持有效，直到
+`refresh-state` 与图/Todo 关联交付返回 `explore_result_delivery.ok=true` 后再释放。
+提前释放会让附件预检在主写回提交前拒绝；重试前重新进入正常的
+准入/claim/lease 路径。`hard_lease` 下已完成 Todo 仅保留增量关联证据的既有例外：原 owner
+可使用保留的已释放租约 key 和当前版本，但不因此获得重新执行或其他编辑权限。
+已成功交付的精确重放只做读回，无需新租约；未完成交付仍需适用的 claim/lease
+证明。这些规则不会让捕获变成必做步骤，也不会自动获取 claim 或续租。
+
+图或关联交付失败时，主写回可能已经提交；以返回的
+`explore_result_delivery.retryable=true` 为准，重放**同一条** refresh 命令完成交付，
+不要通过更改附件重写原 Turn。用 `loopx explore turn-context --goal-id <id>
+--agent-id <agent>` 与 `loopx explore summary --goal-id <id>` 读回；读到证据不证明
+模型已经采纳。Todo 持久关联不再受八条上限约束，增量写入与精确读取保留全部
+有效且去重的节点 ID。每轮紧凑视图对每个分支只展示最多八条请求/未知 ID，
+并给出明确省略数；`plan_command` 现在调用 `todo-branch-plan` 展开同一 Todo
+审计，不再跳到不同的 worker 分组计划。带版本的结果分页
+可读取全部作用域结论。展示预算不删除关联、不漏算负面证据风险，也不阻塞
+合法写回。变化只涉及启用后的证据捕获及显式 Todo 关联编辑；普通工作与
+能力关闭时的 hook 行为保持不变。完整附件与作用域规则见[英文契约](README.md#results-from-ordinary-work-writeback)。
+
 ## 可选 Todo 分支规划
 
 `loopx explore todo-branch-plan` 是面向探索目标的窄 opt-in harness：一次尝试多个看起来都合理的下一个 todo。它使用 CPU 分支预测类比 + DSpark 启发调度器：对 open agent todos 排序，估计分支置信度与预期证据单位，选择置信度调度的验证前缀，选一个 `primary` 分支加安全的 `speculative` 分支，拒绝声明写作用域与已选分支重叠的分支。
@@ -225,6 +253,16 @@ loopx configure-goal \
 ```
 
 在 spawn 权限仍关闭时这仅是分析。用 `--no-explore-harness-enabled` 再次关闭门，或用 `--clear-explore-harness-profile` 让各 planner 请求自己的 profile。不带 `--execute` 的 preview 显示确切 orchestration delta，并保留无关的 `spawn_policy` keys。
+
+Planning 模式的 `explore turn-context` 在既有 turn-start hook 中提供决策输入：
+建议分支保留显式 Todo/节点关联的有界 `typed_evidence_audit`，同时返回最多三个
+既有 exploring 前沿节点。先解析关联 finding，再裁剪近期历史，避免无关的新结果
+遮掉旧反证。诊断不改变 planner 分数；未知关联可见，省略计数针对有界 audit，
+不代表完整日志。通过 `todo update --goal-id <id> --agent-id <agent> --todo-id <todo>
+--explore-result-node-ref <node>` 关联既有证据，仍遵守普通 update/lease 契约。
+实验前据此解释路线和有区分力的 probe；条件变化或不确定性可以支持重试。
+这些是决策指引，没有新增 adoption/writeback gate、自动 successor 或 spawn 权限。
+读取上下文不证明模型已经采纳证据或取得效果提升；短视图不足时读取完整 planner/summary。
 
 planner 把这个边界折叠进 packet 的 `orchestration_gate` 节，行为如下：
 

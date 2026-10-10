@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ...bootstrap import build_goal_entry
 from ...control_plane.runtime.time import now_local_iso
 from ...paths import (
     registered_goal_state_file,
@@ -12,7 +11,7 @@ from ...paths import (
     resolve_runtime_root,
     select_default_runtime_root,
 )
-from ..todos.active_state_editing import atomic_write_state_text as _atomic_write_text
+from ..runtime.document_io import atomic_write_state_text as _atomic_write_text
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from ..goals.source_session_services import (
     FreshSourceSessionRegistration,
@@ -188,6 +187,8 @@ def register_project_goal(
         ),
         "external_locator_bindings": _unique(external_locator_bindings),
     }
+    from ...bootstrap import build_goal_entry
+
     goal_record = build_goal_entry(
         project=knowledge_root,
         goal_id=goal_id,

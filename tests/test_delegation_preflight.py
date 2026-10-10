@@ -13,6 +13,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from loopx.control_plane.collaboration import delegation_validation
 from loopx.control_plane.turn_driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import (
     LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
@@ -123,7 +124,10 @@ def test_structured_previews_isolate_concurrent_registry_and_workspace_facts(
 ):
     """Same public Goal name, different authorities: no cwd or decision leakage."""
     first_root, first = service
-    provider_request = SimpleNamespace(param=request.node.callspec.params["service"])
+    provider_request = SimpleNamespace(
+        param=request.node.callspec.params["service"],
+        addfinalizer=request.addfinalizer,
+    )
     second_root, second = delegation_service.__wrapped__(
         tmp_path / "second", provider_request, monkeypatch
     )
@@ -873,7 +877,7 @@ def test_exact_validated_turn_can_reopen_a_false_terminal_observation(
     }))
 
     binding = runner.binding("analysis", require_active=True)
-    assert runner._recover_validated_settlement(path, row, binding) is True
+    assert delegation_validation.recover_validated_settlement(runner, path, row, binding) is True
     recovered = json.loads(path.read_text())
     assert recovered["status"] == "turn_returned"
     assert recovered["turn_key"] == turn_key

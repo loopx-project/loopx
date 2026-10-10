@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - 跟踪 Issue：[#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - 日期：2026-09-02
-- 最后更新：2026-09-16
+- 最后更新：2026-10-08
 - 范围：多个对等 Agent 围绕同一个共享 Goal 协作，同时保留 canonical
   intent、每个 Agent 的执行 frontier、claim/lease 所有权，以及可审计的
   replan/amendment 决策
@@ -243,6 +243,97 @@ per-Agent frontier 告诉一个 Agent 自己的路线。peer 之间也需要彼�
 - **attention rollup 是 typed 的，且不分配任何东西。** "现在谁需要决策"的视图可以按
   typed state 排序和标注行；它不创造 claim、lease 或优先级，也不是自动分配的输入。
 
+### 3.7 当前工作与 Goal 要求
+
+当前 Agent 集中处理的工作，与整个 Goal 仍须满足的要求必须分开。反馈视图可以
+将既有事实组织成 `work`、`obligations`、`reflection`、`continuation`；这四项是
+投影分区，不是新的持久 schema，也不是模型可直接改写的权威源：
+
+| 分区 | 含义与既有 owner |
+| --- | --- |
+| `work` | 当前 Todo/frontier、局部验收及精确原文入口。 |
+| `obligations` | Goal 验收条件及保留承诺，独立于当前 Todo 和 Agent。 |
+| `reflection` | 有证据的解释与未决问题；owner 接受证据前只作 advisory。 |
+| `continuation` | 后续可执行工作、等待/停止原因及其范围；复用 frontier 与 settlement owner。 |
+
+目标合同须保留稳定 ID、来源 criterion ID、Goal revision/digest、状态与证据绑定。
+每项已声明的结构化 criterion 都要有明确覆盖关系；切换焦点不能删除或改写已登记
+要求。这只能证明已声明合同的覆盖，不能证明任意自然语言意图已被完整提取。
+复用 `acceptance_contract.ts` 与 `acceptance_authority.ts`；lane replan obligation
+保留自己的生命周期，不能成为第二套 Goal 验收账本。
+
+承诺在同一 revision 内保持稳定；授权 amendment 可以保留历史并显式处理
+lease/frontier 影响后替代旧要求，不能禁止合法目标变更。代码、范围或合同变化后
+证据可能过期，因此 satisfied 不单调。引用非空只是结构有效；验收还须检查证据
+可解析、范围相关、时效有效及 owning validator 的结果，保留失败和未测试的区别。
+现有 selected-work acceptance 不等于全局 Goal acceptance。
+
+全局收口须对账当前 revision 的全部适用要求、跨 Agent 剩余工作和待处理 amendment。
+一个 Agent 的 `no_followup` 或一个 Todo 完成，不能推出 `achieved`。压缩投影须保留
+身份及无损详情入口，不能用展示前缀替代源承诺。
+
+**交付边界：** 既有 typed interaction owner 在准入后生成 Goal 原文、已启用的
+canonical acceptance 与当前 Todo 精确详情读取。普通产品 heartbeat 与 TurnEnvelope
+消费同一清单；短包只传输并签名，不另行制定读取规则。Goal 文档恢复完整意图和停止
+条件，canonical acceptance 与 Todo reader 保留各自权威和范围；selected-work 验收
+文档不能替代完整目标。共享 host adapter 保留选中任务。须一起验证默认 heartbeat
+生成→guard→来源回读与短包传输，不能用一条路径替另一条验收。尚未
+实现完整义务账本、全局收口门禁、读取执行的自动证明或模型遵循资格。这些继续归
+R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完整切片应让既有
+结构化 criterion 穿过任务切换和重启，在同一 owner 拒绝覆盖丢失并使过期证据失效。
+
+### 3.8 失效证据与受影响消费者
+
+本节是既有 acceptance 与显式 result-use owner 的待实现资格合同，不新增全局错误
+状态、taint graph 或自动 amendment 政策。历史完成与当前证据使用资格是不同事实。
+保留原 receipt、声明依据与结果，重新检查当前适用性；不能靠改写已完成 Todo 让
+历史看起来一致。
+
+来源不可用、版本/范围改变、owner 确认结论错误，含义不同。来源读不到只能说明
+当前证据不可得，不能说明内容为假。语义反驳须有当前 criterion 与可归属反证，由
+所属 validator 或获授权评审确认；字节一致和传输成功无法单独解决。可选评估遵循
+[检测衔接合同](optional-semantic-assistance-jev-v0.zh-CN.md#检测结果与所属规则的衔接)。
+
+对合同要求当前证据的显式关系：
+
+1. 指明 source operation/artifact version、criterion 和实际声明的 consumer input，
+   保留原因与影响范围。不能从消息送达、共同关键词或 workspace 全部文件推断消费。
+2. 在新的验收、adoption 或所属受保护执行边界之前重验依据。Consumer 输出不变且
+   本地 validator 通过，并不能独立证明声明来源链仍有效。决定须在实际准入边界绑定
+   观察到的版本，不能用较早的 UI 读取或缓存成功授权后续使用。无关工作继续，
+   不因一个 source 缺失就停止全部 Agent。
+3. 通过现有 typed readback/guard 表达当前使用不可用。读取不修改历史、释放 lease、
+   撤回消息或启动修复。不能把任意来源失效塞进 `goal_acceptance_stale`：其现有
+   owner 表达的是 acceptance/work binding 改变。
+4. 恢复时取得当前证据，恢复精确获准依据或经既有 owner 验证替代版本，再检查
+   consumer eligibility。字节恢复只证明版本可得；已确认的语义失败还须重新验证
+   相关 criterion。模型说“修好了”、新 ACK 或新 evidence ID 均不足以解除。
+
+发送者 context 记录此前推理。受影响工作恢复或交接时，既有 context owner 须带入
+失效依据、未解决问题、当前证据与下一项必要检查。这证明新的 context delivery，
+不代表清除全部旧 session，也不证明模型理解了纠正。已经提交的外部 effect 继续
+服从自己的对账或显式授权补偿合同。
+
+**本地实现检查点：** 在 `44931b6d22a50b949d43354e6ea498fb6b68d231`
+观察到的直接来源检查缺口，已有候选实现：
+[`delegation_result_use.ts`](../../../loopx/control_plane/collaboration/delegation_result_use.ts)
+拥有判定，[`delegation_results.py`](../../../loopx/control_plane/collaboration/delegation_results.py)
+采集 host 观察。read、start、adoption 与 settlement 资格化 requester 范围内的
+显式来源链，保留历史 accepted/done 记录。每次准入独立缓存来源观察并检测循环，
+界限为 64 个 operation、16 层、15 秒经过时间预算；预算停止后续检查，不中止已
+运行的 validator。缺失与未访问证据均 unavailable；不跨准入缓存成功，不声称原子
+文件快照。准入与采用消费整体验证结果；逐项检查之后预算耗尽，也会撤回此前
+的 link 成功，避免读回与准入分歧。
+
+[`test_delegation_result_use.py`](../../../tests/test_delegation_result_use.py)
+通过真实本机 worker、独立 validator 和 File/SQLite 存储验证 source → A → B：
+A input 变化时撤回当前使用，拒绝下游 start/adoption，保留历史，修复后恢复且不重复
+派发 accepted worker。typed 测试覆盖共享来源、循环与预算耗尽。打包 team/evidence
+经真实 HTTP 读回，撤下受影响报告、显示原因，并在修复后复验。CLI/MCP/Chat 共用
+owner；操作见[本地委派](../../reference/local-delegation.md#repair-and-recheck)。
+这是本地验证的候选实现，不等于已安装行为；全 Goal 反向传播、全部 session 纠正、
+业务回滚与跨主机 HA 仍在边界之外。
+
 ## 4. Authority matrix
 
 ### 4.1 `GoalAmendmentAuthority` 到底是什么
@@ -458,6 +549,8 @@ provider-neutral authority store contract 后面。
 
 Replan 在选择 writer 前先分类发现的 gap：
 
+- intent 不变时的检查失败或证据失效，先走既有 task/acceptance/result-use 修复或
+  重验路径；读取失败证据不授予新权限，也不一定需要修改共享工作图；
 - 完全位于 canonical intent 内的 route correction 打开或结算 Agent-scoped
   replan obligation；
 - cross-lane dependency/work-graph gap 打开 shared amendment obligation；
@@ -469,6 +562,10 @@ Replan 在选择 writer 前先分类发现的 gap：
 每个 obligation 都有 stable id。仅 ACK proposal 不会结算它。Settlement 必须是：
 该精确 obligation 对应的 committed receipt；被 policy 接受的 reject/no-change
 结构化 rationale；或显式保留因果链的 superseding obligation。
+
+证据导致的 obligation 在修复和复验中保留 source/version 与受影响 criterion。
+结算 replan 证明路径决策已接受，不能顺带解除失败的业务 criterion 或 unknown
+effect；这些仍由各自 owner 要求当前恢复证据。
 
 Commit 后，`based_on_goal_revision` 已过期的 Agent 可以观察，但在 rebase 或取得
 显式 grandfathered-work disposition 前，不能执行 controlled semantic write。
@@ -488,6 +585,18 @@ projection 与 proposal contract 交付；把 commit 映射进 provider-neutral 
 
 `Next Action` 继续是 compatibility prose 与 read projection。它永远不是 claim、
 lease、Goal amendment、replan settlement 或 authority decision。
+
+融合 recommendation checkpoint：`refresh-state --next-action` 演进现有
+recommendation receipt，记录绑定当前 agent/Todo 的任务内步骤，不再覆盖兼容文本。
+单 peer 和多 peer 使用同一规则：先由现有 lane selector 选任务，再由 TS
+recommendation owner 附加仍有效的步骤，保留任务原文及 claim/lease 前置条件。
+各 peer 的汇总复用这些派生路线，不增加独立计划库。来源、任务和当前 agent 步骤
+的读取依据检查拒绝过期写入，并在读时丢弃过期步骤。详见
+[写回合同](../../quota-allocation.md)。
+
+这推进 advisory continuity，不代表 Stage 3 amendment commit 已交付。来源事实
+摘要不是 canonical intent revision；run history 不是共享 Todo/claim/lease 事务库。
+普通任务修改、受保护意图、验收、Vision 和 replan settlement 继续由原 owner 负责。
 
 ### 9.1 语义交接与执行路线衔接
 
@@ -547,6 +656,10 @@ root intent 不能自动 commit，除非 Goal 创建时已经精确委托该 cla
 
 测试至少必须证明：
 
+- 工作切换、压缩、重启与交接保留已声明要求的身份和覆盖关系；
+- 末尾验收条件可通过精确详情取回，不能替换为别的 Todo 或旧展示；
+- 删除或改写 criterion 须经过授权 amendment；缺失、无关或过期引用不能满足验收；
+- 另一 Agent 仍有未完成要求时，局部完成不能结清整个 Goal；
 - own-lane replan 不能改变 canonical intent；
 - unclaimed work 可见，但 claim/lease 前不能执行；
 - pending proposal 不影响无关 peer；

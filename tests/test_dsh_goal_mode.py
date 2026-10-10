@@ -15,6 +15,8 @@ from loopx.cli_commands import turn_dsh_host
 from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
 )
+from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
+from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema
 from loopx.control_plane.turn_driver.host_failure import (
     BuiltInHostError,
     build_host_failure_record,
@@ -361,6 +363,29 @@ def test_prompt_requests_one_typed_public_safe_json_result() -> None:
     # Boundary discipline stays in the prompt text.
     assert "write_scope" in prompt
     assert "credentials" in prompt
+    assert "material_replan" in prompt and "goal_path_delta_v0" in prompt
+    assert "These fields describe the result only; they grant no authority." in prompt
+    assert "For stop results (wait, user_action_required, iteration_failed), omit both path_delta_mode and agent_vision_json." in prompt
+
+
+def test_prompt_carries_the_signed_authority_without_prose_reconstruction() -> None:
+    request = _signed_request()
+    authority = turn_host_adapter.extract_turn_authority(request)
+    envelope = request["turn_envelope"]
+    assert authority["primary_action"] == "Do the signed thing."
+    assert authority["required_reads"] == envelope["required_reads"]
+    assert authority["write_scope"] == envelope["boundary"]["write_scope"]
+    assert authority["workspace_guard"] == envelope["boundary"]["workspace_guard"]
+
+    prompt = turn_host_adapter.render_prompt(authority)
+    assert "legacy action must not win" not in prompt
+    for expected in (
+        '"primary_action":"Do the signed thing."',
+        '"command":"git status --short"',
+        '"write_scope":["docs/**","tests/**"]',
+        '"workspace_guard":{"action":"continue"',
+    ):
+        assert expected in prompt, expected
 
 
 def test_parse_model_json_tolerates_prose_and_fences() -> None:
@@ -427,6 +452,197 @@ def test_build_result_shapes_material_results_with_required_fields() -> None:
     # Sparse material blocks get bounded fallbacks, never empty authority text.
     assert result["recommended_action"]
     assert result["vision_unchanged_reason"]
+    assert "path_delta_mode" not in result
+    assert "agent_vision_json" not in result
+
+
+def _material_replan_candidate() -> tuple[dict[str, object], str]:
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {
+            "vision_summary": "Continue the next bounded fixture check.",
+            "acceptance_summary": "Validate the next fixture outcome independently.",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": "replan",
+            "prior_assumption": "The prior fixture stage remained open. " + "a" * 250,
+            "observed_reality": "The prior stage passed its local validation. " + "b" * 250,
+            "evidence_refs": [f"fixture:{index}-" + "e" * 120 for index in range(4)],
+            "changed": [f"Advance bounded fixture check {index}-" + "c" * 70 for index in range(3)],
+        },
+    }
+    vision_json = json.dumps(vision, indent=2)
+    candidate: dict[str, object] = {
+        "result_kind": "replan_required",
+        "classification": "fixture replan",
+        "recommended_action": "Continue the validated successor stage.",
+        "next_action": "Validate the next bounded fixture check.",
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": vision_json,
+    }
+    return candidate, vision_json
+
+
+def test_build_result_preserves_material_replan_for_the_executor() -> None:
+    candidate, vision_json = _material_replan_candidate()
+    result = turn_host_adapter.build_result(_signed_request(), candidate)
+
+    assert result["path_delta_mode"] == "material_replan"
+    assert result["agent_vision_json"] == vision_json
+    assert len(vision_json) > 400
+    assert "vision_unchanged_reason" not in result
+    verdict = validate_loopx_turn_host_result(
+        _turn_plan(_signed_request()), result
+    )
+    assert verdict["ok"], verdict["errors"]
+
+
+@pytest.mark.parametrize(
+    ("change", "expected_error"),
+    [
+        ({"agent_vision_json": ["not a string"]}, "agent_vision_json must be a JSON string"),
+        ({"agent_vision_json": None}, "agent_vision_json must be a JSON string"),
+        ({"agent_vision_json": "{"}, "invalid agent_vision_json"),
+        ({"agent_vision_json": "[]"}, "agent_vision_json must decode to a JSON object"),
+        ({"agent_vision_json": "x" * 3_201}, "agent_vision_json exceeds 3200 characters"),
+        ({"path_delta_mode": "unexpected"}, "path_delta_mode must be unchanged or material_replan"),
+        ({"path_delta_mode": False}, "path_delta_mode must be a string"),
+        ({"path_delta_mode": None}, "path_delta_mode must be a string"),
+        ({"result_kind": "validated_progress"}, "material_replan path_delta_mode requires result_kind replan_required"),
+        ({"vision_unchanged_reason": "The goal path is unchanged."}, "material_replan cannot also declare vision_unchanged_reason"),
+    ],
+    ids=["wrong-json-type", "null-json", "malformed-json", "nonobject-json", "oversized-json", "wrong-mode", "wrong-mode-type", "null-mode", "wrong-kind", "conflicting-reason"],
+)
+def test_build_result_preserves_invalid_replan_for_executor_rejection(
+    change: dict[str, object], expected_error: str,
+) -> None:
+    candidate, _vision_json = _material_replan_candidate()
+    candidate.update(change)
+    result = turn_host_adapter.build_result(_signed_request(), candidate)
+    for field in ("agent_vision_json", "path_delta_mode"):
+        if field in change:
+            assert result[field] == change[field]
+
+    verdict = validate_loopx_turn_host_result(_turn_plan(_signed_request()), result)
+    assert not verdict["ok"]
+    assert expected_error in " ".join(verdict["errors"])
+
+
+@pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
+def test_stop_candidates_omit_path_delta_fields_and_pass_executor(kind: str) -> None:
+    candidate = {
+        "result_kind": kind,
+        "classification": "bounded stop",
+        "next_action": "Await the next authorized iteration.",
+    }
+    result = turn_host_adapter.build_result(_signed_request(), candidate)
+
+    assert "path_delta_mode" not in result
+    assert "agent_vision_json" not in result
+    verdict = validate_loopx_turn_host_result(_turn_plan(_signed_request()), result)
+    assert verdict["ok"], verdict["errors"]
+
+
+@pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
+def test_stop_candidates_cannot_smuggle_material_path_fields(kind: str) -> None:
+    candidate, vision_json = _material_replan_candidate()
+    candidate["result_kind"] = kind
+    result = turn_host_adapter.build_result(_signed_request(), candidate)
+
+    assert result["path_delta_mode"] == "material_replan"
+    assert result["agent_vision_json"] == vision_json
+    verdict = validate_loopx_turn_host_result(_turn_plan(_signed_request()), result)
+    assert not verdict["ok"]
+    assert "non-material host results cannot declare path_delta_mode or agent_vision_json" in " ".join(verdict["errors"])
+
+
+@pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
+def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind: str) -> None:
+    request = _signed_request()
+    schema = codex_cli_result_schema(request)
+    required = schema["required"]
+    properties = schema["properties"]
+    assert "path_delta_mode" in required and "agent_vision_json" in required
+    assert properties["path_delta_mode"]["type"] == "string"
+    assert properties["agent_vision_json"]["type"] == "string"
+    value = {field: "" for field in required}
+    value.update(
+        {
+            "schema_version": properties["schema_version"]["enum"][0],
+            "turn_key": request["turn_key"],
+            "result_kind": kind,
+            "completed_phases": ["host_execute", "typed_result"],
+            "classification": "bounded stop",
+            "next_action": "Await the next authorized iteration.",
+        }
+    )
+
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), value)
+    assert verdict["ok"], verdict["errors"]
+
+
+def _turn_plan(request: dict) -> dict:
+    return {
+        "transaction": {"turn_key": request["turn_key"]},
+        "turn_envelope": request["turn_envelope"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected_kind"),
+    [
+        (
+            {
+                "result_kind": "validated_progress",
+                "classification": "single surface change",
+                "summary": "edited one file",
+                "next_action": "review the diff",
+            },
+            "validated_progress",
+        ),
+        (
+            {
+                "result_kind": "wait",
+                "classification": "throttled",
+                "next_action": "retry after cadence",
+            },
+            "wait",
+        ),
+        (None, "wait"),
+        ({"result_kind": "not_a_loopx_kind", "summary": "bad"}, "wait"),
+    ],
+    ids=["material", "wait", "missing_block", "unsupported_kind"],
+)
+def test_build_result_is_accepted_by_the_real_host_result_validator(
+    candidate: dict | None, expected_kind: str
+) -> None:
+    # Shaping alone is not enough: every adapter output, including fail-closed
+    # waits, must pass the same validator the Turn executor applies.
+    request = _signed_request()
+    result = turn_host_adapter.build_result(request, candidate)
+    assert result["result_kind"] == expected_kind
+    if expected_kind == "wait":
+        assert "delivery_batch_scale" not in result
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+
+
+def test_build_result_bounds_every_free_text_field() -> None:
+    result = turn_host_adapter.build_result(
+        _signed_request(),
+        {
+            "result_kind": "user_action_required",
+            "classification": "x" * 500,
+            "summary": "y" * 900,
+            "next_action": "z" * 5000,
+        },
+    )
+    # Independent limits from the Turn result contract, not the adapter's table.
+    assert len(result["classification"]) <= 120
+    assert len(result["summary"]) <= 400
+    assert len(result["next_action"]) <= 1_200
 
 
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:

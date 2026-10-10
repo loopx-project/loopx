@@ -354,6 +354,9 @@ def test_lifecycle_public_safety_covers_all_emitted_text():
         "/" + "etc/service/config.json", "/" + "workspace/fixture/result.json",
         "access_key=" + "synthetic" * 4, "token:" + "synthetic" * 4,
         "x" * 500 + " access_key=" + "synthetic" * 4,
+        "~/evidence.txt", "path:/srv/evidence.txt",
+        "file:///tmp/evidence.txt", "FILE://server/share/evidence.txt",
+        "x" * 500 + " ~/evidence.txt",
     ]
     for value in unsafe_values:
         projection = build_goal_artifact_lifecycle_projection(

@@ -18,7 +18,10 @@ from ..control_plane.coordination.legacy_writer_fence import (
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
-from ..control_plane.effect_runtime import EffectRuntimeStartupError
+from ..control_plane.effect_runtime import (
+    EffectRuntimeHostPermissionError,
+    EffectRuntimeStartupError,
+)
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -77,6 +80,11 @@ def quota_failure_payload(
     verbose_debug = verbose_debug_fields(
         error, verbose=bool(getattr(args, "verbose", False))
     )
+    recommended_action = (
+        error.recommended_action
+        if isinstance(error, EffectRuntimeHostPermissionError)
+        else "fix quota/status collection before spending automatic compute"
+    )
     if command not in QUOTA_EVENT_KINDS:
         return {
             "ok": False,
@@ -98,9 +106,7 @@ def quota_failure_payload(
                     "status": "quota_collection_failed",
                     "waiting_on": "codex",
                     "severity": "high",
-                    "recommended_action": (
-                        "fix quota/status collection before spending automatic compute"
-                    ),
+                    "recommended_action": recommended_action,
                     "source": "quota",
                 }
             ],
@@ -131,9 +137,7 @@ def quota_failure_payload(
         "waiting_on": "codex",
         "status": "quota_collection_failed",
         "source": "quota",
-        "recommended_action": (
-            "fix quota/status collection before spending automatic compute"
-        ),
+        "recommended_action": recommended_action,
         **verbose_debug,
         **lock_timeout_fields,
     }

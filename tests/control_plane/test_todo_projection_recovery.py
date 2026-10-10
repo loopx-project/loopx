@@ -21,7 +21,8 @@ from loopx.control_plane.coordination.coordination_state_contract import (
     TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS,
 )
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
-from loopx.control_plane.todos import provider_projection, active_state_editing
+from loopx.control_plane.todos import provider_projection
+from loopx.control_plane.runtime import document_io
 from loopx.control_plane.todos.todo_summary import normalize_todo_text, todo_priority_parts
 from loopx.control_plane.todos.completion_validation_store import (
     persist_completion_validation_declaration,
@@ -122,11 +123,22 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     assert state.read_text() == rendered and _read(runtime) == before
 
     code, listed = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"])
-    # The CLI remains a bounded attention view, not source serialization.
+    # Exact cold reads preserve the current request; attention views remain bounded.
     summary_text = normalize_todo_text(text)
-    assert code == 0 and listed["todo"]["text"] == summary_text, listed
+    assert code == 0 and listed["todo"]["text"] == text, listed
     assert listed["todo"]["title"] == todo_priority_parts(summary_text)[1]
     assert listed["authority_read"]["provider_revision"] == before["provider_revision"]
+    code, rejected = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"], "--thin")
+    assert code == 1 and rejected["ok"] is False, rejected
+    assert "Exact Todo reads return full requirements" in rejected["error"]
+    assert _read(runtime) == before and state.read_text() == rendered
+    code, thin = _cli(registry, "list", "--goal-id", "goal-a", "--thin")
+    assert code == 0 and thin["todos"][0]["todo_id"] == record["todo_id"], thin
+    assert len(thin["todos"][0]["text"]) <= 500
+    assert "retain the final obligation" not in thin["todos"][0]["text"]
+    code, hot = _cli(registry, "list", "--goal-id", "goal-a")
+    assert code == 0 and hot["todos"][0]["text"] == summary_text, hot
+    assert _read(runtime) == before
     manager = read_manager_goal_details(registry, runtime, "goal-a", owner_scope=True)
     assert manager["status"] == "read" and manager["coverage"]["active"] == 1
     assert manager["authority_revision"] == before["provider_revision"]
@@ -250,7 +262,7 @@ def test_concurrent_document_restoration_is_not_overwritten(canonical_display, m
         Path(destination).write_text("Another writer concurrently restored the generated document.\n")
         return real_link(source, destination)
 
-    monkeypatch.setattr(active_state_editing.os, "link", restore_before_publish)
+    monkeypatch.setattr(document_io.os, "link", restore_before_publish)
     with pytest.raises(FileExistsError):
         provider_projection.project_current_canonical_todos(
             registry_path=registry, runtime_root=runtime, goal_id="goal-a",
@@ -272,9 +284,9 @@ def test_interrupted_rebuild_is_safe_and_retryable(canonical_display, monkeypatc
 
     with monkeypatch.context() as patch:
         if failure_point == "directory_fsync":
-            patch.setattr(active_state_editing, "fsync_state_directory", fail)
+            patch.setattr(document_io, "fsync_state_directory", fail)
         else:
-            patch.setattr(active_state_editing.os, failure_point, fail)
+            patch.setattr(document_io.os, failure_point, fail)
         with pytest.raises(OSError, match="injected publication failure"):
             provider_projection.project_current_canonical_todos(
                 registry_path=registry, runtime_root=runtime, goal_id="goal-a",
@@ -401,7 +413,7 @@ def test_equal_display_does_not_acknowledge_an_unfinished_durability_barrier(can
         calls.append("directory")
         raise OSError("directory durability unavailable")
     with monkeypatch.context() as patch:
-        patch.setattr(active_state_editing, "fsync_state_directory", interrupted)
+        patch.setattr(document_io, "fsync_state_directory", interrupted)
         payload = provider_projection.settle_canonical_todo_projection(
             {"ok": True, "status": "replayed", "provider_revision": before["provider_revision"]},
             registry_path=registry, runtime_root=runtime, goal_id="goal-a",
@@ -434,5 +446,5 @@ def test_objective_display_never_changes_canonical_authority(canonical_display, 
     assert _read(runtime) == before
     state.write_text("<!-- unreadable display")
     code, result = _cli(registry, "list", "--goal-id", "goal-a")
-    assert code == 0 and result["agent_todos"]["items"][0]["todo_id"] == "todo_active", result
+    assert code == 0 and result["todos"][0]["todo_id"] == "todo_active", result
     assert _read(runtime) == before

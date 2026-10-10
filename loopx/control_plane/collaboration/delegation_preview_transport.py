@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import selectors
+import signal
 import subprocess
 import time
 import weakref
@@ -17,6 +19,9 @@ from threading import Lock, Thread
 from typing import Any
 
 from ..effect_runtime import _node_executable
+
+
+BRIDGE_CLOSE_TIMEOUT_SECONDS = 5.0
 
 
 def _source_snapshot(release: Path) -> tuple:
@@ -47,22 +52,61 @@ def _source_snapshot(release: Path) -> tuple:
     return tuple(files)
 
 
-def _close_bridge(process: subprocess.Popen) -> None:
+def _terminate_bridge(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name != "nt":
+        try:
+            process.send_signal(signal.SIGCONT)
+        except ProcessLookupError:
+            return
+    process.terminate()
+
+
+def _kill_bridge(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _close_bridge(
+    process: subprocess.Popen,
+    *,
+    force: bool = False,
+    cleanup_confirmed: bool = False,
+) -> bool:
     # Parent EOF cancels the TS-owned group; give its cleanup fence time to run.
+    if force:
+        _terminate_bridge(process)
     if process.stdin is not None and not process.stdin.closed:
         try:
             process.stdin.close()
         except OSError:
             pass  # A crashed/retired supervisor may already have closed its pipe.
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=BRIDGE_CLOSE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        # SIGTERM asks the supervisor to clean, not to abandon its worker.
-        process.terminate()
-        process.wait(timeout=5)
+        if not force:
+            # SIGTERM asks the supervisor to clean, not to abandon its worker.
+            _terminate_bridge(process)
+            try:
+                process.wait(timeout=BRIDGE_CLOSE_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                _kill_bridge(process)
+                process.wait(timeout=BRIDGE_CLOSE_TIMEOUT_SECONDS)
+        else:
+            _kill_bridge(process)
+            process.wait(timeout=BRIDGE_CLOSE_TIMEOUT_SECONDS)
     finally:
         if process.stdout is not None:
             process.stdout.close()
+    # SIGTERM can win before the bridge installs its handlers, before it can
+    # spawn a worker. Once initialized, normal exit follows Host group cleanup.
+    # A SIGKILLed supervisor provides neither guarantee.
+    return cleanup_confirmed or process.returncode in (0, -signal.SIGTERM)
 
 
 class DelegationPreviewTransport:
@@ -75,15 +119,21 @@ class DelegationPreviewTransport:
         self._finalizer: weakref.finalize | None = None
         self._sequence = 0
 
-    def _close(self) -> None:
-        if self._process is not None:
-            _close_bridge(self._process)
-        if self._finalizer is not None:
-            self._finalizer.detach()
-        self._process = None
-        self._finalizer = None
-        self._partition = None
+    def _close(
+        self, *, force: bool = False, cleanup_confirmed: bool = False
+    ) -> bool:
+        process, finalizer = self._process, self._finalizer
+        if process is not None and not _close_bridge(
+            process,
+            force=force,
+            cleanup_confirmed=cleanup_confirmed,
+        ):
+            return False
+        self._process = self._partition = self._finalizer = None
         self._sequence = 0
+        if finalizer is not None:
+            finalizer.detach()
+        return True
 
     def close(self) -> None:
         with self._lock:
@@ -108,7 +158,10 @@ class DelegationPreviewTransport:
             for replacement in (False, True):
                 if (self._partition != partition or self._process is None
                         or self._process.poll() is not None or self._sequence >= 128):
-                    self._close()
+                    if not self._close():
+                        raise ValueError(
+                            "delegation preview cleanup remains unconfirmed"
+                        )
                     bridge = Path(__file__).with_name("delegation_preview_bridge.ts")
                     self._process = subprocess.Popen(
                         [_node_executable(), "--no-warnings", "--experimental-strip-types", str(bridge)],
@@ -144,7 +197,7 @@ class DelegationPreviewTransport:
                         and type(response["last_id"]) is int):
                     # The TS owner confirms this request was not accepted and
                     # its old group stopped. Reuse the original deadline/binding.
-                    self._close()
+                    self._close(cleanup_confirmed=True)
                     continue
                 if response.get("kind") == "failure" and response.get("outcome") == "timeout":
                     raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
@@ -155,7 +208,7 @@ class DelegationPreviewTransport:
                 return response["value"]
             raise ValueError("delegation preview retirement did not complete")
         except BaseException:
-            self._close()
+            self._close(force=True)
             raise
         finally:
             self._lock.release()
@@ -163,8 +216,34 @@ class DelegationPreviewTransport:
     def _send(self, value: dict, deadline: float, timeout: float) -> None:
         assert self._process is not None and self._process.stdin is not None
         stream = self._process.stdin
-        result: Queue = Queue(maxsize=1)
         data = (json.dumps(value) + "\n").encode("utf-8")
+
+        if os.name == "posix":
+            # A blocking write in another thread can retain the pipe after
+            # close(), or finish a frame after the caller's deadline. This
+            # transport exclusively owns stdin; keep its writes nonblocking
+            # so the original owner can observe EOF during timeout cleanup.
+            descriptor = stream.fileno()
+            os.set_blocking(descriptor, False)
+            remaining = memoryview(data)
+            with selectors.DefaultSelector() as writable:
+                writable.register(descriptor, selectors.EVENT_WRITE)
+                while remaining:
+                    budget = deadline - time.monotonic()
+                    if budget <= 0 or not writable.select(budget):
+                        raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
+                    try:
+                        written = os.write(descriptor, remaining)
+                    except BlockingIOError:
+                        continue
+                    if written <= 0:
+                        raise OSError("preview input closed")
+                    remaining = remaining[written:]
+            return
+
+        # Keep the existing Windows pipe writer path. Host cleanup remains
+        # owned by the same supervisor on every platform.
+        result: Queue = Queue(maxsize=1)
 
         def write() -> None:
             try:

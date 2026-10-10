@@ -58,6 +58,56 @@ def test_audience_scope_is_distinct_from_sender_delivery_and_cannot_leak(tmp_pat
     assert reader.read(TOOL_NAME, {"view": "agents", "goal_id": "private"})["error"] == "goal_outside_available_scope"
 
 
+def test_repeated_roles_expose_scoped_binding_context_without_host_access(tmp_path, monkeypatch):
+    registry, reader, records = setup(tmp_path, owner=False, scope=lambda: ["research", "new-work"])
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"] = {
+        "registered_agents": ["operations"],
+        "agent_profiles": {"operations": {"scope_summary": "Existing project operations"}},
+        "thread_agent_bindings": [{"agent_id": "operations", "host_surface": "codex-app",
+                                   "thread_id": "private-host-address"}],
+    }
+    data["goals"].append({"id": "new-work", "registered_agents": ["operations"]})
+    registry.write_text(json.dumps(data))
+
+    def no_host_access(*args, **kwargs):
+        raise AssertionError("directory must not read host stores")
+
+    monkeypatch.setattr("loopx.control_plane.collaboration.peer_host_route.codex_thread_observers", no_host_access)
+    result = reader.read(TOOL_NAME, {"view": "agents", "query": "operations"})
+    assert result["matched"] == 2
+    rows = {row["goal_id"]: row for row in result["rows"]}
+    assert rows["research"]["registered_host_binding"] == {
+        "outcome": "single_candidate", "candidate_count": 1,
+        "address_shared": False, "scope": "goals_supplied",
+    }
+    assert rows["new-work"]["registered_host_binding"]["outcome"] == "no_candidate"
+    assert rows["new-work"]["registered_host_binding"]["candidate_count"] == 0
+    assert all(row["execution_readiness"] == "not_checked" for row in rows.values())
+    assert all(row["context_delivery"] == "not_granted" for row in rows.values())
+    assert "private-host-address" not in json.dumps(result)
+    assert "hidden-worker" not in json.dumps(result)
+    assert records == [result]
+    assert not (tmp_path / "manager-context").exists()
+
+
+def test_directory_binding_summary_keeps_multiple_and_shared_addresses(tmp_path):
+    registry, reader, _ = setup(tmp_path)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        {"agent_id": agent, "host_surface": "codex-app", "thread_id": thread}
+        for agent, thread in [("worker-00", "shared"), ("worker-34", "shared"),
+                              ("worker-34", "alternative")]
+    ]
+    registry.write_text(json.dumps(data))
+    page = reader.read(TOOL_NAME, {"view": "agents", "query": "worker-34"})
+    assert page["rows"][0]["registered_host_binding"] == {
+        "outcome": "multiple_candidates", "candidate_count": 2,
+        "address_shared": True, "scope": "goals_supplied",
+    }
+    assert page["rows"][0]["execution_readiness"] == "not_checked"
+
+
 def test_stopped_is_historical_not_a_delivery_target(tmp_path):
     _, reader, _ = setup(tmp_path)
     assert reader.read(TOOL_NAME, {"view": "agents", "query": "old-worker"})["matched"] == 0

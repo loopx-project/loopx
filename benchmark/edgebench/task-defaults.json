@@ -1,0 +1,10 @@
+{
+  "portfolio_risk_calibration": {
+    "timeout_seconds": 43200,
+    "eval_interval_seconds": 300
+  },
+  "lean_analysis_proofs": {
+    "timeout_seconds": 43200,
+    "eval_interval_seconds": 300
+  }
+}

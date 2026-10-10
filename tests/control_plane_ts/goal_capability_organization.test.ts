@@ -58,6 +58,87 @@ test("trial needs applicability, explicit off state, owner, effect and rollback 
   }).reason_code, "trial_budget_zero");
 });
 
+test("reviewed trial outcomes refine advice without becoming utility or execution authority", () => {
+  const candidate = { ...trial, candidate_revision: "provider/v1" };
+  const plan = (value: object, caller = scope, gap = "example/gap") =>
+    planCapabilityImprovement(policy, { gap_ref: gap, candidates: [value] }, caller);
+  const basis = plan(candidate).trial_basis_digest;
+  const feedback = { trial_basis_digest: basis, status: "failed", outcome_ref: "owner/outcome-v1" };
+  const failed = plan({ ...candidate, trial_feedback: feedback });
+  assert.equal(failed.recommendation, "continue_current_work");
+  assert.equal(failed.reason_code, "prior_trial_failed");
+  assert.equal(failed.outcome_ref, feedback.outcome_ref);
+  assert.equal(failed.execution_authorized, false);
+  assert.equal(plan({ ...candidate, trial_feedback: { ...feedback, status: "no_evidence" } }).reason_code,
+    "prior_trial_no_evidence");
+  const success = plan({ ...candidate, trial_feedback: { ...feedback, status: "succeeded" } });
+  assert.equal(success.recommendation, "inspect_trial_outcome");
+  assert.equal(success.reason_code, "trial_result_requires_owner_review");
+  assert.equal(success.execution_authorized, false);
+  assert.equal(success.adopted, undefined);
+  for (const patch of [{ candidate_revision: "provider/v2" }, { configuration_ref: "owner/config-v2" },
+    { effect_ref: "experiment/changed-input" }, { rollback_ref: "owner/rollback-v2" }]) {
+    assert.equal(plan({ ...candidate, ...patch, trial_feedback: feedback }).reason_code, "trial_feedback_stale");
+  }
+  for (const caller of [{ ...scope, goal_id: "other" }, { ...scope, agent_id: "other" },
+    { ...scope, todo_id: "other" }]) {
+    assert.equal(plan({ ...candidate, trial_feedback: feedback }, caller).reason_code, "trial_feedback_stale");
+  }
+  assert.equal(plan({ ...candidate, trial_feedback: feedback }, scope, "example/other-gap").reason_code,
+    "trial_feedback_stale");
+  assert.equal(plan({ ...candidate, candidate_revision: "provider/v2" }).recommendation, "propose_reversible_trial");
+});
+
+test("failed trials do not hide independent candidates or enabled direct paths", () => {
+  const basis = planCapabilityImprovement(policy, { gap_ref: "example/gap", candidates: [trial] }, scope).trial_basis_digest;
+  const failed = { ...trial, trial_feedback: { trial_basis_digest: basis, status: "failed", outcome_ref: "owner/failure" } };
+  const fresh = { ...trial, capability_id: "independent-source" };
+  const input = { gap_ref: "example/gap", candidates: [failed, fresh] };
+  const before = structuredClone(input);
+  assert.equal(planCapabilityImprovement(policy, input, scope).capability_id, fresh.capability_id);
+  assert.deepEqual(input, before);
+  const direct = { ...fresh, enabled: true };
+  assert.equal(planCapabilityImprovement({ ...policy, max_trials: 0 }, {
+    gap_ref: "example/gap", candidates: [{ ...failed, trial_feedback: "invalid" }, direct],
+  }, scope).recommendation, "inspect_direct_capability");
+});
+
+test("trial feedback requires an exact lowercase enveloped digest", () => {
+  const plan = (trial_basis_digest: unknown) => planCapabilityImprovement(policy, {
+    gap_ref: "example/gap", candidates: [{ ...trial, trial_feedback: {
+      trial_basis_digest, status: "failed", outcome_ref: "owner/outcome-v1",
+    } }],
+  }, scope);
+  const basis = planCapabilityImprovement(policy, {
+    gap_ref: "example/gap", candidates: [trial],
+  }, scope).trial_basis_digest;
+  assert.equal(plan(basis).reason_code, "prior_trial_failed");
+  for (const hex of ["a".repeat(64), "0".repeat(64), "0123456789abcdef".repeat(4)]) {
+    assert.equal(plan(`sha256:${hex}`).reason_code, "trial_feedback_stale");
+  }
+  const hex = "a".repeat(64);
+  for (const digest of [null, 1, {}, [], "", hex, `SHA256:${hex}`, `sha256:${hex.toUpperCase()}`,
+    `sha256:${"a".repeat(63)}`, `sha256:${"a".repeat(65)}`, `sha256:${"g".repeat(64)}`,
+    ` sha256:${hex}`, `sha256:${hex} `, `sha256:${hex}\n`, `sha256:${hex}\r\n`,
+    `sha256:${hex}\u2028`, `sha256:${hex}\u2029`, `sha256:${hex}\u0000`,
+    `sha256:${"ａ".repeat(64)}`, `sha256:${hex}\ud800`]) {
+    assert.throws(() => plan(digest), /capability trial feedback requires an outcome reference, basis digest and receipt status/);
+  }
+});
+
+test("malformed feedback is isolated and off advice never reads it", () => {
+  for (const trial_feedback of ["invalid", { status: ["failed"] }, {
+    status: "failed", trial_basis_digest: `sha256:${"a".repeat(64)}`, outcome_ref: "/private/result",
+  }]) {
+    const observations = { capability_improvement: { gap_ref: "example/gap", candidates: [{ ...trial, trial_feedback }] } };
+    const packet = evaluateGoalAgentContext({ ...input, observations,
+      orchestration: { mode: "single" } })!;
+    assert.equal((packet.failures as any[])[0].code, "context_provider_failed");
+    assert.deepEqual(packet.contributions, []);
+    assert.equal(planCapabilityImprovement(null, observations.capability_improvement, scope).reason_code, "improvement_off");
+  }
+});
+
 test("off preserves existing coordinator output byte for byte at every phase", () => {
   const orchestration = { mode: "multi_subagent", spawn_allowed: true, max_children: 2 };
   for (const phase of ["before_plan", "before_delegate", "after_delegate_result"]) {

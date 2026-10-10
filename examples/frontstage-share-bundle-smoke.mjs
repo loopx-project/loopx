@@ -2,11 +2,14 @@
 // Smoke-test the public-safe frontstage static export bundle.
 
 import { spawnSync } from "node:child_process";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateBilingualBlog } from "./blog-bilingual-index-smoke.mjs";
+import { scanPublicBoundary } from "./export-frontstage-share-bundle.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = resolve("/tmp", "loopx-frontstage-share-bundle-smoke");
@@ -51,23 +54,6 @@ function assertRelativeReferenceExists(pagePath, target) {
   assertExists(resolve(dirname(pagePath), target, "index.html"));
 }
 
-function assertNoLeak(text, label) {
-  const forbidden = [
-    /\/Users\//,
-    /\/private\//,
-    new RegExp("byte" + "dance", "i"),
-    new RegExp("lark" + "office", "i"),
-    new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness"),
-    new RegExp("raw_" + "internal_note"),
-    /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/,
-    /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i,
-  ];
-  const hit = forbidden.find((pattern) => pattern.test(text));
-  if (hit) {
-    throw new Error(`${label} leaked forbidden pattern: ${hit}`);
-  }
-}
-
 function collectFakePrivateMarkers(text) {
   return Array.from(new Set(text.match(/GH_FAKE_[A-Z0-9_]+/g) ?? [])).sort();
 }
@@ -89,6 +75,34 @@ async function collectGeneratedTextFiles(rootDir) {
   }
   await visit(rootDir);
   return files;
+}
+
+// Exercise the real exporter guard, with independent accept/reject inputs.
+const boundaryProbeDir = await mkdtemp(resolve(tmpdir(), "loopx-public-source-smoke-"));
+try {
+  const publicCitation = '<a href="https://github.com/ByteDance-Seed/EdgeBench">Benchmark source</a>';
+  const probePath = resolve(boundaryProbeDir, "index.html");
+  await writeFile(probePath, publicCitation);
+  await scanPublicBoundary(boundaryProbeDir);
+  for (const unsafe of [
+    "byte" + "dance internal workspace",
+    '<a href="https://github.com/ByteDance-Seed/private-work">unverified source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench?access_token=secret">source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench/private">source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench.evil">source</a>',
+    "/Users/fixture/private-work",
+    "/private/fixture/private-work",
+    "https://fixture." + "lark" + "office.com/docx/private",
+    ".loopx/goals/private-fixture",
+    "raw_" + "internal_note",
+    "-----BEGIN PRIVATE KEY-----",
+    "access_token=fixture-secret",
+  ]) {
+    await writeFile(probePath, `${publicCitation}<p>${unsafe}</p>`);
+    await assert.rejects(scanPublicBoundary(boundaryProbeDir), /Public boundary scan failed/);
+  }
+} finally {
+  await rm(boundaryProbeDir, { recursive: true, force: true });
 }
 
 await rm(outDir, { force: true, recursive: true });
@@ -444,12 +458,12 @@ if (fakePrivateTrapMarkers.length < 6) {
 }
 for (const path of await collectGeneratedTextFiles(outDir)) {
   const text = await readFile(path, "utf8");
-  assertNoLeak(text, path);
   const leakedTrapMarkers = fakePrivateTrapMarkers.filter((marker) => text.includes(marker));
   if (leakedTrapMarkers.length) {
     throw new Error(`${path} leaked fake-private frontstage trap markers: ${leakedTrapMarkers.join(", ")}`);
   }
 }
+await scanPublicBoundary(outDir);
 
 const readmeText = await readFile(resolve(outDir, "README.md"), "utf8");
 if (readmeText.includes("?statusUrl=")) {

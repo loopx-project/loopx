@@ -34,12 +34,12 @@ assert.match(styles, /personal-channel-composer > button,[\s\S]*background: #171
 assert.match(styles, /personal-quick-prompts button {[^}]*background: #fff/, "Shortcut actions keep one neutral chip style");
 assert.match(styles, /personal-goal-draft-status { border-color: #dedede; border-radius: 6px; background: #f2f2f2/, "LoopX standard keeps Goal draft guidance neutral");
 assert.ok(!styles.includes("personal-prompt-badge"), "Shortcut actions carry no draft/immediate badge");
-assert.match(styles, /personal-select-trigger[\s\S]*font-size: 12px/, "Workspace selects preserve the compact control type size");
-assert.match(styles, /personal-select-option[\s\S]*min-height: 32px[\s\S]*font-size: 12px/, "Workspace select options stay compact");
+assert.match(styles, /personal-select-trigger[^}]*font-size: var\(--text-body\)/, "Workspace selects use the readable Body M control scale");
+assert.match(styles, /personal-select-option[^}]*min-height: 32px[^}]*font-size: var\(--text-body\)/, "Workspace select options share the trigger type size");
 assert.ok(styles.includes('.personal-goal-tabs button[aria-current="page"]::after'), "Goal views use a restrained active underline");
 assert.match(styles, /personal-message.is-user[\s\S]*background: #f2f2f2/, "LoopX Chat uses a neutral owner message");
 assert.match(styles, /personal-task-kanban { gap: 0; border-block: 1px solid #ebebeb/, "LoopX Tasks uses continuous lane dividers");
-assert.match(styles, /personal-task-card > button > strong { font-size: 14px; font-weight: 500; line-height: 20px/, "LoopX task titles use the Body M scale in every lane");
+assert.match(styles, /personal-task-card > button > strong { font-size: var\(--text-body\); font-weight: 500; line-height: var\(--leading-body\)/, "LoopX task titles use the Body M scale in every lane");
 assert.match(styles, /personal-task-lane-scroll > button, \.personal-task-card { flex: 0 0 auto;/, "Task cards do not shrink below their content height");
 assert.match(styles, /personal-files-list { border-radius: 12px/, "LoopX Files uses the standard card radius");
 assert.match(styles, /personal-icon-button {[^}]*flex: 0 0 36px;[^}]*min-width: 36px;[^}]*min-height: 36px;/, "Header icon buttons keep a stable square footprint");
@@ -47,7 +47,7 @@ assert.match(styles, /personal-channel-header\[data-goal-selected="true"\] \.per
 assert.doesNotMatch(header, /personal-live-indicator/, "The Goal header omits the misleading live-status badge");
 assert.match(styles, /@media \(max-width: 720px\) {[\s\S]*personal-home-lane,[\s\S]*personal-task-kanban \.personal-object-list { border-left: 0; border-top: 1px solid #ebebeb;/, "Mobile LoopX lanes use horizontal rather than vertical separators");
 assert.match(styles, /personal-select-listbox[\s\S]*border-radius: 12px/, "Workspace select menus use the card radius");
-assert.match(styles, /personal-channel-title h1 { font-size: 20px/, "LoopX standard uses the panel heading size");
+assert.match(styles, /personal-channel-title h1 { font-size: var\(--text-heading\)/, "LoopX standard uses the panel heading size");
 assert.match(select, /aria-haspopup="listbox"/, "Workspace select exposes combobox semantics");
 assert.match(select, /event.key === "ArrowDown"/, "Workspace select supports arrow-key navigation");
 assert.match(select, /event.key === "Escape"/, "Workspace select supports keyboard dismissal");

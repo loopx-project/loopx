@@ -35,6 +35,18 @@ of that observation, including explicit cache use; the Markdown view shows it.
 
 ## Product Scope
 
+Host-denied local Effect runtime access fails closed with
+`quota_runtime_permission_denied`. The client preserves the pre-dispatch
+permission failure without retrying it as a transient connection error. Locator
+discovery and readiness preserve the same diagnostic and recovery guidance; a
+startup whose locator becomes denied stops its newly owned process. Retry
+the same registry, Goal, Agent and Turn through host-approved access; do not
+enable optional capabilities, replace authority or spend before guard success.
+A method such as `capabilities.pr_review.configuration` can be called to
+normalize stored configuration during generic collection; its name is not
+evidence that PR review ran. Failures after dispatch retain the existing
+ambiguous-response fence and require receipt recovery before replay.
+
 In v0.1, quota means **compute quota only**.
 
 It does not decide human reward, write approval, production permission, or
@@ -76,61 +88,91 @@ depending on the executor:
 - a shared controller loop can use the same number as a weighted selection
   ratio between eligible goals.
 
-## Completed-Todo Review Cadence
+## Goal Review Cadence
 
-`execution_profile.replan_after_completed_todos` is an integer hyperparameter,
-default **5** in both standard and fine-grained Turn modes. It may be set as a
-live machine default, while an explicit Goal value remains pinned until it is
-cleared. Set it to 2 or 3 for earlier review. Supported values are 1–5: the
-current agent projection retains five recent completions, so larger values are
-rejected.
+The product and benchmark runners default to review after **6 settled effective
+work Turns** in both standard and fine-grained modes. This changes the previous
+product threshold of five Turns and benchmark threshold of three Turns. Review
+can occur while a long Todo remains open; it does not count completed Todos.
+TurnEnvelope is not required. These are deterministic thresholds, not random
+averages or counts of model messages, tool calls, or heartbeat wakeups.
+
+The shared TypeScript history owner counts distinct, settled work Turns for the
+same Agent after its latest accepted replan acknowledgement. An accepted negative
+work result can count; observation-only polls, duplicate retries, unspent
+writebacks and missing settlement receipts cannot. At the threshold, the next
+quota evaluation creates `periodic_review_due` through the existing replan path.
+An evidence-linked review may retain the current approach; it does not require
+inventing a new plan, completing the open Todo, or declaring the Goal achieved.
+Review evidence from settled work for current source and acceptance applicability
+before running another probe. Reuse applicable evidence; missing, stale or
+insufficient evidence needs targeted verification. Do not repeat unchanged checks
+only to produce another review artifact. Explicit validation gates still apply.
+The cadence does not interrupt a host, schedule a Turn, spend quota or grant
+authority. The executor must settle work and re-enter quota before starting the
+next work Turn for the review obligation to take effect.
 
 ```bash
-# Preview, apply, and read back the Goal setting.
-loopx configure-goal --goal-id example --execution-replan-after-todos 3
-loopx configure-goal --goal-id example --execution-replan-after-todos 3 --execute
+# Preview, apply, and read back an explicit Goal threshold (supported: 1–6).
+loopx configure-goal --goal-id example --execution-replan-after-turns 5
+loopx configure-goal --goal-id example --execution-replan-after-turns 5 --execute
 loopx configure-goal --goal-id example
 
-# Restore live machine-default inheritance.
+# Restore live device/default inheritance.
+loopx configure-goal --goal-id example --clear-execution-replan-after-turns --execute
+```
+
+The Dashboard exposes **Goal review cadence** in the Capability Center for
+both the device and selected Goal. The existing machine namespace
+`todo_replan_cadence_machine_defaults_v1` stores `count_unit` (`effective_turns`
+or `completed_todos`) and `count`. It is built into the control plane and needs
+no provider installation. The CLI, settings readback, quota decision and
+writeback validation use the same effective configuration.
+
+Precedence is **explicit Goal override → live device setting → product default**.
+A Goal override is a complete unit/count value, not a field merge. Device writes
+are revision-locked; removing the namespace restores six effective Turns.
+Existing explicit Goal and device values retain their unit and count, including
+five effective Turns and legacy completed-Todo settings. To retain the previous
+product cadence, set `--execution-replan-after-turns 5` explicitly. Reading or
+upgrading does not rewrite overrides. Clearing the Goal override restores inheritance. Goals without
+any override adopt the new default on their next evaluation after upgrade;
+this is a disclosed default behavior change, not a migration of historical data.
+Already running benchmark attempts retain their frozen code and settings.
+
+### Explicit completed-Todo cadence
+
+For the former product behavior or a unit ablation, select completed Todos:
+
+```bash
+loopx configure-goal --goal-id example --execution-replan-after-todos 5 --execute
 loopx configure-goal --goal-id example --clear-execution-replan-after-todos --execute
 ```
 
-The Dashboard exposes **Goal review cadence** in both Machine Configuration and
-Goal capability settings. Machine changes are revision-locked and affect every
-Goal without an explicit override at its next quota/frontier evaluation. A Goal
-override is a complete value, not a field merge; clearing it restores live
-inheritance. Removing the machine namespace restores the capability default of
-5. This is a setting of the built-in control plane, with no provider or plugin
-installation. It does not create host turns, spend quota, or grant authority.
+`execution_profile.replan_after_completed_todos` accepts 1–5; the retained Agent
+projection has five recent completions. It counts same-Agent advancement Todos
+with valid completion timestamps after the latest qualified outcome checkpoint.
+Open Todos, other Agents' work and protocol steps do not count. At the threshold
+it contributes `vision_outcome_checkpoint_required` with the completion count
+and threshold. A checkpoint must satisfy the existing material-outcome and
+acceptance-evidence rules; generic refreshes or unqualified ACKs do not reset
+this window.
+The closed-vision rule and existing lane arbitration remain in effect.
 
-The count includes completed advancement Todos claimed by the same Agent, with
-valid completion timestamps, after the latest qualifying outcome checkpoint.
-Open Todos, other Agents' work, and protocol steps do not count. A checkpoint
-must satisfy the existing material-outcome and acceptance-evidence rules;
-a generic refresh or an unqualified replan ACK does not reset the window.
-A closed Agent vision is excluded by the existing terminal-state rule.
+Only one counting unit applies to a Goal. The explicit legacy unit preserves
+its completion/checkpoint semantics; it does not simultaneously trigger the
+effective-Turn cadence. Other review causes remain independent: small-delivery
+streaks (two small deliveries in standard mode and five in fine mode),
+long-open-Todo chains and Monitor-specific thresholds. The former
+20-material-run periodic fallback remains on the explicit completed-Todo path;
+the effective-Turn path uses verified settlements instead.
 
-At the threshold, the next `quota should-run --goal-id example --agent-id agent-a`
-evaluation contributes a `vision_outcome_checkpoint_required` acceptance gap
-with `completed_todo_count` and `completed_todo_threshold`, through the existing
-replan obligation path. This is a machine-evaluated review obligation, subject
-to existing lane arbitration. The review can retain the current path with
-`continue` or `no_change`, or choose `replan`; reaching the threshold does not
-require changing a correct plan. No permission or quota boundary changes, and
-no external data is published by this setting.
-
-This counter does not interrupt the host or schedule a continuation turn.
-For review during a long turn, the executor must write completion state as
-work finishes and re-enter quota before starting the next Todo. Completing all
-Todos in one batch at closeout or never re-entering quota can defer review until
-after implementation. Lowering the threshold alone cannot repair that gap.
-
-Other cadences are independent: the standard profile's two-small-delivery
-streak suggests widening work; fine mode's five-small-delivery streak suggests
-direction review. Neither is this completed-Todo counter. The periodic review
-window of 20 material run records and long-open-Todo-chain triggers also retain
-their existing thresholds. Quiet or unchanged Monitor polls do not consume the
-periodic material-run window; their dedicated Monitor replan thresholds still apply.
+产品与 benchmark 默认统一为 6 个已结算有效工作 Turn，此前分别为 5 个与 3 个。
+长 Todo 未结束也能触发方向复核，不依赖 TurnEnvelope，不按工具调用或空轮询计数。
+Goal 显式设置优先，其次是设备设置；清除两层覆盖才恢复产品默认。显式 Turn 与
+旧 Todo 配置保留原单位和次数，升级不改写；显式设置 5 个 Turn 可保留旧产品周期。
+没有覆盖的 Goal 则采用新默认。复核仍可有证据地
+保留当前路线，不要求机械换方向，也不增加执行、配额或目标验收权限。
 
 ### Governed Turn Execution
 
@@ -165,6 +207,24 @@ writeback/spend chain. An exact typed blocked writeback with a bounded retry
 instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
+
+An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
+Todo-bound Turn after the matching writeback and spend receipts commit. Both
+`in_flight_continuation` and `semantic_closeout` use their corresponding typed
+checkpoint triggers. The latter can leave the Todo open or waiting while the
+eligible frontier changes. Reentering the same Turn returns
+`heartbeat_settled_skip` with the original binding; only a fresh Turn discovers
+new work or replan obligations. Missing, rejected or mismatched checkpoints and
+receipts remain incomplete; this replay rule grants no Todo or Goal completion.
+
+An interrupted Todo-bound Turn retains the same identity before closeout too.
+Its replayed receipt, selected Todo and settlement commands must agree even if
+a higher-priority dated successor becomes ready after admission. Frontier
+discovery cannot rebind the old Turn; recover its verified effects first, then
+select the due successor under a fresh Turn. A stopped local trial does not
+become progress through recovery. Promoted authority's existing typed blocked
+closeout can use a Turn-owned retry for an open Todo without a resume condition,
+without inventing an external dependency or restarting the trial's budget.
 
 A Todo-bound path replan can be qualified during execution even when the
 initial guard selected no replan obligation. Its exact durable writeback must
@@ -578,6 +638,12 @@ empty results; missing/stale display and provider failure never authorize a
 Markdown fallback. The guard does not append a second Markdown candidate list.
 Historical receipt-bound recovery remains separate from new work admission.
 
+Hosts supplying their own `--turn-instance-id` use this same selection contract,
+including `generic_cli`, `outer_controller`, and native CLI profiles. An explicit
+`--todo-id` is qualified before receipt binding; it must not leave the response
+asking for the selection it just accepted. This does not enable `--begin-turn`
+for those hosts or change legacy calls without a Turn identity.
+
 A single-candidate response
 keeps the direct execution path and does not add an extra selection round trip.
 
@@ -656,6 +722,12 @@ must reopen, supersede, or record a public-safe no-follow-up rationale before
 ordinary delivery work. Only when no ready current-agent/unclaimed deferred
 resume exists should agent-scoped quota fall through to `agent_scope_wait`,
 `reassignment_required`, or `scope_exhausted`.
+
+The generated reopen command uses `--status open --clear-resume-when --reason`
+to consume the existing narrow lifecycle transition. Under canonical hard
+leases this resumes unchanged work without granting execution authority; the
+worker must then acquire a fresh lease. Bundling `--note`, evidence or other
+execution edits into that command remains subject to the normal lease fence.
 
 Priority remains authoritative across the resume boundary. When a ready
 current-agent or unclaimed deferred successor has strictly higher priority than
@@ -1105,31 +1177,81 @@ so agent executors know to write newly discovered user/owner work with
 hiding it in `Next Action`, review docs, or chat. Multi-agent writes must also
 name `--bound-agent <registered-agent>` or `--goal-bound`; agent-scoped
 `user_gate` writes bind to the same agent named by `--blocks-agent`.
-When available, `quota should-run` also keeps next-action signals separate:
-`active_state_next_action` is the durable `## Next Action`,
-`latest_run_recommended_action` is the latest non-agent-lane run's
-recommendation, and `agent_lane_next_action` is the current `--agent-id`
-slice. Agent-scoped payloads may also include
-`goal_route_hint.schema_version=goal_route_hint_v0`, a compact read-only
-synthesis that says whether the current lane should run, claim, wait, or
-reassign while preserving `## Next Action` as durable goal-level guidance. It
-is an advisory routing hint, not a writeback instruction and not a replacement
-for `agent_todo_summary`.
-When projected, `goal_frontier_projection.schema_version =
-goal_frontier_projection_v0` is the per-goal progress/frontier view used before
-lane-local quiet or wait decisions. Its `autonomous_replan_decision` says that a
-required replan must be selected independently of `monitor_quiet_skip` or
-`agent_scope_wait`; the policy lives in `loopx.control_plane.goals.goal_frontier`, while
-quota only wires the selected mode into `interaction_contract`.
-If the active-state and latest-run actions differ,
-`next_action_projection_warning` asks the executor to explicitly write back the
-intended durable route with a primary goal-scope `refresh-state --next-action`
-or keep treating the signals as distinct.
-`refresh-state` records `recommended_action_source` so hosts can tell whether a
-run recommendation came from an explicit argument, durable `## Next Action`, an
-Agent Todo compatibility fallback, or the generic default. Dispatch still comes
-from `agent_lane_next_action` / todo projection, not from shared `## Next Action`
-alone.
+When available, `quota should-run` keeps next-action signals separate:
+`active_state_next_action` is the compatibility `## Next Action` display,
+`latest_run_recommended_action` is a historical run recommendation, and
+`agent_lane_next_action` is the currently selected Todo for `--agent-id`.
+The lane retains the task's `text`, identity and execution prerequisites; an
+optional `next_step` refines what to try within that task. Task selection happens
+first. Prose mentioning a Todo id cannot select it; the existing typed Next
+Action breadcrumb remains a compatibility read input.
+
+A registered peer can record its own task step without promoting its report:
+
+```bash
+loopx --format json status --goal-id GOAL --agent-id PEER
+loopx refresh-state --goal-id GOAL --agent-id PEER \
+  --next-action "Evaluate the alternate approach; retain the incumbent." \
+  --next-action-basis BASIS
+```
+
+`BASIS` is the matching queue item's `next_action_basis`, also exposed in quota's
+`agent_lane_next_action.next_action_basis`. The existing
+`recommended_action_resolution` receipt records `recommended_action_source=
+agent_lane_step`, the actor, selected Todo and read basis in run history.
+Semantic history retains the latest bound receipt per actor beyond the recent
+run window. Reads attach its step only while the actor, selected task and source
+facts still match. A changed, completed, reassigned or blocked task cannot
+inherit a stale step. Selecting another task uses the normal Todo owner; this
+flag neither overwrites Markdown nor creates another task or route store.
+
+Single- and multi-agent Goals use the same rule. `progress_scope` still controls
+report presentation, not task authority. `status --include-task-graph` includes
+`agent_next_actions` derived from each registered peer's Todo selector and valid
+step receipt; one peer's step does not replace another's. Shared registry reads
+resolve to the project source registry. Missing sources cannot mint a write
+basis; promoted canonical provider failures do not fall back to Markdown tasks.
+
+The basis binds the complete registered roster, source Goal identity/lifecycle/
+routing and narrative facts, the selected task's semantic facts, and the actor's
+latest bound step. It is a source-facts fence, **not a canonical Goal intent
+revision**. Ordinary peer Todo edits and peer step receipts do not change this
+actor's basis. Same-actor concurrent writers using one basis cannot both commit;
+`next_action_basis_conflict` returns the current basis and selected task for
+reread and rejudgment. The writer rechecks the source under existing locks before
+appending the receipt. This does not CAS or lock the canonical Todo transaction;
+a concurrent provider commit may leave an obsolete historical step, which the
+next read discards. Without the optional flag, it captures a fresh invocation
+basis; it cannot detect a model's older planning read outside that invocation.
+
+**Default behavior change:** `refresh-state --next-action` now requires a
+registered `--agent-id` and an eligible selected advancement Todo, for both
+personal and Goal-scoped reports. Supplying `--recommended-action` alongside it
+requires the same text. It no longer performs a shared prose replacement.
+Existing Todo, claim/lease, settlement and Vision checks retain their owners;
+a within-task step alone is not a durable mainline change, replan ACK or Goal
+amendment. Native Turn host results keep `recommended_action` and `next_action`
+as distinct durable follow-up guidance; they do not implicitly invoke this
+task-step editor or replace shared prose, including after completion or repair.
+Refreshes without `--next-action` keep their existing recommendation
+and report behavior. Historical prose-update receipts remain readable.
+
+CLI status omits the reducer's internal source context and duplicate basis;
+the selected route and explicit peer detail retain the editable read fence.
+The unchanged base/head fixture adds 100 pretty / 94 compact JSON characters
+to ordinary quota for that fence. Explicit task-graph detail adds 457 pretty /
+346 compact characters for two peer routes after compaction. The differential
+guard recognizes this bounded first 0-to-N fence transition only on the affected
+JSON views; absolute ceilings and later N-to-N growth budgets remain unchanged.
+This is a measured readback cost, not a claim of token or end-to-end time savings.
+
+Agent-scoped payloads may also include `goal_route_hint_v0`, a read-only
+synthesis of run, claim, wait or reassign advice. It is not a writer or a
+replacement for `agent_todo_summary`. `goal_frontier_projection_v0` evaluates a
+required replan independently of monitor quiet or agent-scope wait; its owner
+remains `loopx.control_plane.goals.goal_frontier`. Next-step decoration does not
+change eligibility, replan priority or the requirement to claim/lease work.
+
 When `agent_lane_next_action.selected_by=unclaimed_todo`, the payload marks
 `claim_required_before_work=true`; executors must claim the todo before editing
 or launching delivery work.
@@ -1415,13 +1537,34 @@ Post-turn accounting protocol:
   `--delivery-workspace-path <delivery-worktree>`; the path is validated locally
   and omitted from persisted history. Do not point this option at the canonical
   checkout for peer work.
-- delivery attribution is not synonymous with Git. A registered single-agent
-  goal whose project has no Git origin records a path-free `local_goal`
+- delivery attribution is not synonymous with Git. A registered non-Git
+  project or a canonical local Git checkout with no `origin` records a path-free `local_goal`
   workspace identity (`loopx:<goal-id>`) when refresh runs inside that
   registered project root. This lets validated non-repository work settle
-  without inventing a repository. It does not weaken peer isolation: a peer
-  repository write still requires an `independent_git_worktree`, and a local
-  goal workspace is rejected when that requirement is active.
+  without inventing a repository, including peer research and material work.
+  The existing Todo claim/lease and completion validator still apply; local
+  identity does not waive causal delivery requirements. A Git peer delivery still requires
+  an `independent_git_worktree`. An explicit Git task repository or an explicit
+  owner isolation requirement rejects a local Goal receipt. An outside-root
+  workspace cannot produce that local receipt. For originless Git, the checkout
+  root must equal the registered project root; nested repositories, linked
+  worktrees, invalid/empty origins and failed Git config reads cannot fall back.
+- `quota should-run` reuses that registered `local_goal` identity for local
+  tasks by default. Declaring write scopes does not turn local work into a Git
+  edit or require a particular task domain or continuation marker. An explicit
+  task repository and owner isolation requirements keep their existing guards.
+  Relative Goal scopes keep their existing matching semantics; absolute grants
+  under the registered root are projected into the same relative view, including
+  existing glob patterns. The existing boundary guard alone checks coverage.
+  Caller cwd does not rebase the declared targets or itself block local work.
+  If actual delivery is produced in the Goal project from another cwd, use
+  `refresh-state --delivery-workspace-path <Goal-project>`; settlement consumes
+  that recorded local workspace without requiring a cwd move. This changes local
+  task admission, not grants, claim/lease or causal settlement requirements.
+- `todo complete --evidence <pointer>` can record a validated local artifact.
+  `--result-file` additionally requires approved Goal acceptance criteria bound
+  to that Todo. A standalone Todo validator does not establish Goal acceptance;
+  an unsupported result binding is rejected before executing the validator.
 - autonomous replans follow the same accountable-outcome rule: spend after a
   concrete successor, blocker, or `outcome_progress`/`primary_goal_outcome`
   writeback, but do not spend for a `surface_only` watch-lane continuation or

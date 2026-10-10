@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -17,8 +16,8 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
-from .codex_offline import CodexOffline
-from .codex import Execution
+from .codex_offline import CodexOffline, stage_portable_python
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 
 
 _ROOT = "/opt/loopx-benchmark"
@@ -53,11 +52,13 @@ class BenchmarkCodex(CodexOffline):
         iteration_context="fresh",
         codex_sandbox="danger-full-access",
         validation_command=None,
-        turn_timeout_sec=4700,
+        turn_timeout_sec=None,
         scheduler_timeout_sec=5080,
-        replan_after_todos=3,
-        task_entry="seeded-todo",
+        replan_after_todos=None,
+        replan_after_turns=None,
+        task_entry=None,
         planning_timeout_sec=300,
+        turn_envelope=False,
         **kwargs,
     ):
         if isinstance(validation_command, str):
@@ -66,71 +67,90 @@ class BenchmarkCodex(CodexOffline):
             execution_mode,
             iteration_context,
             codex_sandbox,
-            float(turn_timeout_sec),
+            float(scheduler_timeout_sec) - 160 if turn_timeout_sec is None else float(turn_timeout_sec),
             validation_command if validation_command is not None else (),
             task_entry,
+            turn_envelope,
         )
-        self.planning_timeout = float(planning_timeout_sec)
-        if not 0 < self.planning_timeout < float("inf"):
+        self.planning_timeout = None if planning_timeout_sec is None else float(planning_timeout_sec)
+        if self.planning_timeout is not None and not 0 < self.planning_timeout < float("inf"):
             raise ValueError("planning timeout must be finite and positive")
         self.scheduler_timeout = int(scheduler_timeout_sec)
         if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
             raise ValueError(
                 "scheduler timeout must exceed turn timeout plus cleanup allowance"
             )
-        self.replan_after_todos = int(replan_after_todos)
+        if replan_after_turns is not None and replan_after_todos is not None:
+            raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
+        if replan_after_turns is not None:
+            if (type(replan_after_turns) is not int or
+                    not 1 <= replan_after_turns <= 6):
+                raise ValueError("replan_after_turns must be an integer between 1 and 6")
+            if not self.execution.uses_loopx:
+                raise ValueError("replan_after_turns requires a LoopX execution mode")
+        if replan_after_turns is None and replan_after_todos is None and self.execution.uses_loopx:
+            replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
+        self.replan_after_turns = replan_after_turns
+        self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
             raise ValueError("replan_after_todos must be between 1 and 5")
+        self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
         super().__init__(*args, **kwargs)
+
+    def _replan_configuration(self) -> tuple[str, str, int]:
+        # Transport existing Goal fields; the typed control plane owns counting.
+        if self.replan_after_turns is not None:
+            return ("replan_after_effective_turns", "--execution-replan-after-turns",
+                    self.replan_after_turns)
+        return ("replan_after_completed_todos", "--execution-replan-after-todos",
+                self.replan_after_todos)
+
+    def _replan_receipt(self) -> dict[str, int]:
+        key, _, value = self._replan_configuration()
+        return {key: value}
 
     @staticmethod
     def name() -> str:
         return "benchmark-codex"
 
     async def _stage_source(self, environment: BaseEnvironment, source: Path) -> str:
-        if Path(__file__).resolve() != source / "benchmark/runtime/harbor.py":
-            raise RuntimeError("Harbor must import the adapter from LOOPX_SRC_DIR")
-        dirty = subprocess.run(
-            ["git", "-C", str(source), "diff", "HEAD", "--quiet"],
-            check=False,
+        from .source import archive_source, source_pins
+
+        runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(source))).resolve()
+        if Path(__file__).resolve() != runner / "benchmark/runtime/harbor.py":
+            raise RuntimeError("Import the adapter from the pinned runner checkout")
+        head, runner_head = source_pins(
+            source, runner, os.environ.get("LOOPX_EXPECTED_COMMIT"),
+            os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"),
         )
-        if dirty.returncode:
-            raise RuntimeError("Commit tracked source changes before staging a trial")
-        head = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        expected = os.environ.get("LOOPX_EXPECTED_COMMIT", head)
-        if head != expected:
-            raise RuntimeError("LoopX source does not match LOOPX_EXPECTED_COMMIT")
-        # Never upload the checkout, local experiment outputs or trajectories.
+        self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
-            command = ["git", "-C", str(source), "archive", "--format=tar", head]
-            if not self.execution.uses_loopx:
-                command += [
-                    "benchmark/runtime",
-                    "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
-                ]
-            with archive.open("wb") as output:
-                subprocess.run(command, stdout=output, check=True, timeout=120)
+            paths = () if self.execution.uses_loopx else (
+                "benchmark/runtime", "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+            )
+            archive_source(source, head, archive, paths)
             await environment.upload_file(archive, f"{_ROOT}/source.tar")
-        await self.exec_as_root(
-            environment,
-            command=f"tar -xf {_ROOT}/source.tar -C {_SRC} && rm {_ROOT}/source.tar",
-            timeout_sec=180,
-        )
+            await self.exec_as_root(environment, command=(
+                f"tar -xf {_ROOT}/source.tar -C {_SRC} && rm {_ROOT}/source.tar"
+            ), timeout_sec=180)
+            if runner != source:
+                # Only research runtime code is overlaid; LoopX product code
+                # and its installer remain exactly at the product revision.
+                archive_source(runner, runner_head, archive, ("benchmark/runtime",))
+                await environment.upload_file(archive, f"{_ROOT}/runner.tar")
+                await self.exec_as_root(environment, command=(
+                    f"tar -xf {_ROOT}/runner.tar -C {_SRC} && rm {_ROOT}/runner.tar"
+                ), timeout_sec=180)
         return head
 
     def _profile_env(self) -> dict[str, str]:
         return {
             "HOME": _PROFILE_HOME,
             "CODEX_HOME": _SHARED_CODEX_HOME,
-            "PATH": f"{_NODE}/bin:{_PROFILE}/bin:/usr/local/bin:/usr/bin:/bin",
+            "PATH": f"{_NODE}/bin:{_PROFILE}/bin:{self._task_path}",
             "LOOPX_PYTHON": f"{_PYTHON}/bin/python3",
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_INSTALL_CANARY": "0",
@@ -145,16 +165,33 @@ class BenchmarkCodex(CodexOffline):
             "LOOPX_INSTALL_OPENCODE": "0",
             "LOOPX_INSTALL_CLAUDE": "0",
             "LOOPX_SKILL_DEDUPE_OTHER_ROOT": "0",
+            # Research trials do not send background usage statistics. Keep
+            # setup and control commands under the same trial policy as tools.
+            "LOOPX_USAGE_PING": "0",
             # Codex tool calls use `bash -lc`, whose login profile may replace
-            # PATH. BASH_ENV restores the staged Node for LoopX subprocesses.
+            # PATH. BASH_ENV restores staged tools and the task image toolchain.
             "BASH_ENV": _BASH_ENV,
         }
 
+    def _shell_path_restore(self) -> str:
+        # Keep login-profile additions after the pinned runtime and image tools.
+        path = (self._profile_env()["PATH"] if self.execution.uses_loopx
+                else self._task_path)
+        return f'export PATH={shlex.quote(path)}:"$PATH"'
+
+    async def _capture_task_path(self, environment: BaseEnvironment) -> None:
+        # Read inside the task container, before applying the isolated profile.
+        # Never import the operator host PATH or the rest of the task environment.
+        task_path = await environment.exec(command='printf "%s" "$PATH"', timeout_sec=30)
+        if task_path.return_code or not task_path.stdout:
+            raise RuntimeError("Could not read the task container PATH before installation")
+        self._task_path = task_path.stdout
+
     async def install(self, environment: BaseEnvironment) -> None:
+        await self._capture_task_path(environment)
         await super().install(environment)
 
         loopx_src = Path(os.environ["LOOPX_SRC_DIR"]).resolve()
-        portable_python = Path(os.environ["LOOPX_PORTABLE_PYTHON"]).resolve()
         node_root = Path(os.environ["LOOPX_NODE_DIR"]).resolve()
         await self.exec_as_root(
             environment,
@@ -168,16 +205,19 @@ class BenchmarkCodex(CodexOffline):
             timeout_sec=180,
         )
         actual_commit = await self._stage_source(environment, loopx_src)
-        await environment.upload_dir(portable_python, _PYTHON)
+        await stage_portable_python(environment, _PYTHON)
         if self.execution.uses_loopx:
             await environment.upload_dir(node_root, _NODE)
         await self.exec_as_root(
             environment,
             command=(
-                f"printf '%s\\n' 'export PATH={_NODE}/bin:$PATH' > {_BASH_ENV}; "
+                f"printf '%s\\n' {shlex.quote(self._shell_path_restore())} > {_BASH_ENV}; "
                 f"chmod 0644 {_BASH_ENV}; "
                 f"find {_SRC} -maxdepth 2 \\( -name '*.egg-info' -o "
                 f"-name '*.dist-info' \\) -exec rm -rf {{}} +; "
+                # The formal source installer builds generated frontend assets
+                # as the environment user; the archive is extracted by root.
+                f"chown -R {shlex.quote(str(environment.default_user or 'root'))} {_SRC}; "
                 f"chmod -R a+rX {_SRC} {_PYTHON} {_NODE}; "
                 f"chmod -R a+rwX {_PROFILE} {_CONTROL} {_CODEX_HOME} {_WAKE_LOG_DIR}"
             ),
@@ -205,6 +245,12 @@ class BenchmarkCodex(CodexOffline):
             if "error" in (install.stderr or "").lower():
                 self.logger.debug("LoopX installer stderr: %s", install.stderr[-1000:])
 
+            # Ownership is needed only for the trusted build. Restore the
+            # staged source boundary before any solver/worker starts.
+            await self.exec_as_root(
+                environment, command=f"chown -R root {_SRC}", timeout_sec=180,
+            )
+
             doctor = await self.exec_as_agent(
                 environment,
                 command=f"{_CLI} --format json doctor --agent-type codex-cli",
@@ -220,14 +266,17 @@ class BenchmarkCodex(CodexOffline):
 
         receipt = {
             "loopx_commit": actual_commit,
+            "runner_commit": self._runner_commit,
             "runtime_profile": "generic_cli",
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
+            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
             "home_scope": "trial",
+            "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
             "scheduler_terminal_packet_compatibility": True,
-            "replan_after_completed_todos": self.replan_after_todos,
+            **self._replan_receipt(),
         }
         await self.exec_as_agent(
             environment,
@@ -306,6 +355,7 @@ class BenchmarkCodex(CodexOffline):
     async def _prepare_phase(
         self, environment: BaseEnvironment, instruction: str, *, cwd: str
     ) -> None:
+        key, option, expected = self._replan_configuration()
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
         )
@@ -349,8 +399,8 @@ class BenchmarkCodex(CodexOffline):
                     "harbor-task-workspace",
                     "--boundary-authority-decision-id",
                     "trial-workspace",
-                    "--execution-replan-after-todos",
-                    str(self.replan_after_todos),
+                    option,
+                    str(expected),
                     "--agent-work-mode",
                     f"{_AGENT_ID}=active",
                     "--execute",
@@ -365,8 +415,8 @@ class BenchmarkCodex(CodexOffline):
                     "configure-goal",
                     "--goal-id",
                     _GOAL_ID,
-                    "--execution-replan-after-todos",
-                    str(self.replan_after_todos),
+                    option,
+                    str(expected),
                     "--execute",
                 ],
                 cwd=cwd,
@@ -379,24 +429,24 @@ class BenchmarkCodex(CodexOffline):
             environment, ["configure-goal", "--goal-id", _GOAL_ID], cwd=cwd,
         )
         configured_state = cadence.get("after") or cadence.get("before") or {}
-        configured = configured_state.get("execution_profile", {}).get("replan_after_completed_todos")
-        if configured != self.replan_after_todos:
+        configured = configured_state.get("execution_profile", {}).get(key)
+        if configured != expected:
             raise RuntimeError(
-                f"replan cadence readback mismatch: expected {self.replan_after_todos}, got {configured!r}"
+                f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
             )
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:
         text = (
-            f"[P0] Execute benchmark phase {self._phase_number}. Read the exact "
-            f"current task from {self._task_document}; inspect the workspace, implement and "
-            "validate it, and create bounded successor Todos for remaining work."
+            f"[P0] Complete the task in {self._task_document}. Inspect the workspace, "
+            "implement and validate against the task's full requirements and acceptance "
+            "criteria. Keep unmet requirements explicit when judging task completion."
         )
         if self._seeded_todo_id:
             listed = await self._loopx(environment, [
                 "todo", "list", "--goal-id", _GOAL_ID, "--role", "agent",
                 "--todo-id", self._seeded_todo_id,
             ], cwd=cwd)
-            current = next(iter(listed["todos"]), None)
+            current = listed["todo"]
             if current and current.get("status") in {"open", "blocked"}:
                 if current.get("claimed_by") != _AGENT_ID:
                     raise RuntimeError("Seeded task Todo is no longer owned by this agent")
@@ -436,7 +486,7 @@ class BenchmarkCodex(CodexOffline):
     def _worker_env(self, *, cwd: str) -> dict[str, str]:
         env = self._profile_env()
         if not self.execution.uses_loopx:
-            env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+            env["PATH"] = self._task_path
         env.update(
             {
                 "PYTHONPATH": _SRC,
@@ -452,6 +502,7 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_SHARED_SKILLS": _SHARED_SKILLS,
                 "LOOPX_EXECUTION_MODE": self.execution.mode,
                 "LOOPX_TASK_ENTRY": self.execution.task_entry,
+                **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
@@ -559,8 +610,9 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
+            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
             "home_scope": "trial",
-            "replan_after_completed_todos": self.replan_after_todos,
+            **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
         }
         self._write_aggregate_trajectory()
@@ -596,7 +648,9 @@ class BenchmarkCodex(CodexOffline):
             env = self._worker_env(cwd=cwd)
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
-                planning_timeout = min(self.planning_timeout, deadline - time.monotonic() - 30)
+                planning_timeout = deadline - time.monotonic() - 30
+                if self.planning_timeout is not None:
+                    planning_timeout = min(self.planning_timeout, planning_timeout)
                 if planning_timeout <= 0:
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(
@@ -622,35 +676,12 @@ class BenchmarkCodex(CodexOffline):
             # its execution window plus the existing 150-second settlement reserve.
             host_timeout = min(self.execution.timeout_seconds, remaining - 160)
             env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
-            if self.execution.mode in {"heartbeat", "turn"}:
-                command = [
-                    f"{_PYTHON}/bin/python3",
-                    f"{_SRC}/scripts/external_scheduler_worker.py",
-                    "--cli-bin",
-                    _CLI,
-                    "--registry",
-                    _REGISTRY,
-                    "--runtime-root",
-                    _LOOPX_RUNTIME,
-                    "--runtime-profile",
-                    "generic_cli",
-                    "--goal-id",
-                    _GOAL_ID,
-                    "--agent-id",
-                    _AGENT_ID,
-                    "--state-file",
-                    _SCHEDULER_STATE,
-                    "--wake-cmd",
-                    "exec " + shlex.join(wake_command),
-                    "--wake-timeout-seconds",
-                    str(host_timeout + 150),
-                    "--quota-timeout-seconds",
-                    "30",
-                    "--error-backoff-seconds",
-                    "15",
-                ]
-            else:
-                command = wake_command
+            from .scheduler import worker_command
+
+            command = worker_command(
+                env, python=f"{_PYTHON}/bin/python3", source=_SRC,
+                state_file=_SCHEDULER_STATE, host_timeout=host_timeout,
+            )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
             shell = (
                 "set +e; "

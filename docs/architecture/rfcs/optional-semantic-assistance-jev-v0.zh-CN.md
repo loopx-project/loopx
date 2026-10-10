@@ -3,7 +3,7 @@
 - **RFC status：** 已接受
 - **替代 / 关闭：** 无
 - **Delivery maturity：** 研究提案；附录 A 单独提出仅 D1 的可选 shadow 实现，没有建立模型质量资格或自动纠正效果。默认关闭的哨兵 capability 及其录制对照见 [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.zh-CN.md)；这些数字不证明实现资格或产品采用。
-- **Created：** 2026-09-19。**Last normative revision：** 2026-09-20。
+- **Created：** 2026-09-19。**Last normative revision：** 2026-10-08。
 - **Implementation baseline：** `9f1916960306b3650d795895b89f331eeae2516e`；在 PR 版本 `27812bd0fb437f831a541b564bcb5be8a96ff77e` 重新核对源码归属与触发器行为。历史 upstream 检查记于附录 A，不构成全系统认证。
 - **Authors / owners：** 提案作者；被选方向由现有领域维护者负责。不新增运行时权威，也未指派实施 owner。
 - **Language mirror：** [English](optional-semantic-assistance-jev-v0.md)
@@ -193,6 +193,56 @@ D7/D8 使用第 6 节 A/B/C 比较；当前确定性排序作为诊断消融，�
 D1 分别研究目标关系与证据增量。保留必要前置、合理阻塞等待和证据不足，不能硬塞成漂移。它们不必组成一个互斥枚举：等待描述工作状态，对齐描述与目标的关系。缺少此前证据时，增量判断必须为未知。无关的新工作可以有增量，同时偏离目标。
 
 主要比较采用基于产物的输入。作者声明分离保存，在相同产物上增加无自述/中性/自夸/自贬的消融比较。观察分类和概率变化，不能断言标记为不可信就消除了影响，也不能断言删除全部解释总是最好。解释前置必要性的上下文应有可归属支持；即使删除作者摘要，源码内容仍是不可信输入。
+
+#### 检测结果与所属规则的衔接
+
+评估须指向一个可证伪的问题：质疑的是哪个已声明 criterion、结论或依赖，依据哪个
+版本，什么观察能够解决质疑。合法调用工具、更换标识、通过无关测试，仍可能保留
+错误假设；负面实验或必要前置工作也可能推进 Goal。工具成功、活动量、新颖性与
+作者信心均不能单独判定这两类情况。
+
+三种责任分别保留：
+
+1. **取得证据。** 绑定当前 Goal/criterion 依据、可归属 Turn、产物版本、相关前后
+   观察及 verifier 身份/结果。声明选中文件、遗漏依赖、截断和缺失历史。手写评估
+   basis 不自动等于 canonical Goal acceptance revision；exact read 证明来源，
+   hash 不证明内容真实或覆盖完整。
+2. **评估有限问题。** 保留实际判断维度与未解决证据。目标关系和证据增量独立：
+   工作可能偏离目标，同时产生新证据。组合 drift signal 为 `false` 只表示该
+   信号的干预条件不成立，不代表所有工作正确或符合目标。缺失/过期证据按现有
+   receipt 合同保持未评估或不确定，不是反向证据，也不能解除已确认的领域失败。
+3. **由既有 owner 决定后果。** Shadow 评估属于 advisory；显式启用的 `assist`
+   政策可根据合格信号要求处理既有 replan 义务。该政策决定不等于确认业务 criterion
+   失败。当前领域 validator 或获授权评审可以确认具名 criterion 被违反，
+   但须保留证据、范围与权限；再由
+   acceptance、replan、dependency 或 effect owner 决定拒绝、修复、重规划或对账。
+   评估分数不授予停止、修改、回滚或完成权限。
+
+获授权 caller 应选择会产生实际后果之前的最小有效边界，例如结果被验收、被其他
+任务消费或被准入为受保护 effect 之前。仅在最后评审无法控制此前全部效果；不要求
+逐 token/逐工具调用模型审查。须声明证据窗口、截止时间、成本预算及错过检查点后的
+行为。可选评估不可用时，必要的确定性检查仍生效。除检测延迟外，还要测量对合法
+工作的误干预与漏报。告警和从未告警的记录都要抽查；只审查告警记录无法估计漏报。
+
+本地候选实现通过
+[`progress_review_evidence.ts`](../../../loopx/control_plane/work_items/progress_review_evidence.ts)
+绑定显式选中的规范任务 criterion。可选观察器的 `acceptance_scope` 读取既有验收
+owner；私有 registry/runtime 引用不进入模型请求。手写 basis 仍为 `operator_study`。
+回执声明选中文件的净变化覆盖；采集与核心回执解码共用 Goal/Agent/Todo 身份约束，
+不匹配时拒绝模型派发及漂移消费。核心读回也把新 canonical binding 与当前 criterion
+复核；依据变化或不可用时撤回该回执信号，不改历史。旧回执兼容性与默认关闭隔离
+保持原合同。
+
+打包能力编辑器分别展示目标关系与证据增量、criterion 来源、覆盖范围及过期／缺失／
+不可用状态，提供显式刷新。`off_goal` 加 `new_evidence` 不被改写为符合目标；组合
+信号未触发仍遵循原连续段政策。File/SQLite 下规范 criterion 编辑及真实 HTTP／界面
+流程已做本地验证；未开展新的真实模型质量实验或自动干预。见
+[能力合同](../../../loopx/capabilities/progress_review/README.zh-CN.md)与
+[观察器指南](../../../packages/loopx-jev/DRIFT_SHADOW.zh-CN.md)。
+
+这些观察衔接[共享工作中的证据失效](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#38-失效证据与受影响消费者)
+与[恢复资格](composable-state-machines-recovery-verification-v0.zh-CN.md#检测控制与恢复证据)。
+增加模型推理仍取决于第 6 节比较，不能成为修复已证实确定性缺口的前置条件。
 
 ### 5.3 提供方事实与延后机制
 

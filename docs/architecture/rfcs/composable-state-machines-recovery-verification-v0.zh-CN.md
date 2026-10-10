@@ -5,7 +5,7 @@
 - **交付成熟度：** 部分实现；已有有界 Turn 恢复验证，完整 M2 仍开放
 - **作者 / 负责人：** 控制面领域维护者与测试维护者
 - **创建：** 2026-10-01
-- **最近规范修订：** 2026-10-01
+- **最近规范修订：** 2026-10-08
 - **实现基线：** `98acf52e7e41c193959bd45db622c65298273714`
 - **相关契约：** [Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[TS 迁移](typescript-control-plane-migration-v0.zh-CN.md)、[共享权威](shared-goal-authority-state-provider-v0.zh-CN.md)、[质量分层](../../development/testing-and-quality.md)、[总路线](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](composable-state-machines-recovery-verification-v0.md)
@@ -31,6 +31,10 @@ PR 证据。本 RFC 不增加产品 capability、provider、wire schema、运行
 一个合法 Todo 转换可能留下未结算的 Turn；writeback 提交后丢失响应可能诱发重复
 effect；gate 解除后 successor 可能一直 quiet。逐个 owner 的局部测试不能证明这些
 边界之间的因果关系。
+
+合法 Host result 也可能携带错误产物。失败证据须在更多工作依赖它之前到达所属
+准入和恢复路径。进程恢复、journal 阶段推进或接管成功，都不能单独证明业务错误
+已被修正。
 
 ### 不变量
 
@@ -100,6 +104,52 @@ provider acceptance 继续由各自执行边界负责。
 纯决策回放、receipt 恢复和假设模拟遵循
 [Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) 的独立合同。
 
+### 检测、控制与恢复证据
+
+下表是组合情形，不是新的共享错误枚举或生产事件账本。可选评估遵循
+[有界检测合同](optional-semantic-assistance-jev-v0.zh-CN.md#检测结果与所属规则的衔接)，
+受影响证据的当前使用遵循[对齐 §3.8](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#38-失效证据与受影响消费者)。
+
+| 观察与所属证据 | 可采取的控制 | 恢复需要的证据 |
+| --- | --- | --- |
+| 身份、权限或 lease 检查失败 | 拒绝新的受保护执行/提交；仅按已资格化 Host 合同停止所拥有进程 | 当前合法 owner 与有效前提；旧输出不授予新权限 |
+| 类型化瞬时 Host 故障 | 既有有限重试政策、同一逻辑 intent 与已检查次数预算 | 当前准入与已解决的效果不确定性；退避不证明修复 |
+| 独立 task/acceptance 检查发现具名 criterion 失败 | 阻断该范围的成功验收/结算；保留失败 candidate 与原身份 | 实际修复或合法重规划，再按当前依据检查 criterion 及声明输入 |
+| Validator 不可用、无定论或必要输入不可读 | 保留证据缺失与既有 fail-closed gate | 取得可用证据；无法检查不等于内容为假 |
+| Observer/模型怀疑偏离 | Advisory，或显式启用的既有 replan 路径 | 领域调查/当前验证；信心或未触发信号不解除已确认失败 |
+| 显式消费依据失效/不可用 | 在所属依赖/验收边界拒绝新的当前使用；保留历史与无关工作 | 当前获准来源与 consumer eligibility；语义失败已确认时另需 criterion 重验 |
+| Provider 效果未知 | 保留 intent，阻断后续效果 | 同 operation 的权威读回；不能生成替代身份 |
+
+每条恢复轨迹保留：被质疑的 criterion/前提、source 与 validator basis、受影响
+Goal/Todo/Turn/artifact/effect 身份、已提交或未知效果、获准下一步及解除限制所需
+检查。复用已有记录与字段，不设计通用 wire packet；必要扩展归真实 producer 和
+consumer 所有。
+
+JSON 与 hash 正确的错误计算结果，仍不满足计算正确的 criterion；文件存在不能
+验收更强的主张。声明 verifier 须绑定版本、范围与当前来源，悄悄放宽检查不算修复。
+不可执行的 criterion 应指明获授权评审与决定性证据，不能把另一个模型的信心当
+证明。在会产生后果的验收/使用前及相关依据变化后检查，并明确成本和覆盖限制；
+不要求验证每个隐藏推理步骤。发现较晚时，区分被阻止、已经提交和仍未知的效果。
+本地恢复不能隐式补偿其他 provider 的效果。
+
+```text
+观察 + 声明的 criterion/source basis
+  → 所属检查：失败、证据不足或有界疑虑
+  → 原身份下的有范围准入/验收决定
+  → 获授权修复、重规划、接管或同 operation 对账
+  → 当前验证 + 未解决效果读回
+  → 继续合格工作，或保留可见的有范围限制
+```
+
+箭头组合既有 owner，不创建全局状态机。接管尚未完成的修复任务，不要求先通过
+完成 validator；要求当前归属、如实传递失败/未知事实和既有执行准入。声明恢复
+之前，接收者须独立满足受影响的完成/使用条件。
+
+最近可信恢复点是**具名且经过验证的依据**：身份、声明产物/来源版本、适用验证与
+效果 receipt。若只保存阶段 journal，就只能声明阶段恢复；产物、版本或验证范围
+缺失时，应明确限制，在既有权限内重建和重验。这不等于自动回滚 workspace 或
+任意外部状态。Replan 接受、context 送达、流程继续和业务恢复保持独立。
+
 ### 安全性与有条件推进
 
 每个被探索前缀都必须满足安全性。推进断言显式写明适用前提：provider 最终可用、
@@ -146,6 +196,8 @@ provider 会使相应前提不成立；必须暴露这个事实，不能判定�
 | 实现一致 | pinned base/head 生产入口轨迹及独立持久回读 | 保留预期语义，有意变化独立论证 | 必须真实受影响 backend |
 | 测试敏感 | 历史缺陷或刻意语义 mutation | 修复前／注入后失败，修复后通过 | 不从候选输出生成预期 |
 | 用户接续 | 受影响 CLI 与打包 App/Lark 旅程 | 状态、下一动作和原上下文结果真实 | 未覆盖入口明确未资格化 |
+| 业务错误控制 | 身份/hash 合法，但内容违反声明 criterion | 独立失败阻断该范围新的成功验收/使用 | 仅发现报文格式非法不够 |
+| 恢复依据 | 检查与恢复之间产物、verifier、criterion 或 source 改变 | 旧成功不验收新依据；未知效果仍须读回 | 不声称任意文件/外部效果回滚 |
 
 在既有 PR 证据中记录 seed 或确定性枚举、轨迹上限、归一化观察、失败／跳过数和
 最小反例。缩减不得丢掉触发故障的因果前提。只长期保留保护持久行为的反例；
@@ -194,6 +246,48 @@ TypeScript 测试按步骤枚举合法／非法证据。异常模拟进程中断
 PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 M2 仍开放；
 后续沿用现有 ownership-to-settlement 验收，在真实 lease／GoalRef fence 下
 补齐，再进入 M3 的实际送达 caller。
+
+### 基于源码的实现顺序
+
+以下表格记录既有 M2/M3 与路线图 R2/R3/R4 的独立组合边界；候选 checkpoint 不表示已安装能力或完整 M2 验收。源码基线为 `233cc76fd22760947d73e1501032b8b77e28148b`。
+
+| 有界结果 | 既有入口与 owner | 当前 checkpoint 与决定性出口 |
+| --- | --- | --- |
+| 声明来源链失效阻断当前使用 | `Delegations.read/start`、`delegation_results.py`、`delegation_result_use.ts` | `current_use` 区分历史完成和当前资格。新派发、采用与结算共用来源链检查；原 operation 重放只读回。File/SQLite 三层来源反例和打包团队证据页验证撤回、原因、输入引用与修复后重读。 |
+| 独立检查失败可复核原任务 | `executor`、`task_validation_failure.ts`、canonical controller JSON、`Delegations.revalidate` | 已资格化 task-postcondition 失败保留 repair/replan；旧记录仍 generic repair。CLI/MCP/App 显式复核原 Turn 的缓存结果，未修复继续失败，修复产物后沿原效果结算；持久化复核意图及原提交回执支持响应丢失后的同一执行恢复，不重复 Host 或扣额度。 |
+| shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；精确 GoalRef 保持实例身份，任务变化或实例重建撤回旧判断。独立旧核心只保留手工研究的旧格式；规范 scope 不降级。显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
+
+`validation_failed` 的 controller 扩展来自 canonical JSON、生成器和既有词汇定义；
+未手改 generated code。独立细节须来自原 validation 边界，矛盾状态不被接纳；
+Host 格式错误不会冒充后置条件失败。`revalidate` 是显式有副作用的恢复操作，
+不是只读检查：通过后会继续原有结算。实际代码修复仍须当前执行权限；本次复核
+不会编辑代码、自动重跑模型或换 Agent。未解决的 unknown effect 仍由原 journal
+恢复规则对账，替代 validator 不能清除它。
+
+`validation_stage=task_postcondition` 的 failed-Turn retry 已会复用缓存 Host
+result，只重跑 validation，不再次调用 Host。**实际修复工作**需要自己的当前有界
+执行准入，然后复验。Acceptance owner 已提供 criterion/verifier pins 时复用它们；
+未保留验证依据的 generic command 不能仅因退出码为零就成为持久业务 checkpoint。
+替代检查不能抹掉旧的 unknown effect。
+
+先在既有 fixture 中建立独立反例，再用真实 validator 命令与一次性受支持 backend
+验证生产入口。覆盖证据缺失、verifier/source 过期、同 operation 重放、修复再失败、
+停止/接管与 effect 响应丢失。Todo/Turn 视图须显示失败检查和范围，支持获授权
+修复/复验，并在打包 App 读回成功或继续失败；CLI 与受影响 Lark 入口共用 owner。
+复制命令按钮或后端 receipt 不能独自完成旅程。用实际测量限制重复验证和来源链遍历
+成本；经既有 owner 回退代码，同时保留 receipt、已提交效果和未解决恢复义务。
+
+来源链每次准入最多读取 64 个 operation、16 层，按 operation 合并重复来源读取。
+15 秒经过时间预算停止发起后续检查；已启动的 validator 仍受其配置超时约束，
+这不是 15 秒 HTTP 响应承诺。预算耗尽返回不可用，不以缓存成功回退。该路径只
+覆盖明确声明的本地委派输入；跨来源不是原子快照，未声明的记忆或任意推理仍不在范围内。
+
+规范审查 basis 的 `acceptance_scope` 只引用选定 workspace 内的 registry/runtime，
+条款内容从当前 owner 读取，原命令及私有路径不进入模型问题。criterion hash、
+版本和覆盖是来源观察，不证明模型答案正确、完整业务 checkpoint 或全部任务完成。
+前端沿既有团队证据和能力设置入口读回；受影响 CLI/MCP 共用 owner，未新增
+Lark 专有协议。真实模型纠错、远端 exactly-once、接管、observer 质量与受控干预
+仍由原 RFC 验收所有者负责。
 
 ## 12. 未决事项
 

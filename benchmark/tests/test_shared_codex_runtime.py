@@ -71,6 +71,16 @@ def test_trial_home_preserves_sessions_and_fixes_nonconversation_inputs(tmp_path
         prepare_codex_home(**(args | {"effort": "medium"}))
 
 
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat", "turn", "loopx-goal"])
+def test_trial_shell_tools_disable_usage_ping_for_every_execution_mode(tmp_path, mode):
+    execution = Execution(mode=mode, **({"validation_command": ("true",)} if mode == "turn" else {}))
+    args = settings(tmp_path, execution=execution,
+                    **({"skills": None} if not execution.uses_loopx else {}))
+    prepare_codex_home(**args)
+    config = tomllib.loads((args["home"] / "config.toml").read_text())
+    assert config["shell_environment_policy"]["set"]["LOOPX_USAGE_PING"] == "0"
+
+
 def test_baseline_isolated_from_loopx_skills(tmp_path):
     args = settings(tmp_path, execution=Execution(mode="native-goal"), skills=None)
     prepare_codex_home(**args)
@@ -120,7 +130,9 @@ def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_cop
 ):
     env = worker_env(tmp_path)
     for _ in range(2):
-        assert run_once(env)["ok"]
+        receipt = run_once(env)
+        assert receipt["ok"]
+        assert "turn_envelope" not in receipt
     logs = tmp_path / "logs"
     assert len(list((logs / "sessions").glob("*.jsonl"))) == 2
     calls = [json.loads(p.read_text()) for p in (logs / "wakes").glob("*/stdout.jsonl")]
@@ -347,15 +359,22 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert env["LOOPX_EXECUTION_MODE"] == mode
         assert env["LOOPX_PROJECT"] == "/workspace"
         assert env["MODEL_NAME"] == "fixture"
+        assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize("settings,field,value", [
+    ({}, "replan_after_effective_turns", 6),
+    ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
+    ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
+])
+def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_path, monkeypatch, existing, settings, field, value):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
     from loopx.cli import build_parser
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture")
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                           **settings, task_entry="seeded-todo")
     calls = []
 
     async def write_task(*args, **kwargs):
@@ -369,7 +388,7 @@ def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {"replan_after_completed_todos": 3}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -381,6 +400,12 @@ def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing
     assert any(args[:2] == ["todo", "add"] for args in calls)
     assert any(args[0] == "bootstrap" for args in calls) is not existing
     assert all("--clear-waiting-on" not in args for args in calls)
+    option = ("--execution-replan-after-turns" if field == "replan_after_effective_turns"
+              else "--execution-replan-after-todos")
+    configured = [args for args in calls if option in args]
+    assert configured and all(args[args.index(option) + 1] == str(value)
+                              for args in configured)
+    assert agent._replan_receipt() == {field: value}
 
 
 def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monkeypatch):
@@ -419,7 +444,8 @@ def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monke
             git("commit", "-m", "successor")
         return result
 
-    monkeypatch.setattr(harbor.subprocess, "run", moving_head)
+    from benchmark.runtime import source as source_runtime
+    monkeypatch.setattr(source_runtime.subprocess, "run", moving_head)
     uploaded = []
 
     class Environment:
@@ -438,3 +464,145 @@ def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monke
     assert staged == original
     assert marker.read_text() == "successor"
     assert uploaded == [b"original"]
+
+
+@pytest.mark.parametrize("total", [1800, 64800])
+def test_harbor_default_execution_budget_tracks_total_trial(tmp_path, total):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                           scheduler_timeout_sec=total)
+    assert agent.execution.timeout_seconds == total - 160
+    assert agent.scheduler_timeout == total
+
+
+def test_default_execution_has_no_independent_turn_deadline(tmp_path):
+    execution = Execution(mode="turn", validation_command=("true",))
+    env = worker_env(tmp_path) | {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "worker", "LOOPX_REGISTRY": "registry", "LOOPX_RUNTIME_ROOT": "runtime"}
+    assert execution.timeout_seconds is None
+    assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled)
+    commands = []
+    command_envs = {}
+    async def no_op(*args, **kwargs):
+        return None
+    async def stage(*args, **kwargs):
+        agent._runner_commit = "fixture"
+        return "fixture"
+    async def execute(*args, **kwargs):
+        commands.append(kwargs.get("command", ""))
+        command_envs[kwargs.get("command", "")] = kwargs.get("env", {})
+        return SimpleNamespace(stdout='{"ok": true}', stderr="", return_code=0)
+    for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
+        monkeypatch.setenv(key, str(tmp_path))
+    monkeypatch.setattr(CodexOffline, "install", no_op)
+    monkeypatch.setattr(agent, "_stage_source", stage)
+    monkeypatch.setattr(agent, "exec_as_root", execute)
+    monkeypatch.setattr(agent, "exec_as_agent", execute)
+    monkeypatch.setattr(agent, "_get_env", lambda key: None)
+    async def task_exec(**kwargs):
+        assert kwargs == {"command": 'printf "%s" "$PATH"', "timeout_sec": 30}
+        return SimpleNamespace(stdout="/task/toolchain:/usr/bin:/bin", return_code=0)
+    asyncio.run(agent.install(SimpleNamespace(
+        default_user="fixture", upload_dir=no_op, exec=task_exec,
+    )))
+    assert agent._task_path == "/task/toolchain:/usr/bin:/bin"
+    assert "/task/toolchain" in agent._shell_path_restore()
+    command = next(c for c in commands if "> /logs/agent/loopx-install.json" in c)
+    receipt = json.loads(shlex.split(command)[2])
+    assert receipt["loopx_usage_ping_enabled"] is False
+    for command in commands:
+        if "install-local.sh" in command or " doctor " in command:
+            assert command_envs[command]["LOOPX_USAGE_PING"] == "0"
+    assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
+    assert ("turn_envelope" in receipt) is enabled
+    if enabled:
+        assert receipt["turn_envelope"] is True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env["LOOPX_TURN_ENVELOPE"] = "1" if enabled else "0"
+    receipt = run_once(env)
+    assert receipt["ok"], receipt
+    assert ("turn_envelope" in receipt) is enabled
+    if enabled:
+        assert receipt["turn_envelope"] is True
+
+
+@pytest.mark.parametrize("observed", [
+    {"replan_after_completed_todos": 2},
+    {"replan_after_effective_turns": 3},
+    {},
+])
+def test_turn_cadence_readback_rejects_wrong_unit_or_value(tmp_path, monkeypatch, observed):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", replan_after_turns=2)
+    async def no_work(*args, **kwargs):
+        return True
+    async def cli(*args, **kwargs):
+        return {"after": {"execution_profile": observed}}
+    async def no_pending(**kwargs):
+        return SimpleNamespace(return_code=1)
+    monkeypatch.setattr(agent, "_write_task_document", no_work)
+    monkeypatch.setattr(agent, "_registry_exists", no_work)
+    monkeypatch.setattr(agent, "_seed_phase", no_work)
+    monkeypatch.setattr(agent, "_loopx", cli)
+    with pytest.raises(RuntimeError, match="readback mismatch"):
+        asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Fixture", cwd=str(tmp_path)))
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat"])
+def test_task_toolchain_survives_profile_and_login_shell(tmp_path, monkeypatch, mode):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", execution_mode=mode)
+    # Shell metacharacters in an image path must remain literal, not execute.
+    tool_dir = tmp_path / "tools '$(touch injected)'"
+    tool_dir.mkdir()
+    tool = tool_dir / "task-compiler"
+    tool.write_text("#!/bin/sh\nprintf 'task-toolchain'\n")
+    tool.chmod(0o755)
+    agent._task_path = f"{tool_dir}:/usr/bin:/bin"
+    monkeypatch.setenv("PATH", "/operator/private/bin")
+    monkeypatch.setenv("OPERATOR_SECRET", "must-not-propagate")
+    profile = agent._profile_env()
+    assert "/operator/private/bin" not in profile["PATH"]
+    assert "OPERATOR_SECRET" not in profile
+    # BASH_ENV runs after login files; emulate a login profile resetting PATH.
+    restore = tmp_path / "bash-env"
+    restore.write_text(agent._shell_path_restore() + "\n")
+    for login in [False, True]:
+        result = subprocess.run(
+            ["/bin/bash", "-lc" if login else "-c", "task-compiler"],
+            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "BASH_ENV": str(restore)},
+            cwd=tmp_path, text=True, capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "task-toolchain"
+    assert not (tmp_path / "injected").exists()
+    if not agent.execution.uses_loopx:
+        assert "/opt/loopx-benchmark/node" not in agent._shell_path_restore()
+
+
+@pytest.mark.parametrize("stdout,return_code", [("", 0), ("/task/bin", 1)])
+def test_missing_task_path_fails_before_install(tmp_path, monkeypatch, stdout, return_code):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture")
+    async def task_exec(**kwargs):
+        return SimpleNamespace(stdout=stdout, return_code=return_code)
+    async def unexpected(*args):
+        pytest.fail("installation must not start without the task PATH")
+    monkeypatch.setattr(CodexOffline, "install", unexpected)
+    with pytest.raises(RuntimeError, match="task container PATH"):
+        asyncio.run(agent.install(SimpleNamespace(exec=task_exec)))

@@ -1,3 +1,4 @@
+import {PrivateConversationPanel} from "./private-conversation-panel";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
@@ -539,6 +540,7 @@ export function LarkSettingsPage({
         </header>
       )}
 
+      <PrivateConversationPanel />
       <nav className="personal-lark-tabs" aria-label={t("lark.management")}>
         <button aria-current={tab === "apps" ? "page" : undefined} onClick={() => setTab("apps")} type="button">{t("lark.apps")} <span>{loading ? "…" : apps.length}</span></button>
         <button aria-current={tab === "connections" ? "page" : undefined} onClick={() => setTab("connections")} type="button">{t("lark.connections")} <span>{loading ? "…" : connections.length}</span></button>

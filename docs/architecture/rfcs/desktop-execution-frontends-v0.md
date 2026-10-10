@@ -918,6 +918,26 @@ An attached descriptor or managed session reference cannot grant new Goal
 authority. A stale or mismatched Goal, Agent, workspace, runtime, provider, or
 trust binding fails closed.
 
+The Desktop shell's own CLI/HTTP artifact selection is separate from an Agent's
+working-session or provider binding. Startup compares qualified package versions
+and official source ancestry; a launch-time developer override remains explicit.
+A remembered App-owned release path is only a discovery cache. When same-base
+snapshots cannot be ordered, the current App may maintain its own installation
+from its bundled artifact, while retaining a provably newer runtime or an
+independently managed CLI. Repair must retain its qualified promotion before
+reconnecting, and both HTTP services must read back that selected identity.
+An available signed App update must remain actionable while startup is blocked;
+an unchanged service retry cannot replace that result before the user applies
+the update or deliberately chooses another recovery action.
+A failed manual update or recovery must likewise retain its error, diagnostics
+and retry controls until the next explicit action. An unavailable automatic
+update feed must still allow the installed App to start. A completed verified
+restore must retire an incomplete-installation marker and expose Restart,
+without permitting service startup before that restart.
+Qualify ordinary packaged restart and same-window recovery alongside failure
+fallbacks; installation success or a temporary override does not close this
+bootstrap acceptance, Agent execution acceptance, or signed-release readiness.
+
 ## Safety and privacy
 
 - Keep opaque session handles, credentials, environment values, process
@@ -1028,6 +1048,23 @@ The dual-runtime managed mode is complete only after both Slice C and Slice D
 pass the shared conformance suite.
 
 ## Validation criteria
+
+### Native service ownership
+
+Packaged native windows use their own loopback status/Chat endpoints and own
+only the children they start. A ready service with the same source revision is
+not proof of the same registry or App ownership. Window navigation and native
+maintenance permissions must follow that exact Chat origin. A runtime repair
+keeps the same window endpoints and starts both replacement children from the
+one qualified selection; it must not rediscover the global CLI independently.
+CLI services and Vite development retain their existing shared ports; packaged App startup no
+longer borrows or restarts those services or their LaunchAgents.
+
+Qualify a packaged window while independent shared services are running: both
+HTTP runtime identities and the rendered workspace belong to its selected
+runtime; quit, runtime repair and reopen affect only its children. An occupied
+private endpoint fails without adopting or terminating its listener. A source
+checkout or passing helper test does not qualify this native process boundary.
 
 ### Shared
 

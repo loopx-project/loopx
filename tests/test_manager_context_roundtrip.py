@@ -47,15 +47,16 @@ def flow(tmp_path):
     )
     store = ChatSessionStore(tmp_path)
 
-    def create(external=False, project=False, brief=None):
-        session = store.create_session(
+    def create(external=False, project=False, brief=None, source_store=None):
+        actual_store = source_store or store
+        session = actual_store.create_session(
             goal_id="research" if project else "loopx-manager",
             agent_id="codex",
             adapter_kind="codex_app_server",
             upstream_thread_id="test",
             channel_id="goal.research" if project else "manager.external.test" if external else "manager",
         )
-        turn, _ = store.create_turn(
+        turn, _ = actual_store.create_turn(
             session["session_id"],
             client_turn_id="question",
             message="Investigate this new constraint",
@@ -69,7 +70,7 @@ def flow(tmp_path):
                     "schema_version": POLICY_SCHEMA,
                     "sources": {
                         session["channel_id"]: {
-                            "sender_ids": ["owner"],
+                            "local_delivery_scope": "selected", "sender_ids": ["owner"],
                             "targets": [target],
                         }
                     },
@@ -86,9 +87,10 @@ def flow(tmp_path):
             )
         receipt = deliver(
             tmp_path, registry, session=session, turn=turn,
-            request={**target, **({"brief": brief} if brief else {})}
+            request={**target, **({"brief": brief} if brief else {})},
+            source_store=source_store,
         )
-        store.update_turn(
+        actual_store.update_turn(
             session["session_id"],
             turn["turn_id"],
             status="completing",
@@ -97,7 +99,7 @@ def flow(tmp_path):
                 "context_handoff_receipt": receipt,
             },
         )
-        store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+        actual_store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
         return session, turn, receipt
 
     return tmp_path, registry, store, create
@@ -139,6 +141,59 @@ def test_single_request_returns_to_original_transcript_without_second_model_turn
         list((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))
     ) == len(before_turns)
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+@pytest.mark.parametrize("explicit_source", [False, True], ids=["legacy-root", "pinned-root"])
+def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source):
+    root, registry, store, create = flow
+    if explicit_source:
+        store = ChatSessionStore(root / "private-chat-host")
+    session, turn, receipt = create(True, source_store=store if explicit_source else None)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original task is complete.")
+    state_path = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    before = state_path.read_bytes() if state_path.exists() else None
+    foreign = ChatSessionStore(root / "other-chat-host")
+    sent = []
+
+    def sender(route, session, turn, text):
+        sent.append(text)
+        return {"reply_verified": True, "idempotency_key": "sha256:provider-proof"}
+
+    now = datetime.now(timezone.utc)
+    assert drain(root, registry, foreign, sender, now=now) == 0
+    assert (state_path.read_bytes() if state_path.exists() else None) == before
+    assert sent == []
+    # The wrong host cannot impose retry_at and starve the source host's
+    # immediately following tick. A restart must not duplicate the result.
+    assert drain(root, registry, store, sender, now=now) == 1
+    drain(root, registry, ChatSessionStore(store.root.parent), sender, now=now)
+    returned = [m for m in store.messages(session["session_id"])
+                if m.get("origin") == "manager_followup"]
+    assert len(sent) == len(returned) == 1
+    assert returned[0]["turn_id"] == turn["turn_id"]
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_exact_return_skips_other_host_before_admission(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+    from loopx.control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
+
+    root, registry, store, create = flow
+    _, _, receipt = create()
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Checked")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Complete.")
+    profile = json.loads(registry.read_text())
+    profile["profile_id"] = SOURCE_SESSION_PROFILE_ID
+    registry.write_text(json.dumps(profile))
+    foreign = ChatSessionStore(root / "other-chat-host")
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("A foreign host must not admit or deliver this return")
+
+    monkeypatch.setattr(roundtrip, "_exact_return_context", unexpected)
+    assert drain(root, registry, foreign, unexpected) == 0
 
 
 def test_conclusion_coalesces_unsent_intermediate_decision_and_is_immutable(flow):
@@ -855,6 +910,16 @@ def test_background_service_delivers_without_another_agent_or_query(flow, monkey
     assert observations == []  # Legacy delivery is outside the exact-source telemetry contract.
 
 
+def test_return_service_can_close_before_start(flow):
+    root, registry, store, _ = flow
+    service = ReturnService(root, registry, store, lambda *_: {"reply_verified": True})
+
+    service.close()
+
+    assert service.stop.is_set()
+    assert not service.thread.is_alive()
+
+
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
 def test_registration_revocation_blocks_return_without_retargeting(flow, project):
     root, registry, store, create = flow
@@ -992,3 +1057,316 @@ def test_external_reply_never_exposes_private_receiver_reason(flow):
     assert sent[0].startswith("协作回复 · worker")
     assert "Private receiver rationale" not in json.dumps(sent)
     assert all(not row.get("collaboration") for row in snapshot["messages"])
+
+
+def test_unresolvable_return_transport_records_retry_without_fake_receipt(flow):
+    root, registry, store, create = flow
+    session, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Checked with the current evidence and found no gap.",
+    )
+
+    class InertTransport:
+        """Neither attempt-aware nor callable: cannot deliver anything."""
+
+    drain(root, registry, store, InertTransport())
+    state = json.loads(
+        (_root(root) / "replies" / rid / "conclusion.delivery.json").read_text()
+    )
+    assert state["status"] == "retry_pending"
+    assert state["error"] == "return_transport_unavailable"
+    assert "delivered_at" not in state and "message_id" not in state
+    projected = reply_status(root, receipt)[0]
+    assert projected["status"] == "retry_pending"
+    assert projected["error"] == "return_transport_unavailable"
+
+
+def test_attempt_only_transport_still_delivers_without_call_protocol(flow):
+    root, registry, store, create = flow
+    session, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Recorded the validation result for the existing plan.",
+    )
+
+    class Transport:
+        """Attempt-aware only: the instance itself is not callable."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def send_with_attempt(self, route, session, turn, text, record_attempt):
+            self.calls += 1
+            return {"reply_verified": True, "idempotency_key": "sha256:provider-proof"}
+
+    transport = Transport()
+    drain(root, registry, store, transport)
+    assert transport.calls == 1
+    state = json.loads(
+        (_root(root) / "replies" / rid / "conclusion.delivery.json").read_text()
+    )
+    assert state["status"] == "delivered"
+    assert state["provider_receipt"] == "sha256:provider-proof"
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_private_channel_completes_transcript_only_without_sender(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Private deliberation")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Completed the private check against the existing plan.",
+    )
+
+    def unexpected(*_):
+        raise AssertionError("private channel must deliver without any transport")
+
+    drain(root, registry, store, unexpected)
+    state = json.loads(
+        (_root(root) / "replies" / rid / "conclusion.delivery.json").read_text()
+    )
+    assert state["status"] == "delivered"
+    returned = [
+        row
+        for row in store.messages(session["session_id"])
+        if row.get("origin") == "manager_followup"
+    ]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_payload_conflict_records_terminal_state_without_retry(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Checked with the current evidence and found no gap.",
+    )
+    # Pre-seed the transcript with the same handoff message_id carrying a
+    # different payload. A payload conflict is a data fault, not a transport
+    # fault: drain must stop in the existing explicit_unverified status with
+    # the typed error code — no new status word, so every existing reader
+    # keeps its semantics — instead of folding the conflict into the
+    # transport retry path.
+    conflicting_mid = "handoff." + _hash([rid, "conclusion"])
+    store.append_message(
+        session["session_id"],
+        role="agent",
+        text="An earlier, different version of this conclusion.",
+        turn_id=turn["turn_id"],
+        origin="manager_followup",
+        message_id=conflicting_mid,
+    )
+    deliveries = []
+
+    def recording_transport(route, session, turn, text):
+        deliveries.append(text)
+        return {"reply_verified": True, "idempotency_key": "sha256:provider-proof"}
+
+    drain(root, registry, store, recording_transport)
+    state_path = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "explicit_unverified"
+    assert state["error"] == "manager_return_payload_conflict"
+    assert "delivered_at" not in state and "message_id" not in state
+    assert "attempts" not in state and "retry_at" not in state
+    assert deliveries == []
+    # The recorded state is terminal: a second pass neither retries the
+    # transport nor rewrites the record.
+    drain(root, registry, store, recording_transport)
+    assert json.loads(state_path.read_text()) == state
+    assert deliveries == []
+    projected = reply_status(root, receipt)[0]
+    assert projected["status"] == "explicit_unverified"
+    assert projected["error"] == "manager_return_payload_conflict"
+
+
+def test_stored_empty_attachments_list_replays_without_delivery_conflict(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Private deliberation")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Completed the private check against the existing plan.",
+    )
+
+    def unexpected(*_):
+        raise AssertionError("private channel must deliver without any transport")
+
+    # First pass writes the transcript row (no ``attachments`` key) and the
+    # delivered receipt.
+    drain(root, registry, store, unexpected)
+    messages_path = (
+        store.root / "sessions" / session["session_id"] / "messages.jsonl"
+    )
+    rows = [
+        json.loads(line)
+        for line in messages_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    handoff_rows = [row for row in rows if row.get("message_id", "").startswith("handoff.")]
+    assert len(handoff_rows) == 1 and "attachments" not in handoff_rows[0]
+    # An externally written or migrated row can carry a literal empty
+    # ``attachments`` list where the delivery payload has no key at all:
+    # field normalization folds both onto the canonical empty list, so the
+    # same-id replay still delivers instead of reporting a phantom payload
+    # conflict (a bare ``.get()`` comparison would raise one here).
+    for row in rows:
+        if row.get("message_id", "").startswith("handoff."):
+            row["attachments"] = []
+    messages_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    state_path = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    state_path.unlink()
+    drain(root, registry, store, unexpected)
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "delivered"
+    stored = [
+        row
+        for row in store.messages(session["session_id"])
+        if row.get("message_id", "").startswith("handoff.")
+    ]
+    assert len(stored) == 1 and stored[0]["attachments"] == []
+
+
+def test_exact_loop_payload_conflict_sets_terminal_state_without_retry(
+    flow,
+    monkeypatch,
+):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Checked with the current evidence and found no gap.",
+    )
+    conflicting_mid = "handoff." + _hash([rid, "conclusion"])
+    store.append_message(
+        session["session_id"],
+        role="agent",
+        text="An earlier, different version of this conclusion.",
+        turn_id=turn["turn_id"],
+        origin="manager_followup",
+        message_id=conflicting_mid,
+    )
+    # The exact admission machinery needs a source-session registry fixture
+    # this module does not build; stub the context construction and the
+    # settlement writer so the exact loop's own delivery-side conflict
+    # check is what runs against the real divergent row above.
+    import loopx.capabilities.manager_context.roundtrip as return_roundtrip
+    from loopx.control_plane.projects.registry_codec import (
+        SOURCE_SESSION_PROFILE_ID,
+    )
+
+    settlements = []
+
+    def fake_settlement(root, registry, context, value, **kwargs):
+        settlements.append(dict(value))
+
+    monkeypatch.setattr(
+        return_roundtrip, "_write_exact_return_state", fake_settlement
+    )
+
+    def fake_context(root, registry, store, path, state_path, now):
+        reply = return_roundtrip._read(path)
+        return {
+            "reply": {**reply, "phase": path.stem},
+            "row": {"request_id": rid, "agent_id": "worker"},
+            "route": {"session_id": session["session_id"]},
+            "session": session,
+            "turn": turn,
+            "store": store,
+            "state_path": state_path,
+            "state": {},
+            "token": "fixture",
+            "source_id": "lark:om_fixture_source",
+        }
+
+    monkeypatch.setattr(return_roundtrip, "_exact_return_context", fake_context)
+    profile = json.loads(registry.read_text())
+    profile["profile_id"] = SOURCE_SESSION_PROFILE_ID
+    registry.write_text(json.dumps(profile))
+    deliveries = []
+
+    def recording_transport(route, session, turn, text):
+        deliveries.append(text)
+        return {"reply_verified": True, "idempotency_key": "sha256:provider-proof"}
+
+    drain(root, registry, store, recording_transport)
+    assert deliveries == []
+    assert len(settlements) == 1
+    assert settlements[0] == {
+        "status": "explicit_unverified",
+        "error": "manager_return_payload_conflict",
+    }
+
+
+def test_explicit_channel_return_completes_transcript_only_without_sender(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    assert session["channel_id"] == "manager"
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Completed the check against the existing plan.",
+    )
+
+    def unexpected(*_):
+        raise AssertionError(
+            "explicit private channel must complete without any transport"
+        )
+
+    drain(root, registry, store, unexpected)
+    state = json.loads(
+        (_root(root) / "replies" / rid / "conclusion.delivery.json").read_text()
+    )
+    assert state["status"] == "delivered"
+    returned = [
+        row
+        for row in store.messages(session["session_id"])
+        if row.get("origin") == "manager_followup"
+    ]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert reply_status(root, receipt)[0]["status"] == "delivered"

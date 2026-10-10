@@ -92,7 +92,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {
                 "command": "loopx review-packet --goal-id <goal-id>",
-                "purpose": "Render a handoff or review packet with any required evidence-log reads.",
+                "purpose": "Render a handoff or review packet with host-projected replan context.",
             },
             {
                 "command": "loopx goal-channel --help",
@@ -109,10 +109,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             {
                 "command": "loopx goal-lifecycle --help",
                 "purpose": "Preview, stop, or resume a Goal without deleting its history, todos, or evidence.",
-            },
-            {
-                "command": "loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin",
-                "purpose": "Read the current agent's thin public-safe ledger before replan or handoff.",
             },
             {
                 "command": "loopx agent-capabilities --help",
@@ -373,6 +369,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "codex-cli-visible-local-driver-pilot",
         "codex-cli-visible-session-proof",
         "configure-goal",
+        "configuration-backup",
         "delegation",
         "content-ops",
         "decision-context",
@@ -484,8 +481,6 @@ def render_concise_help(program: str = "loopx") -> str:
             "Daily operator commands:",
             "  loopx status                   Show current goals, gates, and next action.",
             "  loopx diagnose --goal-id ID    Build a compact evidence packet.",
-            "  loopx evidence-log --goal-id ID --agent-id AGENT --thin",
-            "                                  Read this agent's thin ledger before replan.",
             "  loopx todo --help              Add, claim, complete, update, or archive todos.",
             "  loopx task-lease --help        Manage a hard per-todo lease.",
             "  loopx coordination-shadow --help",

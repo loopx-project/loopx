@@ -151,8 +151,11 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
       capabilityId: "todo_replan_cadence",
       displayName: "Goal review cadence",
       editorScopes: ["machine", "goal"],
-      defaultConfiguration: { completed_todos: 5 },
-      fields: [{ key: "completed_todos", label: "Completed Todos between Goal reviews", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 }],
+      defaultConfiguration: { count_unit: "effective_turns", count: 5 },
+      fields: [
+        { key: "count_unit", label: "Count between reviews", description: "", input_kind: "select", required: true, options: ["completed_todos", "effective_turns"] },
+        { key: "count", label: "Review interval", description: "", input_kind: "number", required: true, minimum: 1, maximum: 5 },
+      ],
     }),
     periodicReportCapability(),
     goalCapability({
@@ -391,7 +394,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
   }
 }
 
-export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
+export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null, userActionAttention = false, presentationApi = false } = {}) {
   let turnCounter = 0;
   const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
@@ -427,6 +430,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     deletedGoalIds: new Set(),
     nextLifecycleApplyOutcome: null,
     loseNextTeamPlanResponse: false,
+    failNextActionList: false,
+    failActionListAfterLostTeamPlanResponse: false,
+    failNextTeamPlanAfterCommit: null,
     actionApplies: [],
     actionCancels: [],
     actionPreviews: [],
@@ -479,7 +485,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    todoRequestTexts: new Map(),
+    todoRequestReads: [],
     decidedGateTodoIds: new Set(),
+    // Applied User action outcomes, so the needs-you projection reads back like canonical status.
+    userActionOutcomes: new Map(),
     hostThreadActivity: {},
     answerForMessage: null,
     loopxModeRequests: [],
@@ -517,6 +527,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       ...(fixture.local_dashboard_api ?? {}),
       periodic_report_index_url: "/periodic-report-workspace",
       periodic_report_detail_url: "/periodic-report-workspace-projection",
+      ...(presentationApi ? {
+        presentation_surfaces_url: `${typeof presentationApi === "string" ? presentationApi : ""}/extension-presentation-surfaces`,
+        presentation_detail_url: `${typeof presentationApi === "string" ? presentationApi : ""}/extension-projection`,
+      } : {}),
     };
     for (const directoryGoal of directoryGoalFixtures) {
       if (state.deletedGoalIds.has(directoryGoal.id)) continue;
@@ -565,11 +579,18 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (first) {
       first.waiting_on = "user_or_controller";
       const gateDecided = state.decidedGateTodoIds.has("todo-browser-user-gate");
+      const userItems = [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }];
+      if (userActionAttention) {
+        const outcome = state.userActionOutcomes.get("todo-browser-user-action");
+        userItems.unshift({ done: Boolean(outcome), status: outcome ?? "open", goal_id: first.goal_id, index: 1, role: "user", task_class: "user_action", bound_agent: "codex-delivery",
+          text: "在桌面 App 中手动创建剩余的 3 个角色会话", note: "这是一项不阻塞 Agent 的用户操作提醒，而不是批准请求。", todo_id: "todo-browser-user-action", updated_at: "2026-08-13T00:00:00Z" });
+        userItems.push({ done: false, status: "open", goal_id: first.goal_id, index: 2, role: "user", task_class: "user_action", text: "核对本机备份目录是否可写" });
+      }
       first.user_todos = {
-        items: [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }],
-        open_count: gateDecided ? 0 : 1,
+        items: userItems,
+        open_count: userItems.filter((todo) => !todo.done).length,
         source_section: "User Todo",
-        total_count: 1,
+        total_count: userItems.length,
       };
       const domainTodos = (first.project_asset?.agent_todos?.items ?? first.agent_todos?.items ?? [])
         .filter((todo) => !todo.done)
@@ -727,6 +748,15 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           goal_ids: ["multi-agent-projection"], last_activity_at: "2026-08-24T15:00:00+08:00", next_action: "Continue projected todo todo-latest-lane.", state: "running",
         },
       );
+    }
+    for (const goal of fixture.attention_queue.items) {
+      for (const todo of goal.agent_todos?.items ?? []) {
+        if (todo.todo_id) {
+          const key = JSON.stringify([goal.goal_id, todo.todo_id]);
+          if (!state.todoRequestTexts.has(key)) state.todoRequestTexts.set(key, todo.text);
+          todo.text = state.todoRequestTexts.get(key).slice(0, 500);
+        }
+      }
     }
     for (const [goalId, activity] of Object.entries(state.hostThreadActivity)) {
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
@@ -900,6 +930,16 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/chat/todo/detail") {
+      const goalId = url.searchParams.get("goal_id");
+      const todoId = url.searchParams.get("todo_id");
+      state.todoRequestReads.push({ goalId, todoId });
+      const text = state.todoRequestTexts.get(JSON.stringify([goalId, todoId]));
+      await route.fulfill({ json: text === undefined ? { ok: false, error: "Task not found" } : {
+        ok: true, goal_id: goalId, todo_id: todoId, text, status: "open", archive_state: "active", updated_at: null,
+      } });
+      return;
+    }
     if (url.pathname === "/api/chat/completed-todos") {
       const total = url.searchParams.get("goal_id") === "progress-projection" ? 4087 : 0;
       const offset = Number(url.searchParams.get("cursor") || 0);
@@ -913,6 +953,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           completion_validation_revision_history: index === 0 ? [{ revision: 3, previous_declaration_sha256: "b".repeat(64), declaration_sha256: "a".repeat(64), actor_agent_id: "example-reviewer", revised_at: "2026-08-01T00:00:00Z" }] : [],
         };
       });
+      for (const item of items) state.todoRequestTexts.set(JSON.stringify([url.searchParams.get("goal_id"), item.todo_id]), item.text);
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }
@@ -1001,7 +1042,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             namespace: "todo_replan_cadence",
             title: "Goal review cadence",
             description: "Live review threshold without added turns, quota, or authority.",
-            schema_versions: ["todo_replan_cadence_machine_defaults_v0"],
+            schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,
             template_status: "ready",
           },
@@ -1755,6 +1796,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
   });
   await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET" && state.failNextActionList) {
+      state.failNextActionList = false;
+      await route.fulfill({ contentType: "application/json", json: { ok: false, error: "Action state is temporarily unavailable", error_code: "action_list_unavailable" }, status: 503 });
+      return;
+    }
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
@@ -1923,20 +1969,56 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       // Mirrors ChatActionService's gate.resolve receipt (tests/control_plane/test_chat_gate_decisions.py).
       const decisionParameters = actionKind === "gate.resolve" ? preview?.normalized_parameters : null;
       if (decisionParameters) state.decidedGateTodoIds.add(decisionParameters.todo_id);
+      const userActionParameters = preview?.normalized_parameters?.todo_id === "todo-browser-user-action" ? preview.normalized_parameters : null;
+      if (userActionParameters) state.userActionOutcomes.set(userActionParameters.todo_id,
+        actionKind === "gate.resolve" ? "done" : userActionParameters.operation === "defer" ? "deferred" : "done");
       const decisionReceipt = decisionParameters ? { projection_verified: true, receipt_id: "fixture-receipt", outcome: "gate_resolved",
         decision_outcome: decisionParameters.decision,
         unblock_resume_state: { approve: "resumed", reject: "decision_rejected", cancel: "decision_cancelled" }[decisionParameters.decision] ?? null } : null;
+      const storedProposal = actionProposals.get(apply[1]);
       const proposal = {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
-        summary: "已应用", normalized_parameters: preview?.normalized_parameters ?? actionProposals.get(apply[1])?.normalized_parameters ?? {}, context: preview?.context ?? actionProposals.get(apply[1])?.context ?? {}, expected_state_fingerprint: "fixture-r1",
-        permission_classification: "durable_write", validation_evidence: [], available_transitions: ["apply", "cancel"],
-        status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        summary: actionKind === "team.plan" && storedProposal ? storedProposal.summary : "已应用",
+        normalized_parameters: actionKind === "team.plan" && storedProposal
+          ? storedProposal.normalized_parameters : preview?.normalized_parameters ?? storedProposal?.normalized_parameters ?? {},
+        context: actionKind === "team.plan" && storedProposal
+          ? storedProposal.context : preview?.context ?? storedProposal?.context ?? {},
+        expected_state_fingerprint: actionKind === "team.plan" && storedProposal
+          ? storedProposal.expected_state_fingerprint : "fixture-r1",
+        permission_classification: "durable_write",
+        validation_evidence: actionKind === "team.plan" && storedProposal ? storedProposal.validation_evidence : [],
+        available_transitions: ["apply", "cancel"],
+        status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null,
+        created_at: actionKind === "team.plan" && storedProposal
+          ? storedProposal.created_at : "2026-08-13T01:00:00Z",
+        updated_at: "2026-08-13T01:00:01Z",
         ...(actionProposals.get(apply[1])?.canonical_update_basis
           ? { canonical_update_basis: actionProposals.get(apply[1]).canonical_update_basis } : {}),
       };
       actionProposals.set(apply[1], proposal);
+      if (actionKind === "team.plan" && state.failNextTeamPlanAfterCommit === apply[1]) {
+        state.failNextTeamPlanAfterCommit = null;
+        const failed = {
+          ...proposal,
+          status: "failed",
+          receipt: null,
+          failure: {
+            error_code: "team_plan_commit_failed",
+            message: "The team plan was committed, but its post-commit readback failed.",
+            failed_at: "2026-08-13T01:00:01Z",
+            retry_safe: true,
+          },
+        };
+        actionProposals.set(apply[1], failed);
+        await route.fulfill({ contentType: "application/json", json: { ok: true, proposal: failed }, status: 200 });
+        return;
+      }
       if (actionKind === "team.plan" && state.loseNextTeamPlanResponse) {
         state.loseNextTeamPlanResponse = false;
+        if (state.failActionListAfterLostTeamPlanResponse) {
+          state.failActionListAfterLostTeamPlanResponse = false;
+          state.failNextActionList = true;
+        }
         await route.fulfill({ contentType: "application/json", status: 503, json: { ok: false, error: "Assignment response unavailable", error_code: "team_plan_response_lost" } });
         return;
       }

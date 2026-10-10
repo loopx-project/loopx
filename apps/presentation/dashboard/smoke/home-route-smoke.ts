@@ -57,7 +57,7 @@ includes(workspacePageSource, 'kind: "run"', "run row projection");
 includes(workspacePageSource, 'kind: "output"', "output row projection");
 includes(workspacePageSource, 'kind: "schedule"', "schedule row projection");
 includes(workspacePageSource, 'kind: "proposal"', "typed proposal projection");
-includes(workspacePageSource, "callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId", "selected conversation receives free text");
+includes(workspacePageSource, "callbacks.onSendMessage?.(message, selectedAgentId, conversationKey", "selected conversation receives free text");
 includes(actionFormSource, 'from "./goal-create-request"', "Goal form imports the shared Goal create request builder");
 includes(actionFormSource, "onPreview(goalCreateRequest(", "Goal form previews through goalCreateRequest");
 includes(goalCreateRequestSource, "export function goalCreateRequest", "shared Goal create request builder");

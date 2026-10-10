@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
@@ -34,91 +35,117 @@ def _render_settlement_plan(plan: object) -> list[str]:
     return lines
 
 
-def render_todo_markdown(payload: dict[str, Any]) -> str:
-    if payload.get("command") == "project-markdown":
-        return "\n".join(
-            [
-                "# LoopX Todo Markdown Projection",
-                "",
-                f"- ok: `{payload.get('ok')}`",
-                f"- goal_id: `{payload.get('goal_id')}`",
-                f"- dry_run: `{payload.get('dry_run')}`",
-                f"- executed: `{payload.get('executed')}`",
-                f"- changed: `{payload.get('changed')}`",
-                f"- source_authority: `{payload.get('source_authority')}`",
-                f"- provider_revision: `{payload.get('provider_revision')}`",
-                f"- todo_count: `{payload.get('todo_count')}`",
-                f"- parse_render_parity: `{payload.get('parse_render_parity')}`",
-                f"- narrative_preserved: `{payload.get('narrative_preserved')}`",
-                f"- error: `{payload.get('error')}`" if payload.get("error") else "",
+def _render_todo_detail(payload: dict[str, Any]) -> str:
+    """Render the same lossless read lens, including missing/source metadata."""
+    metadata = {key: value for key, value in payload.items() if key != "todo"}
+    lines = ["# LoopX Todo Detail", "", "## Read metadata", "", "```json",
+             json.dumps(metadata, ensure_ascii=False, indent=2), "```"]
+    todo = payload.get("todo")
+    if isinstance(todo, dict):
+        lines.extend(["", "## Original Todo", "", todo["text"], "",
+                      "## Todo metadata", "", "```json",
+                      json.dumps({key: value for key, value in todo.items() if key != "text"},
+                                 ensure_ascii=False, indent=2), "```"])
+    return "\n".join(lines)
+
+
+def _render_todo_projection(payload: dict[str, Any]) -> str:
+    """Keep the existing provider-projection receipt presentation separate."""
+    return "\n".join(
+        [
+            "# LoopX Todo Markdown Projection",
+            "",
+            f"- ok: `{payload.get('ok')}`",
+            f"- goal_id: `{payload.get('goal_id')}`",
+            f"- dry_run: `{payload.get('dry_run')}`",
+            f"- executed: `{payload.get('executed')}`",
+            f"- changed: `{payload.get('changed')}`",
+            f"- source_authority: `{payload.get('source_authority')}`",
+            f"- provider_revision: `{payload.get('provider_revision')}`",
+            f"- todo_count: `{payload.get('todo_count')}`",
+            f"- parse_render_parity: `{payload.get('parse_render_parity')}`",
+            f"- narrative_preserved: `{payload.get('narrative_preserved')}`",
+            f"- error: `{payload.get('error')}`" if payload.get("error") else "",
+        ]
+    ).rstrip()
+
+
+def _render_thin_todo_list(payload: dict[str, Any]) -> str:
+    """Render the existing bounded list without altering its projection."""
+    field_projection = payload.get("todo_list_field_projection")
+    field_projection = (
+        field_projection if isinstance(field_projection, dict) else {}
+    )
+    cold_paths = field_projection.get("full_detail_cold_paths") or []
+    lines = [
+        "# LoopX Todo List",
+        "",
+        f"- goal_id: `{payload.get('goal_id')}`",
+        f"- role: `{payload.get('role')}`",
+        f"- status_filter: `{payload.get('status_filter')}`",
+        f"- todo_count: `{payload.get('todo_count')}`",
+        f"- matched_todo_count: `{payload.get('matched_todo_count')}`",
+        f"- returned_todo_count: `{payload.get('returned_todo_count')}`",
+        f"- omitted_todo_count: `{payload.get('omitted_todo_count')}`",
+        (
+            "- item_limit_per_role: `"
+            f"{field_projection.get('item_limit_per_role')}`"
+        ),
+        f"- view: `{field_projection.get('view')}`",
+        (
+            "- full_detail_cold_path: `"
+            f"{cold_paths[0] if cold_paths else 'todo list without --thin'}`"
+        ),
+    ]
+    for key, heading in (
+        ("user_todos", "User Todo"),
+        ("agent_todos", "Agent Todo"),
+    ):
+        summary = payload.get(key)
+        if not isinstance(summary, dict):
+            continue
+        lines.extend(["", f"## {heading}", ""])
+        expected_role = key.removesuffix("_todos")
+        items = [
+            item
+            for item in payload.get("todos") or []
+            if isinstance(item, dict)
+            and item.get("role") == expected_role
+        ]
+        if not items:
+            lines.append("- none")
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            marker = todo_marker_for_status(
+                item.get("status") or TODO_STATUS_OPEN
+            )
+            text = item.get("text") or item.get("title") or ""
+            metadata = [
+                f"{metadata_key}={item.get(metadata_key)}"
+                for metadata_key in (
+                    "todo_id",
+                    "status",
+                    "claimed_by",
+                    "blocks_agent",
+                    "next_due_at",
+                )
+                if item.get(metadata_key)
             ]
-        ).rstrip()
+            suffix = f" <!-- {' '.join(metadata)} -->" if metadata else ""
+            lines.append(f"- [{marker}] {text}{suffix}")
+    return "\n".join(lines)
+
+
+def render_todo_markdown(payload: dict[str, Any]) -> str:
+    if payload.get("todo_detail_projection"):
+        return _render_todo_detail(payload)
+    if payload.get("command") == "project-markdown":
+        return _render_todo_projection(payload)
     if payload.get("command") == "list":
         if payload.get("thin"):
-            field_projection = payload.get("todo_list_field_projection")
-            field_projection = (
-                field_projection if isinstance(field_projection, dict) else {}
-            )
-            cold_paths = field_projection.get("full_detail_cold_paths") or []
-            lines = [
-                "# LoopX Todo List",
-                "",
-                f"- goal_id: `{payload.get('goal_id')}`",
-                f"- role: `{payload.get('role')}`",
-                f"- status_filter: `{payload.get('status_filter')}`",
-                f"- todo_count: `{payload.get('todo_count')}`",
-                f"- matched_todo_count: `{payload.get('matched_todo_count')}`",
-                f"- returned_todo_count: `{payload.get('returned_todo_count')}`",
-                f"- omitted_todo_count: `{payload.get('omitted_todo_count')}`",
-                (
-                    "- item_limit_per_role: `"
-                    f"{field_projection.get('item_limit_per_role')}`"
-                ),
-                f"- view: `{field_projection.get('view')}`",
-                (
-                    "- full_detail_cold_path: `"
-                    f"{cold_paths[0] if cold_paths else 'todo list without --thin'}`"
-                ),
-            ]
-            for key, heading in (
-                ("user_todos", "User Todo"),
-                ("agent_todos", "Agent Todo"),
-            ):
-                summary = payload.get(key)
-                if not isinstance(summary, dict):
-                    continue
-                lines.extend(["", f"## {heading}", ""])
-                expected_role = key.removesuffix("_todos")
-                items = [
-                    item
-                    for item in payload.get("todos") or []
-                    if isinstance(item, dict)
-                    and item.get("role") == expected_role
-                ]
-                if not items:
-                    lines.append("- none")
-                    continue
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    marker = todo_marker_for_status(
-                        item.get("status") or TODO_STATUS_OPEN
-                    )
-                    text = item.get("text") or item.get("title") or ""
-                    metadata = [
-                        f"{metadata_key}={item.get(metadata_key)}"
-                        for metadata_key in (
-                            "todo_id",
-                            "status",
-                            "claimed_by",
-                            "blocks_agent",
-                            "next_due_at",
-                        )
-                        if item.get(metadata_key)
-                    ]
-                    suffix = f" <!-- {' '.join(metadata)} -->" if metadata else ""
-                    lines.append(f"- [{marker}] {text}{suffix}")
-            return "\n".join(lines)
+            return _render_thin_todo_list(payload)
 
         lines = [
             "# LoopX Todo List",
@@ -248,6 +275,15 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        if payload.get("error_code") == "todo_claim_invalid_arguments":
+            recovery = payload["recovery"]
+            lines.extend([
+                f"- recovery: {recovery['reason']}",
+                f"- requires_flags: `{', '.join(recovery['requires_flags']) or 'none'}`",
+                f"- remove_flags: `{', '.join(recovery['remove_flags']) or 'none'}`",
+                "- cli_args (append required values before running):",
+                "```json", json.dumps(recovery["cli_args"]), "```",
+            ])
         lines.extend(_render_lease_recovery(payload))
         lines.extend(_render_settlement_plan(payload.get("settlement_plan")))
         if payload.get("operator_action"):

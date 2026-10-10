@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# New benchmark runs and the product both default to six settled work Turns.
+DEFAULT_REPLAN_AFTER_TURNS = 6
+
+
 MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
 CONTEXTS = ("fresh", "resume")
 TASK_ENTRIES = ("seeded-todo", "loopx-planned")
@@ -20,13 +24,18 @@ class Execution:
     mode: str = "heartbeat"
     context: str = "fresh"
     sandbox: str = "danger-full-access"
-    timeout_seconds: float = 4700
+    timeout_seconds: float | None = None
     validation_command: tuple[str, ...] = ()
-    task_entry: str = "seeded-todo"
+    task_entry: str | None = None
+    turn_envelope: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
+            raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
+        if self.task_entry is None:
+            object.__setattr__(self, "task_entry", "loopx-planned" if self.uses_loopx else "seeded-todo")
         if self.task_entry not in TASK_ENTRIES:
             raise ValueError("unsupported task entry")
         if self.task_entry == "loopx-planned" and not self.uses_loopx:
@@ -35,7 +44,9 @@ class Execution:
             raise ValueError("resume requires mode=turn or mode=heartbeat")
         if self.sandbox not in SANDBOXES:
             raise ValueError("unsupported Codex sandbox")
-        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+        if self.timeout_seconds is not None and (
+            not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
+        ):
             raise ValueError("execution timeout must be finite and positive")
         if not isinstance(self.validation_command, (list, tuple)):
             raise ValueError("validation_command must be an argv list")
@@ -90,6 +101,10 @@ def prepare_codex_home(
             f"sandbox_mode = {json.dumps(execution.sandbox)}",
             'web_search = "disabled"',
             f'model_provider = "{"harbor" if base_url else "openai"}"',
+            # Codex filters its inherited shell environment. Set the trial
+            # policy explicitly so model tools cannot silently lose it.
+            "[shell_environment_policy.set]",
+            'LOOPX_USAGE_PING = "0"',
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",

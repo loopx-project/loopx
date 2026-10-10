@@ -148,6 +148,23 @@ def todo_authoring_steps(
         agent_id=agent_id,
         registry_path=registry_path,
     )
+    # This adapter already owns routed CLI templates for both planning entrypoints.
+    readback = {
+        "id": "read_back_authored_todos",
+        "kind": "operator_or_agent_actions",
+        "command_template": (
+            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+            + (f"--registry {shell_arg(str(registry_path))} " if registry_path is not None else "")
+            + f"--format json todo list --goal-id {shell_arg(str(goal_id))} "
+            + (f"--agent-id {shell_arg(str(agent_id))} " if agent_id else "")
+            + "--todo-id '<todo-id>'"
+        ),
+        "purpose": (
+            "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
+            "compare .todo.text, status/claim. Excerpts cannot verify writes. "
+            "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+        ),
+    }
     if not existing_runnable_frontier:
         return [
             {
@@ -173,6 +190,7 @@ def todo_authoring_steps(
                     "the admitted action_kind and target_key for later quota re-entry"
                 ),
             },
+            readback,
         ]
     return [
         {
@@ -205,6 +223,7 @@ def todo_authoring_steps(
             "add_new_command_template": add_template,
             "purpose": "takeover continues the frontier; authoring is a delta",
         },
+        readback,
     ]
 
 

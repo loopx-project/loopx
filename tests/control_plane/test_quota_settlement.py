@@ -66,6 +66,7 @@ def test_command_plan_supplies_actor_from_identity(replan):
     for step in plan.as_dict()["ordered_steps"]:
         if command := step.get("command_template"):
             argv = shlex.split(command)
+            assert argv[1:3] == ["--format", "json"]
             assert argv.count("--agent-id") == 1
             assert argv[argv.index("--agent-id") + 1] == AGENT_ID
             assert argv[argv.index("--turn-instance-id") + 1] == "turn with spaces"
@@ -784,8 +785,8 @@ def test_standard_app_actions_use_typed_settlement_before_turn_driver(
     )
 
     assert len(actions) == 2
-    assert actions[0].startswith("loopx refresh-state")
-    assert actions[1].startswith("loopx quota spend-slot")
+    assert actions[0].startswith("loopx --format json refresh-state")
+    assert actions[1].startswith("loopx --format json quota spend-slot")
     for command in actions:
         assert f"--todo-id {todo_id}" in command
         assert '--turn-instance-id "${LOOPX_TURN:?}"' in command
@@ -933,8 +934,8 @@ def test_turn_bound_native_goal_preserves_visible_goal_settlement(profile) -> No
     )
 
     assert len(actions) == 2
-    assert actions[0].startswith("loopx refresh-state")
-    assert actions[1].startswith("loopx quota spend-slot")
+    assert actions[0].startswith("loopx --format json refresh-state")
+    assert actions[1].startswith("loopx --format json quota spend-slot")
     assert "--source visible-goal" in actions[1]
     for command in actions:
         assert f"--todo-id {TODO_ID}" in command
@@ -980,8 +981,8 @@ def test_interactive_visible_goal_reenters_before_exposing_bound_settlement(
     )
 
     assert len(bound) == 2
-    assert bound[0].startswith("loopx refresh-state")
-    assert bound[1].startswith("loopx quota spend-slot")
+    assert bound[0].startswith("loopx --format json refresh-state")
+    assert bound[1].startswith("loopx --format json quota spend-slot")
     assert "--source visible-goal" in bound[1]
     for command in bound:
         assert f"--todo-id {TODO_ID}" in command
@@ -1185,10 +1186,10 @@ def test_interaction_contract_cli_actions_keep_runtime_root() -> None:
 
     channel = contract["cli_channel"]
     assert channel["next_cli_actions"][0].startswith(
-        f"{command_prefix} refresh-state "
+        f"{command_prefix} --format json refresh-state "
     )
     assert channel["next_cli_actions"][1].startswith(
-        f"{command_prefix} quota spend-slot "
+        f"{command_prefix} --format json quota spend-slot "
     )
     plan = channel["settlement_plan"]
     for step in plan["ordered_steps"]:

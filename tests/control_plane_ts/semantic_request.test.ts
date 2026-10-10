@@ -10,6 +10,10 @@ const brief = {
 };
 assert.deepEqual(normalizeCollaborationRequest(target), target);
 assert.deepEqual(normalizeCollaborationRequest({ ...target, brief }), { ...target, brief });
+assert.deepEqual(normalizeCollaborationRequest({ ...target, brief, execution_binding_id: "review" }),
+  {...target, brief, execution_binding_id: "review"});
+assert.throws(() => normalizeCollaborationRequest({...target, execution_binding_id: "review"}));
+assert.throws(() => normalizeCollaborationRequest({...target, brief, execution_binding_id: "../escape"}));
 for (const request of [
   { ...target, priority: "P0" }, { ...target, agent_id: "../reviewer" },
   { ...target, brief: { ...brief, acceptance: [] } },

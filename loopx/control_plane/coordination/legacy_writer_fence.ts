@@ -5,6 +5,7 @@ import { isAbsolute, join } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import { readShadowBootstrapSourcePath, requireShadowPrimaryWriteAllowed, ShadowManagementError, shadowMaintenanceLockPath } from "./shadow_management.ts";
 import { legacyCoordinationTodoLockPath, legacyCoordinationLeaseLockPath, taskLeaseLockPath } from "./legacy_writer_lock_paths.ts";
 export { legacyCoordinationTodoLockPath, legacyCoordinationLeaseLockPath,
@@ -13,12 +14,14 @@ export { legacyCoordinationTodoLockPath, legacyCoordinationLeaseLockPath,
 import {
   canonicalAuthorityBytes,
   canonicalAuthorityObject,
+  hasExactAuthorityKeys,
   requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
 import {
   LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
   LEGACY_COORDINATION_WRITER_FENCE_RESULT_SCHEMA,
   LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+  NEW_GOAL_WRITER_FENCE_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_RESULT_SCHEMA,
 } from "./coordination_state_contract.generated.ts";
@@ -27,9 +30,13 @@ export {
   LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
   LEGACY_COORDINATION_WRITER_FENCE_RESULT_SCHEMA,
   LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+  NEW_GOAL_WRITER_FENCE_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_RESULT_SCHEMA,
 };
+
+/** A cold import pins its own source and operation; it has no shadow revision. */
+export const COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA = "loopx_cold_source_import_writer_fence_v0";
 
 // Caller adapter: remediation is rendered here, never inside
 // checkLegacyCoordinationWriteAllowed, which owns only the stable typed reason
@@ -103,6 +110,27 @@ export function legacyCoordinationWriterFencePath(root: string, goalId: string):
 
 export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject {
   const fence = canonicalAuthorityObject(value, "legacy coordination writer fence");
+  if (fence.schema_version === COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA) {
+    if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
+        ["schema_version", "state", "goal_id", "fence_id", "import_operation_id", "import_plan_sha256"]) ||
+        !BARE_SHA256_PATTERN.test(String(fence.import_plan_sha256))) {
+      throw new Error("Invalid cold source import writer fence");
+    }
+    for (const key of ["goal_id", "fence_id", "import_operation_id"]) requireAuthorityStoreId(fence[key], key);
+    return fence;
+  }
+  if (fence.schema_version === NEW_GOAL_WRITER_FENCE_SCHEMA) {
+    if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
+        ["schema_version", "state", "goal_id", "fence_id", "creation_operation_id", "creation_identity_sha256", "creation_completed"]) ||
+        typeof fence.creation_completed !== "boolean") {
+      throw new Error("Invalid new Goal writer fence");
+    }
+    for (const key of ["goal_id", "fence_id", "creation_operation_id", "creation_identity_sha256"]) {
+      requireAuthorityStoreId(fence[key], `new Goal writer fence ${key}`);
+    }
+    if (!BARE_SHA256_PATTERN.test(String(fence.creation_identity_sha256))) throw new Error("Invalid new Goal creation identity digest");
+    return fence;
+  }
   if (
     fence.schema_version !== LEGACY_COORDINATION_WRITER_FENCE_SCHEMA ||
     fence.state !== "engaged"
@@ -134,6 +162,27 @@ export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject 
       promotion_plan_sha256: promotionPlanSha256,
     }),
   }, "legacy coordination writer fence");
+}
+
+/** Record verified creation completion without reopening the legacy writer.
+ * Caller holds the same maintenance/source locks through receipt readback.
+ */
+export async function completeNewGoalWriterFenceUnderLocks(root: string, goalId: string, pending: JsonObject): Promise<void> {
+  const path = legacyCoordinationWriterFencePath(root, goalId);
+  await withFileMutationLock(path, async () => {
+    const current = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (current.status !== "loaded" || current.fence.schema_version !== NEW_GOAL_WRITER_FENCE_SCHEMA ||
+        !canonicalAuthorityBytes({...current.fence, creation_completed: false}).equals(canonicalAuthorityBytes(pending))) {
+      throw new Error("New Goal creation fence changed before completion");
+    }
+    if (current.fence.creation_completed === true) return;
+    const completed = {...pending, creation_completed: true};
+    await atomicWriteJson(path, completed);
+    const checked = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (checked.status !== "loaded" || !canonicalAuthorityBytes(checked.fence).equals(canonicalAuthorityBytes(completed))) {
+      throw new Error("New Goal creation completion fence readback failed");
+    }
+  });
 }
 
 export async function loadLegacyCoordinationWriterFence(

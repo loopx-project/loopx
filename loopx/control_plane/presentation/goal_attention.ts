@@ -50,6 +50,9 @@ export function projectGoalAttention(input: JsonObject): {
 export function boundGoalAttention(input: JsonObject): {goals: JsonObject[]} {
   const limit = input.limit === undefined ? 12 : requireInteger(input.limit, "limit");
   if (limit < 1 || limit > 48) throw new Error("attention limit must be 1..48");
+  if (input.preview !== undefined && typeof input.preview !== "boolean") {
+    throw new TypeError("attention preview must be a boolean");
+  }
   const goals = (Array.isArray(input.goals) ? input.goals : []).map(raw =>
     requireJsonObject(raw, "goal"));
   const candidates = goals.flatMap((goal, goalIndex) => {
@@ -62,12 +65,48 @@ export function boundGoalAttention(input: JsonObject): {goals: JsonObject[]} {
     if (!goal.attention) return goal;
     const attention = requireJsonObject(goal.attention, "goal.attention");
     const items = candidates.filter(candidate => candidate.goalIndex === goalIndex)
-      .sort((a, b) => a.itemIndex - b.itemIndex).map(candidate => candidate.item);
-    if (attention.status !== "read") return goal;
+      .sort((a, b) => a.itemIndex - b.itemIndex).map(candidate =>
+        input.preview === true ? attentionPreview(goal, candidate.item) : candidate.item);
+    if (attention.status !== "read" && input.preview !== true) return goal;
     const coverage = attention.coverage as JsonObject | undefined;
     const known = typeof coverage?.known === "number" ? coverage.known
       : (Array.isArray(attention.items) ? attention.items.length : 0);
     return {...goal, attention: {...attention, items,
+      ...(input.preview === true ? {details_omitted: true} : {}),
       coverage: {known, included: items.length, omitted: known - items.length}}};
   })};
+}
+
+/** A directory excerpt is never the complete terms of an owner decision.
+ * Keep identity and ownership, not nested task/receipt bodies. The existing
+ * scoped Todo reader resolves the exact record before any decision or action. */
+function attentionPreview(goal: JsonObject, item: JsonObject): JsonObject {
+  const excerpt = (value: unknown): JsonObject => {
+    const result: JsonObject = {};
+    if (value === null || value === undefined) return result;
+    const record = requireJsonObject(value, "attention record");
+    for (const key of ["todo_id", "request_id", "blocker_identity", "blocker_revision",
+      "owner_must_know", "owner_must_act", "responsible_party"]) {
+      if (record[key] !== undefined) result[key] = record[key];
+    }
+    for (const key of ["text", "cause"]) {
+      if (typeof record[key] !== "string") continue;
+      const chars = Array.from(record[key]);
+      result[key] = chars.length > 180 ? chars.slice(0, 179).join("") + "…" : record[key];
+      if (chars.length > 180 || record.content_truncated === true) result.content_truncated = true;
+    }
+    return result;
+  };
+  const blocker = item.blocker == null ? null : excerpt(item.blocker);
+  const rawBlocker = item.blocker as JsonObject | null | undefined;
+  if (blocker && rawBlocker?.task) blocker.task = excerpt(rawBlocker.task);
+  const request = item.request == null ? null : excerpt(item.request);
+  const todoId = item.todo_id ?? (rawBlocker?.task as JsonObject | undefined)?.todo_id;
+  return {
+    todo_id: todoId ?? null, owner_must_act: item.owner_must_act === true,
+    blocker, request, details_omitted: true,
+    ...(item.incomplete ? {incomplete: item.incomplete} : {}),
+    read_reference: {view: "todos", goal_id: goal.goal_id,
+      ...(todoId ? {todo_id: todoId} : {})},
+  };
 }

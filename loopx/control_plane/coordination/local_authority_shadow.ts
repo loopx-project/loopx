@@ -838,10 +838,14 @@ export async function loadValidatedShadowLineage(
         cursor: transaction.cursor, provider_revision: transaction.provider_revision }), "shadow_qualification_transaction_identity_invalid");
     requireLineage(canonicalAuthorityBytes(transaction.events).equals(canonicalAuthorityBytes([transactionEvent(request, noOp)])),
       "shadow_qualification_event_identity_invalid");
+    const readModel = validateCoordinationTodoReadModel(transaction.projection, goalId);
     const expected = composeLocalAuthorityShadowHead(previous, goalId, request.entry, projection, request.partition_digest);
+    // Replay the exact released field manifest that wrote this transaction.
+    // Validation above rejects arbitrary subsets and fields unavailable in that
+    // revision; record digests and every other composed field remain exact.
+    (expected.todo_read_model as JsonObject).contract_fields = readModel.contract_fields;
     requireLineage(canonicalAuthorityBytes(expected).equals(canonicalAuthorityBytes(transaction.projection)),
       "shadow_qualification_projection_history_invalid");
-    validateCoordinationTodoReadModel(transaction.projection, goalId);
     settled[partition] = request.entry.seq;
     if (!noOp) { applied[partition] = request.entry.seq; writeClasses.add(request.entry.writer.write_class); }
     previous = transaction.projection;

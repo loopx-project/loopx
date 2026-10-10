@@ -139,22 +139,26 @@ class LoopXControlPlane:
         )
 
     def evidence_since(self, since: str, *, todo_id: str) -> dict[str, Any]:
-        return self._run_json(
-            [
-                "evidence-log",
-                "--goal-id",
-                self.goal_id,
-                "--agent-id",
-                self.agent_id,
-                "--todo-id",
-                todo_id,
-                "--thin",
-                "--since",
-                since,
-                "--limit",
-                "128",
-            ]
-        )
+        # Recovery reads its owning persisted event source directly. An agent-facing
+        # diagnostic command is not a dependency of native writeback reconciliation.
+        from loopx.history import load_registry
+        from loopx.paths import resolve_runtime_root
+        from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+        from loopx.control_plane.runtime.agent_evidence_history import build_agent_scoped_evidence_log
+
+        try:
+            registry_path = Path(self.registry).expanduser()
+            if not registry_path.is_absolute():
+                registry_path = self.project / registry_path
+            registry = load_registry(registry_path)
+            runtime_root = resolve_runtime_root(registry, None, registry_path=registry_path)
+            events = load_rollout_events(rollout_event_log_path(runtime_root, self.goal_id), limit=400)
+            return build_agent_scoped_evidence_log(
+                goal_id=self.goal_id, agent_id=self.agent_id, todo_id=todo_id,
+                since=since, rollout_events=events, history_runs=[], limit=128,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            raise KunlunNativeGoalRuntimeError(f"writeback evidence unavailable: {exc}") from exc
 
     def record_verified_delivery(self, *, mode: str, todo_id: str) -> dict[str, Any]:
         workspace_arguments = (

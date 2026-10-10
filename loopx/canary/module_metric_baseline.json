@@ -32,7 +32,8 @@
     },
     "loopx/chat_runtime.py": {
       "any_count": 35,
-      "dict_any_count": 0
+      "dict_any_count": 0,
+      "lines": 2024
     },
     "loopx/chat_server.py": {
       "any_count": 25,
@@ -59,7 +60,7 @@
       "dict_any_count": 0
     },
     "loopx/extensions/lark/goal_topic_runtime.py": {
-      "any_count": 49,
+      "any_count": 56,
       "dict_any_count": 0
     },
     "loopx/extensions/lark/presentation/explore_results.py": {

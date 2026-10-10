@@ -14,7 +14,6 @@ from .agent_registry import (
 )
 from .execution_profile import execution_profile_turn_granularity
 from .heartbeat_prompt import build_heartbeat_prompt
-from .control_plane.reward_memory import reward_memory_goal_policy
 from .history import load_registry
 from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import registry_goals, resolve_state_file
@@ -85,11 +84,15 @@ def goal_heartbeat_prompt(
     repo = Path(str(goal.get("repo") or ".")).expanduser()
     state_file = resolve_state_file(repo, goal.get("state_file"))
     registered_agents = registered_agent_ids_for_goal(goal)
-    reward_memory_policy = reward_memory_goal_policy(goal)
-    reward_memory_enabled = bool(
-        reward_memory_policy["enabled"]
-        and reward_memory_policy["automation"].get("automatic_ingest") is True
-    )
+    reward_memory_enabled = False
+    if agent_id is not None:
+        from .capabilities.reward_memory.configuration import (
+            reward_memory_automatic_ingest_for_agent,
+        )
+
+        reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
+            goal, agent_id
+        )
     return build_heartbeat_prompt(
         goal_id=goal_id,
         active_state=None,

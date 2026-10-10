@@ -258,12 +258,17 @@ def attach_active_state_project_asset_fields(
     next_action_projection_warning: Callable[..., dict[str, Any] | None] | None = None,
     autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None] | None = None,
     external_progress_review: dict[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
         return {}
 
     attached: dict[str, Any] = {}
+    if effective_turn_cadence is not None and autonomous_replan_obligation_from_runs is not None:
+        autonomous_replan_obligation_from_runs = partial(
+            autonomous_replan_obligation_from_runs, effective_turn_cadence=effective_turn_cadence,
+        )
     if isinstance(external_progress_review, dict):
         review_summary = external_progress_review.get("summary")
         if isinstance(review_summary, dict):

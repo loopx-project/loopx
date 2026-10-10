@@ -43,7 +43,6 @@ TODO_CAPABILITY_BINDING_REF_PATTERN = re.compile(
 )
 TODO_REPLAN_OBLIGATION_ID_PATTERN = re.compile(r"^replan-[a-f0-9]{16}$")
 TODO_EXPLORE_RESULT_NODE_REF_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,95}$")
-TODO_EXPLORE_RESULT_NODE_REF_LIMIT = 8
 TODO_DECISION_SCOPE_KEY_PATTERN = re.compile(r"^(?:\*|[a-z0-9][a-z0-9_.:@*/-]{0,95})$")
 TODO_WRITE_SCOPE_MAX_CHARS = 160
 TODO_MONITOR_METADATA_FIELDS = (
@@ -311,18 +310,6 @@ def normalize_removed_todo_continuation_policy(value: Any) -> str | None:
     return None
 
 
-def resolve_todo_continuation_policy(
-    value: Any,
-    *,
-    action_kind: Any = None,
-) -> TodoContinuationPolicy:
-    del action_kind
-    explicit = normalize_todo_continuation_policy(value)
-    if explicit:
-        return TodoContinuationPolicy(explicit)
-    return TodoContinuationPolicy.INDEPENDENT_HANDOFF
-
-
 def normalize_todo_claimed_by(value: Any) -> str | None:
     candidate = compact_todo_text(value).lower().replace(" ", "-")
     if candidate and TODO_AGENT_CLAIM_PATTERN.match(candidate):
@@ -490,14 +477,14 @@ def normalize_explore_result_node_refs(value: Any) -> list[str]:
     else:
         raw_values = re.split(r"[,;|]", str(value or ""))
     refs: list[str] = []
+    seen: set[str] = set()
     for raw in raw_values:
         ref = compact_todo_text(raw)
         if not ref or not TODO_EXPLORE_RESULT_NODE_REF_PATTERN.match(ref):
             continue
-        if ref not in refs:
+        if ref not in seen:
+            seen.add(ref)
             refs.append(ref)
-        if len(refs) >= TODO_EXPLORE_RESULT_NODE_REF_LIMIT:
-            break
     return refs
 
 
@@ -1135,6 +1122,7 @@ _TODO_METADATA_FIELD_SCHEMA = (
             "completed_at",
             "updated_at",
             "completion_turn_key",
+            "completion_receipt_id",
             "validation_command",
             "validation_command_argv",
             "validation_label",
@@ -1268,6 +1256,7 @@ def format_todo_metadata_line(
     successor_todo_ids: Any = None,
     completion_continuation: str | None = None,
     completion_recovery: str | None = None,
+    completion_receipt_id: str | None = None,
     replan_obligation_id: str | None = None,
     resume_when: str | None = None,
     resume_monitor_generation: int | str | None = None,

@@ -34,6 +34,27 @@
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
 或所有 Python 消失。本节替代陈旧的当前数量估算，不覆盖历史执行证据。
 
+[可逆试用操作单](../../reference/sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用)
+将原生 Todo/guard/writeback/单次 spend、重启和从当前 head 退出至 File 串为同一旅程。
+CLI 回归保留完整 Todo metadata 和原 Turn 结算；这是有界资格路径，不是持续使用、
+完整 Goal 恢复、真实 Host 试用或发布默认通过。安装包/源码一致性还须证明重复构建
+不夹带已退役模块；单次冷构建通过不等于构建规则已经修复。
+
+**新建 opt-in（2026-10-04，拟议）。** 既有
+[设备设置和 CLI/App 创建 owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
+可固定 File/SQLite 目标与 `soft_claim`/`hard_lease` 策略，初始化空 canonical
+权威并恢复原创建回执。隔离真实 provider 的 CLI/HTTP 与打包设置验证覆盖原操作
+重试、旧 writer fence、已完成存储丢失和非法策略恢复。完成后的重试不再解析
+Python Markdown 源；未完成的新建仅在 typed owner 请求时捕获源。默认关闭及
+发布版 v0 行为保持，活跃 legacy writer 仍有调用方。这是有界 L9 前置，不代表
+安装态升级、整 Goal 恢复、D2、cohort 准入或发布默认验收；这些既有出口保持开放。
+
+**L9 原提案读回。** 从已有 Goal 发起的全局创建保留管家上下文；打开的详情
+按原 proposal 独立读回，不用当前 Goal 的发现列表判定原操作缺失，也不把其它管家
+卡片混入 Goal。身份不匹配、记录缺失和传输失败仍明确报错；变更回执发布前取消
+过时读回。打包交互与安装态 File/SQLite 恢复只验收此投影修复，真实模型首 Turn、
+L8/D3、持续 D2 和发布默认分别保留。此处不改变 provider、policy 或旧 Goal 迁移默认。
+
 **所有权精简阶段（2026-10-01）。** R5/T4 将存储晋升与策略迁移分开：新 CLI
 promote 默认保留策略，正常策略目标收敛为 soft/hard。canonical 策略迁移复用晋升
 规则、完整归档和 command receipt owner，用一笔 CAS 保留 assignment、lease
@@ -1077,9 +1098,14 @@ rehearsal 证据（1000 次提交／64 KiB）现为 16 个 checkpoint、63 次 r
 单次历史读取最多重建一个 64 次提交窗口，保留 1,048,576 字节 projection 与
 126,714 字节 delta，而“每提交一份完整拷贝”为 65,536,000 字节。
 
-这仍不代表 lane L 完成。File 与 NoKV 依旧在每次 load 时保留并解码完整 journal，
-因此“有界恢复”是内嵌候选 provider 的性质，不是跨 provider 等价；SQLite profile
-也仍不裁剪 receipt 与 event。逻辑/WAL 流量与 <=15x 累计写入预算、1 MiB 与 300k
+这仍不代表 lane L 完成。当前比较采用 File 的 checkpoint/delta journal 与有界的
+已验证读取视图，见[同负载 provider 比较](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。
+File 在复用已解码视图前仍会重读并哈希完整 envelope、检查 store identity；避免重复
+解码并未消除耐久发布或大历史验证成本。SQLite 历史读取证明覆盖的 checkpoint
+区间，scan 返回完整状态。已交付的 archive audit 已使用索引 receipt 批量读取；
+资格验证应同时覆盖这个完整 consumer 与单条 receipt、scan 查询。这些机制不代表
+跨 provider 恢复等价或 NoKV 资格通过，SQLite 也仍不裁剪 receipt 与 event。
+逻辑/WAL 流量与 <=15x 累计写入预算、1 MiB 与 300k
 headroom、完整领域负载、大历史恢复、fenced backup/restore、受支持升级/回滚、
 OS/runtime 覆盖和 >=10 天自然时间 soak 仍是 hold，工具跑完不能声称已满足。参见
 [SQLite 验证命令](../../reference/sqlite-authority-store.md#reproduce-validation)。

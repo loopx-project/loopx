@@ -103,6 +103,9 @@ def _receipt_row(
         ),
         **{f"{option}_command_route_count": count
            for option, count in semantics.command_route_counts(text).items()},
+        "heartbeat_peer_admission_prompt_revision": (
+            semantics.heartbeat_peer_admission_prompt_revision(text)
+        ),
         "host_prompt_static_safety_revision": semantics.host_prompt_static_safety_revision(text),
         "heartbeat_user_language_prompt_revision": (
             semantics.heartbeat_user_language_prompt_revision(text)
@@ -126,6 +129,8 @@ def _receipt_row(
             if isinstance(payload, dict)
             else []
         ),
+        "next_action_basis_count": semantics.next_action_basis_count(payload),
+        "authoring_inputs": semantics.authoring_input_observations(text),
     }
 
 

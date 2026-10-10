@@ -72,6 +72,12 @@ earlier targets if a later replacement fails. The implementation copies the
 whole skill directory instead of linking `SKILL.md`, so supporting scripts,
 references, and host metadata remain complete.
 
+Python distributions bundle the canonical `loopx-material` and
+`loopx-change-quality` sources, scope markers and host display metadata
+alongside the global workflows. Bundling a project skill does not add it to the
+global host catalog or activate its capability. Project install, readback and
+uninstall use the same release-owned sources in a wheel or source checkout.
+
 ## Authority Boundary
 
 Project skill delivery controls discoverability, not domain authority. A

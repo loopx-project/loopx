@@ -29,6 +29,16 @@ or role-incomplete page sets. See
 
 ## Implemented Surface
 
+`loopx content-ops reference` reads an existing private source/style catalog,
+prepares version-checked capture/correction artifacts, retrieves topic/structure
+references, and prepares outlines with original credit and reuse conditions.
+The same TypeScript owner runs in the packaged **Capabilities → Goal → Reference
+styles** workbench. Imports stay in browser page memory; downloads are private
+review artifacts. This preview does not write the original catalog or activate
+a source. Inventory reuses Material Lifecycle, while managed apply/rollback
+still requires that owner's qualified source provider. See
+[`content_ops_reference_v0`](../../../docs/reference/protocols/content-ops-reference-v0.md).
+
 | Layer | Current path |
 | --- | --- |
 | Capability module | `loopx/capabilities/content_ops/` |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Any
 
 from .contract import (
@@ -25,6 +26,7 @@ TODO_SUMMARY_COMPACT_FIELDS = (
     "goal_acceptance_guard",
     "schema_version",
     "todo_id",
+    "content_revision",
     "role",
     "status",
     "priority",
@@ -112,6 +114,15 @@ TODO_PLANNING_SOURCE_KEYS = (
 )
 
 
+def todo_text_content_revision(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        return None
+    return "sha256:" + sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def compact_todo_summary_item(
     item: dict[str, Any],
     *,
@@ -121,6 +132,9 @@ def compact_todo_summary_item(
         "index": item.get("index"),
         "text": text if text is not None else item.get("text"),
     }
+    content_revision = item.get("content_revision")
+    if content_revision:
+        compact["content_revision"] = content_revision
     for key in TODO_SUMMARY_COMPACT_FIELDS:
         if item.get(key) is not None:
             compact[key] = item.get(key)

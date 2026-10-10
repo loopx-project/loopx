@@ -20,6 +20,7 @@ from test_loop_turn_loop_controller import (
     _assert_markers,
     _budget,
     _envelope,
+    _execution,
     _validated_receipt,
 )
 
@@ -142,6 +143,11 @@ _ROWS = [
         ],
     ),
     ("validation_failed", _REPAIR),
+    # Qualified task replan overrides automatic work routes, but never the
+    # existing owner-action gate. Host-contract failures retain generic repair.
+    ("validation_replan", ["replan", "replan", "replan", "replan", "user_action_required", "replan", "replan"]),
+    ("validation_repair", _REPAIR),
+    ("validation_host_contract", _REPAIR),
     ("writeback_failed", _REPAIR),
     ("quota_spend_failed", _REPAIR),
     ("terminal_closeout_failed", _REPAIR),
@@ -180,11 +186,20 @@ def _cell(row, route):
             "completed_phases": _ALL_PHASES[:5],
             "failed_phase": "terminal_closeout",
         }
+    if row in {"validation_replan", "validation_repair", "validation_host_contract"}:
+        kind = "validation_failed"
     receipt = (
         None
         if row == "absent"
         else _validated_receipt(result_kind=LoopXTurnResultKind(kind), **kwargs)
     )
+    if row in {"validation_replan", "validation_repair", "validation_host_contract"}:
+        execution = _execution(result_kind=LoopXTurnResultKind.VALIDATION_FAILED)
+        execution.update(validation_stage="host_result_contract" if row == "validation_host_contract" else "task_postcondition",
+            validation={"schema_version": "loopx_turn_task_validation_v0", "ok": False, "status": "failed",
+                "validator_kind": "fixture", "summary": "Declared postcondition absent", "errors": [],
+                "recovery_kind": "replan_required" if row == "validation_replan" else "repair_required"})
+        receipt = controller.ValidatedTurnReceipt.from_execution(execution)
     envelope = _envelope(
         should_run=route not in {"wait", "blocked"},
         quiet_noop_allowed=route == "wait",
@@ -282,6 +297,7 @@ def test_contract_uses_closed_finite_partitions_and_unique_rules():
         "exhausted",
         "not_applicable",
     ]
+    assert domains["validation_recovery"] == ["absent", "repair_required", "replan_required"]
     seen = set()
     checked = set()
     for rule in contract["rules"]:
@@ -359,6 +375,7 @@ _RULE_SEQUENCE = (
     "check_host_retry",
     "host_retry",
     "host_exhausted",
+    "task_validation_replan",
     "failed_receipt",
 )
 
@@ -402,6 +419,7 @@ def _decisions_for(contract, monkeypatch):
         ("host_repair", "failed_receipt"),
         ("host_retry", "failed_receipt"),
         ("host_exhausted", "failed_receipt"),
+        ("task_validation_replan", "failed_receipt"),
     ],
 )
 def test_a_refining_rule_must_precede_the_rule_it_refines(monkeypatch, specific, general):

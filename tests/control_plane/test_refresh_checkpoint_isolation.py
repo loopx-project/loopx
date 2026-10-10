@@ -13,7 +13,7 @@ from loopx.capabilities.explore.result_log import (
     build_explore_node_event,
     explore_result_log_path,
 )
-from loopx.extensions.lark import goal_channel_contracts, goal_channel_runtime
+from loopx.extensions.lark import goal_channel_contracts, goal_channel_lifecycle, goal_channel_runtime
 from loopx.extensions.lark.presentation import explore_results
 from loopx.extensions.runtime import install_extension
 from loopx.global_registry import sync_project_registry_to_global
@@ -104,6 +104,12 @@ def _configure_sinks(registry, runtime):
 def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
     tmp_path, monkeypatch, capsys, hint_source, baseline, isolated,
 ):
+    def unexpected_notification_failure(error):
+        # This successful synthetic delivery must not hide a failure behind the
+        # public error projection. Preserve its cause in the test traceback.
+        pytest.fail(f"Unexpected notification failure: {type(error).__name__}")
+
+    monkeypatch.setattr(goal_channel_lifecycle, "_exception_reason", unexpected_notification_failure)
     project, runtime, registry = _write_fixture(tmp_path)
     shared = tmp_path / "shared-runtime"
     monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(shared))
@@ -172,7 +178,8 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
     assert first["vision_checkpoint"]["decision"] == "missing_required"
     original_record = Path(first["json_path"]).read_bytes()
     original_state = state_path.read_bytes()
-    assert b"Verify the scoped delivery evidence." in original_state
+    assert b"Verify the scoped delivery evidence." not in original_state
+    assert first["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
     stdout = first_stdout if hint_source == "first" else run(original, "markdown")
     if hint_source == "replay":
         assert "- recovery: `replay`" in stdout

@@ -332,19 +332,32 @@ TypeScript 的对象写入、赋值及声明返回使用仓库的 TypeScript
 数据流证明。
 
 `uv run python examples/semantic-vocabulary-drift-smoke.py --report` 列出未解析的生产
-位置。unknown 不能补足缺失值的生产证据。生产者守卫对六个 kernel 条目使用不同证据：`effective_action`、`turn_route`、
+位置。unknown 不能补足缺失值的生产证据。生产者守卫对五个活跃 kernel 条目使用不同证据：`effective_action`、`turn_route`、
 `loop_disposition` 和 `agent_scope_frontier_action` 使用源码见证；
 `turn_result_kind` 另有固定入口 `transaction._result_kind` 的可执行输入见证。
 真实解码器必须为每个注册输入返回相同的类型化成员，并拒绝非法探测输入。这证明
 存在允许的生产路径，不表示 Host 实际发出过全部成员或所有 Host 执行都合法。
 `input_producer` 不能从数据任意指定执行代码，验证入口固定在 smoke 中。
 
-`lease_action` 明确分类为 legacy/兼容保留：仓库运行时调用者直接使用
-完整的 native acquire／renew／transfer／release 事务。已无调用方的 Python command
-facade 独立退役，不因此丢弃这个已声明的输入契约。四个成员为旧的类型化
-`LeaseModeGateCommand` 输入接口保留到 M4 调用者/迁移评审；不声称存在持久化
-使用。只有每个值都带保留理由及退休里程碑时，生产者列表才能为空。新发现的
-生产者必须让原兼容声明失败。
+M4 在源码、注册入口和隔离安装态调用方评审后，退役无人使用的私有 Python
+`LeaseAction`、`LeaseModeGateCommand` 及其 `CoordinationCommand` union；
+`lease_action` 随输入契约退出注册表。这改变内部 Python import 兼容性，不删除
+公共 lease 动词、`legacy` 所有权策略，也不强迫 pre-canonical Goal 升级。
+
+有价值的 lifecycle 子集检查改为引用实际 TS request owner
+`TASK_LEASE_LIFECYCLE_OPERATIONS`，登记为 `task_lease_lifecycle_operation`：
+renew／transfer／release，以及 terminal／holder 验证和 fence 清理。acquire
+仍有独立原生事务；mutation decision 子集排除这三项验证／清理操作。覆盖下限
+仍为 26 个词表、51 个 owner、9 项关系，不用空 owner 或伪造生产者替代旧接口。
+原生 request 值仍接受含义、owner 和子集检查，但生产活性明确未验证；形式化
+生产者域现为六项（五项 kernel、一项 cross-runtime），域外二十项 cross-runtime
+保持未验证。不放宽其他生产者检查或 inventory 预算。
+
+drift smoke 拒绝恢复旧定义或静态解析出的旧 import；fresh-wheel 负例与真实
+File／SQLite lease、重放、争用和 unpromoted Goal 路径验证安装态边界。动态／
+外部 import 不因此获得全程序兼容证明。保留活跃 Todo bridge、历史备份／格式／
+回执 reader 和 Host IO；回退代码包即可恢复私有 import，无需数据转换。本切片
+不代表全部 M4、C1 或发布默认资格完成。
 没有生产者元数据的 kernel 词表会明确
 报告为覆盖待完成，不能把 owner 一致性宣称为 I12/I13 完成。所有要求的词表通过
 相应验收行之前，M0.5 仍未完成。

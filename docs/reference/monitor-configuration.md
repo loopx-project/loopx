@@ -70,6 +70,18 @@ Provider selection/defaults and whole-Goal promotion remain unchanged. Reverse
 a configuration through a fresh validated update, never by editing a stale
 Markdown projection or switching off the writer fence.
 
+Quota's full-source monitor selection captures one observation instant for due,
+expiry and missing-schedule decisions in its existing typed planning batch.
+The summary and quota readers share these time rules: expiry at that instant is
+inactive; a watch-only monitor without a schedule is not a gap. Claim/exclusion,
+resume, provider writeback and capability admission still apply. Gap counts
+precede display limits; their priority/index order is independent of execution
+claim/profile order. This read refactor removes quota's Python due classification
+and gap rescan without adding a runtime crossing. Legacy Python monitor APIs,
+timestamp parsing and provider IO remain live compatibility adapters.
+The internal planning request uses v3 for these clock facts while retaining v2
+route/handoff/closure behavior; existing v0/v1/v2 requests keep their input contracts.
+
 ## 中文
 
 Monitor 配置修改复用 `todo update`。晋升后由 TS 在同一个 canonical revision 上
@@ -95,3 +107,13 @@ Chat 不补造 lease proof，带 lease 的编辑保留既有限制；停止／�
 各自 lifecycle/runtime 路径负责。
 提交成功但展示 pending 时，用原操作重试回执／投影；不能改旧 Markdown 当作回滚。
 本切片不改变 provider 默认，不晋升已有 Goal。
+
+Quota 完整源 Monitor 选择在已有 typed planning batch 捕获同一个观察时刻，统一
+due、expiry 与缺失 schedule 判定，并复用 summary reader 的时间规则：恰好到期不再
+可运行，无 schedule 的 watch-only 不算缺口。claim／exclusion、resume、provider
+writeback 与 capability 准入保留。缺口数量先于展示截断；其 priority/index 顺序独立
+于执行用 claim/profile 排序。本重构删除 quota 中 Python due 判定和缺口二次扫描，
+不增加 runtime crossing；仍有调用方的旧 Python Monitor API、时间解析和 provider IO 保留。
+
+内部 planning request 用 v3 承载时钟事实，保留 v2 的 route／handoff／closure 规则；
+已有 v0／v1／v2 请求保持原输入合同。

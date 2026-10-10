@@ -1564,7 +1564,13 @@ def test_catalog_distinguishes_cached_receipt_from_live_config(tmp_path: Path) -
     )
 
     registry_path, _, _ = _experiment(tmp_path)
-    goal = json.loads(registry_path.read_text())["goals"][0]
+    goal, _ = _configure_prompt_ingest_binding(
+        registry_path,
+        config_automatic_ingest=True,
+        policy_automatic_ingest=True,
+        config_automatic_recall=True,
+        policy_automatic_recall=True,
+    )
     goal["control_plane"]["reward_memory"]["automation"] = {
         "automatic_recall": True,
         "automatic_ingest": True,
@@ -1613,6 +1619,61 @@ def test_catalog_distinguishes_cached_receipt_from_live_config(tmp_path: Path) -
     )
 
 
+def test_effective_automation_requires_live_config_flags_in_catalog(
+    tmp_path: Path,
+) -> None:
+    from loopx.capabilities.reward_memory.configuration import (
+        reward_memory_goal_configuration_summary,
+    )
+    from loopx.configuration_catalog import build_goal_configuration_catalog
+
+    registry_path, _, _ = _experiment(tmp_path)
+    goal = json.loads(registry_path.read_text(encoding="utf-8"))["goals"][0]
+    policy = goal["control_plane"]["reward_memory"]
+    live_config = json.loads(
+        (Path(goal["repo"]) / policy["config_path"]).read_text(encoding="utf-8")
+    )
+    assert live_config["automation"]["automatic_recall"] is False
+    assert live_config["automation"]["automatic_ingest"] is False
+    policy["automation"] = {"automatic_recall": True, "automatic_ingest": True}
+
+    summary = reward_memory_goal_configuration_summary(goal)
+    assert summary["effective_available"] is True
+    assert summary["desired_automation"] == {
+        "automatic_recall": True,
+        "automatic_ingest": True,
+    }
+    assert summary["automatic_recall"] is False
+    assert summary["automatic_ingest"] is False
+
+    catalog = build_goal_configuration_catalog(
+        goal_id=goal["id"],
+        settings={},
+        feature_summary={"reward_memory": summary},
+        default_multi_subagent_max_children=4,
+        explore_harness_profiles=[],
+    )
+    current = next(
+        feature["current"]
+        for feature in catalog["features"]
+        if feature["feature_id"] == "reward_memory"
+    )
+    assert current["effective_available"] is True
+    assert current["desired_automation"]["automatic_recall"] is True
+    assert current["automatic_recall"] is False
+    assert current["automatic_ingest"] is False
+
+    policy["automation"] = {"automatic_recall": False, "automatic_ingest": False}
+    feature_off = reward_memory_goal_configuration_summary(goal)
+    assert feature_off["effective_available"] is True
+    assert feature_off["desired_automation"] == {
+        "automatic_recall": False,
+        "automatic_ingest": False,
+    }
+    assert feature_off["automatic_recall"] is False
+    assert feature_off["automatic_ingest"] is False
+
+
 @pytest.mark.parametrize(
     ("field", "invalid"),
     [
@@ -1645,3 +1706,248 @@ def test_catalog_availability_uses_runtime_receipt_checks(
     assert summary["effective_available"] is False
     assert summary["enablement_verified_agents"] == []
     assert summary["automatic_recall"] is False
+
+
+def _configure_prompt_ingest_binding(
+    registry_path: Path,
+    *,
+    config_automatic_ingest: bool,
+    policy_automatic_ingest: bool = True,
+    config_automatic_recall: bool = False,
+    policy_automatic_recall: bool = False,
+    receipt_status: str = "verified",
+    receipt_provider_id: str = "openviking",
+    drift_config_after_binding: bool = False,
+    omit_receipt: bool = False,
+) -> tuple[dict[str, Any], Path]:
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    goal = registry["goals"][0]
+    goal["state_file"] = "STATE.md"
+    (Path(goal["repo"]) / "STATE.md").write_text("# Synthetic Goal\n", encoding="utf-8")
+    policy = goal["control_plane"]["reward_memory"]
+    config_path = Path(goal["repo"]) / policy["config_path"]
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["automation"]["automatic_ingest"] = config_automatic_ingest
+    config["automation"]["automatic_recall"] = config_automatic_recall
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    digest = "sha256:" + hashlib.sha256(config_path.read_bytes()).hexdigest()
+    policy["config_digest"] = digest
+    policy["automation"] = {
+        "automatic_recall": policy_automatic_recall,
+        "automatic_ingest": policy_automatic_ingest,
+        "fail_open": True,
+    }
+    if omit_receipt:
+        policy["enablement_receipts"].pop("pilot", None)
+    else:
+        receipt = policy["enablement_receipts"]["pilot"]
+        receipt["config_digest"] = digest
+        receipt["status"] = receipt_status
+        receipt["provider_id"] = receipt_provider_id
+    if drift_config_after_binding:
+        config_path.write_bytes(config_path.read_bytes() + b"\n")
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    return goal, config_path
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "config_ingest", "policy_ingest", "receipt_status", "receipt_provider", "drift", "omit_receipt", "expected"),
+    [
+        ("pilot", True, True, "verified", "openviking", False, False, True),
+        ("meta", True, True, "verified", "openviking", False, False, False),
+        ("pilot", True, True, "pending", "openviking", False, False, False),
+        ("pilot", True, True, "verified", "other-provider", False, False, False),
+        ("pilot", True, True, "verified", "openviking", True, False, False),
+        ("pilot", False, True, "verified", "openviking", False, False, False),
+        ("pilot", True, True, "verified", "openviking", False, True, False),
+    ],
+)
+def test_heartbeat_prompts_require_effective_agent_ingest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    agent_id: str,
+    config_ingest: bool,
+    policy_ingest: bool,
+    receipt_status: str,
+    receipt_provider: str,
+    drift: bool,
+    omit_receipt: bool,
+    expected: bool,
+) -> None:
+    from loopx.upgrade import goal_heartbeat_prompt
+
+    registry_path, _, _ = _experiment(tmp_path)
+    goal, _ = _configure_prompt_ingest_binding(
+        registry_path,
+        config_automatic_ingest=config_ingest,
+        policy_automatic_ingest=policy_ingest,
+        receipt_status=receipt_status,
+        receipt_provider_id=receipt_provider,
+        drift_config_after_binding=drift,
+        omit_receipt=omit_receipt,
+    )
+
+    upgraded = goal_heartbeat_prompt(
+        goal, cli_bin="loopx", mode="thin", agent_id=agent_id,
+    )
+    code = main([
+        "--registry", str(registry_path),
+        "--runtime-root", str(tmp_path / "runtime"),
+        "--format", "json", "heartbeat-prompt",
+        "--goal-id", goal["id"], "--agent-id", agent_id,
+        "--codex-app", "--thin",
+    ])
+    packet = json.loads(capsys.readouterr().out)
+    assert code == 0 and packet["ok"] is True
+    actual = (
+        "--reward-memory-reflection-json" in upgraded["task_body"],
+        "--reward-memory-reflection-json" in packet["task_body"],
+    )
+    assert actual == (expected, expected)
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "expected_error"),
+    [
+        (None, "identity-aware peer heartbeat prompt required"),
+        ("a" * 300, "public-safe token"),
+        ("ghost", "not registered"),
+    ],
+)
+def test_upgrade_reward_memory_prompt_keeps_identity_errors(
+    tmp_path: Path, agent_id: str | None, expected_error: str
+) -> None:
+    from loopx.upgrade import goal_heartbeat_prompt
+
+    registry_path, _, _ = _experiment(tmp_path)
+    goal, _ = _configure_prompt_ingest_binding(
+        registry_path, config_automatic_ingest=True,
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        goal_heartbeat_prompt(goal, cli_bin="loopx", mode="thin", agent_id=agent_id)
+
+
+def test_reward_memory_prompt_fails_closed_for_legacy_registration_alias(
+    tmp_path: Path,
+) -> None:
+    from loopx.upgrade import goal_heartbeat_prompt
+
+    registry_path, _, _ = _experiment(tmp_path)
+    goal, _ = _configure_prompt_ingest_binding(
+        registry_path, config_automatic_ingest=True,
+    )
+    goal["registered_agents"] = goal["coordination"].pop("registered_agents")
+
+    payload = goal_heartbeat_prompt(
+        goal, cli_bin="loopx", mode="thin", agent_id="pilot",
+    )
+    assert "--reward-memory-reflection-json" not in payload["task_body"]
+
+
+def test_heartbeat_prompt_admission_never_runs_provider_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.reward_memory import experiment
+    from loopx.upgrade import goal_heartbeat_prompt
+
+    registry_path, _, _ = _experiment(tmp_path)
+    goal, _ = _configure_prompt_ingest_binding(
+        registry_path, config_automatic_ingest=True,
+    )
+    monkeypatch.setattr(
+        experiment,
+        "preflight_reward_memory_experiment_config",
+        lambda *_args, **_kwargs: pytest.fail("prompt admission must not contact provider"),
+    )
+
+    payload = goal_heartbeat_prompt(
+        goal, cli_bin="loopx", mode="thin", agent_id="pilot",
+    )
+    assert "--reward-memory-reflection-json" in payload["task_body"]
+
+
+def test_disabled_reward_memory_prompt_keeps_builder_bytes_and_skips_binding_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from loopx.capabilities.reward_memory import configuration
+    from loopx.upgrade import goal_heartbeat_prompt
+
+    registry_path, _, _ = _experiment(tmp_path)
+    goal, _ = _configure_prompt_ingest_binding(
+        registry_path,
+        config_automatic_ingest=True,
+        policy_automatic_ingest=False,
+    )
+    monkeypatch.setattr(
+        configuration,
+        "resolve_goal_reward_memory_experiment",
+        lambda **_kwargs: pytest.fail("disabled policy must not read the binding"),
+    )
+
+    payload = goal_heartbeat_prompt(
+        goal, cli_bin="loopx", mode="thin", agent_id="pilot",
+    )
+    assert "--reward-memory-reflection-json" not in payload["task_body"]
+    assert payload["interface_budget"]["reward_memory_headroom_chars"] == 0
+
+    goal_without_reward_memory = json.loads(json.dumps(goal))
+    goal_without_reward_memory["control_plane"].pop("reward_memory")
+    without_policy = goal_heartbeat_prompt(
+        goal_without_reward_memory,
+        cli_bin="loopx",
+        mode="thin",
+        agent_id="pilot",
+    )
+    assert payload["task_body"] == without_policy["task_body"]
+    assert payload["interface_budget"] == without_policy["interface_budget"]
+
+    cli_argv = [
+        "--registry", str(registry_path),
+        "--runtime-root", str(tmp_path / "runtime"),
+        "--format", "json", "heartbeat-prompt",
+        "--goal-id", goal["id"], "--agent-id", "pilot", "--codex-app", "--thin",
+    ]
+    assert main(cli_argv) == 0
+    with_reward_memory = json.loads(capsys.readouterr().out)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["control_plane"].pop("reward_memory")
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    assert main(cli_argv) == 0
+    without_reward_memory = json.loads(capsys.readouterr().out)
+    assert with_reward_memory["task_body"] == without_reward_memory["task_body"]
+    assert with_reward_memory["interface_budget"] == without_reward_memory["interface_budget"]
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "expected_error"),
+    [
+        (None, "identity-aware peer heartbeat prompt required"),
+        ("a" * 300, "public-safe registered agent id"),
+        ("ghost", "not registered"),
+    ],
+)
+def test_cli_reward_memory_prompt_keeps_identity_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    agent_id: str | None,
+    expected_error: str,
+) -> None:
+    registry_path, _, _ = _experiment(tmp_path)
+    _configure_prompt_ingest_binding(
+        registry_path, config_automatic_ingest=True,
+    )
+    argv = [
+        "--registry", str(registry_path),
+        "--runtime-root", str(tmp_path / "runtime"),
+        "--format", "json", "heartbeat-prompt",
+        "--goal-id", "reward-memory-goal", "--codex-app", "--thin",
+    ]
+    if agent_id is not None:
+        argv.extend(("--agent-id", agent_id))
+    code = main(argv)
+    output = capsys.readouterr().out
+    assert code != 0
+    assert expected_error in output

@@ -189,10 +189,14 @@ def _semantic_contract_field_rules(*, arm: str) -> dict[str, str]:
             "concrete_user_question": (
                 "first interaction_contract.user_channel.actions value, else null."
             ),
-            "required_reads": """use interaction_contract.required_reads, falling back to
-  packet.required_reads. Keep at most five object entries with a non-empty
-  command and only command plus optional kind, reason, and source. Non-object
-  entries are ignored.""",
+            "required_reads": """copy all entries from
+  interaction_contract.agent_channel.required_reads, including an empty list.
+  Only when that field is absent use interaction_contract.required_reads or
+  packet.required_reads. Preserve every admitted command, kind, reason, source,
+  ordering, hook_id, capability_id and explicit prompt_budget_bytes exactly,
+  without shortening text or inventing absent fields.
+  Sources already delivered in agent_channel.work_context require no extra
+  tool call. Non-object entries are ignored; never cap the list at five.""",
             "gate_or_stop": """include exactly decision, should_run, effective_action, state,
   interaction_mode, user_action_required, response_plan, guards, and
   stop_condition. Use top-level values, interaction_contract,

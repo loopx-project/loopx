@@ -17,12 +17,12 @@ for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
   assert(satisfies(testedVersion, range), `${name} excludes pinned host ${testedVersion}`)
   if (!name.startsWith('@deepseek-ai/dsh')) continue
   // SemVer excludes prereleases of a different tuple unless that tuple is
-  // explicitly declared. The 0.1.5 and 0.1.7 candidates have packed-host qualification;
+  // explicitly declared. The 0.1.5, 0.1.7 and 0.2.0 tuples have packed-host qualification;
   // do not opt every future release candidate into compatibility.
-  for (const version of ['0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.2', '0.1.7']) {
+  for (const version of ['0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.2', '0.1.7', '0.2.0-rc.2', '0.2.0']) {
     assert(satisfies(version, range), `${name} excludes supported host ${version}`)
   }
-  for (const version of ['0.1.4', '0.1.5-rc.0', '0.1.7-rc.1', '0.1.8-rc.1', '0.2.0-rc.2', '0.2.0']) {
+  for (const version of ['0.1.4', '0.1.5-rc.0', '0.1.7-rc.1', '0.1.8-rc.1', '0.2.0-rc.1', '0.2.1-alpha.1', '0.2.1', '0.3.0']) {
     assert(!satisfies(version, range), `${name} admits unqualified host ${version}`)
   }
 }

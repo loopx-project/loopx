@@ -419,7 +419,163 @@ commands bind the original actor and route. Receipt repair reuses the existing
 idempotent writer. This is a bounded M7.4 adoption with no shared executor or
 new authority store; it does not certify terminal Todo or Goal acceptance.
 
+The R5 compact projection also retains the existing CLI settlement plan intact,
+including its effect identity, ordered conditional steps and host handoff. Action
+signature coverage v5 detects removal or mutation of that plan; packets without
+one retain their historical coverage. Real CLI validation exercises premature
+spend rejection and one original-Turn writeback/spend with idempotent replay.
+This closes a projection omission, not the short-context rollout: same-Turn
+cached detail delivery, normal/replan context selection and measured model
+behavior remain unqualified. The 8 KiB target and delivery growth checks stay
+unchanged. See [TurnEnvelope](../../reference/protocols/turn-envelope-v0.md).
+
+The shared settlement command renderer now includes global JSON output before
+all generated step subcommands, including writeback recovery. This removes
+caller-side flag insertion for App heartbeat, external CLI and visible Goal
+lanes; real CLI tests cover full/envelope parity, rejection before writeback and
+one debit across replay. It is a transport correction, not closure of R5 model
+context-efficiency acceptance or a change to the typed settlement rules.
+
+The existing R5 CLI captures full decisions before projection, with a private directory per invocation and readback that does not rerun admission. Default-off heartbeat renderer/shared-worker adoption now covers explicit host-owned Turns: selection retains the capture route, and real CLI tests exercise reentry and exactly-once settlement. Python adapts filesystem/command transport over the TypeScript decision owner. Native Goal begin-Turn, installed App/Lark/UI adoption, model token/IO cost and decision quality remain unqualified; existing trials are not changed. See the [TurnEnvelope capture contract](../../reference/protocols/turn-envelope-v0.md).
+
 ### What Is Missing
+
+#### Heartbeat and Turn Envelope convergence
+
+Under existing M7.4 and roadmap S2/S3/S6/S8, converge the **execution facts**
+used by heartbeat and Turn hosts, while keeping host effect ownership separate.
+Neither today's large quota packet nor the smaller TurnEnvelope is a target
+shape merely because of its size. Optional memory participation now has one
+compact, signed envelope projection; the Codex CLI adapter preserves default-off
+isolation. This does not qualify installed heartbeat/App adoption or model value.
+
+Current source-path audit for the first convergence slice:
+
+| Execution fact | Existing owner / projection | Remaining boundary |
+|---|---|---|
+| Goal/Agent/Todo identity | Quota selection and receipt; envelope actor, selected Todo and signed settlement identity | Capture identity and mutation-time validation remain necessary; display identity is not an execution grant |
+| Full requirements | Authoritative Agent-channel work context plus remaining reads; effective Todo, acceptance and scoped User obligations, with the full Goal on its progressive read | Registered source readers fulfill current task reads inline in both transports; the mixed Goal remains mandatory on its full read path; source failure holds dependent delivery. Live model adoption and packaged host journeys remain unqualified |
+| Capability refusal | Existing quota `capability_gate_v0`; compact boundary now retains exact `required`/`missing` arrays and historical source names | This repairs omitted facts, not readiness policy or capability activation |
+| Selection / claim / lease | Selected Todo, action portfolio and current owning transactions | Compact selected ownership is not a fresh lease; retain the captured source and revalidate at the owning mutation |
+| Replan / Goal closure | Replan action packet, contract capsule and vision audit | Full evidence remains on authorized detail paths; Todo completion is not Goal completion |
+| Settlement / scheduler | Intact typed settlement plan and explicit host-owned scheduler projection; omitted scheduler argv references resolve the same captured full decision | Unbound detail commands are retired in this projection. Actual host readback, stale mutation refusal and exactly-once recovery still need host adoption qualification |
+| Optional memory | Verified boundary participation plus fresh host binding | Off/recall/ingest/stale/provider-failure isolation remains mandatory; transport parity is not model value |
+
+The capability-fact correction is a read-model change in the established
+TypeScript owner. Real captured File/SQLite decisions cover refusal and admission
+with memory off, recall-only, ingest-only and invalidated configuration. New
+projections sign those retained facts without rewriting saved signatures; no
+new coverage version, admission rule or Python policy is introduced. Host
+provider-failure and settlement cases remain covered separately, and do not
+qualify installed App convergence or model costs. Keep all three Todos below
+open until their own acceptance is met; this inventory is not blanket permission
+to delete the remaining Python IO adapters.
+
+The unified required-work context proposal now returns full current task sources in
+ordinary Heartbeat/quota packets as well as signed envelopes, without enabling
+TurnEnvelope. The existing TypeScript interaction owner selects and fulfills
+reads; registered Python adapters check the Goal source and deliver enabled
+acceptance, effective work, scoped open User obligations and preference/Explore
+context. The mixed Goal document retains its mandatory full progressive read;
+no prose classifier infers current intent from historical sections. Unsupported
+provider reads remain explicit obligations. Failed or changed sources hold
+dependent delivery rather than granting authority from a summary. One Agent
+carrier preserves explicit empty lists, full requirement tails and hook identity;
+exact Todo detail returns one record and inventory views remain bounded.
+Legacy/File/SQLite CLI qualification covers full readback, source recovery,
+scoped gates and signed content mutation. See
+[required work context](../../reference/required-work-context.md). This changes
+the ordinary context-delivery default, not the transport selection default.
+Live model outcomes, packaged App/Lark operation and overall efficiency remain
+separate acceptance; active Python IO adapters are retained.
+
+统一工作上下文提案现在让普通 Heartbeat/quota 与签名 envelope 都直接返回完整当前任务来源，
+无需启用 TurnEnvelope。已有 TS interaction owner 决定读取和满足义务，注册的 Python
+适配器核验 Goal 来源，返回启用的验收、实际工作项、当前 Agent 相关的开放 User 事项，以及
+偏好和 Explore 上下文；混合 Goal 文件保留为必须完成的渐进式全文读取，不能按标题裁剪
+后冒充原始目标。尚无适配器的来源保留必读命令。来源失败或变化会阻止依赖它的交付。
+真实 Legacy/File/SQLite CLI 验证覆盖全文尾部、用户 gate、恢复和签名内容篡改。
+这是普通上下文交付默认值的变化；模型效果、安装后的 App/Lark 旅程及总体效率仍待验证。
+
+The no-write model-behavior safety adapter now recognizes the existing native
+scheduler route prefix (`--registry` / `--runtime-root`) before the matching
+ACK/failure command. Qualification exercises the actual binder and TurnEnvelope
+projection, not only unbound synthetic argv. The adapter decodes bounded wire
+only for recursive confidentiality scanning; route values, decoded extensions
+and unrelated aliases remain subject to that scan, and the original packet and
+wire are forwarded unchanged. Unknown or malformed prefixes and mismatched
+hint/command pairs still refuse. This removes a transport false rejection; it
+changes no scheduler admission, execution grant, default or host effect.
+Real packaged transport qualification remains separate from live model outcomes,
+App adoption and the three convergence acceptances below.
+
+Remaining implementation Todos, in dependency order:
+
+| Todo | Observable outcome and decisive acceptance |
+|---|---|
+| Reconcile execution/context requirements across heartbeat and TurnEnvelope | Same captured authoritative decision preserves actor/Goal/Todo, required full reads, claim/lease, action selection, replan/closure, conditional settlement and scheduler ownership. Inventory omitted/duplicated facts before deleting render branches. Include optional capabilities off, recall-only, ingest-only, stale binding and provider failure; private detail is accessed only through authorized references. |
+| Adopt one typed projection in real host renderers | Heartbeat full/thin and Turn host consume the same execution facts and per-Turn capture/detail route. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
+| Qualify the context shape and migration default | Compare the same normal, replan, wait/recovery and optional-capability workloads against both current full and compact paths. Measure payload/model tokens, detail IO, latency, resource growth, omissions and decision/outcome quality. Keep data loss, duplicate effects, identity and settlement errors as hard constraints. Preserve supported saved prompts/receipts and reversible rollout; change budgets or defaults only with that evidence. |
+
+The earlier cost slice reproduced a regression-budget gap, rather than a
+missing fixture alias or permission to remove required context. Comparing
+`aa87cc019` with `fc411c878` on the unchanged public CLI fixture, identical
+temporary aliases and command arguments produced these JSON stdout costs:
+
+| Public fixture / surface | Base characters | Candidate characters | Base compact JSON | Candidate compact JSON |
+|---|---:|---:|---:|---:|
+| 36 Todos / 1 Agent / 12 runs, `turn plan` | 16,115 | 17,403 | 12,112 | 13,145 |
+| 1 Todo / 1 Agent / 1 run, enabled multi-subagent `quota should-run --turn-envelope` | 10,990 | 11,661 | 8,892 | 9,464 |
+| 36 Todos / 1 Agent / 12 runs, `heartbeat-prompt --thin` | 3,122 | 3,122 | 3,069 | 3,069 |
+
+The crowded Turn increase includes 484 compact characters in the envelope and
+510 in the newly returned hook-dispatch diagnostic. The envelope now states
+which hooks observed empty context, discards cached content for them, and
+distinguishes fulfilled pre-work reads from later action-specific freshness.
+Those instructions and signed observations carry useful decision semantics.
+The hook diagnostic has a separate effect-disclosure role; audit its actual
+consumers before moving or removing it. Pretty-print overhead is measured
+separately and is not a token, latency or model-quality result.
+
+Under the original guards, crowded `turn plan` exceeded its 16,000
+character ceiling, and the enabled multi-subagent runner exceeded its 9,000
+character envelope ceiling. Its nested fixture paths emit 11,291 characters
+on the base and 11,961 on the candidate; that is a different path workload
+from the table. The historical base was already red; those results remain
+failures under their original guards.
+
+The current source checkpoint is qualified separately. The merged calibration
+at `a855a547e7a3fc4f9b5c3e02e1ea73cf0f591f95` updates the existing regression
+guards, with its matched workload and bounded headroom recorded in the
+[budget decision guide](../../development/testing-and-quality.md#budget-failure-decisions).
+An independent real CLI rerun at `0cd547b0c442a5c0ec7f608827b02dce7aeb0aac`
+passes all 96 producer rows with candidate budget enforcement. Its immutable
+`2244b96f1e2e5c90bef43ae4c140c0994bfcc07a` comparison passes the existing
+semantic differential with 96 rows on each side, no candidate-only rows and
+no review-required changes. The fixture still contains 1/36/18 Todos,
+1/12/12 runs, full command routes, enabled multi-subagent and blocking gates.
+Crowded Turn emits 16,250 characters against 17,000; the enabled envelope
+emits 11,426 against 12,000. Thin JSON remains 3,122 characters. Existing
+runner tests also reject real stdout inflation without rewriting paths or
+shrinking the fixture.
+
+The consumer audit retains both hook views: the typed envelope signs unavailable
+context, hook coordinates and dependent-action freshness; the live Turn adapter
+also reads hook results to disclose local state writes through `effects` and
+`boundary`. Removing that diagnostic as duplicate context would lose effect
+disclosure. Compact serialization measures formatting savings separately;
+it does not qualify a new host transport. Current source regressions cover
+File/SQLite preferences, empty/failed hook invalidation, optional-off isolation,
+selected requirements and later reads. This closes the bounded source-budget
+gap, not M7.4: packaged host adoption, model token/IO/latency/outcome evidence
+and a reversible transport-default decision remain open. Execution quota,
+wire limits and frozen promotion criteria are unchanged; no runtime cost
+reduction is claimed.
+
+Do not add a generic executor or lower an acceptance threshold to make a short
+packet pass. Preserve unsatisfied requirements and distinguish transport parity,
+installed host adoption and useful model outcomes. See the
+[current envelope contract](../../reference/protocols/turn-envelope-v0.md#optional-memory-participation).
 
 - A generic shared executor is deliberately absent. The current adapters share
   plan/receipt algebra but have different execution ownership, so M7.3

@@ -38,20 +38,23 @@ SCHEME_LIST = "https?|file|s3|gs|tos|hdfs"
 # (site label, entry point, the message that site raises for a raw location).
 # Each row goes through the real entry point so the test proves the wiring, not just
 # the pattern; the messages differ per site on purpose.
-SITES: list[tuple[str, Callable[[str], str], str]] = [
+SITES: list[tuple[str, Callable[[str], str], str, str]] = [
     (
         "decision_context",
         lambda value: packets._compact_text(value, field="source_ref"),
         "must use an opaque source reference, not a raw URL",
+        "must not contain a local path",
     ),
     (
         "material_lifecycle",
         lambda value: _validation.compact_text(value, field="source_ref"),
         "must use an opaque reference, not a raw URL",
+        "must not contain a local path",
     ),
     (
         "ml_experiment",
         lambda value: ml_experiment._compact_public_text(value, field="dataset_ref"),
+        "must use a public alias, not a raw URL or remote path",
         "must use a public alias, not a raw URL or remote path",
     ),
 ]
@@ -99,22 +102,28 @@ def test_owner_shape_still_leaves_unlisted_schemes_alone() -> None:
     )
 
 
-@pytest.mark.parametrize("label,call,message", SITES)
+@pytest.mark.parametrize("label,call,remote_message,file_url_message", SITES)
 def test_each_site_rejects_a_raw_location_through_its_own_entry_point(
-    label: str, call: Callable[[str], str], message: str
+    label: str,
+    call: Callable[[str], str],
+    remote_message: str,
+    file_url_message: str,
 ) -> None:
-    for value in (
-        "s3://loopx-artifacts/run-7/metrics.json",
-        "file:///Users/dev/model.bin",
+    for value, message in (
+        ("s3://loopx-artifacts/run-7/metrics.json", remote_message),
+        ("file:///Users/dev/model.bin", file_url_message),
     ):
         with pytest.raises(ValueError) as caught:
             call(value)
         assert message in str(caught.value), (label, value)
 
 
-@pytest.mark.parametrize("label,call,_message", SITES)
+@pytest.mark.parametrize("label,call,_remote_message,_file_url_message", SITES)
 def test_each_site_still_accepts_an_opaque_reference(
-    label: str, call: Callable[[str], str], _message: str
+    label: str,
+    call: Callable[[str], str],
+    _remote_message: str,
+    _file_url_message: str,
 ) -> None:
     """Positive control on the same entry point with no injected fault."""
     assert call("run-7/metrics.json") == "run-7/metrics.json"

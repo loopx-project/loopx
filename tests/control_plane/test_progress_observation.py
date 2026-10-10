@@ -478,7 +478,7 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
     enriched = {**obligation, "replan_context": context}
     packet = build_replan_action_packet(enriched)
 
-    assert context["evidence_source"] == "agent_scoped_evidence_log"
+    assert context["evidence_source"] == "compact_run_history"
     assert context["delivery"] == "host_projected"
     assert context["delivery_receipt"]["status"] == "delivered"
     assert context["coverage_ledger"][0]["fingerprint"] == trigger[
@@ -494,7 +494,7 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         "allowed_terminal",
         "planning_guidance",
     }
-    assert len(packet["planning_guidance"]) == 2
+    assert len(packet["planning_guidance"]) == 5
     assert all(
         isinstance(instruction, str) and instruction
         for instruction in packet["planning_guidance"]

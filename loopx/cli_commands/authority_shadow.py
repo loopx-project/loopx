@@ -7,10 +7,10 @@ from pathlib import Path
 from ..control_plane.coordination.local_authority_shadow_adapter import (
     CLI_DRAIN_LOCK_TIMEOUT_SECONDS,
     drain_local_authority_shadow_outbox,
-    effective_runtime_root,
     local_authority_shadow_status,
 )
 from ..control_plane.coordination.local_authority_shadow_outbox import OutboxError
+from ..paths import effective_runtime_root
 from ..file_lock import LockAcquireTimeoutError
 
 

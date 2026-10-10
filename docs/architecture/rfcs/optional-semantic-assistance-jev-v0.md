@@ -3,7 +3,7 @@
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Research proposal; a separate D1-only optional shadow implementation is proposed in Appendix A. No model qualification or automatic correction is established. The default-off sentinel capability and its recorded differential live in [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.md); those numbers do not prove implementation qualification or product adoption.
-- **Created:** 2026-09-19. **Last normative revision:** 2026-09-20.
+- **Created:** 2026-09-19. **Last normative revision:** 2026-10-08.
 - **Implementation baseline:** `9f1916960306b3650d795895b89f331eeae2516e`; source ownership and trigger behavior rechecked at PR revision `27812bd0fb437f831a541b564bcb5be8a96ff77e`. Historical upstream inspection is recorded in Appendix A, not a whole-system certification.
 - **Authors / owners:** Proposal author; existing domain maintainers own any direction selected. No new runtime authority or assigned implementation owner.
 - **Language mirror:** [中文版](optional-semantic-assistance-jev-v0.zh-CN.md)
@@ -193,6 +193,74 @@ Bind the approved goal/acceptance revision, attributable work identity, host-rea
 For D1, study goal relationship and evidence increment separately. Preserve necessary prerequisites, legitimate blocked waiting and insufficient evidence without forcing them into drift. These need not be a single mutually exclusive enum: waiting describes work state, while alignment describes a relation. Missing prior evidence requires an unknown novelty result. New unrelated work may have increment while remaining off goal.
 
 Use artifact-based input as the primary comparison. Keep author claims separate and evaluate absent/neutral/praising/critical self-description as an ablation on the same artifacts. Measure classification and probability shifts; do not assert that labeling claims untrusted eliminates influence, or that removing all explanations is universally best. Any context needed to explain a prerequisite must have attributable support. Source text remains untrusted even after author summaries are removed.
+
+#### Detection result and handoff to the owning rule
+
+An assessment must identify a falsifiable question: which declared criterion,
+claim or dependency is challenged, on which revision, and what observation would
+resolve the challenge. A run that uses valid tools, changes identifiers and
+passes unrelated tests can still preserve a wrong assumption. Conversely, a
+negative experiment or necessary prerequisite can advance the Goal. Tool success,
+activity, novelty and author confidence cannot decide between those cases.
+
+Keep three responsibilities separate:
+
+1. **Acquire evidence.** Bind the current Goal/criterion basis, attributable
+   Turn and artifact versions, the relevant before/after observations and
+   verifier identity/result. Declare selected files, omitted dependencies,
+   truncation and missing history. A manually written assessment basis is not
+   automatically the canonical Goal acceptance revision. An exact read proves
+   provenance; a hash cannot prove content true or coverage complete.
+2. **Assess the bounded question.** Report the actual dimensions and unresolved
+   evidence. Goal relationship and evidence increment remain separate: work can
+   be off Goal and produce new evidence. A combined drift signal of `false`
+   means that signal's intervention condition did not hold, not that all work
+   was correct or on Goal. Missing or stale evidence remains unevaluated or
+   uncertain under the existing receipt contract; it is not a negative finding
+   and cannot clear a confirmed domain failure.
+3. **Let the existing owner decide the consequence.** Shadow assessment is
+   advisory; an explicitly enabled `assist` policy may require the existing
+   replan obligation from a qualified signal. That policy decision does not
+   establish that a business criterion failed. A current domain validator or
+   authorized review may establish that
+   a named criterion is violated; it must retain its evidence, scope and
+   authority. The existing acceptance, replan, dependency or effect owner then
+   decides refusal, repair, replan or reconciliation. No assessment score grants
+   stop, mutation, rollback or completion authority.
+
+For an authorized caller, evaluate at the smallest useful boundary before a
+consequential result is accepted, consumed by another task or admitted as a
+protected effect. A final-only review cannot contain all earlier effects; a
+per-token/per-tool model reviewer is not required. Declare the evidence window,
+deadline, cost budget and missed-boundary behavior. Keep mandatory deterministic
+checks effective when optional assessment is unavailable. Measure detection
+delay, false intervention against legitimate work and missed failures. Sample
+cases that never generated an alert as well as alerted cases; alert-only review
+cannot estimate missed failures.
+
+The local candidate now binds an explicitly selected canonical task criterion
+through [`progress_review_evidence.ts`](../../../loopx/control_plane/work_items/progress_review_evidence.ts).
+The optional observer's `acceptance_scope` reads the existing acceptance owner;
+private registry/runtime references stay outside the model packet. A manual
+basis remains an `operator_study`. Receipts declare selected-file net-change
+coverage. Capture and core receipt decoding require the canonical Goal/Agent/Todo
+scope to match the actual run; mismatches never reach model dispatch or drift
+consumption. Core readback also rechecks bindings against current criteria. A changed or unavailable basis withdraws that receipt's signal without
+rewriting its history. Legacy receipt handling and default-off isolation remain.
+
+The packaged capability editor separately displays relationship and increment,
+criterion origin, coverage, stale/missing/unavailable states and an explicit
+refresh. `off_goal` plus `new_evidence` does not become an on-Goal verdict; a
+non-triggering combined signal retains the existing streak behavior. File/SQLite
+canonical criterion edits and the production HTTP/frontend journey have local
+validation; no new live model-quality experiment or automatic intervention was
+performed. See the [capability contract](../../../loopx/capabilities/progress_review/README.md)
+and [observer guide](../../../packages/loopx-jev/DRIFT_SHADOW.md).
+
+These observations connect to [shared evidence invalidation](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers)
+and [recovery qualification](composable-state-machines-recovery-verification-v0.md#detection-containment-and-recovery-evidence).
+Model reasoning remains subject to the comparisons in section 6 and is not a
+prerequisite for repairing an evidenced deterministic gap.
 
 ### 5.3 Provider facts and deferred mechanisms
 

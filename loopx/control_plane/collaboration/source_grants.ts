@@ -3,6 +3,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray } from "../runtime_decode.ts";
 
 type Recipient = { goal_id: string; agent_id?: string };
+type LocalDeliveryScope = "all_registered" | "selected";
 
 function recipients(value: unknown, label: string, exact: boolean): Recipient[] {
   if (!Array.isArray(value)) throw new EffectRuntimeRequestError(`${label} must be an array`);
@@ -18,21 +19,46 @@ function recipients(value: unknown, label: string, exact: boolean): Recipient[] 
 function grants(source: JsonObject) {
   return {
     targets: recipients(Object.hasOwn(source, "targets") ? source.targets : [], "context delivery targets", false),
-    blocked: recipients(Object.hasOwn(source, "blocked_targets") ? source.blocked_targets : [], "blocked context recipients", true),
+    blocked: recipients(Object.hasOwn(source, "blocked_targets") ? source.blocked_targets : [], "blocked context recipients", false),
+    scope: localScope(source),
   };
+}
+
+function localScope(source: JsonObject): LocalDeliveryScope {
+  const scope = Object.hasOwn(source, "local_delivery_scope") ? source.local_delivery_scope : "all_registered";
+  if (scope !== "all_registered" && scope !== "selected") {
+    throw new EffectRuntimeRequestError("local delivery scope must be all_registered or selected");
+  }
+  return scope;
+}
+
+/** Trusted-local scope configuration preserves explicit recipient revocations. */
+export function configureSourceScope(params: JsonObject): JsonObject {
+  const source = requireJsonObject(params.source, "source policy");
+  grants(source);
+  const scope = localScope({local_delivery_scope: params.local_delivery_scope});
+  const senders = requireStringArray(source.sender_ids, "source senders");
+  if (!senders.length || senders.some(sender => !sender.trim())) {
+    throw new EffectRuntimeRequestError("external channel has no valid sender grant");
+  }
+  const next = {...source, local_delivery_scope: scope};
+  return {source: next, local_delivery_scope: scope,
+    would_change: JSON.stringify(next) !== JSON.stringify(source)};
 }
 
 function matches(grant: Recipient, target: Recipient): boolean {
   return grant.goal_id === target.goal_id && (grant.agent_id === undefined || grant.agent_id === target.agent_id);
 }
 
-function granted(target: Recipient, targets: Recipient[], blocked: Recipient[]): boolean {
-  return targets.some(row => matches(row, target)) && !blocked.some(row => matches(row, target));
+function granted(target: Recipient, targets: Recipient[], blocked: Recipient[], scope: LocalDeliveryScope): boolean {
+  return (scope === "all_registered" || targets.some(row => matches(row, target))) &&
+    !blocked.some(row => matches(row, target));
 }
 
 /** Source provenance is verified by the provider adapter; registration is observed
- * afresh. A Goal target covers its current/future Agents, never other Goals,
- * evidence reads, protected operations or executor readiness.
+ * afresh on this host. Authorized sources default to all registered local
+ * recipients; selected scope opts into enrollment. Neither scope grants remote
+ * delivery, evidence reads, protected operations or executor readiness.
  */
 export function resolveSourceRecipients(params: JsonObject): JsonObject {
   const source = requireJsonObject(params.source, "source policy");
@@ -40,12 +66,51 @@ export function resolveSourceRecipients(params: JsonObject): JsonObject {
   if (!requireStringArray(source.sender_ids, "source senders").includes(sender)) {
     throw new EffectRuntimeRequestError("source sender is not authorized");
   }
-  const { targets, blocked } = grants(source);
+  const { targets, blocked, scope } = grants(source);
   const available = recipients(params.available, "registered recipients", true);
-  const selected = available.filter(target => granted(target, targets, blocked));
+  const selected = available.filter(target => granted(target, targets, blocked, scope));
   const unique = new Map(selected.map(row => [JSON.stringify([row.goal_id, row.agent_id]), row]));
   return { targets: [...unique.values()].sort((a, b) =>
     a.goal_id.localeCompare(b.goal_id) || a.agent_id!.localeCompare(b.agent_id!)) };
+}
+
+/** A separate, exact operator grant for existing governed work. Context delivery
+ * alone never authorizes launch; neither models nor sources choose host profiles.
+ */
+export function sourceExecutionBindings(params: JsonObject): JsonObject {
+  const source = requireJsonObject(params.source, "source policy");
+  const authorized = resolveSourceRecipients(params).targets as Recipient[];
+  const available = recipients(params.available, "registered recipients", true);
+  const rows = Object.hasOwn(source, "execution_bindings") ? source.execution_bindings : [];
+  if (!Array.isArray(rows) || rows.length > 100) {
+    throw new EffectRuntimeRequestError("bounded source execution bindings required");
+  }
+  const bindings = rows.map(raw => {
+    const row = requireJsonObject(raw, "source execution binding");
+    const keys = ["goal_id", "agent_id", "requester_agent_id", "binding_id"];
+    if (Object.keys(row).some(key => !keys.includes(key)) || keys.some(key => !Object.hasOwn(row, key))) {
+      throw new EffectRuntimeRequestError("exact source execution binding fields required");
+    }
+    const binding: JsonObject = {};
+    for (const key of keys) {
+      const id = requireNonEmptyString(row[key], key);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(id)) {
+        throw new EffectRuntimeRequestError("invalid source execution binding identity");
+      }
+      binding[key] = id;
+    }
+    if (binding.requester_agent_id === binding.agent_id) {
+      throw new EffectRuntimeRequestError("execution requester must be an independent registered Agent");
+    }
+    return binding;
+  });
+  const identities = bindings.map(row => JSON.stringify([row.goal_id, row.agent_id, row.binding_id]));
+  if (new Set(identities).size !== identities.length) {
+    throw new EffectRuntimeRequestError("ambiguous source execution binding");
+  }
+  return {bindings: bindings.filter(row =>
+    authorized.some(target => target.goal_id === row.goal_id && target.agent_id === row.agent_id)
+    && available.some(target => target.goal_id === row.goal_id && target.agent_id === row.requester_agent_id))};
 }
 
 /** Plan one trusted-local configuration change; the adapter owns locking and IO.
@@ -53,7 +118,7 @@ export function resolveSourceRecipients(params: JsonObject): JsonObject {
  */
 export function configureSourceRecipient(params: JsonObject): JsonObject {
   const source = requireJsonObject(params.source, "source policy");
-  const { targets, blocked } = grants(source);
+  const { targets, blocked, scope } = grants(source);
   const goal_id = requireNonEmptyString(params.goal_id, "delivery target Goal");
   const agent_id = params.agent_id === null || params.agent_id === undefined
     ? undefined : requireNonEmptyString(params.agent_id, "delivery target Agent");
@@ -70,7 +135,7 @@ export function configureSourceRecipient(params: JsonObject): JsonObject {
         !available.some(row => matches(target, row)))) {
       throw new EffectRuntimeRequestError("delivery target must be a registered Agent or all Agents in an active Goal");
     }
-    if (Object.hasOwn(source, "evidence_goal_ids")) {
+    if (scope === "selected" && Object.hasOwn(source, "evidence_goal_ids")) {
       const readGoals = requireStringArray(source.evidence_goal_ids, "source read Goals");
       if (readGoals.some(id => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(id)) || !readGoals.includes(goal_id)) {
         throw new EffectRuntimeRequestError("target Goal is outside the channel read scope");
@@ -78,33 +143,42 @@ export function configureSourceRecipient(params: JsonObject): JsonObject {
     }
   }
   const before = agent_id === undefined
-    ? targets.some(row => row.goal_id === goal_id && row.agent_id === undefined)
-    : granted(target, targets, blocked);
+    ? (scope === "all_registered" || targets.some(row => row.goal_id === goal_id && row.agent_id === undefined)) &&
+      !blocked.some(row => row.goal_id === goal_id && row.agent_id === undefined)
+    : granted(target, targets, blocked, scope);
   let updatedTargets = targets;
   let updatedBlocked = blocked;
   if (grant) {
-    if (!targets.some(row => matches(row, target))) updatedTargets = [...targets, target];
-    if (agent_id !== undefined) updatedBlocked = blocked.filter(row => !matches(target, row));
+    if (agent_id !== undefined && blocked.some(row => row.goal_id === goal_id && row.agent_id === undefined)) {
+      throw new EffectRuntimeRequestError("restore the Goal delivery grant before restoring an individual Agent");
+    }
+    if (scope === "selected" && !targets.some(row => matches(row, target))) updatedTargets = [...targets, target];
+    // Regrant only this scope; a Goal regrant preserves individual revocations.
+    updatedBlocked = blocked.filter(row => !(row.goal_id === goal_id && row.agent_id === agent_id));
   } else if (agent_id === undefined) {
-    // Revoking a Goal also revokes individually enrolled members of that Goal.
     updatedTargets = targets.filter(row => row.goal_id !== goal_id);
-    updatedBlocked = blocked.filter(row => row.goal_id !== goal_id);
+    if (scope === "all_registered" && !blocked.some(row => row.goal_id === goal_id && row.agent_id === undefined)) {
+      updatedBlocked = [...blocked, target];
+    }
+    // Preserve individual exceptions when the Goal is restored later.
   } else {
     updatedTargets = targets.filter(row => !matches(target, row));
-    if (updatedTargets.some(row => matches(row, target)) && !blocked.some(row => matches(row, target))) {
+    // Record the exact revocation even if a Goal block or missing enrollment
+    // already disables delivery. Restoring that broader scope must not erase it.
+    if (!blocked.some(row => row.goal_id === goal_id && row.agent_id === agent_id)) {
       updatedBlocked = [...blocked, target];
     }
   }
   const changed = JSON.stringify(updatedTargets) !== JSON.stringify(targets) ||
     JSON.stringify(updatedBlocked) !== JSON.stringify(blocked);
-  // Preserve provider metadata when the semantic recipient set is unchanged.
+  // Preserve provider metadata when the declared grants and exceptions are unchanged.
   const updatedSource: JsonObject = { ...source };
   if (changed) {
     updatedSource.targets = updatedTargets;
     if (updatedBlocked.length) updatedSource.blocked_targets = updatedBlocked;
     else delete updatedSource.blocked_targets;
   }
-  return { source: updatedSource, target, would_change: changed,
+  return { source: updatedSource, target, local_delivery_scope: scope, would_change: changed,
     granted_before: before, granted_after: grant,
     existing_target_count: targets.length, resulting_target_count: updatedTargets.length,
     includes_future_agents: agent_id === undefined && grant };

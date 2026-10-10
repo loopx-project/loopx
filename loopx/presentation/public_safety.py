@@ -4,6 +4,11 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from ..public_safe_text import (
+    PRESENTATION_LOCAL_PATH_PATTERNS as LOCAL_PATH_PATTERNS,
+    PRESENTATION_PUBLIC_BOUNDARY_PATTERNS as PUBLIC_BOUNDARY_PATTERNS,
+)
+
 
 PUBLIC_SAFE_BOUNDARY_FIELDS = (
     "raw_logs_recorded",
@@ -13,12 +18,6 @@ PUBLIC_SAFE_BOUNDARY_FIELDS = (
     "absolute_paths_recorded",
     "private_source_bodies_recorded",
 )
-
-LOCAL_PATH_PATTERNS = (
-    re.compile(r"/(?:Users|home|private|tmp|var)/[^\s`|,)]+"),
-    re.compile(r"[A-Za-z]:\\\\Users\\\\[^\s`|,)]+"),
-)
-
 
 def public_safe_boundary() -> dict[str, bool]:
     return {field: False for field in PUBLIC_SAFE_BOUNDARY_FIELDS}
@@ -40,21 +39,6 @@ def redact_public_text(
     if len(text) > limit:
         return text[: max(0, limit - 1)].rstrip() + truncation_marker
     return text
-
-
-PUBLIC_BOUNDARY_PATTERNS = (
-    (
-        "absolute local path",
-        re.compile(r"/(?:Users|home|private|tmp|var)/[^\s`\"'<>]+"),
-    ),
-    ("private key material", re.compile(r"BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY")),
-    (
-        "credential assignment",
-        re.compile(
-            r"\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]", re.IGNORECASE
-        ),
-    ),
-)
 
 
 def scan_public_boundary_text(text: str) -> dict[str, object]:

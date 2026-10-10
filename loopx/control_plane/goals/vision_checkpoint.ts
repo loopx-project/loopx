@@ -24,6 +24,8 @@ const GOAL_VISION_BUDGET_ERROR = "vision_budget_exceeded";
 const GOAL_VISION_TOTAL_LIMIT = 1_800;
 const GOAL_VISION_ADVANCEMENT_POLICIES = ["as_needed", "repeat_until_closed"] as const;
 const VISION_UNCHANGED_REASON_LIMIT = 240;
+const VISION_TODO_DELTA_ENTRY_LIMIT = 8;
+const VISION_TODO_DELTA_TEXT_LIMIT = 80;
 const VISION_BUDGET_SUGGESTION_LIMIT = 96;
 
 const GOAL_VISION_FIELD_LIMITS = {
@@ -62,17 +64,41 @@ const GOAL_PATH_DELTA_LIST_LIMITS = {
   evidence_refs: [4, 140],
 } as const;
 
+// Guidance for the existing material-closeout qualification, not a new gate.
+export const VISION_MATERIAL_CLOSEOUT_HINT =
+  "For material semantic_closeout, provide " +
+  "vision_patch.acceptance_summary and top-level path_delta (outcome=continue/no_change/replan, " +
+  "prior_assumption, observed_reality, retained/changed/stopped, evidence_refs). " +
+  "An unchanged reason only reuses an already evidence-linked current vision. " +
+  "Checkpoint satisfied alone does not qualify the outcome.";
+
 /** Authoring hints share the validator's limits; they grant no transition authority. */
 export function visionAuthoringContract(): JsonObject {
   return {
     schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION,
-    fields: {state: "lifecycle token", vision_patch: {...GOAL_VISION_FIELD_LIMITS}},
+    fields: {
+      state: "lifecycle token",
+      vision_patch: {...GOAL_VISION_FIELD_LIMITS},
+      todo_delta: {
+        max_retained_items: VISION_TODO_DELTA_ENTRY_LIMIT,
+        max_item_chars: VISION_TODO_DELTA_TEXT_LIMIT,
+      },
+    },
     common_states: ["vision_patch_proposed", "vision_closed", "no_followup"],
     advancement_policies: [...GOAL_VISION_ADVANCEMENT_POLICIES],
-    minimal_example: {schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed", vision_patch: {
-      vision_summary: "Scoped outcome", acceptance_summary: "Verified evidence and remaining gap",
-    }},
-    authoring_hint: "Fields are optional, not a checklist. Keep the whole decision compact; total includes path_delta. Do not copy the delivery evidence report into every field.",
+    minimal_example: {
+      schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed",
+      vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
+      path_delta: {
+        outcome: "continue", prior_assumption: "Viable route.",
+        observed_reality: "Evidence supports the route.", retained: ["Route"],
+        evidence_refs: ["evidence:verified-result"],
+      },
+    },
+    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
+      "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+      "checkpoint-context is only for recovery after the original committed Turn writeback; " +
+      "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,
     unchanged_reason_limit: VISION_UNCHANGED_REASON_LIMIT,
     path_delta: {
@@ -85,7 +111,7 @@ export function visionAuthoringContract(): JsonObject {
         ([field, [maxItems, maxChars]]) => [field, {item_type: "string", max_items: maxItems, max_item_chars: maxChars}],
       )),
     },
-    rule: "Compare acceptance with evidence. vision_closed closes a stage, not the Goal; no_followup requires no remaining scoped work. A changed mainline needs path_delta; respect the live replan contract.",
+    rule: "Material closeout: acceptance_summary + evidence-linked path_delta. Changed mainline: outcome=replan. vision_closed closes a stage, not Goal; no_followup: no scoped work.",
   };
 }
 // Bounded typed fallback declarations survive prepare unchanged so the
@@ -377,7 +403,9 @@ function normalizeAdvancementPolicy(value: unknown): string {
   return candidate;
 }
 
-function normalizeGoalPathDelta(
+// Reuse the same authoring rule when an optional capability references this
+// explicit packet; callers never recreate its validation or state vocabulary.
+export function normalizeGoalPathDelta(
   value: unknown,
 ): [JsonObject | null, Record<string, number>] {
   if (value === null || value === undefined) return [null, {}];
@@ -618,8 +646,8 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
 
   const todoDelta: string[] = [];
   if (Array.isArray(updatePacket.todo_delta)) {
-    for (const item of updatePacket.todo_delta.slice(0, 8)) {
-      const text = boundedPublicText("todo_delta", item, 80);
+    for (const item of updatePacket.todo_delta.slice(0, VISION_TODO_DELTA_ENTRY_LIMIT)) {
+      const text = boundedPublicText("todo_delta", item, VISION_TODO_DELTA_TEXT_LIMIT);
       if (text) todoDelta.push(text);
     }
   }
@@ -883,7 +911,9 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   }
   if (!satisfied) {
     checkpoint.required_resolution = ["write_vision_patch"];
-    if (checkpoint.missing_baseline !== true) {
+    if (request.existing_agent_vision === null) {
+      checkpoint.missing_baseline = true;
+    } else {
       (checkpoint.required_resolution as string[]).push(
         "record_unchanged_reason",
       );

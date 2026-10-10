@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {mkdtemp, readdir, rm} from "node:fs/promises";
+import {chmod, mkdtemp, readdir, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
@@ -23,9 +23,16 @@ for (const [name, Store] of [["file", FileAuthorityStore], ["sqlite", SqliteAuth
     const call = (fields: JsonObject = {}) => executeAgentPreferences({...request, ...fields}, new Store(dir, "preferences"));
     assert.deepEqual(items(await call()), []);
     assert.deepEqual(await call({action: "observe"}), {ok: true, status: "absent", observation_count: 0});
+    const emptyContext = await call({action: "turn_context"});
+    assert.equal(emptyContext.status, "absent");
+    assert.deepEqual(items(emptyContext), []);
     const added = await call(update);
     assert.equal(added.status, "applied", JSON.stringify(added));
     assert.equal(items(await call())[0]!.statement, update.statement);
+    const context = await call({action: "turn_context"});
+    assert.equal(context.status, "observed");
+    assert.equal(context.observation_count, 1);
+    assert.deepEqual(view(context), view(added));
     const changed = await call({...update, expected_revision: view(added).revision,
       operation_id: "correct-2", statement: "Do not contact a reviewer.", source_ref: "owner-message-2", source_quote: "Stop asking a reviewer."});
     assert.equal(changed.status, "applied");
@@ -57,6 +64,23 @@ for (const [name, Store] of [["file", FileAuthorityStore], ["sqlite", SqliteAuth
     assert.equal(items(await call({})).length, 2);
   });
 }
+
+test("known filesystem denial is not missing or corrupt preferences", async t => {
+  if (process.getuid?.() === 0) { t.skip("root bypasses POSIX read permission"); return; }
+  const root = await mkdtemp(join(tmpdir(), "preferences-permission-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const call = (fields: JsonObject = {}) => agentPreferences({...request, runtime_root: root, ...fields});
+  assert.equal((await call(update)).ok, true);
+  const scope = join(root, "agent-preferences", (await readdir(join(root, "agent-preferences")))[0]);
+  const file = (await readdir(scope)).find(name => /^authority-store-.*\.json$/.test(name))!;
+  const path = join(scope, file);
+  await chmod(path, 0);
+  try {
+    assert.deepEqual(await call({action: "turn_context"}), {ok: false, status: "permission_denied",
+      error: "agent_preferences_permission_denied"});
+  } finally { await chmod(path, 0o600); }
+  assert.equal((await call({action: "turn_context"})).status, "observed");
+});
 
 test("read/preview are side-effect free; scope isolation, expiry and input bounds fail explicitly", async t => {
   const root = await mkdtemp(join(tmpdir(), "preferences-local-"));

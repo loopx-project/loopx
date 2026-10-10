@@ -74,7 +74,7 @@ def _hint_payload(
     }
 
 
-def test_active_work_uses_initial_interval() -> None:
+def test_active_observation_uses_initial_interval() -> None:
     payload = _hint_payload(
         action="run_now",
         initial=3,
@@ -384,11 +384,13 @@ def test_end_to_end_should_run_invokes_wake_cmd(tmp_path: Path) -> None:
     state_file = tmp_path / "wake" / "worker-state.json"
     fake_cli = tmp_path / "wake" / "fake-loopx"
     marker = tmp_path / "wake" / "marker.txt"
-    _write_fake_cli(fake_cli, [active])
-
-
-    def stop_after_one(seconds: float) -> None:
-        raise KeyboardInterrupt
+    terminal = _hint_payload(
+        action="stop_until_explicit_resume",
+        initial=3, progression=[3], limit=None,
+        local_scheduler_directive="stop",
+    )
+    _write_fake_cli(fake_cli, [active, terminal])
+    slept: list[float] = []
     args = argparse.Namespace(
         cli_bin=str(fake_cli),
         registry=str(registry),
@@ -401,10 +403,8 @@ def test_end_to_end_should_run_invokes_wake_cmd(tmp_path: Path) -> None:
         once=False,
         error_backoff_seconds=5.0,
     )
-    try:
-        run_worker(args, sleep=stop_after_one)
-    except KeyboardInterrupt:
-        pass
+    assert run_worker(args, sleep=slept.append) == 0
+    assert slept == []
 
     assert marker.exists()
     assert marker.read_text().strip() == "woke"
@@ -454,7 +454,7 @@ def test_end_to_end_failed_wake_returns_nonzero_once(tmp_path: Path) -> None:
 
 def main() -> int:
     tests = [
-        test_active_work_uses_initial_interval,
+        test_active_observation_uses_initial_interval,
         test_unchanged_poll_advances_ladder_then_stops,
         test_new_reset_token_resets_progression,
         test_terminal_action_is_terminal,

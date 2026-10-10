@@ -84,8 +84,8 @@ canonical 完成仍是不同事实；本切片不提供动态派生授权或另�
 ### 托管宿主绑定与真实环境验证（2026-09-15）
 
 一个托管宿主绑定要说明四件事：宿主适配器、provider、模型，以及凭据来自哪里。
-DSH 绑定是 DSH Turn 宿主 + provider `deepseek-official` + 模型 `deepseek-v4-flash`
-（DeepSeek V4.1 Flash）+ 推理档位 `high`，端点取自运维方环境（`DEEPSEEK_BASE_URL`），
+DSH 绑定是 DSH Turn 宿主 + provider `deepseek-official` + 模型 `deepseek-flash`
+（DeepSeek-V4.1-Flash）+ 推理档位 `high`，端点取自运维方环境（`DEEPSEEK_BASE_URL`），
 凭据取自运维方环境（`DEEPSEEK_API_KEY`）。
 
 LoopX **选择**托管有界 Turn 的默认宿主，而从不由启动时的意外推断
@@ -123,14 +123,19 @@ LoopX **选择**托管有界 Turn 的默认宿主，而从不由启动时的意�
 
 两个托管面从同一个所有者解析**执行档位**
 （`loopx/control_plane/turn_driver/execution_profile.py`）：provider
-`deepseek-official`、模型 `deepseek-v4-flash`（DeepSeek V4.1 Flash）、推理档位
+`deepseek-official`、模型 `deepseek-flash`（DeepSeek-V4.1-Flash）、推理档位
 `high`，可由 `LOOPX_TURN_PROVIDER` / `LOOPX_TURN_MODEL` /
 `LOOPX_TURN_REASONING_EFFORT` 覆盖，更低优先级为历史变量 `DSH_PROVIDER` /
-`DSH_MODEL`。回读是一行 `execution_profile`：出货形态为 `deepseek-v4-flash@high`，
+`DSH_MODEL`。回读是一行 `execution_profile`：出货形态为 `deepseek-flash@high`，
 仅当 provider 不是出货值时前置为 `<provider>/…`。之所以只有一行，是因为每个 plan
 载荷都携带它，而面向 agent 的输出预算是一份契约；该行写出什么值，就是实际会跑的值，
 因此 owner 自己设定的模型会以自身出现。凭据为选定档位提供认证，从不参与选型；凭据
 唯一解析的是"无人显式选择时有界 Turn 的出货宿主默认值"，且该解析自带来源回读。
+
+**修订（2026-10-04）：** 出货模型默认值由已退役的 `deepseek-v4-flash` 拼写改为同一
+DeepSeek-V4.1-Flash 世代的正式 ID `deepseek-flash`。该退役拼写仍被厂商端点接受，
+并继续作为显式 `LOOPX_TURN_MODEL` / `DSH_MODEL` 覆盖可用，因此仍固定旧拼写的宿主
+属于配置变更，而不是代码变更。
 
 该绑定的证据按来源区分：
 
@@ -250,20 +255,62 @@ tag：PyPI 上的 `deepseek-harness-sdk==0.1.5rc1` /
 这是接入成本和合同差异，不是说 Pi 没有事件，或 DSH 不能使用其他模型。
 两个 harness 都有控制 API；“被动”是具体 adapter 和实际加载依赖的性质。
 
-依赖 dsh 的两个 LoopX 面并不一起移动：有界 Turn 宿主使用上文记录的 Python
-SDK/runtime 固定版本（`0.1.5rc1`，已发布通道）；而 dsh 侧插件
-（`packages/dsh-loopx-plugin`）的开发、宿主与客户端面现已统一构建在同一已发布的
-`0.1.5-rc.2` 线上，不再停留在 `0.1.1-rc.2`，其 npm peer 范围只接受
-`>=0.1.5-rc.1`。这是上游三处变化逼出来的，因此它是一条新的发布线而不是原地补丁：
-0.1.5 线不再发布 `@deepseek-ai/dsh-client-runtime`（最后发布版本为 `0.1.1-rc.2`），
-`slots` service 座位随之移到 `@deepseek-ai/dsh-client-ui-renderer`，也就是本 manifest
-现在写入 `dsh.client.inject` 的包；`Session.events` 变为 `Session.snapshotEvents()`，
-`Inbox.hasPending` 变为两个 pending 队列；共享 `/api` bridge 用
-`<namespace>/<method>` 寻址 Remote 方法，并只接受一个 `args` payload 字段。一份
-`dsh.client.inject` 无法同时为两代排序 boot row，所以插件不能同时声明两代。上文的
-L1 observer 契约不变：observer 仍只消费 `session/created`、`session/event`、
-`session/disposed`，只是把 token 级 `assistant/chunk` 行视为旧 durable 日志重放出来的
-已退场输入，而不是现存事件类型。
+有界 Turn 宿主的 Python SDK/runtime 固定版本，与独立版本化的
+`packages/dsh-loopx-plugin` 分开维护。插件源码现将开发、Host、Client 包固定为
+`0.2.0-rc.2`，保留已支持的 0.1.5 和显式 0.1.7 预发布 peer 范围。插件注册自己的
+初始化消息来源，在 `agent/created` 重置 Session 状态，并由上游 Connection transport
+继续负责 Peer 准入；Client revision 保持不透明。
+初始化与运行时统一要求包含 Windows peer-file 修复的 LoopX 1.2.4 或更新版本；
+显式指定的旧 CLI 在安装前失败。已退场的 0.1.1 Client runtime 仍不支持，slots 由
+renderer 提供，共享 `/api` 保留 `<namespace>/<method>` 和 `args` 契约。
+
+npm 分发通道要求包与 GitHub release artifact 完全一致，`latest` 指向已验证版本，
+仓库搜索选中 `dsh-loopx-plugin` 而不是 monorepo 根目录。registry smoke 在本地验证
+包名安装与卸载，CI 覆盖 Linux 和 Windows。
+[Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93) 报告的直接 release 安装已由
+上游独立实现并发布到 [Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14)，
+按现有权威目录命令安装，不要求本 provider 先发布 npm。
+[beta.6 GitHub 包](https://github.com/loopx-project/loopx/releases/tag/dsh-loopx-plugin-v0.1.1-beta.6)
+已从合并提交 `5eee730c2` 发布，下载字节与构建产物一致；个人图文升级指南已回读文本
+及三张真实 DSH 截图。[目录 PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+于 2026-10-08 合并，已部署的 awesome 目录选择 beta.6。
+但 2026-10-10 回读 [DSH Hub 网站](https://dsh-plugin.org/plugins/loopx-project/loopx)
+及 `api.dsh-plugin.org/plugins.en.json`、`plugins.zh.json`，LoopX 行的 `ic` 和
+`igc` 仍选择 beta.5。当前 Hub 消费这两个独立 feed，并不读取 awesome 目录；
+[Hub #146](https://github.com/dshplugin/dsh-plugin-hub/issues/146) 跟踪这一真实消费入口的
+元数据缺口，目录合并或升级 Hub 均不能证明它已采用 beta.6。
+
+[Hub #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) 已由 Hub 1.5.0 发布。
+发布版 backend 与 Client helper 已通过原生 DSH 0.2 HTTP 路由验证 beta.6 安装、
+已安装身份、固定版本更新与卸载，但使用的是手动提供的目录 URL。
+新的隔离 macOS DSH 0.2.0-rc.2 profile 使用 pnpm 11.25.0 和 Hub 1.6.4，成功直接
+安装已发布 beta.6 URL，并回读两个包版本、四个 LoopX 行及真实 Web 宿主加载。
+直接安装不等于过期 Hub feed 的安装路径已通过。
+
+[Hub #102](https://github.com/dshplugin/dsh-plugin-hub/pull/102) 于 2026-10-07 合并；
+当前发布的 Hub 1.6.4 包含缺校验和的准确诊断、英中文恢复提示和实际执行命令回报。
+早期 packed candidate 已通过真实 macOS 失败弹窗及通知持久化回读。合成缺校验和
+lockfile 在 pnpm 12.6.0 下重现拒绝，`--force` 和 `--fix-lockfile` 也失败；保留旧文件
+并重新解析依赖后，在校验启用的前提下恢复安装。这不解释报告中的 Windows lockfile
+为何丢失校验和，也不自动修复既有 profile。
+[LoopX #6053](https://github.com/loopx-project/loopx/issues/6053) 使用 Hub 1.6.3 仍尝试
+beta.5，只有外层错误，尚不能归因到具体 pnpm 步骤。
+
+已发布包的原生 URL、旧兼容宿主到 0.2 的升级和离线 tgz 安装／卸载均有独立通过证据；
+干净 Linux 容器使用发布的 LoopX 1.2.4 wheel 验证私有 bootstrap、技能、认证和
+GoalBar 回读。真实 macOS 浏览器中的合成 Goal 与预配置唯一绑定已通过 Start/Pause
+并回读 `active`／`stopped`；未激活 Session 未增加模型 turn。这不验收模型驱动续跑、
+Windows 桌面完整旅程或网络故障恢复。2026-10-10 使用已发布 beta.6 与 Hub 1.6.4
+再次热卸载：依赖已删除，但撤销 `loopxBootstrap` 使共享 Web 行退出、浏览器断连。
+后续源码候选删除共享行的这一依赖，保留原生 Loader 启动等待和 LoopX Host／Driver
+内部等待。packed 真实 0.2.0-rc.2 与 0.1.5-rc.2 均通过延迟初始化后公布 URL、热停用后
+宿主仍在线且 LoopX 路由退场、整个插件禁用后冷启动。真实 macOS Hub 1.6.4 浏览器
+卸载完成、删除依赖，刷新后宿主仍在线。候选尚未发布；已发布 beta.6 仍应先关闭 DSH，
+用原生 CLI 卸载后重启。
+[#5671](https://github.com/loopx-project/loopx/issues/5671) 的 Windows desktop-host CLI
+模块缺失属于插件加载前的宿主打包边界，仍待 Windows／上游回读。
+L1 observer 仍只消费 `session/created`、
+`session/event`、`session/disposed`；兼容性修复不关闭另行预算的 C0/C1 或开销验收。
 
 ## 数据流与权限
 

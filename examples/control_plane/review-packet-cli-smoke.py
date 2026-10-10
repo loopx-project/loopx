@@ -374,11 +374,8 @@ def assert_connected_delivery_surface_loop_requires_macro_evidence() -> None:
     contract = payload["handoff_delivery_contract"]
     assert payload["ok"] is True, payload
     assert payload["connected_delivery_handoff"] is True, payload
-    required_reads = payload["project_agent_required_reads"]
-    assert required_reads[0]["kind"] == "agent_scoped_evidence_log", required_reads
-    assert required_reads[0]["agent_id"] == "codex-side-bypass", required_reads
-    assert "evidence-log" in required_reads[0]["command"], required_reads
-    assert " --agent-id codex-side-bypass " in f" {required_reads[0]['command']} ", required_reads
+    assert "project_agent_required_reads" not in payload, payload
+    assert payload["replan_context"]["agent_id"] == "codex-side-bypass", payload
     assert "quota should-run" in payload["project_agent_command"], payload
     assert "--goal-id delivery-side-bypass" in payload["project_agent_command"], payload
     assert contract["mode"] == "expand_after_surface_progress_loop", payload
@@ -387,8 +384,8 @@ def assert_connected_delivery_surface_loop_requires_macro_evidence() -> None:
     assert "connected-delivery" in handoff, handoff
     assert "真实 delivery" in handoff, handoff
     assert "可改文件、验证、写回、spend" in handoff, handoff
-    assert "必读流水账" in handoff, handoff
-    assert "evidence-log" in handoff, handoff
+    assert "重规划上下文" in handoff, handoff
+    assert "evidence-log" not in handoff, handoff
     assert "codex-side-bypass" in handoff, handoff
     assert "surface-only 下游传播" in handoff, handoff
     assert "只读或 dry-run 路径" not in handoff, handoff
@@ -406,7 +403,7 @@ def assert_connected_delivery_surface_loop_requires_macro_evidence() -> None:
     handoff_only = review_packet_handoff_only_payload(payload)
     assert_handoff_interface_budget(handoff_only, "connected-delivery handoff-only payload")
     assert_handoff_only_top_level_budget(handoff_only, "connected-delivery handoff-only payload")
-    assert handoff_only["project_agent_required_reads"] == required_reads, handoff_only
+    assert "project_agent_required_reads" not in handoff_only, handoff_only
     agent_contract = handoff_only["handoff_delivery_contract"]
     assert set(agent_contract) == {"mode", "instruction", "minimum_scale", "must_include", "if_blocked"}, handoff_only
     assert agent_contract["mode"] == "expand_after_surface_progress_loop", handoff_only

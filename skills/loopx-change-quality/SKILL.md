@@ -61,6 +61,15 @@ Spend the review budget on simplification before broad quality analysis:
 4. Prefer the smallest coherent edit that leaves ownership and intent clearer.
    Do not create churn when the current shape is already direct and cohesive.
 
+Simplification must preserve decision meaning, including agent-consumed prose.
+Compare ordering, evidence provenance, modality, qualifiers, continuation and
+stop conditions before shortening instructions. Unchanged fields and green size
+tests are insufficient. Follow the repository's budget decision guide; prefer
+an evidence-backed regression-limit increase when compaction loses useful
+meaning. Never treat a test ceiling as frozen authority or infer a semantic
+change is authorized by a size target. Keep this judgment in the existing
+reuse/simplification and validation evidence rather than a separate receipt.
+
 Write one evidence-backed `reuse` conclusion and one evidence-backed
 `simplification` conclusion. Do not emit a row for every remaining lens.
 Those dimensions are guardrail categories for sparse `risks[]`: add an item

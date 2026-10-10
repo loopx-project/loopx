@@ -38,7 +38,7 @@ REASONING_EFFORT="${REASONING_EFFORT:-max}"
 CONCURRENCY="${CONCURRENCY:-4}"
 AGENT_TIMEOUT_SEC="${AGENT_TIMEOUT_SEC:-5400}"
 LOOPX_SCHEDULER_TIMEOUT_SEC="${LOOPX_SCHEDULER_TIMEOUT_SEC:-5080}"
-LOOPX_CODEX_TURN_TIMEOUT_SEC="${LOOPX_CODEX_TURN_TIMEOUT_SEC:-4700}"
+LOOPX_CODEX_TURN_TIMEOUT_SEC="${LOOPX_CODEX_TURN_TIMEOUT_SEC:-}"
 LHTB_MAX_RETRIES="${LHTB_MAX_RETRIES:-2}"
 RUNNER_RESTARTS="${RUNNER_RESTARTS:-2}"
 LHTB_MODELONLY_NETWORK="${LHTB_MODELONLY_NETWORK:-lhtb-modelonly}"
@@ -47,7 +47,7 @@ LHTB_MODELONLY_GATEWAY="${LHTB_MODELONLY_GATEWAY:-192.0.2.1}"
 LOOPX_SRC_DIR="${LOOPX_SRC_DIR:-$LOOPX_ROOT}"
 export PYTHONPATH="$LOOPX_SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 LOOPX_EXECUTION_MODE="${LOOPX_EXECUTION_MODE:-heartbeat}"
-LOOPX_TASK_ENTRY="${LOOPX_TASK_ENTRY:-seeded-todo}"
+LOOPX_TASK_ENTRY="${LOOPX_TASK_ENTRY:-}"
 LOOPX_PLANNING_TIMEOUT_SEC="${LOOPX_PLANNING_TIMEOUT_SEC:-300}"
 LOOPX_ITERATION_CONTEXT="${LOOPX_ITERATION_CONTEXT:-fresh}"
 LOOPX_VALIDATION_COMMAND_JSON="${LOOPX_VALIDATION_COMMAND_JSON:-[]}"
@@ -117,10 +117,18 @@ if [[ "$MODE" == smoke ]]; then
   expected_task_count=1
   job_suffix="smoke-${SMOKE_TASK}"
 fi
-job_name="lhtb-${LOOPX_EXECUTION_MODE}-${LOOPX_TASK_ENTRY}-${LOOPX_ITERATION_CONTEXT}-${job_suffix}-${run_stamp}"
+job_name="lhtb-${LOOPX_EXECUTION_MODE}-${LOOPX_TASK_ENTRY:-default}-${LOOPX_ITERATION_CONTEXT}-${job_suffix}-${run_stamp}"
 generated_config="$CODE_DIR/.generated/${job_name}.yaml"
 jobs_dir="$CODE_DIR/runs"
 
+task_entry_args=()
+if [[ -n "$LOOPX_TASK_ENTRY" ]]; then
+  task_entry_args=(--task-entry "$LOOPX_TASK_ENTRY")
+fi
+turn_timeout_args=()
+if [[ -n "$LOOPX_CODEX_TURN_TIMEOUT_SEC" ]]; then
+  turn_timeout_args=(--turn-timeout "$LOOPX_CODEX_TURN_TIMEOUT_SEC")
+fi
 "$VENV/bin/python" "$CODE_DIR/scripts/render_config.py" \
   --template "$CODE_DIR/configs/heartbeat-generic-cli.yaml" \
   --output "$generated_config" \
@@ -131,11 +139,11 @@ jobs_dir="$CODE_DIR/runs"
   --effort "$REASONING_EFFORT" \
   --timeout "$AGENT_TIMEOUT_SEC" \
   --execution-mode "$LOOPX_EXECUTION_MODE" \
-  --task-entry "$LOOPX_TASK_ENTRY" \
+  "${task_entry_args[@]}" \
   --planning-timeout "$LOOPX_PLANNING_TIMEOUT_SEC" \
   --iteration-context "$LOOPX_ITERATION_CONTEXT" \
   --validation-command-json "$LOOPX_VALIDATION_COMMAND_JSON" \
-  --turn-timeout "$LOOPX_CODEX_TURN_TIMEOUT_SEC" \
+  "${turn_timeout_args[@]}" \
   --scheduler-timeout "$LOOPX_SCHEDULER_TIMEOUT_SEC" \
   "${task_args[@]}"
 
@@ -176,7 +184,9 @@ receipt="$CODE_DIR/reports/${job_name}.env"
   printf 'gateway=%s\nwire_api=%s\nweb_search=disabled\n' "$OPENAI_BASE_URL" "$CODEX_WIRE_API"
   printf 'execution_mode=%s\niteration_context=%s\ncodex_home_scope=trial\n' "$LOOPX_EXECUTION_MODE" "$LOOPX_ITERATION_CONTEXT"
   printf 'scheduler_terminal_packet_compatibility=true\n'
-  printf 'replan_after_completed_todos=3\nverifier_policy=44_shared_2_separate\n'
+  # Cadence comes from the resolved adapter configuration in preflight and the
+  # per-trial bootstrap receipt; do not hard-code a second value here.
+  printf 'verifier_policy=44_shared_2_separate\n'
   printf 'loopx_commit=%s\n' "$(git -C "$LOOPX_SRC_DIR" rev-parse HEAD)"
   "$CODEX_BIN" --version 2>/dev/null | sed 's/^/codex_version=/' || true
 } | tee "$receipt"

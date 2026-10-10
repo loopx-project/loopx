@@ -153,6 +153,13 @@ export async function fetchPeriodicReportIndex(indexUrl: string, goalId: string)
   return periodicReportIndexResponseSchema.parse(await response.json()).periodic_reports;
 }
 
+export function presentationApiUrls(payload: StatusPayload, source: ResolvedLocalStatusUrl) {
+  return {
+    indexUrl: localApiUrl(source, payload.local_dashboard_api?.presentation_surfaces_url),
+    detailUrl: localApiUrl(source, payload.local_dashboard_api?.presentation_detail_url),
+  };
+}
+
 export async function fetchPeriodicReportProjection(
   detailUrl: string,
   ref: PeriodicReportDetailRef,

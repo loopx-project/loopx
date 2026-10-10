@@ -1,4 +1,4 @@
-import {leaseWorkspace, sameLeaseWorkspace, independentLeaseWorktrees, type LeaseWorkspace} from "./task_lease_workspace.ts";
+import {leaseWorkspace, sameLeaseWorkspace, sameLeaseCheckout, type LeaseWorkspace} from "./task_lease_workspace.ts";
 /** Shared acquire/reclaim admission. IO and durable receipts belong to callers. */
 import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -381,9 +381,14 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
   }
   const advisoryIndexes: number[] = [], conflictIndexes: number[] = [];
   for (const [index, other] of input.other_leases.entries()) {
-    if (!other.active || !other.effective || !repositoryScopesMayOverlap(repository, other.write_repository) ||
+    if (!other.active || !other.effective) continue;
+    const sameCheckout = workspace !== null && sameLeaseCheckout(workspace, other.write_workspace);
+    if ((!sameCheckout && !repositoryScopesMayOverlap(repository, other.write_repository)) ||
         !writeScopesOverlap(command.write_scopes, other.write_scopes)) continue;
-    if (independentLeaseWorktrees(workspace, other.write_workspace)) advisoryIndexes.push(index);
+    // Verified code-edit mode coordinates integration, rather than requesting
+    // cross-checkout file exclusivity. Unknown legacy workspaces stay unknown;
+    // neither their records nor their execution ownership are changed.
+    if (workspace && !sameCheckout) advisoryIndexes.push(index);
     else conflictIndexes.push(index);
   }
   if (conflictIndexes.length > 0) {

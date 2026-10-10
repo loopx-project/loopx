@@ -162,7 +162,7 @@ def register_status_commands(
         "review-packet",
         help=(
             "Generate a CLI-visible Review Packet from the current status contract, "
-            "including agent-scoped evidence-log read hints when available."
+            "including bounded replan context when available."
         ),
     )
     review_packet_parser.add_argument(

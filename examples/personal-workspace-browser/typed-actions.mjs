@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { resolve } from "node:path";
 
 import {
@@ -118,7 +119,10 @@ export const typedActionsScenario = {
             context: {kind: "goal", goal_id: "product-release"},
             expected_state_fingerprint: "creation-basis", permission_classification: "durable_write",
             validation_evidence: ["Workspace validated before storage initialization."], available_transitions: ["apply", "cancel"],
-            checkpoint: {steps: {workspace_validated: {outcome: "workspace_validated"}}},
+            checkpoint: {steps: {workspace_validated: {
+              outcome: "workspace_validated",
+              workspace_digest: "a".repeat(64),
+            }}},
             failure: {error_code: "canonical_action_failed"}, receipt: null, stale: null,
             created_at: "2026-09-14T01:00:00Z", updated_at: "2026-09-14T01:00:01Z",
           },
@@ -889,6 +893,15 @@ export const typedActionsScenario = {
       await page.locator(".personal-goal-link", { hasText: "Progress Projection" }).click();
       await page.getByRole("heading", { name: "Progress Projection" }).waitFor({ state: "visible" });
       await page.locator(".personal-task-card").getByText("Current Todo", {exact: true}).waitFor();
+      const unclaimedCard = page.locator(".personal-task-card", {hasText: "Current Todo"});
+      // The owner is visible text alongside status badges, not necessarily
+      // a separate element. Check the displayed fact without requiring a span.
+      assert.match(await unclaimedCard.locator(":scope > button small").innerText(), /未分配/,
+        "An unclaimed task must remain unassigned on its card");
+      await unclaimedCard.getByText("Current Todo", {exact: true}).click();
+      const unclaimedOwner = page.getByRole("dialog", {name: "Todo 详情"}).locator("dl > div", {has: page.getByText("Owner", {exact: true})});
+      await unclaimedOwner.getByText("未分配", {exact: true}).waitFor();
+      await page.getByRole("button", {name: /关闭详情/}).click();
       if ((await page.locator(".personal-channel-title").innerText()).includes("Current Todo")) throw new Error("Header repeated the task already shown in the workspace");
       const progressColumn = page.locator(".personal-object-list", { hasText: "待执行 / 进行中" });
       if ((await progressColumn.locator(".personal-task-card").count()) !== 5) throw new Error("Id-less long Todo was duplicated across compact and full projections");
@@ -1282,7 +1295,20 @@ export const typedActionsScenario = {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
       await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
-      await page.getByLabel(/^两次 Goal 复核间的已完成 Todo 数/u).waitFor({ state: "visible" });
+      const reviewUnit = page.getByLabel(/^复核计数依据/u);
+      const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
+      await reviewUnit.waitFor({ state: "visible" });
+      await reviewCount.waitFor({ state: "visible" });
+      // Visibility precedes hydration of the persisted cadence into the v1 editor.
+      await page.waitForFunction(() => {
+        const labels = [...document.querySelectorAll(".personal-capability-detail label")];
+        const unit = labels.find((label) => label.innerText.includes("复核计数依据"))?.querySelector("select");
+        const count = labels.find((label) => label.innerText.includes("两次复核间的数量"))?.querySelector("input[type=number]");
+        return unit?.value === "completed_todos" && count?.value === "3";
+      });
+      assert.equal(await reviewUnit.inputValue(), "completed_todos");
+      assert.equal(await reviewCount.inputValue(), "3");
+      assert.deepEqual(await reviewUnit.locator("option").evaluateAll((options) => options.map((option) => option.value).filter(Boolean)), ["completed_todos", "effective_turns"]);
       await page.getByText(/不会创建 Turn、消耗配额或授予权限/u).waitFor({ state: "visible" });
       await machineCatalog.getByRole("button", { name: /^变更质量验证/ }).click();
       for (const label of [/^启用$/u, /^允许一次有界安全修复$/u, /^要求精确 diff 回执$/u]) {
@@ -1766,12 +1792,35 @@ export const typedActionsScenario = {
       taskManagement = page.locator("details.personal-task-management");
       await taskManagement.locator("summary").click();
       await page.getByLabel("优先级", {exact: true}).selectOption("P4");
+      const priorityButton = taskManagement.locator("label", {has: page.getByLabel("优先级", {exact: true})}).getByRole("button");
+      const previewsBeforeFailure = api.actionPreviews.length;
+      api.failNextActionPreview = true;
+      await priorityButton.click();
+      await taskInspector.getByRole("alert").getByText(/Action preview temporarily unavailable/).waitFor();
+      if (api.actionPreviews.length !== previewsBeforeFailure) throw new Error("A refused preview persisted a proposal");
+      if (await page.getByLabel("优先级", {exact: true}).inputValue() !== "P4") throw new Error("Preview failure lost the owner's draft");
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await secondTaskRow.click();
+      if (await taskInspector.getByRole("alert").count()) throw new Error("Preview error leaked into another Todo");
+      await taskRow.click();
+      taskManagement = page.locator("details.personal-task-management");
+      await taskManagement.locator("summary").click();
+      await page.getByLabel("优先级", {exact: true}).selectOption("P4");
       await page.screenshot({path: resolve(outputDir, "todo-priority-edit.png"), fullPage: false, animations: "disabled"});
       await taskManagement.locator("label", {has: page.getByLabel("优先级", {exact: true})}).getByRole("button").click();
       await page.getByText("确认执行").waitFor({state: "visible"});
       const priorityEdit = api.actionPreviews.findLast(preview => preview.action_kind === "todo.update" && preview.normalized_parameters.priority === "P4");
       if (!priorityEdit || priorityEdit.normalized_parameters.text !== undefined) throw new Error("Priority edit must be structured, without a text rewrite");
-      await page.getByRole("button", {name: "关闭", exact: true}).click();
+      const readsBeforePriorityApply = api.statusRequestCount;
+      const writesBeforePriorityApply = api.durableWriteCount;
+      await page.getByRole("button", {name: "确认并应用", exact: true}).click();
+      await page.getByText("操作已完成，结果状态已通过读回验证。", {exact: true}).waitFor();
+      await page.waitForTimeout(2_000);
+      if (api.statusRequestCount <= readsBeforePriorityApply) throw new Error("Verified Todo update left the workspace status unread");
+      if (api.durableWriteCount !== writesBeforePriorityApply + 1) throw new Error("Todo status reconciliation repeated the confirmed write");
+      // Applied receipts retain their Goal navigation; close the drawer itself
+      // so the next operation still begins from the existing task card.
+      await page.getByRole("button", {name: /关闭详情/}).click();
       await taskRow.click();
       taskManagement = page.locator("details.personal-task-management");
       await taskManagement.locator("summary").click();
@@ -1796,12 +1845,22 @@ export const typedActionsScenario = {
         await page.getByRole("button", { name: "关闭", exact: true }).click();
       }
       api.nextActionPreviewDelayMs = 900;
-      const quickComplete = taskCards.first().getByRole("button", { name: /^标记完成：/u });
+      const conversationRuntime = page.getByRole("combobox", { name: "选择聊天 Runtime" });
+      const conversationAgentId = await conversationRuntime.getAttribute("data-value");
+      if (conversationAgentId !== "codex") throw new Error(`Quick Todo actor fixture requires the selected Codex Runtime, got ${conversationAgentId}`);
+      const claimedTask = taskCards.filter({ hasText: "Monitor ArcticDB #3179 LoopX comment" });
+      const unassignedTask = taskCards.filter({ hasText: "todo todo_1596c3a678bb" });
+      if (await claimedTask.count() !== 1 || await unassignedTask.count() !== 1) {
+        throw new Error("Quick Todo actor fixture requires the canonical claimed and unassigned Todo rows");
+      }
+      const quickComplete = claimedTask.getByRole("button", { name: /^标记完成：/u });
+      const unassignedQuickComplete = unassignedTask.getByRole("button", { name: /^标记完成：/u });
       const quickPreviewCount = api.actionPreviews.length;
       await quickComplete.click();
+      const quickCompleteHandle = await quickComplete.elementHandle();
       await page.waitForFunction(
-        () => document.querySelector('button[aria-label^="标记完成："]')?.getAttribute("aria-busy") === "true",
-        null,
+        (button) => button?.getAttribute("aria-busy") === "true",
+        quickCompleteHandle,
         { timeout: 600 },
       );
       if (!(await quickComplete.isDisabled())) throw new Error("Quick Todo completion remained clickable while preview creation was pending");
@@ -1809,14 +1868,35 @@ export const typedActionsScenario = {
       await page.getByText("确认执行").waitFor({ state: "visible", timeout: 2_000 });
       if (api.actionPreviews.length !== quickPreviewCount + 1) throw new Error("Quick Todo completion did not create exactly one typed preview");
       const quickPreview = api.actionPreviews.at(-1);
-      if (quickPreview?.action_kind !== "todo.update" || quickPreview.normalized_parameters.operation !== "complete") throw new Error(`Quick Todo completion created the wrong typed preview: ${JSON.stringify(quickPreview)}`);
+      if (quickPreview?.action_kind !== "todo.update"
+        || quickPreview.normalized_parameters.operation !== "complete"
+        || quickPreview.normalized_parameters.todo_id !== "todo_15bc0926a494") {
+        throw new Error(`Quick Todo completion created the wrong typed preview: ${JSON.stringify(quickPreview)}`);
+      }
+      if (quickPreview.normalized_parameters.agent_id !== "codex-value-explorer"
+        || quickPreview.normalized_parameters.agent_id === conversationAgentId) {
+        throw new Error(`Quick Todo completion used the wrong actor; Todo owner=codex-value-explorer, conversation owner=${conversationAgentId}, preview=${JSON.stringify(quickPreview.normalized_parameters)}`);
+      }
       await page.getByRole("button", { name: "关闭", exact: true }).click();
+      const unassignedPreviewCount = api.actionPreviews.length;
+      await unassignedQuickComplete.click();
+      await page.getByText("确认执行").waitFor({ state: "visible" });
+      const unassignedPreview = api.actionPreviews.at(-1);
+      if (api.actionPreviews.length !== unassignedPreviewCount + 1
+        || unassignedPreview?.action_kind !== "todo.update"
+        || unassignedPreview.normalized_parameters.operation !== "complete"
+        || unassignedPreview.normalized_parameters.todo_id !== "todo_1596c3a678bb"
+        || Object.hasOwn(unassignedPreview.normalized_parameters, "agent_id")) {
+        throw new Error(`Unassigned quick Todo completion must omit agent_id: ${JSON.stringify(unassignedPreview?.normalized_parameters)}`);
+      }
+      await page.getByRole("button", { name: "关闭", exact: true }).click();
+      const rejectedPreviewCount = api.actionPreviews.length;
       api.failNextActionPreview = true;
       api.nextActionPreviewDelayMs = 300;
       await quickComplete.click();
       await page.getByText(/^无法准备确认预览：/u).waitFor({ state: "visible", timeout: 1_000 });
       if (await quickComplete.isDisabled()) throw new Error("Quick Todo completion stayed disabled after a preview failure");
-      if (api.actionPreviews.length !== quickPreviewCount + 1) throw new Error("A rejected quick completion preview was recorded as ready");
+      if (api.actionPreviews.length !== rejectedPreviewCount) throw new Error("A rejected quick completion preview was recorded as ready");
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.getByRole("dialog").filter({ hasText: "确认执行" }).waitFor({ state: "hidden" });
 
@@ -1992,5 +2072,101 @@ export const typedActionsScenario = {
       coverageEntries: context.coverageEntries,
       note: notes.join(" "),
     };
+  },
+};
+
+// The list is the conversation frontier; an opened original proposal has its
+// own canonical identity even when a global create started inside a Goal.
+export const proposalReadbackScopeScenario = {
+  id: "proposal-readback-scope",
+  async run({browser, url}) {
+    const reads = [];
+    let readFailure = false;
+    let wrongIdentity = false;
+    let releaseRead;
+    let readStarted;
+    let delayedRead;
+    const ui = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
+      await page.route(/\/api\/actions\/[^/?]+$/, async route => {
+        const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
+        if (id === "preview" || route.request().method() !== "GET") return route.fallback();
+        reads.push(id);
+        const stored = page.__loopxRuntime.actionProposals.get(id);
+        const proposal = stored && wrongIdentity ? {...stored, proposal_id: "wrong-operation"} : stored;
+        if (delayedRead) {
+          const wait = delayedRead; delayedRead = null;
+          readStarted(); await wait;
+        }
+        await route.fulfill({status: readFailure ? 503 : proposal ? 200 : 404,
+          json: readFailure ? {ok: false, error: "Readback offline"} : proposal
+            ? {ok: true, proposal} : {ok: false, error: "Proposal missing"}});
+      });
+    }});
+    try {
+      const {page, api} = ui;
+      await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
+      if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
+      await page.getByRole("button", {name: "创建 Goal", exact: true}).last().click();
+      const form = page.getByRole("dialog", {name: "创建新 Goal", exact: true});
+      await form.getByLabel("目标", {exact: true}).fill("Create independent Goal");
+      await form.getByLabel("完成标准", {exact: true}).fill("Preserve the reviewed operation");
+      await form.getByRole("button", {name: "检查配置"}).click();
+      const original = api.actionPreviews.at(-1);
+      assert.equal(original.context.goal_id, null, "Global creation keeps its manager authority context");
+      const drawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
+      await drawer.getByRole("button", {name: "创建 Goal 并开始首轮", exact: true}).waitFor();
+      // Allow a complete list refresh: a temporary mutation cache cannot be the fix.
+      await page.waitForTimeout(5500);
+      assert.ok(reads.includes(original.proposalId), "Opened original proposal is independently read back");
+      assert.equal(await drawer.getByText(/提案状态刷新失败/).count(), 0, "A valid original proposal is not missing from another conversation's list");
+      const foreign = {...page.__loopxRuntime.actionProposals.get(original.proposalId), proposal_id: "unrelated-manager-proposal", summary: "Unrelated manager proposal", normalized_parameters: {...original.normalized_parameters, title: "Unrelated manager Goal"}};
+      page.__loopxRuntime.actionProposals.set(foreign.proposal_id, foreign);
+      await page.waitForTimeout(5500);
+      assert.equal(await page.locator(".personal-proposal-row", {hasText: foreign.summary}).count(), 0, "Other manager proposals never join this Goal");
+      readFailure = true;
+      await drawer.getByText(/提案状态刷新失败/).waitFor({timeout: 10000});
+      readFailure = false;
+      await drawer.getByRole("button", {name: "重试状态读取", exact: true}).click();
+      await drawer.getByText(/提案状态刷新失败/).waitFor({state: "hidden"});
+      wrongIdentity = true;
+      await drawer.getByText(/提案状态刷新失败/).waitFor({timeout: 10000});
+      wrongIdentity = false;
+      await drawer.getByRole("button", {name: "重试状态读取", exact: true}).click();
+      await drawer.getByText(/提案状态刷新失败/).waitFor({state: "hidden"});
+      const saved = page.__loopxRuntime.actionProposals.get(original.proposalId);
+      page.__loopxRuntime.actionProposals.delete(original.proposalId);
+      await drawer.getByText(/提案状态刷新失败/).waitFor({timeout: 10000});
+      page.__loopxRuntime.actionProposals.set(original.proposalId, saved);
+      await drawer.getByRole("button", {name: "重试状态读取", exact: true}).click();
+      await drawer.getByText(/提案状态刷新失败/).waitFor({state: "hidden"});
+      await page.getByRole("button", {name: /关闭详情/}).click();
+      await page.locator(".personal-manager-link").first().click();
+      await page.reload({waitUntil: "networkidle"});
+      await page.getByRole("button", {name: "对话", exact: true}).first().click();
+      await page.getByText("另有 1 个待确认提议", {exact: true}).click();
+      await page.locator(".personal-proposal-row", {hasText: original.normalized_parameters.title}).click();
+      await drawer.getByRole("button", {name: "创建 Goal 并开始首轮", exact: true}).waitFor();
+      const started = new Promise(resolve => { readStarted = resolve; });
+      delayedRead = new Promise(resolve => { releaseRead = resolve; });
+      await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error("No delayed original read")), 10000))]);
+      await drawer.getByRole("button", {name: "创建 Goal 并开始首轮", exact: true}).focus();
+      await page.keyboard.press("Enter");
+      await drawer.getByText("已应用，LoopX 状态将刷新。", {exact: true}).waitFor();
+      releaseRead();
+      await page.waitForTimeout(500);
+      await drawer.getByText("已应用，LoopX 状态将刷新。", {exact: true}).waitFor();
+      assert.deepEqual(api.actionApplies, [original.proposalId], "Confirmation applies the original operation exactly once despite a late preview read");
+      await page.screenshot({path: resolve(outputDir, "proposal-original-scope.png"), animations: "disabled"});
+      const readCount = reads.length;
+      const readonlyUrl = new URL(url);
+      readonlyUrl.searchParams.set("statusUrl", new URL("/status.json", url).href);
+      await page.goto(readonlyUrl.href, {waitUntil: "networkidle"});
+      await page.getByText("只读", {exact: true}).first().waitFor();
+      await page.waitForTimeout(5500);
+      assert.equal(reads.length, readCount, "A read-only source performs no original-proposal reads");
+      assert.deepEqual(api.actionApplies, [original.proposalId], "Source switching performs no additional effect");
+    } catch (error) { throw new Error(error.message + "\n" + await ui.page.locator("body").innerText()); } finally { releaseRead?.(); await ui.close(); }
+    return {coverageEntries: ui.coverageEntries, note: "Cross-Goal global creation reads the original proposal, fences unrelated cards and preserves errors/retry/reload and keyboard confirmation."};
   },
 };

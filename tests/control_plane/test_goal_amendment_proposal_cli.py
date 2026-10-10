@@ -200,6 +200,54 @@ def test_cli_submits_proposal_and_lists_journal_json(
     assert list_payload["rows"][0]["journal_append_sequence"] == 1
 
 
+def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_fixture(tmp_path)
+    proposal = _proposal(paths)
+    proposal_json = _write_submit_inputs(tmp_path, proposal)
+
+    registry = json.loads(paths["registry"].read_text(encoding="utf-8"))
+    goal = next(item for item in registry["goals"] if item["id"] == GOAL_ID)
+    goal["repo"] = str(tmp_path / "missing-registered-project")
+    paths["registry"].write_text(json.dumps(registry), encoding="utf-8")
+
+    # A different current directory happens to contain a same-named Goal
+    # state. It must not replace the project selected by the registry.
+    foreign_project = tmp_path / "foreign-project"
+    foreign_state = foreign_project / Path(goal["state_file"])
+    foreign_state.parent.mkdir(parents=True)
+    foreign_state.write_text(
+        paths["state_file"].read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(foreign_project)
+
+    exit_code, payload, _ = _run_amendment_cli(
+        capsys,
+        paths["registry"],
+        "goal-amendment-proposal",
+        "--proposal-json",
+        str(proposal_json),
+        "--format",
+        "json",
+    )
+
+    journal = (
+        paths["runtime"]
+        / "goals"
+        / GOAL_ID
+        / "amendment-proposals"
+        / "journal.jsonl"
+    )
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert "goal state file is missing" in payload["error"]
+    assert not journal.exists()
+
+
 def test_cli_submit_and_list_share_one_registry_selector(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

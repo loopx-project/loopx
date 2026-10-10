@@ -13,6 +13,8 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 const GOAL_ID = "product-release";
 const PROPOSAL_ID = "proposal-team-plan-fixture";
 const MANAGER_PROPOSAL_ID = "proposal-team-plan-manager-fixture";
+const READBACK_PROPOSAL_ID = "proposal-team-plan-readback-fixture";
+const RETRY_PROPOSAL_ID = "proposal-team-plan-retry-fixture";
 // The manager-channel card is deliberately a different plan from the Goal-scoped
 // one, so a row in the manager conversation cannot be the Goal's card leaking in.
 const MANAGER_PROPOSAL_TITLE = "为 product-release 分配 3 项任务";
@@ -86,12 +88,15 @@ function teamPlanProposal() {
  * channel, and its card has to be confirmable in the conversation that produced
  * it -- not only under the Goal whose workspace it is scoped to.
  */
-function managerTeamPlanProposal() {
+function managerTeamPlanProposal({
+  proposalId = MANAGER_PROPOSAL_ID,
+  lanePrefix = "",
+} = {}) {
   const plan = teamPlanProposal();
   const parameters = plan.normalized_parameters;
   return {
     ...plan,
-    proposal_id: MANAGER_PROPOSAL_ID,
+    proposal_id: proposalId,
     summary: MANAGER_PROPOSAL_TITLE,
     context: { kind: "manager", goal_id: GOAL_ID },
     // Two independently stored drafts never share a timestamp, and the Goal view
@@ -106,9 +111,11 @@ function managerTeamPlanProposal() {
         ...parameters.plan,
         objective: "Ship the manager-channel intake",
         lanes: [
-          ...parameters.plan.lanes,
+          ...parameters.plan.lanes.map((lane) => lanePrefix
+            ? { ...lane, lane_id: `${lanePrefix}_${lane.lane_id}` }
+            : lane),
           {
-            lane_id: "a1a1a1a1a1a1",
+            lane_id: lanePrefix ? `${lanePrefix}_manager` : "a1a1a1a1a1a1",
             agent_id: "agent-manager",
             acceptance: "the manager lane reports its receipt",
             staffing: "ready",
@@ -120,6 +127,9 @@ function managerTeamPlanProposal() {
             },
           },
         ],
+        gaps: parameters.plan.gaps.map((gap) => lanePrefix
+          ? { ...gap, lane_id: `${lanePrefix}_${gap.lane_id}` }
+          : gap),
       },
     },
   };
@@ -252,24 +262,125 @@ export const teamPlanScenario = {
         fullPage: false,
         animations: "disabled",
       });
-      // A lost response occurs after the durable write. Retry must use the
-      // original operation, including its remaining gaps, without a new plan.
+      // A lost response occurs after the durable write. A successful list
+      // readback must return the stored result, not offer the already-committed
+      // operation for another apply.
       await managerCard.click();
+      const writesBeforeA = api.durableWriteCount;
       api.loseNextTeamPlanResponse = true;
       await drawer.getByRole("button", { name: "确认分配", exact: true }).click();
-      const retry = drawer.getByRole("button", { name: "重试分配", exact: true });
-      await retry.waitFor({ state: "visible" });
-      check(api.durableWriteCount === 2, "the uncertain manager apply committed once");
-      await retry.click();
-      await drawer.getByRole("heading", { name: "已恢复原分配结果", exact: true }).waitFor();
-      check(api.actionApplies.filter((id) => id === MANAGER_PROPOSAL_ID).length === 2, "retry uses the same proposal identity");
-      check(api.durableWriteCount === 2, "recovery does not create another assignment");
-      check((await drawer.innerText()).includes("待安排 · 尚未加入此目标"), "recovery preserves the original unassigned work");
-      const resultCard = page.locator(".personal-proposal-row", { hasText: "已恢复原分配结果" });
+      await drawer.getByText("已分配 2 项，1 项待安排", { exact: true }).waitFor({ state: "visible" });
+      check(api.actionApplies.filter((id) => id === MANAGER_PROPOSAL_ID).length === 1, "the uncertain manager apply is not retried after applied readback");
+      check(api.durableWriteCount === writesBeforeA + 1, "the uncertain manager apply committed once");
+      check(await drawer.getByRole("button", { name: "重试原操作", exact: true }).count() === 0, "an applied readback does not expose assignment retry");
+      check((await drawer.innerText()).includes("待安排 · 尚未加入此目标"), "the applied readback preserves the original unassigned work");
+      const resultCard = page.locator(".personal-proposal-row", { hasText: "团队分配 · 已记录" });
       await drawer.locator(".personal-drawer-close").click();
       await resultCard.waitFor({ state: "visible" });
-      check((await resultCard.innerText()).includes("已恢复原分配结果"), "closing details keeps the assignment result in the original conversation");
+      check((await resultCard.innerText()).includes("已分配 2 项，1 项待安排"), "closing details keeps the assignment result in the original conversation");
       check(!(await resultCard.innerText()).includes("team.plan"), "the applied card uses a user-facing label instead of a protocol kind");
+
+      // A one-shot failure of the authoritative list read leaves only the
+      // cached preview. It must not grant another apply until readback works.
+      const readbackContext = await openWorkspacePage(browser, url, {
+        apiOptions: { initialActionProposals: [managerTeamPlanProposal({
+          proposalId: READBACK_PROPOSAL_ID,
+          lanePrefix: "readback",
+        })] },
+      });
+      try {
+        const { api: readbackApi, page: readbackPage } = readbackContext;
+        await readbackPage.locator(".personal-manager-link").first().click();
+        await readbackPage.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+        const readbackDrawer = readbackPage.locator('.personal-context-drawer[data-context-kind="proposal"]');
+        const readbackCard = readbackPage.locator(".personal-proposal-row", { hasText: MANAGER_PROPOSAL_TITLE });
+        await readbackCard.waitFor({ state: "visible" });
+        await readbackCard.click();
+        const writesBeforeB = readbackApi.durableWriteCount;
+        readbackApi.loseNextTeamPlanResponse = true;
+        readbackApi.failActionListAfterLostTeamPlanResponse = true;
+        await readbackDrawer.getByRole("button", { name: "确认分配", exact: true }).click();
+        const readbackNotice = readbackPage.getByTestId("personal-action-readback-error");
+        await readbackNotice.waitFor({ state: "visible" });
+        await readbackDrawer.locator(".personal-proposal-state.is-error").waitFor({ state: "visible" });
+        check(
+          (await readbackDrawer.locator(".personal-proposal-state.is-error").innerText()).includes("尚不能确认完成")
+            && (await readbackDrawer.locator(".personal-proposal-state.is-error").innerText()).includes("当前提案不允许重试分配"),
+          "failed authoritative readback is shown as unverified and unavailable",
+        );
+        check(await readbackDrawer.getByRole("button", { name: "确认分配", exact: true }).count() === 0, "cached preview after a failed readback cannot offer first apply again");
+        check(await readbackDrawer.getByRole("button", { name: "重试原操作", exact: true }).count() === 0, "cached preview after a failed readback cannot authorize assignment retry");
+        check(await readbackDrawer.getByRole("button", { name: "重试分配", exact: true }).count() === 0, "cached preview does not expose the Team Plan retry label");
+        check(readbackApi.actionApplies.filter((id) => id === READBACK_PROPOSAL_ID).length === 1, "readback failure does not send another apply");
+        check(readbackApi.durableWriteCount === writesBeforeB + 1, "the readback-failure case committed once");
+        await readbackNotice.getByRole("button", { name: "重试状态读取", exact: true }).click();
+        await readbackDrawer.getByText("已分配 2 项，1 项待安排", { exact: true }).waitFor({ state: "visible" });
+        check(readbackApi.actionApplies.filter((id) => id === READBACK_PROPOSAL_ID).length === 1, "state-read retry resolves the original apply without reposting");
+        check(readbackApi.durableWriteCount === writesBeforeB + 1, "state-read retry performs no durable write");
+        check(await readbackDrawer.getByRole("button", { name: "重试原操作", exact: true }).count() === 0, "applied readback still withholds assignment retry");
+      } finally {
+        await readbackContext.close();
+      }
+
+      // This distinct proposal models the backend's typed post-commit failure:
+      // only this stored failed result permits retrying the same identity.
+      const retryContext = await openWorkspacePage(browser, url, {
+        apiOptions: { initialActionProposals: [managerTeamPlanProposal({
+          proposalId: RETRY_PROPOSAL_ID,
+          lanePrefix: "retry",
+        })] },
+      });
+      try {
+        const { api: retryApi, page: retryPage } = retryContext;
+        await retryPage.locator(".personal-manager-link").first().click();
+        await retryPage.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+        const retryDrawer = retryPage.locator('.personal-context-drawer[data-context-kind="proposal"]');
+        const retryCard = retryPage.locator(".personal-proposal-row", { hasText: MANAGER_PROPOSAL_TITLE });
+        await retryCard.waitFor({ state: "visible" });
+        await retryCard.click();
+        const writesBeforeC = retryApi.durableWriteCount;
+        retryApi.failNextTeamPlanAfterCommit = RETRY_PROPOSAL_ID;
+        await retryDrawer.getByRole("button", { name: "确认分配", exact: true }).click();
+        const retry = retryDrawer.getByRole("button", { name: "重试原操作", exact: true });
+        try {
+          await retry.waitFor({ state: "visible", timeout: 5_000 });
+        } catch (error) {
+          throw new Error(`${error.message}; proposal=${JSON.stringify(retryPage.__loopxRuntime.actionProposals.get(RETRY_PROPOSAL_ID))}; drawer=${(await retryDrawer.innerText()).slice(0, 1200)}; applies=${JSON.stringify(retryApi.actionApplies)}; errors=${JSON.stringify(retryContext.errors)}`);
+        }
+        check(retryApi.actionApplies.filter((id) => id === RETRY_PROPOSAL_ID).length === 1, "the retryable failure keeps the original proposal ID");
+        check(retryApi.durableWriteCount === writesBeforeC + 1, "the retryable failure follows one durable commit");
+        const failedRetry = retryPage.__loopxRuntime.actionProposals.get(RETRY_PROPOSAL_ID);
+        check(
+          failedRetry?.status === "failed"
+            && failedRetry?.failure?.error_code === "team_plan_commit_failed"
+            && failedRetry?.failure?.retry_safe === true
+            && failedRetry?.expected_state_fingerprint === "fixture-team-plan-r1"
+            && failedRetry?.summary === MANAGER_PROPOSAL_TITLE
+            && failedRetry?.normalized_parameters?.plan?.lanes?.[0]?.lane_id === "retry_lane_intake",
+          "the failed readback preserves backend failure semantics and the original plan identity",
+        );
+        const previewCountBeforeRetry = retryApi.actionPreviews.length;
+        await retry.click();
+        await retryDrawer.getByRole("heading", { name: "已恢复原分配结果", exact: true }).waitFor();
+        check(retryApi.actionApplies.filter((id) => id === RETRY_PROPOSAL_ID).length === 2, "retry applies the same failed proposal once");
+        check(retryApi.durableWriteCount === writesBeforeC + 1, "retry recovers the committed receipt without a second write");
+        check(retryApi.actionPreviews.length === previewCountBeforeRetry, "recovery does not create a replacement proposal");
+        const recoveredRetry = retryPage.__loopxRuntime.actionProposals.get(RETRY_PROPOSAL_ID);
+        check(
+          recoveredRetry?.proposal_id === RETRY_PROPOSAL_ID
+            && recoveredRetry?.expected_state_fingerprint === "fixture-team-plan-r1"
+            && recoveredRetry?.receipt?.projection_verified === true
+            && recoveredRetry?.receipt?.outcome === "team_plan_commit_recovered"
+            && recoveredRetry?.receipt?.resource_ids?.goal_id === GOAL_ID
+            && recoveredRetry?.receipt?.lanes?.length === 2
+            && recoveredRetry?.receipt?.gap_count === 1
+            && recoveredRetry?.receipt?.gap_lanes?.[0]?.lane_id === "retry_lane_review",
+          "recovery returns the original verified Goal, lanes, and gap receipt",
+        );
+      } finally {
+        await retryContext.close();
+      }
+
       await context.checkpointCoverage();
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
@@ -282,9 +393,9 @@ export const teamPlanScenario = {
         animations: "disabled",
       });
       await resultCard.click();
-      await drawer.getByRole("heading", { name: "已恢复原分配结果", exact: true }).waitFor();
-      check(api.actionApplies.filter((id) => id === MANAGER_PROPOSAL_ID).length === 2, "reload reads back the result without reapplying the team plan");
-      check(api.durableWriteCount === 2, "reopening the assignment result writes no work");
+      await drawer.getByText("已分配 2 项，1 项待安排", { exact: true }).waitFor({ state: "visible" });
+      check(api.actionApplies.filter((id) => id === MANAGER_PROPOSAL_ID).length === 1, "reload reads back the result without reapplying the team plan");
+      check(api.durableWriteCount === writesBeforeA + 1, "reopening the assignment result writes no work");
       await drawer.locator(".personal-drawer-close").click();
       const managerResult = page.getByRole("region", {name: "团队结果回到管家"});
       await managerResult.getByText("团队任务已分配，尚无可核验的已采用结果。").waitFor();

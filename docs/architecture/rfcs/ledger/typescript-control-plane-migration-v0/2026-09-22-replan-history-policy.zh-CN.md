@@ -43,3 +43,37 @@ state 重用。既有同 UID runtime 是信任边界，不是远端上传服务�
 O(history) 内存/时间成本。后续 S7/R7 容量切片应测量 bridge 字节、峰值内存和
 p95 结算时间，再以完整历史为 oracle 验收 checkpoint/cursor 归约，覆盖较旧 ACK、
 缺失归属和 Turn 去重。不能为使结算成功而归档/截断历史或提高阈值。
+
+## 有效 Turn 复核节奏：验收进行中
+
+同一个 open Todo 跨越多轮已结算工作时，按已完成 Todo 数触发可能长期延后复核。
+降低历史运行记录阈值不能解决它：有 classification 的记录不等于已接受的结算。
+候选实现复用 work-item 历史归约器，对每次投影的一份不可变快照调用 quota
+结算读取 owner；Python 只传递显式节奏及来源，不解释回执。
+
+Goal 显式选项使用独立的 `replan_after_effective_turns` 字段，既有完成 Todo
+配置保持原单位。隔离的真实 CLI 验证覆盖 open Todo 连续结算、未扣记写回不计数、
+扣记缺少回执不计数、有效负证据计数，以及 quota/写回义务 ID 一致。
+peer ACK 和重试仍由既有历史 owner 处理；未启用新选项的调用保持旧行为。
+
+候选配置在既有 cadence capability 内扩展了带显式计数单位的机器 v1 schema；
+读取 v0 时保留原存储与单位。打包后的中英文设备/Goal 编辑器已通过真实、锁定 revision
+的 handler，覆盖旧值回读、v1 迁移、非法输入不写入、Goal 覆盖及清除后恢复继承，
+并检查窄屏和键盘焦点。共享浏览器 fixture 在接收写入前声明并验证隔离的同步目标；
+仅设置 HTTP server runtime 不足以隔离源 registry 的路由。
+
+exact-source 读取复用既有 quota admission，并借用外层 refresh 锁；过期实例的
+ACK 不能清空当前实例计数，缺失或过期 admission 会被拒绝。这只验收共享读取
+边界，不表示新增 source-session 产品入口。
+
+合成批量测试暴露了每次显式读取前重复过滤全量历史的成本，V8 剖析将其定位到
+quota readback owner。先复用既有 Turn 索引再过滤，消除了重复扫描；最新 Turn
+推断仍读取完整的 owner 历史。同输入 1,000 Turn 热态样本从 177–195 ms 降为
+13–19 ms；这些本地样本不代表全量 p95，也不证明求解分数提升。
+
+Harbor/SForge 现可通过既有 Goal CLI 传递显式有效 Turn 节律，并在执行前核对
+持久化的单位及数值。适配器复用一处配置/回执映射，Python 不增加计数决策源。
+隔离真实 CLI 的 bootstrap、覆盖、回滚已通过；适配器检查覆盖旧默认值、
+不支持的 profile 和错误单位读回。完整 provider 安装执行、维护者合并及匹配
+效果实验仍待验收，活动实验保持冻结。SForge planned task entry 是另一项尚未
+闭合的适配器流程。

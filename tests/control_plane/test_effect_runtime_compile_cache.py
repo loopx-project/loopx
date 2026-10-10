@@ -110,8 +110,9 @@ def test_compile_preload_is_part_of_the_source_fingerprint(tmp_path: Path, monke
     assert effect_runtime._runtime_fingerprint() != original
 
 
+@pytest.mark.parametrize("retirement_delay", ["none", "claim_open", "claim_cleanup"])
 def test_shutdown_flushes_compilation_before_retiring_the_locator(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, retirement_delay: str,
 ) -> None:
     """A retired locator lets its fixture clean up; exit must not write later."""
     runtime = tmp_path / "runtime"
@@ -133,6 +134,27 @@ def test_shutdown_flushes_compilation_before_retiring_the_locator(
         "};\n",
         encoding="utf-8",
     )
+    if retirement_delay != "none":
+        # Expose both creation and deletion after locator retirement.
+        operation = "open" if retirement_delay == "claim_open" else "readFile"
+        with delay.open("a", encoding="utf-8") as preload:
+            preload.write(
+                "import fsp from 'node:fs/promises';\n"
+                "import { syncBuiltinESMExports } from 'node:module';\n"
+                f"const savedRm = fsp.rm, savedOperation = fsp.{operation};\n"
+                "let retired = false;\n"
+                "fsp.rm = async (path, ...args) => {\n"
+                "  const result = await savedRm(path, ...args);\n"
+                "  if (String(path).endsWith('.json')) retired = true;\n"
+                "  return result;\n"
+                "};\n"
+                f"fsp.{operation} = async (path, ...args) => {{\n"
+                "  if (retired && String(path).includes('.ts-effect.lock.claim.'))\n"
+                "    await new Promise(resolve => setTimeout(resolve, 200));\n"
+                "  return savedOperation(path, ...args);\n"
+                "};\n"
+                "syncBuiltinESMExports();\n"
+            )
     monkeypatch.setenv("NODE_OPTIONS", "--import=" + delay.as_uri())
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
     children = []
@@ -150,6 +172,9 @@ def test_shutdown_flushes_compilation_before_retiring_the_locator(
         assert len(children) == 1
         assert effect_runtime.restart_effect_runtime()["status"] == "stopped"
         assert children[0].poll() is None, "the fixture must expose the pre-exit interval"
+        assert not list(runtime.glob("*.ts-effect.lock*")), (
+            "stop must wait until locator retirement and claim cleanup complete"
+        )
         assert any(p.is_file() for p in (runtime / "compile-cache").rglob("*")), (
             "cache must be flushed before the locator authorizes directory cleanup"
         )

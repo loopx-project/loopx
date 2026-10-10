@@ -6,6 +6,8 @@ from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
+from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from ..control_plane.coordination.local_authority import (
     local_authority_is_promoted,
     read_canonical_todo_fields_if_promoted,
@@ -40,6 +42,7 @@ from ..control_plane.goals.task_planning import (
     render_task_planning_packet,
 )
 from ..control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
@@ -75,6 +78,7 @@ from .todo_event import (
 from .post_writeback import (
     PostWritebackProjectionBuilder,
     dispatch_committed_cli_post_writeback_hooks,
+    post_writeback_source_failure,
 )
 from ..control_plane.agents.capability_gate import (
     runtime_capabilities_for_cli_projection,
@@ -149,12 +153,16 @@ def _completion_settlement_plan(
                 path_args += argument
     prefix = (f"loopx --registry {shlex.quote(str(registry_path))}"
               f" --runtime-root {shlex.quote(str(runtime_root))}")
-    return build_turn_scoped_cli_settlement_plan(
+    plan = build_turn_scoped_cli_settlement_plan(
         goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
         turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
         scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
         goal_ref=goal_ref,
     ).as_dict()
+
+    from ..capabilities.explore.turn_context import project_settlement_attachment
+
+    return project_settlement_attachment(plan, registry_path=registry_path)
 
 
 def _validated_replan_successor_obligation(
@@ -225,6 +233,12 @@ def _validated_replan_successor_obligation(
         agent_id=args.claimed_by,
         goal_id=args.goal_id,
         registry_goal=registry_goal,
+        effective_turn_cadence=effective_turn_cadence_context(
+            resolve_todo_replan_cadence_goal(
+                registry_goal or {"id": args.goal_id}, runtime_root,
+            ), runtime_root,
+            registry_path=registry_path,
+        ),
     )
     current = str((obligation or {}).get("obligation_id") or "").strip()
     if not current:
@@ -291,6 +305,8 @@ def handle_todo_command(
                 "`loopx todo claim`, `loopx todo update`, or another command shown "
                 "by `loopx todo --help`"
             )
+        if args.todo_command == "claim":
+            validate_todo_claim_options(args)
         validate_shared_todo_options(args)
         validate_capability_gap_options(args)
         if getattr(args, "turn_instance_id", None):
@@ -437,7 +453,6 @@ def handle_todo_command(
                 if not payload.get("dry_run"):
                     payload["host_action"] = "end_current_heartbeat"
         elif args.todo_command == "claim":
-            validate_todo_claim_options(args)
             payload = update_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -675,6 +690,7 @@ def handle_todo_command(
                 todo_id=args.todo_id,
                 role=args.role,
                 reason=args.reason,
+                successor_todo_ids=args.successor_todo_ids,
                 next_agent_todo=args.next_agent_todo,
                 next_user_todo=args.next_user_todo,
                 next_user_task_class=args.next_user_task_class,
@@ -715,7 +731,9 @@ def handle_todo_command(
     except Exception as exc:
         from ..usage_ping import capture_failure
         capture_failure(exc)
-        payload = todo_error_payload(args, exc)
+        payload = todo_error_payload(
+            args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+        )
     append_todo_rollout_event(
         payload,
         args=args,
@@ -767,37 +785,69 @@ def handle_todo_command(
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()
+        receipt_id = payload.get("completion_receipt_id")
         if committed_at:
-            # Capability evidence comes only from a Turn journal the TS
-            # journal owner validated against this completion's full
-            # settlement identity (goal/agent/binding/turn/effect): the
-            # journaled envelope froze what this exact Turn's scheduler
-            # observed. No fully-bound journal means no evidence, and gated
-            # successors stay excluded (fail closed).
-            observed = turn_journal_observed_capabilities(
-                resolve_runtime_root(load_registry(registry_path), runtime_root_arg),
-                settlement_identity=identity,
-            )
-            projected = runtime_capabilities_for_cli_projection(observed)
-            if projected:
-                payload["available_capabilities"] = projected
-            payload["post_writeback_hooks"] = (
-                dispatch_committed_cli_post_writeback_hooks(
-                    payload=payload,
+            try:
+                admission = FirstPartyHostGoalAdmission.for_plan(
                     registry_path=registry_path,
-                    runtime_root_arg=runtime_root_arg,
                     goal_id=args.goal_id,
-                    event_kind="todo_complete",
-                    identity=identity,
-                    state_version=committed_at,
-                    committed_at=committed_at,
-                    hooks=post_writeback_hooks,
-                    projection_builder=post_writeback_projection_builder,
+                    planned_goal_ref=goal_ref,
                 )
+                with admission.current_lifetime(
+                    operation="todo_post_writeback_hooks",
+                ):
+                    # The source lifetime lock keeps the journal evidence and
+                    # its consumers bound to the same exact Goal instance.
+                    observed = turn_journal_observed_capabilities(
+                        resolve_runtime_root(
+                            load_registry(registry_path),
+                            runtime_root_arg,
+                        ),
+                        settlement_identity=identity,
+                        goal_ref=goal_ref,
+                    )
+                    projected = runtime_capabilities_for_cli_projection(observed)
+                    if projected:
+                        payload["available_capabilities"] = projected
+                    payload["post_writeback_hooks"] = (
+                        dispatch_committed_cli_post_writeback_hooks(
+                            payload=payload,
+                            registry_path=registry_path,
+                            runtime_root_arg=runtime_root_arg,
+                            goal_id=args.goal_id,
+                            event_kind="todo_complete",
+                            identity=identity,
+                            state_version=receipt_id or committed_at,
+                            receipt_id=receipt_id,
+                            committed_at=committed_at,
+                            hooks=post_writeback_hooks,
+                            projection_builder=post_writeback_projection_builder,
+                        )
+                    )
+            except Exception:
+                # Optional post-writeback composition cannot invalidate or
+                # repeat the Todo completion that already committed above.
+                payload.pop("available_capabilities", None)
+                payload["post_writeback_hooks"] = post_writeback_source_failure(
+                    post_writeback_hooks
+                )
+    output_format = format_name or str(getattr(args, "format", None) or "markdown")
+    if (args.todo_command == "list" and payload.get("ok")
+            and not args.todo_id and not args.todo_thin and output_format == "json"):
+        try:
+            payload = effect_runtime_result(
+                "todo.context.page", {"list_payload": payload},
+                large_local_snapshot=True,
+            )
+        except Exception as exc:
+            from ..usage_ping import capture_failure
+            capture_failure(exc)
+            payload = todo_error_payload(
+                args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
             )
     print_payload(
         payload,
-        format_name or str(getattr(args, "format", None) or "markdown"),
+        output_format,
         renderer,
     )
     return 0 if payload.get("ok") else 1

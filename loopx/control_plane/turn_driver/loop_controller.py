@@ -134,6 +134,7 @@ class ValidatedTurnReceipt:
     __slots__ = (
         "lineage",
         "host_failure",
+        "task_failure",
         "result_kind",
         "settlement_effect_id",
         "status",
@@ -149,6 +150,7 @@ class ValidatedTurnReceipt:
         lineage: Mapping[str, str],
         turn_key: str | None,
         host_failure: Mapping[str, Any] | None = None,
+        task_failure: Mapping[str, Any] | None = None,
         settlement_effect_id: str | None = None,
         todo_completion: Mapping[str, Any] | None = None,
     ) -> None:
@@ -161,6 +163,7 @@ class ValidatedTurnReceipt:
         }
         self.turn_key = turn_key
         self.host_failure = dict(host_failure or {}) or None
+        self.task_failure = dict(task_failure or {}) or None
         self.settlement_effect_id = settlement_effect_id
         self.todo_completion = dict(todo_completion or {}) or None
 
@@ -226,7 +229,14 @@ class ValidatedTurnReceipt:
                 todo_completion,
                 expected_todo_id=str(lineage["todo_id"]),
             )
+        from ..effect_runtime import effect_runtime_result
+        task_failure = effect_runtime_result("turn.task_validation_failure", {
+            "result_kind": result_kind.value, "status": execution.get("status"),
+            "receipt": dict(receipt), "validation": execution.get("validation"),
+            **({"validation_stage": execution["validation_stage"]} if "validation_stage" in execution else {}),
+        })["failure"] if result_kind is LoopXTurnResultKind.VALIDATION_FAILED and "validation_stage" in execution else None
         return cls(
+            task_failure=task_failure,
             result_kind=result_kind,
             status=status,
             lineage=lineage,
@@ -244,6 +254,7 @@ class ValidatedTurnReceipt:
             "lineage": dict(self.lineage),
             "turn_key": self.turn_key,
             "settlement_effect_id": self.settlement_effect_id,
+            **({"task_failure": dict(self.task_failure)} if self.task_failure else {}),
             **(
                 {"host_failure": dict(self.host_failure)}
                 if self.host_failure
@@ -286,7 +297,13 @@ def _qualified_material_effect_id(
     if any(item.get("status") != "committed" for item in receipts):
         raise ValueError("material Turn settlement receipts must be committed")
     effects = _mapping(execution.get("effects"))
-    if effects.get("state_written") is not True or effects.get("quota_spent") is not True:
+    committed_replay = (execution.get("replayed") is True and execution.get("dry_run") is False
+        and execution.get("status") == "committed" and execution.get("quota_slot_spend_count") == 1
+        and effects.get("host_invoked") is False
+        and effects.get("state_written") is False and effects.get("quota_spent") is False)
+    # A replay has no new effects; the ordered committed receipts above prove
+    # the original durable settlement under the same transaction identity.
+    if not committed_replay and (effects.get("state_written") is not True or effects.get("quota_spent") is not True):
         raise ValueError("material Turn execution is missing durable effect evidence")
     scheduler = _mapping(execution.get("scheduler"))
     if scheduler.get("completed") is not True:
@@ -442,6 +459,8 @@ class _ControllerInputs:
     def fact(self, name: str) -> str | bool:
         if name == "receipt_present":
             return self.receipt is not None
+        if name == "validation_recovery":
+            return str((self.receipt.task_failure or {}).get("recovery_kind") or "absent") if self.receipt else "absent"
         if name == "receipt_kind":
             return self.receipt.result_kind.value if self.receipt else "absent"
         if name == "route":

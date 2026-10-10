@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "1.2.4"
+version = "1.3.1"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,10 +23,22 @@ Issues = "https://github.com/loopx-project/loopx/issues"
 Changelog = "https://github.com/loopx-project/loopx/releases"
 
 [project.optional-dependencies]
+ego-source-reader = [
+  "mcp==1.28.1",
+]
+public-source-reader = [
+  "mcp==1.28.1",
+  "resvg-py==0.5.0",
+  "defusedxml==0.7.1",
+  "pillow>=11,<13",
+]
 deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
 ]
 test = [
+  "resvg-py==0.5.0",
+  "defusedxml==0.7.1",
+  "pillow>=11,<13",
   "jsonschema>=4.23,<5",
   "mcp==1.28.1",
   "pyyaml>=6,<7",
@@ -66,6 +78,7 @@ include = ["loopx*"]
 "loopx.control_plane.work_items" = ["*.ts"]
 "*" = ["README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]
 "loopx.capabilities.content_ops" = ["templates/*.json", "experiences/*.json"]
+"loopx.capabilities.pr_review_queue" = ["experiences/*/*/*.json", "experiences/*.md"]
 "loopx.capabilities.manager_context" = ["skills/loopx-manager/SKILL.md"]
 "loopx.extensions.lark" = ["extension.toml", "README.md", "docs/*.md"]
 "loopx.extensions.openviking_periodic_report" = ["extension.toml"]
@@ -77,6 +90,20 @@ include = ["loopx*"]
 "loopx.kunluncode_goal_mode" = ["README.md"]
 
 [tool.setuptools.data-files]
+"share/loopx/skills/loopx-material" = [
+  "skills/loopx-material/SKILL.md",
+  "skills/loopx-material/.loopx-skill-scope",
+]
+"share/loopx/skills/loopx-material/agents" = [
+  "skills/loopx-material/agents/openai.yaml",
+]
+"share/loopx/skills/loopx-change-quality" = [
+  "skills/loopx-change-quality/SKILL.md",
+  "skills/loopx-change-quality/.loopx-skill-scope",
+]
+"share/loopx/skills/loopx-change-quality/agents" = [
+  "skills/loopx-change-quality/agents/openai.yaml",
+]
 "share/loopx/skills/loopx-performance-diagnosis" = [
   "skills/loopx-performance-diagnosis/SKILL.md",
   "skills/loopx-performance-diagnosis/.loopx-skill-scope",

@@ -3,9 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import secrets
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -22,6 +20,14 @@ from typing import IO, Any
 
 from ..file_lock import process_is_alive
 from .runtime.file_reads import iter_binary_file_reads
+from .runtime.node_probe import (
+    HOST_PERMISSION_RECOMMENDATION,
+    MINIMUM_NODE_VERSION as MINIMUM_NODE_VERSION,
+    MINIMUM_NODE_VERSION_TEXT as MINIMUM_NODE_VERSION_TEXT,
+    STARTUP_READY_TIMEOUT_SECONDS as STARTUP_READY_TIMEOUT_SECONDS,
+    node_probe_remediation,
+    probe_node as _probe_node,
+)
 from .content_digest import BARE_SHA256_PATTERN
 
 EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION = "loopx_effect_runtime_request_v0"
@@ -31,23 +37,23 @@ EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
     "loopx_effect_runtime_startup_error_v0"
 )
-MINIMUM_NODE_VERSION = (22, 22, 3)
-MINIMUM_NODE_VERSION_TEXT = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
+    "coordination.local_authority.todo_source",
     "todo.context.page",
-    "goal.checkpoint_read_context.source",
-    "goal.checkpoint_read_context.evaluate",
+    "work_item.context.project",
+    "goal.checkpoint_read_context.resolve",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
     "performance_diagnosis.inspect",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
-STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+RUNTIME_LOCATOR_PERMISSION_RETRIES = 3
+RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
 # another 5 seconds for the provider lock. Keep the client connected through
@@ -55,7 +61,6 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # turns an in-flight write into an avoidable ambiguous response.
 CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
-_NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 
@@ -221,6 +226,23 @@ class EffectRuntimeStartupError(RuntimeError):
         self.diagnostic_code = diagnostic_code
 
 
+class EffectRuntimeHostPermissionError(EffectRuntimeStartupError):
+    """The host denied local runtime access before any request was dispatched."""
+
+    recommended_action = HOST_PERMISSION_RECOMMENDATION
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Host permission denied access to the local TypeScript Effect runtime "
+            "before request dispatch; no capability operation was executed",
+            diagnostic_code="runtime_host_permission_denied",
+        )
+
+
+class EffectRuntimeNodeProbeError(EffectRuntimeStartupError):
+    """A pre-dispatch toolchain observation requires caller recovery."""
+
+
 class EffectRuntimeResponseAmbiguous(EffectRuntimeStartupError):
     """The request may have executed even though its response was lost."""
 
@@ -377,38 +399,16 @@ def _runtime_server_path() -> Path:
 
 
 def _node_executable() -> str:
-    status, executable, _version = _probe_node()
-    if status != "ready" or executable is None:
-        raise EffectRuntimeStartupError(
-            f"LoopX Effect runtime requires Node.js {MINIMUM_NODE_VERSION_TEXT} "
-            "or newer",
-            diagnostic_code="node_unavailable",
+    probe = _probe_node(timeout=STARTUP_READY_TIMEOUT_SECONDS)
+    if not probe.ready:
+        if probe.diagnostic_code == "runtime_host_permission_denied":
+            raise EffectRuntimeHostPermissionError()
+        raise EffectRuntimeNodeProbeError(
+            probe.failure_message,
+            diagnostic_code=str(probe.diagnostic_code),
         )
-    return executable
-
-
-def _probe_node() -> tuple[str, str | None, str | None]:
-    executable = shutil.which("node")
-    if executable is None:
-        return "missing", None, None
-    try:
-        completed = subprocess.run(
-            [executable, "--version"],
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=2,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return "probe_failed", executable, None
-    match = _NODE_VERSION_RE.fullmatch(completed.stdout.strip())
-    version = tuple(int(part) for part in match.groups()) if match else None
-    if completed.returncode != 0 or version is None:
-        return "probe_failed", executable, None
-    version_text = ".".join(str(part) for part in version)
-    if version < MINIMUM_NODE_VERSION:
-        return "unsupported", executable, version_text
-    return "ready", executable, version_text
+    assert probe.executable is not None
+    return probe.executable
 
 
 def _pid_is_alive(value: object) -> bool:
@@ -443,9 +443,27 @@ def _start_lock_holder_pid(path: Path) -> int | None:
 
 
 def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
+    for attempt in range(RUNTIME_LOCATOR_PERMISSION_RETRIES + 1):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            break
+        except PermissionError as exc:
+            # On Windows, opening a directory as a file reports access denied.
+            # Defer that occupied-locator case to the managed server, which can
+            # publish the shared filesystem diagnostic through its startup envelope.
+            # A short-lived denial can also overlap locator publication/retirement.
+            if path.is_dir() and not path.is_symlink():
+                return None
+            if attempt == RUNTIME_LOCATOR_PERMISSION_RETRIES:
+                # Keep symlinks and persistently unreadable metadata on the
+                # host-permission path after the bounded retry window.
+                raise EffectRuntimeHostPermissionError() from exc
+            time.sleep(STARTUP_POLL_SECONDS)
+        except (FileNotFoundError, OSError):
+            return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -459,6 +477,26 @@ def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
     ):
         return None
     return payload
+
+
+def _wait_for_runtime_locator_turnover(
+    path: Path,
+    *,
+    fingerprint: str,
+    observed: Mapping[str, Any] | None,
+    timeout: float,
+) -> None:
+    """Give a retiring runtime time to remove or replace its locator."""
+
+    if not isinstance(observed, Mapping):
+        return
+    token = observed.get("token")
+    deadline = time.monotonic() + min(timeout, RUNTIME_RETRY_SETTLE_SECONDS)
+    while time.monotonic() < deadline:
+        current = _read_info(path, fingerprint=fingerprint)
+        if current is None or current.get("token") != token:
+            return
+        time.sleep(STARTUP_POLL_SECONDS)
 
 
 _RUNTIME_IDENTITY_TEXT_FIELDS = (
@@ -506,7 +544,9 @@ def _serving_token(path: Path) -> tuple[bool, str | None]:
     """Report whether a runtime is still publishing itself at ``path``.
 
     The managed runtime removes its info file as part of its shutdown
-    handshake, so the file is the authoritative stop signal. The pid is not:
+    handshake. Its mutation lock and cleanup files must also retire before
+    namespace cleanup.
+    A readable replacement token proves this runtime no longer serves. The pid is not:
     an exited runtime whose parent has not reaped it still answers a liveness
     probe, which would otherwise report a completed restart as pending.
     """
@@ -520,9 +560,26 @@ def _serving_token(path: Path) -> tuple[bool, str | None]:
         # until the deadline instead of claiming a restart that did not happen.
         return True, None
     if not isinstance(payload, dict):
-        return False, None
+        return True, None
     token = payload.get("token")
     return True, token if isinstance(token, str) else None
+
+
+def _locator_retirement_pending(info_path: Path) -> bool:
+    """Observe the existing TS lock namespace, including its cleanup files."""
+    lock_name = info_path.name + ".ts-effect.lock"
+    try:
+        return any(
+            path.name == lock_name
+            or path.name.startswith(lock_name + ".claim.")
+            or path.name.startswith(lock_name + ".released.")
+            for path in info_path.parent.iterdir()
+        )
+    except FileNotFoundError:
+        return False
+    except OSError:
+        # An unreadable directory cannot prove that retirement finished.
+        return True
 
 
 def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
@@ -568,7 +625,10 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
     stopped = False
     while time.monotonic() < deadline:
         published, published_token = _serving_token(info_path)
-        if not published or published_token != serving_token:
+        if published and published_token is not None and published_token != serving_token:
+            stopped = True
+            break
+        if not published and not _locator_retirement_pending(info_path):
             stopped = True
             break
         if not _pid_is_alive(pid):
@@ -640,9 +700,13 @@ def _request_with_info(
             )
         chunks: list[bytes] = []
         size = 0
-        with socket.create_connection(
-            (str(info["host"]), int(info["port"])), timeout=timeout
-        ) as connection:
+        try:
+            connection = socket.create_connection(
+                (str(info["host"]), int(info["port"])), timeout=timeout
+            )
+        except PermissionError as exc:
+            raise EffectRuntimeHostPermissionError() from exc
+        with connection:
             try:
                 connection.settimeout(timeout)
                 # sendall may have delivered a prefix before it raises. From this
@@ -833,7 +897,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     pass
                 continue
             try:
-                if time.time() - lock.stat().st_mtime > 10:
+                if holder_pid is None and time.time() - lock.stat().st_mtime > 10:
                     lock.unlink(missing_ok=True)
             except OSError:
                 pass
@@ -881,6 +945,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     start_new_session=os.name != "nt",
                     close_fds=True,
                 )
+            except PermissionError as exc:
+                raise EffectRuntimeHostPermissionError() from exc
             except OSError as exc:
                 raise EffectRuntimeStartupError(
                     "TypeScript Effect runtime process could not be launched",
@@ -888,7 +954,12 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                 ) from exc
             ready_deadline = time.monotonic() + STARTUP_READY_TIMEOUT_SECONDS
             while time.monotonic() < ready_deadline:
-                info = _read_info(info_path, fingerprint=fingerprint)
+                try:
+                    info = _read_info(info_path, fingerprint=fingerprint)
+                except EffectRuntimeHostPermissionError:
+                    if process.poll() is None:
+                        process.terminate()
+                    raise
                 if info is not None:
                     return info
                 exit_code = process.poll()
@@ -935,9 +1006,12 @@ def effect_runtime_request(
     for attempt in range(2 if retry_safe else 1):
         info: dict[str, Any] | None = None
         try:
-            info = _read_info(info_path, fingerprint=fingerprint)
-            if info is None:
-                info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
+            try:
+                info = _read_info(info_path, fingerprint=fingerprint)
+                if info is None:
+                    info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
+            except PermissionError as exc:
+                raise EffectRuntimeHostPermissionError() from exc
             return _request_with_info(
                 info,
                 request_id=request_id,
@@ -946,7 +1020,12 @@ def effect_runtime_request(
                 timeout=timeout,
                 large_local_snapshot=large_local_snapshot,
             )
-        except (EffectRuntimeRemoteError, EffectRuntimeResponseAmbiguous):
+        except (
+            EffectRuntimeRemoteError,
+            EffectRuntimeResponseAmbiguous,
+            EffectRuntimeHostPermissionError,
+            EffectRuntimeNodeProbeError,
+        ):
             raise
         except EffectRuntimeStartupError as exc:
             last_error = exc
@@ -972,6 +1051,12 @@ def effect_runtime_request(
                 # Even a token check followed by unlink would race with a
                 # replacement server publishing its own locator.
                 _reap_exited_runtime_child(info)
+                _wait_for_runtime_locator_turnover(
+                    info_path,
+                    fingerprint=fingerprint,
+                    observed=info,
+                    timeout=timeout,
+                )
                 continue
             break
     if isinstance(last_error, TimeoutError):
@@ -1033,11 +1118,13 @@ def _sqlite_restart_recommendation(identity: Mapping[str, Any] | None) -> str | 
 def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]:
     """Report whether the managed TS Effect runtime can serve control-plane work."""
 
-    status, _executable, version = _probe_node()
-    ready = status == "ready"
+    probe = _probe_node(timeout=STARTUP_READY_TIMEOUT_SECONDS)
+    status, version = probe.status, probe.version
+    ready = probe.ready
     runtime_state = "unavailable"
-    runtime_diagnostic_code: str | None = None
+    runtime_diagnostic_code: str | None = probe.diagnostic_code
     runtime_identity: dict[str, Any] | None = None
+    host_permission_error: EffectRuntimeHostPermissionError | None = None
     if ready:
         try:
             fingerprint = _runtime_fingerprint()
@@ -1047,6 +1134,11 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             )
             runtime_state = "running" if info is not None else "stopped"
             runtime_identity = runtime_identity_from_info(info)
+        except EffectRuntimeHostPermissionError as exc:
+            ready = False
+            status = "probe_failed"
+            runtime_diagnostic_code = exc.diagnostic_code
+            host_permission_error = exc
         except (OSError, EffectRuntimeStartupError) as exc:
             ready = False
             status = "package_invalid"
@@ -1076,14 +1168,12 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
         "semantic_probe": "not_requested" if not deep else "not_run",
         "runtime_lifecycle": runtime_lifecycle,
         "recommended_action": (
-            None
+            host_permission_error.recommended_action
+            if host_permission_error is not None
+            else None
             if ready
-            else (
-                f"Install Node.js {MINIMUM_NODE_VERSION_TEXT} or newer, then "
-                "rerun `loopx doctor --deep`."
-                if status in {"missing", "unsupported"}
-                else "Repair Node.js on PATH, then rerun `loopx doctor --deep`."
-            )
+            else probe.recommended_action
+            or "Repair the packaged LoopX runtime, then rerun `loopx doctor --deep`."
         ),
     }
     if ready:
@@ -1117,7 +1207,10 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
                 "diagnostic_code": diagnostic_code,
             },
             "recommended_action": (
-                "Run `loopx doctor --deep` again after any concurrent startup "
+                exc.recommended_action
+                if isinstance(exc, EffectRuntimeHostPermissionError)
+                else node_probe_remediation(diagnostic_code)
+                or "Run `loopx doctor --deep` again after any concurrent startup "
                 "finishes. If the same diagnostic code remains, reinstall LoopX "
                 "and verify Node.js before retrying."
             ),

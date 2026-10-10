@@ -455,7 +455,21 @@ current vision, durable writeback, and one of these continuation settlements:
   the matching replan semantic delta was accepted, and the successor vision
   plus its owned frontier were durably established.
 
-The producer deduplicates by the closed-vision revision and frontier identity.
+The producer deduplicates by the closed-vision revision and settled continuation
+identity. Native Vision-successor ACKs use the matching accepted
+`semantic_delta.obligation_id`; they do not require a monitor's optional
+`frontier_identity`. Existing explicit frontier identities retain their receipt
+identity. The native ACK and successor Vision must occupy the same persisted
+run; a separate unacknowledged Vision edit cannot reuse that acceptance even
+when both writes share a timestamp.
+Only the exact refresh that durably wrote the selected accepted successor
+Vision and ACK may emit its successor milestone. A later Todo completion or
+ordinary refresh cannot first report that older boundary; terminal settlement
+may still follow a later Todo completion while the closed Vision remains current.
+Exact-source retry uses the run-index append prefix through that refresh, so
+a later Vision edit does not displace the original successor. Legacy
+unpromoted Todo state does not yet provide historical frontier readback, so
+retry after later Todo mutation remains dependent on current frontier facts.
 Ordinary Todo completion, Todo-count thresholds, elapsed time, setup work, and
 generic replan causes such as blockers, succession gaps, long Todo chains, or
 monitor exhaustion are evidence or control-plane context only; they never
@@ -536,11 +550,59 @@ The optional automatic path uses the provider-neutral TypeScript
 `post_writeback` capability-hook contract. The CLI composition root registers
 `periodic_report.runtime_trigger` only when the Goal's local control-plane
 configuration explicitly enables a periodic-report profile. Core dispatches
-only after the primary `refresh-state` durable writeback and exact settlement
+only after the primary `refresh-state` or `todo complete` durable writeback and exact settlement
 readback have succeeded with complete Goal, Agent, Turn, and effect identity.
 Todo-bound settlements carry a non-empty Todo id; Todo-less autonomous replans
 carry an explicit `null` Todo id rather than inventing a Todo identity. The
 best-effort rollout-event log is not dispatch authority.
+
+New Todo completions checkpoint a TypeScript-owned `completion_receipt_id` in
+the primary transaction. Ordinary completion and same-Turn terminal closeout
+have distinct ids even when their timestamps are equal. Hook dispatch and
+composition recovery use that committed id, so a later timestamp change cannot
+create a duplicate intent. Existing completions without the field retain their
+original timestamp-derived identity; replay does not migrate or rewrite them.
+Canonical receipt replay also recovers the optional hook after primary commit
+if its sidecar was not checkpointed. These ids grant no additional authority.
+
+Direct `turn run-once` execution and replay drain the same optional hook after
+returning from the primary Turn driver. Canonical refresh runs retain the
+source authority, store identity, provider revision and cursor of the Todo
+snapshot consumed by planning. The TypeScript source reader reconstructs that
+retained transaction; the report adapter uses run history only through the
+original refresh, including when later writes share its timestamp. The optional
+`todo_source` metadata is retained whether reporting is enabled or disabled;
+it activates no hook and adds no caller input requirement. Disabled reporting
+performs no optional settlement/source read or hook-sidecar write. Terminal
+closeout has its own operation and completion receipt, bound to the same
+Goal, Agent, Todo, Turn and original store lineage. An earlier refresh cannot
+inherit a later terminal frontier. Large historical snapshots use the existing
+private, digest-checked runtime transport with its unchanged 64 MiB cap; an
+oversized source fails closed rather than returning partial rows.
+
+A terminal receipt requires a closed current Vision. A newer Vision from
+the same Agent supersedes an earlier closed stage; completing its Todo cannot
+settle that earlier stage again. File and SQLite public CLI qualification covers
+this rejection, enabled/off Turn behavior, optional-source failure, later Todo
+mutation and exact replay without repeating host execution, refresh or quota
+spend. The existing ordered CLI completion/refresh journey also qualifies a
+genuine closed-current-Vision milestone and pending-intent readback.
+Exact refresh recovery after interrupted hook dispatch and a later open Todo
+recovers that milestone from the original source without another refresh or
+quota spend. Direct Turn milestone production remains partial: its host contract
+permits Vision changes
+for replanning, and native accepted-successor production requires the separate
+producer correction. These source tests do not qualify that positive journey.
+
+PostgreSQL qualifies the shared historical-source read against an isolated real
+database; its full Turn journey is separate. Anchored refresh and direct Turn
+recovery reject missing retained history. Direct Turn runs backed by legacy
+Markdown or without an anchor report `source_projection_failed`; they never
+substitute the latest Goal state. The existing legacy CLI projection remains a
+compatibility path, not evidence of qualified historical recovery. The
+refresh anchor identifies its planning snapshot, not an atomic transaction
+spanning refresh history and Todo storage. Frontend/Lark integration and those
+unqualified source paths remain separate delivery boundaries.
 
 The hook input contains only the committed receipt identity, stable state
 revision, and derived `periodic_report_stage_completion_receipt_v0`. Its result

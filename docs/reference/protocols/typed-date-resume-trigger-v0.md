@@ -56,6 +56,11 @@ same receipt and never increment the generation beyond `1`.
 - CLI authoring validates and reads back the canonical UTC token.
 - Status and quota keep a future Todo outside executable lanes. Other eligible
   work may continue according to the existing fallback policy.
+- Canonical execution admission evaluates the same typed condition against the
+  operation's runtime-clock snapshot. Future waits reject new acquisition and
+  completion, even when a cached projection or old lease receipt says ready.
+  Lease release, authorized condition repair and historical terminal readback
+  retain their existing authority; reaching the time does not grant a lease.
 - Once due, quota returns the existing `successor_replan_required` lifecycle
   action. A receipt is proof of the condition transition, not execution
   authority and not an implicit reopen.

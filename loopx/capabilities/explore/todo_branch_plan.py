@@ -214,14 +214,25 @@ def _claim_bucket(item: Mapping[str, Any], *, agent_id: str | None) -> int:
     return 2
 
 
-def _monitor_lane_exclusion(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
-    if candidate.get("task_class") != TODO_TASK_CLASS_MONITOR:
-        return None
+def _candidate_readiness(item: Mapping[str, Any]) -> dict[str, Any]:
+    # Reuse the canonical read model; a planner does not resolve dependencies
+    # from ownership, lineage, or the other candidates selected in this batch.
     return {
-        **candidate,
-        "selection_status": "excluded_non_exploration_lane",
-        "exclusion_reason": "continuous_monitor_does_not_consume_exploration_budget",
+        "actionable_open": todo_item_is_actionable_open(dict(item)),
+        **{key: item[key] for key in ("status", "resume_when", "resume_ready") if key in item},
     }
+
+
+def _execution_exclusion(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
+    if candidate.get("task_class") == TODO_TASK_CLASS_MONITOR:
+        return {
+            **candidate,
+            "selection_status": "excluded_non_exploration_lane",
+            "exclusion_reason": "continuous_monitor_does_not_consume_exploration_budget",
+        }
+    if not candidate["actionable_open"]:
+        return {**candidate, "selection_status": "not_actionable_open"}
+    return None
 
 
 def _lane_id(todo_id: str, *, index: int) -> str:
@@ -366,6 +377,7 @@ def build_explore_todo_branch_plan(
         task_class = todo_item_task_class(dict(item))
         required_capabilities = _required_capabilities(item)
         candidate = {
+            **_candidate_readiness(item),
             "todo_id": todo_id,
             "text": _compact_text(item.get("text") or item.get("title")),
             "priority": item.get("priority"),
@@ -407,15 +419,16 @@ def build_explore_todo_branch_plan(
         )
     )
 
-    monitor_lanes = [
+    excluded_candidates = [
         exclusion
         for candidate in candidates
-        if (exclusion := _monitor_lane_exclusion(candidate)) is not None
+        if (exclusion := _execution_exclusion(candidate)) is not None
     ]
     exploration_candidates = [
         candidate
         for candidate in candidates
         if candidate.get("task_class") != TODO_TASK_CLASS_MONITOR
+        if candidate["actionable_open"]
     ]
     schedulable = [
         candidate
@@ -552,7 +565,7 @@ def build_explore_todo_branch_plan(
             lane="todo_branch_plan",
         )
         if not invalidated:
-            rejected = [*monitor_lanes, *dependency_rejections, *selection_rejections]
+            rejected = [*excluded_candidates, *dependency_rejections, *selection_rejections]
             selected = valid_selected
             break
         new_invalidated_ids = {
@@ -562,7 +575,7 @@ def build_explore_todo_branch_plan(
         dependency_events.extend(events)
         invalidated_ids.update(new_invalidated_ids)
         if not new_invalidated_ids:
-            rejected = [*monitor_lanes, *dependency_rejections, *selection_rejections]
+            rejected = [*excluded_candidates, *dependency_rejections, *selection_rejections]
             selected = valid_selected
             break
 
@@ -602,6 +615,7 @@ def build_explore_todo_branch_plan(
         "exploration_candidate_count": len(exploration_candidates),
         "selected_count": len(selected),
         "selected_branches": selected,
+        "rejected_candidate_count": len(rejected),
         "rejected_candidates": rejected[: max(0, normalized_width * 3)],
         "resource_portfolio": resource_portfolio_with_selection(resource_portfolio, selected),
         "hazard_model": {
@@ -642,6 +656,9 @@ def build_explore_todo_branch_plan(
             "registered goal's spawn_policy (spawn_allowed, max_children) to receive "
             "suggested commands; execution stays in the normal LoopX lifecycle."
             if gate["state"] == GATE_STATE_ANALYSIS_ONLY
+            else "No actionable branch was selected. Inspect rejected candidates and their "
+            "resume conditions; replan when readiness changes."
+            if not selected
             else "Run the primary branch normally; hand selected speculative branches to side "
             "agents only after claiming/lease commands are accepted and workspace guards pass."
             if len(selected) > 1

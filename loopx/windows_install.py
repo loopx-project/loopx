@@ -98,6 +98,101 @@ def _entry_command(release_root: Path, python: Path, args: Sequence[str]) -> lis
     return [str(python), "-I", str(release_root / "scripts" / "loopx_entry.py"), *args]
 
 
+def _doctor_failure_summary(stdout: str) -> str | None:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    failed: dict[str, list[tuple[str, str]]] = {}
+    scopes = [("doctor", payload.get("checks"))]
+    release_candidate = payload.get("release_candidate")
+    if isinstance(release_candidate, dict):
+        scopes.append(("release candidate", release_candidate.get("checks")))
+    for scope, checks in scopes:
+        if not isinstance(checks, list):
+            continue
+        for item in checks:
+            if not (
+                isinstance(item, dict)
+                and item.get("required")
+                and not item.get("ok")
+                and isinstance(item.get("id"), str)
+            ):
+                continue
+            check_id = f"{scope}.{item['id'].strip()}"
+            fields = failed.setdefault(check_id, [])
+            for key in ("detail", "recommended_action"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    fields.append((key, value))
+    if not failed:
+        return None
+    check_ids = sorted(failed)
+    summary_limit = 2000
+    summary_prefix = "failed checks="
+    included_ids: list[str] = []
+    for check_id in check_ids:
+        omitted_after = len(check_ids) - len(included_ids) - 1
+        omission_marker = (
+            f"; {omitted_after} additional required failed check IDs omitted"
+            if omitted_after
+            else ""
+        )
+        candidate = (
+            summary_prefix + ", ".join([*included_ids, check_id]) + omission_marker
+        )
+        if len(candidate) > summary_limit:
+            break
+        included_ids.append(check_id)
+    omitted_ids = len(check_ids) - len(included_ids)
+    summary = summary_prefix + ", ".join(included_ids)
+    if omitted_ids:
+        marker = (
+            f"; {omitted_ids} required failed check IDs omitted by the summary limit"
+        )
+        while included_ids and len(summary + marker) > summary_limit:
+            included_ids.pop()
+            omitted_ids += 1
+            summary = summary_prefix + ", ".join(included_ids)
+            marker = f"; {omitted_ids} required failed check IDs omitted by the summary limit"
+        summary += marker
+
+    diagnostic_fields: list[tuple[str, str]] = []
+    for check_id in check_ids:
+        for key, value in failed[check_id]:
+            diagnostic_fields.append((f"{check_id} {key}=", value))
+    for key in ("error", "recommended_action"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            diagnostic_fields.append((f"{key}=", value))
+
+    if not diagnostic_fields:
+        return summary
+    separator_size = len("; ") * len(diagnostic_fields)
+    prefix_size = sum(len(prefix) for prefix, _ in diagnostic_fields)
+    content_budget = max(
+        0,
+        (summary_limit - len(summary) - separator_size - prefix_size)
+        // len(diagnostic_fields),
+    )
+    details: list[str] = []
+    for prefix, value in diagnostic_fields:
+        detail = " ".join(value.split())
+        limit = min(400, content_budget)
+        if len(detail) > limit:
+            detail = (
+                detail[: max(0, limit - 3)] + "..." if limit >= 3 else detail[:limit]
+            )
+        if detail:
+            details.append(prefix + detail)
+    if details:
+        summary += "; " + "; ".join(details)
+    return summary
+
+
 def _validate_candidate(
     release_root: Path,
     *,
@@ -134,6 +229,12 @@ def _validate_candidate(
     finally:
         candidate_pointer.unlink(missing_ok=True)
     if result.returncode != 0:
+        summary = _doctor_failure_summary(result.stdout)
+        if summary is not None:
+            raise RuntimeError(
+                "release candidate doctor failed: "
+                f"failed checks={summary}, stderr={result.stderr[-2000:]!r}"
+            )
         raise RuntimeError(
             "release candidate doctor failed: "
             f"stdout={result.stdout[-2000:]!r}, stderr={result.stderr[-2000:]!r}"

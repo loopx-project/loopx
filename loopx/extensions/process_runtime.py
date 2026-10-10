@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ class CappedProcessResult:
     failure_kind: str | None = None
 
 
-def _wait_for_process(process: subprocess.Popen[bytes], timeout: float) -> bool:
+def _wait_for_process(process: subprocess.Popen[bytes] | subprocess.Popen[str], timeout: float) -> bool:
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -30,8 +31,29 @@ def _wait_for_process(process: subprocess.Popen[bytes], timeout: float) -> bool:
     return True
 
 
+def _darwin_owned_group_has_exited(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> bool:
+    # Darwin can report EPERM rather than ESRCH for a now-empty process group.
+    # A reaped leader alone does not prove its descendants have exited.
+    if sys.platform != "darwin" or process.poll() is None:
+        return False
+    try:
+        snapshot = subprocess.run(
+            ["/bin/ps", "-axo", "pgid="], capture_output=True, text=True,
+            encoding="utf-8", check=False, timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return False
+    groups = snapshot.stdout.split()
+    return (
+        snapshot.returncode == 0
+        and bool(groups)
+        and all(group.isdecimal() for group in groups)
+        and str(process.pid) not in groups
+    )
+
+
 def _terminate_posix_process_group(
-    process: subprocess.Popen[bytes], grace_seconds: float
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float
 ) -> None:
     process_group_id = process.pid
     try:
@@ -42,19 +64,27 @@ def _terminate_posix_process_group(
     except ProcessLookupError:
         process.wait()
         return
+    except PermissionError:
+        if not _darwin_owned_group_has_exited(process):
+            raise
+        process.wait()
+        return
     if grace_seconds > 0:
         _wait_for_process(process, grace_seconds)
         try:
             os.killpg(process_group_id, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            if not _darwin_owned_group_has_exited(process):
+                raise
     if process.poll() is None:
         process.kill()
         process.wait()
 
 
 def _terminate_windows_process_tree(
-    process: subprocess.Popen[bytes], grace_seconds: float
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float
 ) -> None:
     if process.poll() is not None:
         return
@@ -76,7 +106,7 @@ def _terminate_windows_process_tree(
 
 
 def terminate_process_tree(
-    process: subprocess.Popen[bytes], grace_seconds: float
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float
 ) -> None:
     """Stop an owned, previously isolated process tree and reap its leader.
 
@@ -102,7 +132,7 @@ def run_capped_process(
     argv: Sequence[str],
     *,
     stdin: bytes,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     output_limit_bytes: int,
     env: Mapping[str, str] | None = None,
     cwd: str | Path | None = None,
@@ -194,16 +224,16 @@ def run_capped_process(
     for thread in threads:
         thread.start()
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     timed_out = False
     try:
         while process.poll() is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 timed_out = True
                 terminate_process_tree(process, termination_grace_seconds)
                 break
-            if limit_event.wait(timeout=min(0.05, remaining)):
+            if limit_event.wait(timeout=0.05 if remaining is None else min(0.05, remaining)):
                 terminate_process_tree(process, termination_grace_seconds)
                 break
     except BaseException:

@@ -157,6 +157,128 @@ def _five_mode_manifest() -> dict[str, object]:
     return manifest
 
 
+def test_ratio_comparisons_round_trip_and_rank_on_the_same_scale(tmp_path: Path):
+    manifest = _manifest()
+    manifest["factors"][0]["levels"].append("alternative")
+    manifest["arms"].append(
+        {
+            "arm_id": "alternative",
+            "arm_role": "treatment",
+            "factor_assignments": {"orchestrator": "alternative"},
+        }
+    )
+    baseline = _row(arm_id="goal_plain", arm_role="baseline", feature=50, reward=0)
+    candidate = _row(
+        arm_id="loopx_plain",
+        arm_role="treatment",
+        feature=600,
+        reward=1,
+        anchor=baseline["run_id"],
+    )
+    alternative = _row(
+        arm_id="alternative",
+        arm_role="treatment",
+        feature=9,
+        reward=1,
+        anchor=baseline["run_id"],
+    )
+    store = tmp_path / "uploads.jsonl"
+    for row, total in zip([baseline, candidate, alternative], [100, 1000, 10]):
+        row["metrics"]["requirements_passed"]["total"] = total
+        simulate_benchmark_upload(
+            store,
+            _envelope(
+                row,
+                record_kind="experiment_board_row",
+                key=row["run_id"],
+            ),
+            execute=True,
+        )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    packet = _loopx_json(
+        "benchmark",
+        "study-dashboard",
+        "--manifest-json",
+        str(manifest_path),
+        "--store",
+        str(store),
+        "--format",
+        "json",
+    )
+    assert packet == build_benchmark_study_dashboard(
+        manifest, read_benchmark_local_upload_records(store)
+    )
+    largest = packet["cases"][0]["largest_eligible_primary_contrast"]
+    assert largest["candidate_arm_id"] == "alternative"
+    assert largest["metric_deltas"]["requirements_passed"]["delta"] == -41
+    assert largest["metric_deltas"]["requirements_passed"][
+        "delta_rate"
+    ] == pytest.approx(0.4)
+    assert packet["contrasts"]["alternative"]["primary_metric_directions"] == {
+        "improved": 1,
+        "flat": 0,
+        "regressed": 0,
+    }
+
+
+def test_dashboard_does_not_rank_mixed_comparison_scales():
+    manifest = _manifest()
+    baseline = _row(arm_id="goal_plain", arm_role="baseline", feature=5, reward=0)
+    candidate = _row(
+        arm_id="loopx_plain",
+        arm_role="treatment",
+        feature=9,
+        reward=1,
+        anchor=baseline["run_id"],
+    )
+    scalar_baseline, scalar_candidate = (
+        copy.deepcopy(baseline),
+        copy.deepcopy(candidate),
+    )
+    scalar_baseline["run_id"] = "scalar-baseline"
+    scalar_candidate["run_id"] = "scalar-candidate"
+    scalar_candidate["comparison_anchor_run_id"] = scalar_baseline["run_id"]
+    for row in [scalar_baseline, scalar_candidate]:
+        del row["metrics"]["requirements_passed"]["total"]
+    packet = build_benchmark_study_dashboard(
+        manifest,
+        [
+            _envelope(row, record_kind="experiment_board_row", key=row["run_id"])
+            for row in [baseline, candidate, scalar_baseline, scalar_candidate]
+        ],
+    )
+    assert len(packet["cases"][0]["eligible_comparisons"]) == 2
+    assert packet["cases"][0]["largest_eligible_primary_contrast"] is None
+
+
+def test_unavailable_auxiliary_metric_is_not_counted_as_a_binary_transition():
+    baseline = _row(arm_id="goal_plain", arm_role="baseline", feature=5, reward=0)
+    candidate = _row(
+        arm_id="loopx_plain",
+        arm_role="treatment",
+        feature=9,
+        reward=1,
+        anchor=baseline["run_id"],
+    )
+    baseline["metrics"]["reward"]["total"] = 0
+    packet = build_benchmark_study_dashboard(
+        _manifest(),
+        [
+            _envelope(row, record_kind="experiment_board_row", key=row["run_id"])
+            for row in [baseline, candidate]
+        ],
+    )
+    contrast = packet["contrasts"]["loopx_plain"]
+    assert contrast["matched_pair_denominator"] == 1
+    assert contrast["primary_metric_directions"]["improved"] == 1
+    assert contrast["binary_metric_transitions"]["reward"] == {
+        "0_to_1": 0,
+        "1_to_0": 0,
+        "same": 0,
+    }
+
+
 def _row(
     *,
     arm_id: str,
@@ -300,6 +422,133 @@ def _four_arm_contract() -> dict[str, object]:
             hint_id="swe",
             domain_hint_independent_of_loopx=True,
         )
+    )
+
+
+def test_dashboard_preserves_provenance_for_case_local_run_ids() -> None:
+    first = _row(arm_id="goal_plain", arm_role="baseline", feature=5, reward=0)
+    second = copy.deepcopy(first)
+    second["case_id"] = "case-2"
+    envelopes = [
+        _envelope(first, record_kind="experiment_board_row", key="first"),
+        _envelope(second, record_kind="experiment_board_row", key="second"),
+    ]
+    for ordering in (envelopes, envelopes[::-1]):
+        packet = build_benchmark_study_dashboard(_manifest(), ordering)
+        assert [r["upload_provenance"]["record_id"] for r in packet["runs"]] == [
+            e["record_id"] for e in envelopes
+        ]
+
+
+@pytest.mark.parametrize("insights_last", [False, True])
+def test_case_local_run_ids_round_trip_with_insights_and_supersession(
+    tmp_path: Path,
+    insights_last: bool,
+) -> None:
+    store = tmp_path / "uploads.jsonl"
+    envelope_path = tmp_path / "envelope.json"
+
+    def upload(envelope: dict[str, object]) -> dict[str, object]:
+        if not insights_last:
+            return simulate_benchmark_upload(store, envelope, execute=True)
+        envelope_path.write_text(json.dumps(envelope), encoding="utf-8")
+        return _loopx_json(
+            "benchmark",
+            "upload-local",
+            "--envelope-json",
+            str(envelope_path),
+            "--store",
+            str(store),
+            "--execute",
+            "--format",
+            "json",
+        )
+
+    pending_insights = []
+    treatments = []
+    for case_id, score in (("case-1", 7), ("case-2", 8)):
+        baseline = _row(arm_id="goal_plain", arm_role="baseline", feature=5, reward=0)
+        treatment = _row(
+            arm_id="loopx_plain",
+            arm_role="treatment",
+            feature=score,
+            reward=0,
+            anchor=baseline["run_id"],
+        )
+        for row in (baseline, treatment):
+            row["case_id"] = case_id
+            envelope = _envelope(
+                row,
+                record_kind="experiment_board_row",
+                key=f"{case_id}-{row['arm_id']}",
+            )
+            upload(envelope)
+        treatments.append(envelope)
+        insight = _insight()
+        insight["case_id"] = case_id
+        insight["failure_class"] = case_id
+        envelope = _envelope(
+            insight, record_kind="case_insight_projection", key=f"{case_id}-insight"
+        )
+        if insights_last:
+            pending_insights.append(envelope)
+        else:
+            upload(envelope)
+    for envelope in pending_insights:
+        upload(envelope)
+
+    packet = build_benchmark_study_dashboard(
+        _manifest(), read_benchmark_local_upload_records(store)
+    )
+    assert packet["campaign"]["matched_pair_countable_count"] == 2
+    assert packet["status"] == "complete"
+    assert [
+        case["largest_eligible_primary_contrast"]["metric_deltas"][
+            "requirements_passed"
+        ]["delta"]
+        for case in packet["cases"]
+    ] == [2, 3]
+    for run in packet["runs"]:
+        if run["arm_role"] == "treatment":
+            assert run["redacted_insight"]["case_id"] == run["case_id"]
+    arm = next(a for a in packet["arms"] if a["arm_id"] == "loopx_plain")
+    assert arm["failure_class_counts"] == {"case-1": 1, "case-2": 1}
+
+    corrected = copy.deepcopy(treatments[0]["payload"])
+    corrected["metrics"]["requirements_passed"]["value"] = 9
+    replacement = _envelope(
+        corrected,
+        record_kind="experiment_board_row",
+        key="corrected-case-1",
+        supersedes=treatments[0]["record_id"],
+    )
+    upload(replacement)
+    replay = upload(replacement)
+    assert replay["disposition"] == "replayed"
+    packet = build_benchmark_study_dashboard(
+        _manifest(), read_benchmark_local_upload_records(store)
+    )
+    selected = [r for r in packet["runs"] if r["arm_role"] == "treatment"]
+    assert [r["metrics"]["requirements_passed"]["value"] for r in selected] == [9, 8]
+    assert [r["upload_provenance"]["record_id"] for r in selected] == [
+        replacement["record_id"],
+        treatments[1]["record_id"],
+    ]
+    assert [r["redacted_insight"]["case_id"] for r in selected] == ["case-1", "case-2"]
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_manifest()), encoding="utf-8")
+    assert (
+        _loopx_json(
+            "benchmark",
+            "study-dashboard",
+            "--manifest-json",
+            str(manifest_path),
+            "--store",
+            str(store),
+            "--format",
+            "json",
+        )
+        == packet
     )
 
 

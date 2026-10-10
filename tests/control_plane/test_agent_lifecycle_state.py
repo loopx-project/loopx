@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from loopx.control_plane.agents import management_projection as projection
+from loopx.control_plane.agents import execution_facts
 from loopx.control_plane.agents.execution_facts import collect_agent_execution_facts
 from loopx.control_plane.collaboration.inbox import _hash as manager_context_hash
 from loopx.control_plane.collaboration.inbox import _root as manager_context_root
@@ -80,6 +81,10 @@ def build_projection(monkeypatch, *, age=None, binding=False, status="open",
     ({"age": 0, "facts": {"lane": "absent", "lease": {"status": "active", "expired": True}}}, "unknown"),
     ({"age": 0, "facts": {"lane": "absent", "lease": {"status": "active", "expired": False}}}, "launchable"),
     ({"age": 0, "facts": {"lane": "absent", "lease": {"status": "released"}}}, "launchable"),
+    ({"age": 0, "facts": {"lane": "absent", "lease": {"status": "unavailable"}}}, "unknown"),
+    ({"age": 0, "facts": {"lane": "live", "lease": {"status": "unavailable"}}}, "executing"),
+    ({"age": 0, "facts": {"lane": "absent", "delegation_worker_active": True,
+                           "lease": {"status": "unavailable"}}}, "executing"),
     ({"age": 0, "facts": {"lane": "live", "lease": {"status": "active", "expired": True}}}, "executing"),
     ({"age": 0, "facts": {"lane": "foreign_host", "delegation_worker_active": True}}, "executing"),
     ({"has_todo": False, "facts": {"lane": "live"}}, "executing"),
@@ -220,6 +225,85 @@ def test_an_expired_active_lease_with_nothing_live_is_unknown(monkeypatch, tmp_p
     released, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root)
     assert released["agents"][0]["state"] == "launchable"
     assert released["agents"][0]["execution"]["lease"] == {"status": "released"}
+
+
+@pytest.mark.parametrize("lease_bytes", [b"{broken json", b"\xff"],
+                         ids=["malformed-json", "invalid-utf8"])
+def test_unreadable_claimed_lease_fails_closed_without_hiding_healthy_peer(monkeypatch, tmp_path,
+                                                                            lease_bytes):
+    runtime_root = tmp_path / "runtime"
+    lease_path = runtime_root / "goals" / GOAL / "task-leases" / "todo_peer.json"
+    lease_path.parent.mkdir(parents=True)
+    lease_path.write_bytes(lease_bytes)
+    other_todo = {"todo_id": "todo_healthy", "goal_id": GOAL, "role": "agent",
+                  "claimed_by": "healthy", "status": "open", "task_class": "advancement_task"}
+    with turn_lane_singleflight(runtime_root=runtime_root, goal_id=GOAL,
+                                plan={"turn_envelope": {"agent_id": "healthy"}}):
+        packet, todo = build_projection(monkeypatch, age=0, runtime_root=runtime_root,
+                                        extra_todos=[other_todo], registered=("peer", "healthy"))
+    rows = {row["agent_id"]: row for row in packet["agents"]}
+    assert rows["peer"]["state"] == "unknown"
+    assert rows["peer"]["execution"]["lease"] == {"status": "unavailable"}
+    assert rows["healthy"]["state"] == "executing"
+    assert rows["healthy"]["execution"]["lane"] == "live"
+
+    todo.update(resume_when="todo_done:dependency", resume_ready=True)
+    contract, _ = apply_task_orchestration_contract(
+        fallback_work_lane_contract={"lane": "advancement_task"},
+        goal_boundary={"peer_task_coordination": {"enabled": True,
+                                                  "coordinator_agent_id": "coordinator"}},
+        agent_identity={"agent_id": "coordinator",
+                        "registered_agents": ["coordinator", "peer", "healthy"]},
+        agent_todo_summary={"items": [todo]}, raw_agent_todo_summary={"items": [todo]},
+        available_capabilities=["peer_agent_activation"], agent_management_projection=packet,
+    )
+    assert contract["eligible_peer_lanes"] == []
+    assert contract["blocked_peer_lanes"][0]["reason_codes"] == ["peer_runtime_not_active"]
+
+
+def test_unreadable_second_todo_overrides_fresh_lease_but_not_live_lane(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "runtime"
+    _write_lease(runtime_root, expires_in_hours=1)
+    lease_path = runtime_root / "goals" / GOAL / "task-leases" / "todo_second.json"
+    lease_path.write_text("{broken json", encoding="utf-8")
+    second = {"todo_id": "todo_second", "goal_id": GOAL, "role": "agent",
+              "claimed_by": "peer", "status": "open", "task_class": "advancement_task"}
+    kwargs = {"age": 0, "runtime_root": runtime_root, "extra_todos": [second]}
+    packet, _ = build_projection(monkeypatch, **kwargs)
+    assert packet["agents"][0]["state"] == "unknown"
+    assert packet["agents"][0]["execution"]["lease"] == {"status": "unavailable"}
+    with turn_lane_singleflight(runtime_root=runtime_root, goal_id=GOAL,
+                                plan={"turn_envelope": {"agent_id": "peer"}}):
+        live, _ = build_projection(monkeypatch, **kwargs)
+    assert live["agents"][0]["state"] == "executing"
+    assert live["agents"][0]["execution"]["lease"] == {"status": "unavailable"}
+
+
+def test_canonical_lease_read_failure_stays_unavailable(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    _write_lease(runtime_root, expires_in_hours=1)
+
+    def unavailable(**_kwargs):
+        raise RuntimeError("synthetic canonical head unavailable")
+
+    monkeypatch.setattr(execution_facts, "read_canonical_todos_if_promoted", unavailable)
+    packet, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root)
+    assert packet["agents"][0]["state"] == "unknown"
+    assert packet["agents"][0]["execution"]["lease"] == {"status": "unavailable"}
+
+
+def test_local_lease_oserror_is_unavailable(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+
+    def unreadable(_path):
+        raise OSError("synthetic lease read failure")
+
+    monkeypatch.setattr(execution_facts, "read_lease", unreadable)
+    packet, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root)
+    assert packet["agents"][0]["state"] == "unknown"
+    assert packet["agents"][0]["execution"]["lease"] == {"status": "unavailable"}
 
 
 def _delegation_row(runtime_root: Path, *, goal: str, requester: str, agent: str = "peer",
@@ -452,6 +536,7 @@ def test_no_runtime_root_means_no_facts_not_no_execution(monkeypatch):
     (1, True, {"lane": "foreign_host"}, True, True, "peer_runtime_not_active"),
     (1, False, {"lane": "unreadable"}, True, True, "peer_runtime_not_active"),
     (1, True, {"lane": "absent", "lease": {"status": "active", "expired": True}}, True, True, "peer_runtime_not_active"),
+    (1, True, {"lane": "absent", "lease": {"status": "unavailable"}}, True, True, "peer_runtime_not_active"),
 ])
 def test_real_projection_to_peer_admission(monkeypatch, age, binding, facts, capability,
                                            resume_ready, reason):

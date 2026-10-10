@@ -247,7 +247,7 @@ def test_no_unadmitted_or_conflicting_receipts(tmp_path: Path):
             tmp_path, "op-1", stage="decision", operation="spawn",
             outcome="started", entrypoint_id="other_host",
         )
-    with pytest.raises(ValueError, match="completed"):
+    with pytest.raises(ValueError, match="terminal"):
         _record(tmp_path, "op-1", stage="review", outcome="accepted",
                 evidence_ref="evidence-1", validation_ref="validation-1")
     with pytest.raises(ValueError, match="compact opaque id"):

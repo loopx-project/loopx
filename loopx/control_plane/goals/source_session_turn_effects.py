@@ -18,7 +18,7 @@ from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
 )
-from ..todos.active_state_editing import fsync_state_directory
+from ..runtime.document_io import fsync_state_directory
 from .source_session_registry_state import (
     alias_digest,
     canonical_digest,

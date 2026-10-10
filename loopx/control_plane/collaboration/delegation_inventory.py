@@ -12,6 +12,12 @@ from ..content_digest import BARE_SHA256_PATTERN
 if TYPE_CHECKING:
     from ...collaboration_mcp import Delegations
 
+# Files kept beside an execution record and never merged into it: the stop
+# receipt, and the record naming the native Host its Turn launched.
+DELEGATION_STOP_RECEIPT_SUFFIX = ".stop.json"
+DELEGATION_HOST_PROCESS_SUFFIX = ".host.json"
+DELEGATION_RECORD_SIDECAR_SUFFIXES = (DELEGATION_STOP_RECEIPT_SUFFIX, DELEGATION_HOST_PROCESS_SUFFIX)
+
 
 def read_delegation_inventory(service: Delegations, *, limit: int = 20,
                               cursor: str | None = None) -> dict:
@@ -24,7 +30,7 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
         try:
             entries = directory.iterdir()
             for path in entries:
-                if path.suffix != ".json":
+                if path.suffix != ".json" or path.name.endswith(DELEGATION_RECORD_SIDECAR_SUFFIXES):
                     continue
                 if not BARE_SHA256_PATTERN.fullmatch(path.stem):
                     raise ValueError("unexpected delegation record address; reconcile inventory storage")

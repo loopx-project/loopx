@@ -58,6 +58,8 @@ import {
   TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA,
 } from "./todo_successor_derivation.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
+import {isLifecycleCloseout, prepareTerminalReentry, requiresReentrySettlement} from "./todo_terminal_reentry.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
@@ -471,6 +473,12 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     todo_id: input.todo_id,
     expected_role: input.expected_role,
     command: input.command,
+    // This phase has no historical native receipt to preserve. Also bind its
+    // evidence and receipt payloads so changed retries cannot mask replacement.
+    ...(isLifecycleCloseout(input) ? {note: input.note, evidence: input.evidence, reason: input.reason,
+      validation_receipt: input.validation_receipt,
+      goal_acceptance_source_binding: input.goal_acceptance_source_binding ?? null,
+      goal_acceptance_validation_receipts: input.goal_acceptance_validation_receipts ?? null} : {}),
     // Older receipts deliberately retain their original fingerprint. A reviewed
     // command binds both its approved snapshot and its complete prose intent.
     ...(input.review_basis === undefined ? {} : {review_basis: input.review_basis,
@@ -514,7 +522,7 @@ function monitorCycleTerminalOperationId(
   return `todo-terminal:${digest.slice(0, 32)}`;
 }
 
-function completionTurnOperationId(
+export function completionTurnOperationId(
   input: Pick<CoordinationTodoTerminalLifecycleInput, "goal_id" | "todo_id" | "requested_completion_turn_key">,
   closeout: boolean,
 ): string {
@@ -1024,6 +1032,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   store: AuthorityStore,
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<void>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1047,7 +1056,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     input = observation.input;
     head = observation.authority;
   } else {
-    input = {...normalized, operation_id: normalized.operation_identity.kind === "completion_turn"
+    input = {...normalized, operation_id: normalized.operation_identity.kind === "completion_turn" || isLifecycleCloseout(normalized)
       ? completionTurnOperationId(normalized, normalized.requested_no_followup)
       : normalized.operation_identity.operation_id};
     // Named operation recovery reports history, not present execution authority.
@@ -1204,6 +1213,41 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "decision_rejection",
     );
   }
+  if (isLifecycleCloseout(input)) {
+    let closed: JsonObject | null;
+    try {
+      closed = prepareTerminalReentry(todo, input, activeLease(projection.leases.get(input.todo_id), input.now));
+      if (closed !== null && requiresReentrySettlement(input)) {
+        if (verifyLifecycleSettlement === undefined) throw new AuthorityStoreProtocolError(
+          "Lifecycle closeout requires original quota settlement verification");
+        await verifyLifecycleSettlement(input);
+      }
+    } catch (error) {
+      return terminalFailure("invalid_todo_completion_transaction",
+        error instanceof Error ? error.message : "Invalid terminal lifecycle reentry", {}, "decision_rejection");
+    }
+    const target = closed ?? todo;
+    return commitTerminalResult(store, input, requestSha, head, {
+      todo_id: input.todo_id, command: input.command, changed: closed !== null,
+      terminal_decision: closed === null ? authority : {...authority, outcome: "apply",
+        code: "terminal_transition", idempotent: false, next_todo_status: "done"},
+      successor_todo_ids: [], generated_successor_todo_ids: [],
+      validation_receipt: null, completion_policy: null,
+      completion_identity_key: target.completion_turn_key ?? null,
+      completion_identity_source: input.requested_completion_identity_source,
+      completion_continuation: target.completion_continuation ?? null,
+      completion_recovery: target.completion_recovery ?? null,
+      completion_receipt_id: target.completion_receipt_id ?? null,
+      completed_at: target.completed_at ?? null,
+    }, closed === null ? [] : [{kind: "todo_upsert", todo: closed}], authoritySourcesCurrent);
+  }
+  // Supersede retires waiting work through its existing terminal owner; it is
+  // not execution of the deferred Todo or proof that its prerequisite ran.
+  if (input.command === "complete" && authority.outcome === "apply") {
+    const dependency = todoExecutionDependencyRejection(projection.todos, input.todo_id, input.now);
+    if (dependency !== null) return terminalFailure(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition}, "decision_rejection");
+  }
   if (update === undefined && input.command === "complete" && authority.outcome === "apply") {
     try {
       requireCompletionDecisionOutcome(todo, input.decision_outcome);
@@ -1229,6 +1273,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {goal_acceptance_guard: acceptance}, "decision_rejection");
   }
   const acceptanceRequirements = acceptanceCompletionRequirements(completionHead, input.goal_id, input.todo_id);
+  if (input.completion_result != null && acceptanceRequirements === null) {
+    return terminalFailure("completion_result_rejected",
+      "--result-file requires Goal acceptance criteria bound to this Todo; a Todo validator alone does not establish Goal acceptance. " +
+      "Use --evidence for a local artifact pointer, or bind approved Goal acceptance criteria before retrying --result-file.",
+      {next_action: "Keep the same Todo/Turn and complete with --evidence, or configure approved bound Goal acceptance criteria."},
+      "decision_rejection");
+  }
   const acceptanceBinding = acceptanceRequirements === null ? null
     : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
   let acceptanceEvidence: JsonObject | null = null;
@@ -1416,18 +1467,19 @@ export async function executeCoordinationTodoTerminalLifecycle(
   }
 
   if (authority.outcome === "no_change" && (edit === null || !edit.changed) && terminalUpgradeReceipt === null) {
-    if (input.successor_intents.length > 0) {
-      return terminalFailure(
-        "todo_terminal_successor_intent_after_completion",
-        "an already terminal Todo cannot accept a new generated successor intent",
-        {},
-        "decision_rejection",
-      );
-    }
     const existingSuccessorIds = Array.isArray(todo.successor_todo_ids)
       ? todo.successor_todo_ids.map((value, index) =>
         requireAuthorityStoreId(value, `todo.successor_todo_ids[${index}]`))
       : [];
+    if (input.successor_intents.length > 0 ||
+        input.linked_successor_todo_ids.some(id => !existingSuccessorIds.includes(id))) {
+      return terminalFailure(
+        "todo_terminal_successor_intent_after_completion",
+        "an already terminal Todo cannot accept a new successor intent",
+        {},
+        "decision_rejection",
+      );
+    }
     return commitTerminalResult(store, input, requestSha, head, {
       todo_id: input.todo_id,
       command: input.command,
@@ -1597,6 +1649,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_identity_source:
       completion === null ? null : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
+    completion_receipt_id: target.todo.completion_receipt_id ?? null,
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     // A preview that omits this would show an unconditional close for work the

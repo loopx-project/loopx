@@ -132,6 +132,32 @@ receipt。
 
 每次新唤醒都重新从第 1 步开始，不能依赖模型记忆或缓存 packet 续跑。
 
+### 保存 CLI 原始结果
+
+runner 需要本地副本时，应在 CLI 执行时保存原始结果。不要让模型通过 heredoc
+重新生成刚返回的 JSON：这会重复生成文本，也可能改写回执。保存副本是可选操作，
+不算经过验证的工作或结算。
+
+保存完整 guard 决策可复用现有捕获选项：显式传入 Turn 身份，**每次调用**使用新目录：
+
+```bash
+loopx --format json --registry "$HOME/.loopx/registry.global.json" \
+  quota should-run --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-instance-id <turn-id> --decision-output-dir ./guard-001 && \
+cat ./guard-001/decision.json
+```
+
+父目录必须已存在；LoopX 创建私有捕获目录。使用保存的决策前，检查命令是否成功、
+`ok` 和 Goal/Agent/Turn 身份。仍须读取所有必需的 hook、准入和结算指令；捕获不要求
+开启 `--turn-envelope`，也不改变展示的合同。选择 Todo 或重新校验 lease 时仍要运行
+新 guard，并使用新目录。捕获在后段失败时，应先检查已有 Turn 回执，再判断重试。
+详见[捕获合同](../reference/protocols/turn-envelope-v0.md)。
+
+其他 CLI 结果可以由 runner 直接把 stdout 保存到新的私有文件，同时保留 stderr 和
+原始退出码。不要让管道或后续读文件操作掩盖失败，也不要仅为补存输出而重跑写操作。
+尤其是 spend，必须按当前结算合同只执行一次。原始结果不进入公开产物；宿主生命周期
+回执仍单独保留。本例不会自动给现有 worker 开启捕获，也不证明模型效率已经改善。
+
 ## 选择合适的执行边界
 
 接入深度有两种，都合理；无论选择哪种，外层唤醒与调度循环仍由你的 runner 负责：
@@ -156,6 +182,22 @@ decide、validate、writeback 和 spend owner；同一逻辑动作不能同时�
 effect，并且外层 runner 能正确应用和 ACK scheduler state。这些正是继续提升 Turn
 成熟度的 extension / contribution surface；Agent 进程退出码或从 transcript 猜结果不能
 替代这些证明。
+
+### 观察正在运行的 Turn
+
+在第二个终端中，可以在 `run-once` 执行期间查看同一 Turn：
+
+```bash
+loopx --registry <registry.json> --runtime-root <runtime-root> turn inspect-journal \
+  --goal-id <goal-id> --agent-id <agent-id> --turn-key <sha256-turn-key> \
+  --watch --watch-interval 1 --format json
+```
+
+Watch 模式只在 journal 状态或已完成阶段列表变化时输出一条 JSON Lines 进度事件。
+事件仅包含 Turn 身份、journal 状态、已完成阶段和空 effects 列表，不包含 host 输出或
+session 内容。状态变为 `committed`、`stopped` 或 `failed` 后命令退出。该命令只读；
+提前停止可按 Ctrl-C。请在 Turn journal 创建后启动，并使用与 runner 相同的 registry 和
+runtime root。
 
 ## 验收清单
 

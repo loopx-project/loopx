@@ -13,6 +13,7 @@ import {
 import {validateContinuationNote, computeContinuationTodoFacts} from "./continuation_note.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {
   prepareCoordinationProjectionCommit,
@@ -609,6 +610,11 @@ async function executeClaimAttempt(
   if (acceptance !== null && !acceptance.allowed) {
     return failure(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
       {goal_acceptance_guard: acceptance}, "decision_rejection");
+  }
+  if (leaseRequest !== null) {
+    const dependency = todoExecutionDependencyRejection(projection.todos, input.todo_id, input.now);
+    if (dependency !== null) return failure(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition}, "decision_rejection");
   }
 
   const mutationAuthority = canonicalAuthorityObject(

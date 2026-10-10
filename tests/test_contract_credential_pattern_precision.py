@@ -41,6 +41,9 @@ def _scan_line(tmp_path: Path, line: str) -> dict[str, list[str]]:
         f"{TOKEN_ASSIGN}config.token)",
         AUTH_HEADER,
         "AK" + "IAIOSFODNN7EXAMPLE",
+        f"{AUTH_HEADER} Basic {{encoded}}",
+        f'auth = f"Proxy-{AUTH_HEADER} Basic {{encoded}}\\r\\n"',
+        f"{AUTH_HEADER} Basic {{config.encoded}}",
     ],
 )
 def test_non_literal_credential_hits_are_downgraded(tmp_path: Path, line: str) -> None:
@@ -58,6 +61,10 @@ def test_non_literal_credential_hits_are_downgraded(tmp_path: Path, line: str) -
         f"{PASSWORD_ASSIGN}hunter2",
         f'{PASSWORD_ASSIGN}"hunter2",',
         "AK" + "IA1234567890ABCDEF",
+        f"{AUTH_HEADER} Basic QWxhZGRpbjpvcGVu",
+        f"{AUTH_HEADER} Basic {{encoded}}literal",
+        f"{AUTH_HEADER} Basic {{encoded}} QWxhZGRpbjpvcGVu",
+        f"{AUTH_HEADER} Basic {{encoded + literal}}",
     ],
 )
 def test_literal_credential_hits_stay_errors(tmp_path: Path, line: str) -> None:

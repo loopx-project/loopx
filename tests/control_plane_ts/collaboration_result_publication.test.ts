@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady } from "../../loopx/control_plane/collaboration/result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, resultAttachmentRefs } from "../../loopx/control_plane/collaboration/result_publication.ts";
 
 const request = { request_id: "a".repeat(64), goal_id: "delivery", agent_id: "worker", source_id: "chat:original" };
 const initial = { ...request, phase: "conclusion", text: "Waiting for review.", decision: "adopt" };
@@ -56,4 +56,23 @@ test("later delivery waits for verified predecessors, including exact update ide
   assert.equal(collaborationResultDeliveryReady({ result: next, previous_delivery: { status: "delivered" } }).ready, false);
   assert.equal(collaborationResultDeliveryReady({ result: next, previous_delivery: { status: "delivered", result_key: next.previous_result_key } }).ready, true);
   assert.equal(collaborationResultDeliveryReady({ result: {}, previous_delivery: null }).ready, true);
+});
+
+test("explicit result files participate in immutable retry identity", () => {
+  const attachment = {ref: "reports/output.pdf", name: "output.pdf", size: 12, sha256: "a".repeat(64)};
+  const source = {...input, update_id: null, results: [], attachments: [attachment]};
+  const plan = planCollaborationResult(source);
+  const replay = {...source, results: [observation("conclusion", plan.value as JsonObject)]};
+  assert.equal(planCollaborationResult(replay).replay, true);
+  for (const attachments of [[], [{...attachment, sha256: "b".repeat(64)}], [{...attachment, size: 13}]]) {
+    assert.throws(() => planCollaborationResult({...replay, attachments}), /conflicting/);
+  }
+  for (const ref of ["/private/report", "../outside", "link/../outside", "https://example.test/file", "C:\\file"])
+    assert.throws(() => resultAttachmentRefs({refs: [ref]}), /relative workspace/);
+  assert.throws(() => resultAttachmentRefs({refs: ["report", "report"]}), /duplicate/);
+  assert.throws(() => resultAttachmentRefs({refs: ["report"], workspace_current: false}), /instance changed/);
+  assert.throws(() => resultAttachmentRefs({refs: ["a", "b", "c", "d", "e"]}), /four/);
+  for (const patch of [{size: 0}, {size: 30 * 1024 * 1024 + 1}, {name: "another.pdf"}, {sha256: "A".repeat(64)}]) {
+    assert.throws(() => planCollaborationResult({...source, attachments: [{...attachment, ...patch}]}), /attachment/);
+  }
 });

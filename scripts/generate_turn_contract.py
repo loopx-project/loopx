@@ -48,6 +48,7 @@ FACT_NAMES = frozenset(
         "host_failure_present",
         "retry_state",
         "budget_state",
+        "validation_recovery",
     }
 )
 

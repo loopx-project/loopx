@@ -22,6 +22,7 @@ import {
 
 export const POSTGRESQL_STORE_IDENTITY_PATTERN = /^postgresql:[0-9a-f]{32}$/;
 const POSTGRESQL_PROVIDER_REVISION_PATTERN = /^postgresql:([0-9a-f]{32}):([1-9]\d*)$/;
+const POSTGRESQL_STORE_IDENTITY_LOCK_KEY = "5522768808912313929";
 export const POSTGRESQL_SCHEMA_VERSION = "loopx_postgresql_authority_store_v0";
 export const DEFAULT_POSTGRESQL_MAX_COMMIT_BYTES = 16 * 1024 * 1024;
 
@@ -356,6 +357,19 @@ async function requireStoreIdentity(
   return String(metadata.store_identity);
 }
 
+async function lockStoreIdentityTransaction(
+  connection: PostgreSqlAuthorityConnection,
+  mode: "shared" | "exclusive",
+): Promise<void> {
+  const lockFunction = mode === "shared"
+    ? "pg_advisory_xact_lock_shared"
+    : "pg_advisory_xact_lock";
+  await connection.query(
+    `SELECT ${lockFunction}($1::bigint)`,
+    [POSTGRESQL_STORE_IDENTITY_LOCK_KEY],
+  );
+}
+
 /**
  * Administrative schema installation. Call this only from the authenticated
  * service deployment path with a newly minted database-incarnation identity.
@@ -484,6 +498,7 @@ export async function rotatePostgreSqlAuthorityStoreIdentity(
   let releaseError: Error | undefined;
   try {
     await connection.query("BEGIN");
+    await lockStoreIdentityTransaction(connection, "exclusive");
     const metadata = oneRow(await connection.query(
       `SELECT schema_version, store_identity
        FROM loopx_control_plane.authority_store_metadata
@@ -675,6 +690,9 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
     let releaseError: Error | undefined;
     try {
       await beginTenantTransaction(connection, this.tenantId, { readOnly: false });
+      // Keep the identity lock ahead of the per-Goal head lock. Shared mode
+      // preserves cross-Goal concurrency while rotation takes exclusive mode.
+      await lockStoreIdentityTransaction(connection, "shared");
       const storeIdentity = await requireStoreIdentity(connection);
       await connection.query(
         `INSERT INTO loopx_control_plane.authority_heads

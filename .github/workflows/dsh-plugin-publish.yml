@@ -1,0 +1,77 @@
+name: Publish DSH Plugin to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing published DSH plugin release tag"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-plugin-npm-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'loopx-project/loopx' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/dsh-loopx-plugin
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Require a merged, published release with matching package identity
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+          assert.equal(process.env.RELEASE_TAG, `dsh-loopx-plugin-v${manifest.version}`)
+          mkdirSync('output', { recursive: true })
+          appendFileSync(process.env.GITHUB_ENV, `DSH_ARTIFACT=output/${manifest.name}-${manifest.version}.tgz\n`)
+          NODE
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft > output/release.json
+          node -e 'const r=require("./output/release.json"); require("node:assert/strict").equal(r.isDraft, false)'
+      - name: Download the immutable GitHub package
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$(basename "$DSH_ARTIFACT")" --dir output
+          tar -xOf "$DSH_ARTIFACT" package/package.json > output/manifest.json
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { appendFileSync, readFileSync } from 'node:fs'
+          const source = JSON.parse(readFileSync('package.json', 'utf8'))
+          const packed = JSON.parse(readFileSync('output/manifest.json', 'utf8'))
+          for (const field of ['name', 'version', 'main', 'exports', 'dsh', 'peerDependencies', 'repository', 'keywords']) {
+            assert.deepEqual(packed[field], source[field], `release artifact ${field} differs from its tag`)
+          }
+          const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(source.name)}`, {
+            signal: AbortSignal.timeout(15_000),
+          })
+          assert(response.ok || response.status === 404, `registry lookup failed: HTTP ${response.status}`)
+          const exists = response.ok && !!(await response.json()).versions?.[source.version]
+          appendFileSync(process.env.GITHUB_ENV, `DSH_ALREADY_PUBLISHED=${exists}\n`)
+          NODE
+      - name: Publish the same bytes with npm trusted publishing
+        if: env.DSH_ALREADY_PUBLISHED != 'true'
+        run: npm publish "$DSH_ARTIFACT" --access public --tag latest --ignore-scripts --provenance
+      - name: Read back npm bytes, latest, and marketplace repository discovery
+        run: node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT"

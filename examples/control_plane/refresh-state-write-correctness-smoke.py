@@ -76,7 +76,7 @@ def dry_run_payload(registry_path: Path, runtime: Path, project: Path) -> dict:
         state_file=None,
         classification="state_refreshed",
         recommended_action="preview refresh-state correctness packet",
-        next_action="Review the dry-run packet before writing local state.",
+        next_action=None,
         delivery_batch_scale="single_surface",
         delivery_outcome="surface_only",
         dry_run=True,
@@ -90,8 +90,13 @@ def main() -> None:
         state_refresh.now_local = lambda: GENERATED_AT
         with tempfile.TemporaryDirectory(prefix="loopx-refresh-write-correctness-") as raw_tmp:
             registry_path, runtime, project = write_fixture(Path(raw_tmp))
+            state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+            state_before, registry_before = state_path.read_bytes(), registry_path.read_bytes()
             first = dry_run_payload(registry_path, runtime, project)
             second = dry_run_payload(registry_path, runtime, project)
+            assert state_path.read_bytes() == state_before
+            assert registry_path.read_bytes() == registry_before
+            assert not runtime.exists()
 
             assert first["dry_run"] is True, first
             assert first["appended"] is False, first
@@ -120,7 +125,8 @@ def main() -> None:
             preview = packet["preview"]
             assert preview["mode"] == "dry_run", packet
             assert preview["non_destructive"] is True, packet
-            assert preview["expected_write_scopes"] == ["active_state", "runtime_history"], packet
+            # A history-only refresh does not rewrite the shared Next Action.
+            assert preview["expected_write_scopes"] == ["runtime_history"], packet
             assert "append refresh-state run" in preview["patch_summary"], packet
 
             assert packet["lock_boundary"]["kind"] == "per_goal", packet

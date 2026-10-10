@@ -2,7 +2,8 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   goalPathSegment,
-  readGoalHeartbeatReceipts,
+  heartbeatReceiptStatus,
+  type HeartbeatReceiptStatus,
 } from "../rollout_receipt_log.ts";
 import {
   jsonObject,
@@ -45,7 +46,6 @@ export interface SchedulerHeartbeatFollowupResult extends JsonObject {
 }
 
 type FollowupOperation = "ack" | "host_failure";
-type ReceiptStatus = "fresh" | "missing" | "stale";
 
 function optionalText(value: unknown): string | null {
   if (value === undefined || value === null || value === "") return null;
@@ -127,25 +127,9 @@ function compactBefore(value: JsonObject): JsonObject {
   };
 }
 
-
-async function heartbeatReceiptStatus(
-  runtimeRoot: string,
-  goalId: string,
-  agentId: string,
-  turnInstanceId: string,
-): Promise<ReceiptStatus> {
-  const receipts = await readGoalHeartbeatReceipts(runtimeRoot, goalId, agentId);
-  if (receipts === null) return "missing";
-  const firstMatch = receipts.findIndex((event) => event.run_id === turnInstanceId);
-  if (firstMatch < 0) return "missing";
-  return receipts.slice(firstMatch + 1).some((event) => event.run_id !== turnInstanceId)
-    ? "stale"
-    : "fresh";
-}
-
 function receiptFailure(
   request: SchedulerHeartbeatFollowupRequest,
-  status: Exclude<ReceiptStatus, "fresh">,
+  status: Exclude<HeartbeatReceiptStatus, "fresh">,
 ): SchedulerHeartbeatFollowupResult {
   const facts = request.host_facts;
   const operation = followupOperation(facts);
@@ -177,6 +161,14 @@ function receiptFailure(
     quota_spend_performed: false,
     delivery_outcome: "surface_only",
   };
+}
+
+function commitReceiptFailureStatus(
+  commit: SchedulerHeartbeatCommitResult,
+): Exclude<HeartbeatReceiptStatus, "fresh"> | null {
+  if (commit.reason_code === "heartbeat_receipt_missing") return "missing";
+  if (commit.reason_code === "heartbeat_receipt_stale") return "stale";
+  return null;
 }
 
 function schedulerState(commit: SchedulerHeartbeatCommitResult): JsonObject | null {
@@ -344,18 +336,24 @@ export async function evaluateSchedulerHeartbeatFollowup(
   const request = requestObject(value);
   const facts = request.host_facts;
   if (request.require_heartbeat_receipt) {
-    const status = await heartbeatReceiptStatus(
-      request.runtime_root,
-      String(facts.goal_id),
-      String(facts.agent_id),
-      String(request.turn_instance_id),
-    );
+    const status = await heartbeatReceiptStatus({
+      runtimeRoot: request.runtime_root,
+      goalId: String(facts.goal_id),
+      agentId: String(facts.agent_id),
+      turnInstanceId: String(request.turn_instance_id),
+    });
     if (status !== "fresh") return receiptFailure(request, status);
   }
   const commit = await evaluateSchedulerHeartbeatHostFacts({
     ...facts,
     runtime_root: request.runtime_root,
+  }, {
+    heartbeatReceiptTurnInstanceId: request.require_heartbeat_receipt
+      ? request.turn_instance_id
+      : null,
   });
+  const receiptStatus = commitReceiptFailureStatus(commit);
+  if (receiptStatus !== null) return receiptFailure(request, receiptStatus);
   if (commit.status === "conflict") return compatibilityFailure(request, commit);
   return followupOperation(facts) === "ack"
     ? ackResult(request, commit)

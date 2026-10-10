@@ -28,7 +28,7 @@ The `deepseek-harness` host surface (aliases: `deepseek_harness`,
 ```bash
 python -m loopx.dsh_goal_mode \
   --cordis /path/to/cordis.yml \
-  --model deepseek-v4-flash \
+  --model deepseek-flash \
   --provider deepseek-official
 ```
 
@@ -128,7 +128,7 @@ SDK 以 `finish_reason=max-tokens` 结束时，内置 host 会产生不可自动
   settings for the real runtime.
 - Provider, model and reasoning effort come from the managed execution profile
   (`loopx/control_plane/turn_driver/execution_profile.py`): product defaults
-  `deepseek-official` / `deepseek-v4-flash` / `high`, overridden by
+  `deepseek-official` / `deepseek-flash` / `high`, overridden by
   `LOOPX_TURN_PROVIDER` / `LOOPX_TURN_MODEL` / `LOOPX_TURN_REASONING_EFFORT` and,
   at lower precedence, by the legacy `DSH_PROVIDER` / `DSH_MODEL`. An explicit CLI
   value wins over both, and the resolved profile reports its own source. A
@@ -152,8 +152,8 @@ does not claim managed supervisor recovery, outer wake/timer ownership, or a
 cross-process resume guarantee.
 
 See `docs/integrations/deepseek-harness-connector.md` for the full connector
-walkthrough and `examples/dsh-turn-host-adapter-smoke.py` plus
-`examples/loopx-turn-dsh-e2e-smoke.py` for hermetic smokes. With the optional
+walkthrough, `tests/test_dsh_goal_mode.py` for the adapter contract, and
+`examples/loopx-turn-dsh-e2e-smoke.py` for the hermetic end-to-end smoke. With the optional
 SDK installed, run `examples/loopx-turn-dsh-real-e2e-smoke.py` once with
 `--host generic-cli` and once with `--host dsh`; both paths clear ambient DSH
 home variables and prove the explicit SDK-home wiring.

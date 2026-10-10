@@ -15,6 +15,7 @@ from loopx_finance_value_discovery.presentation_view import (  # noqa: E402
     validate_decision_research_view,
 )
 from loopx_finance_value_discovery.lark_projection import (  # noqa: E402
+    build_decision_research_lark_card,
     build_source_period_metrics_lark_card,
 )
 
@@ -332,6 +333,56 @@ def test_lark_card_calls_missing_period_evidence_missing_not_zero() -> None:
     markdown = card["elements"][0]["text"]["content"]
 
     assert "missing (not zero)" in markdown
+
+
+def test_research_card_without_period_metrics_keeps_review_basis() -> None:
+    view = _valid_view()
+    view["metrics"].append({
+        "id": "supply", "label": "Reported supply", "value": "123456789.1234567891 SYN",
+        "detail": "No source as-of height was provided; not a flow measurement.", "tone": "warning",
+    })
+    frozen = deepcopy(view)
+    card = build_decision_research_lark_card(view)
+    markdown = card["elements"][0]["text"]["content"]
+    assert "Insufficient Evidence" in markdown
+    assert "2026-01-15T12:00:00+00:00" in markdown
+    assert "123456789.1234567891 SYN" in markdown
+    assert "not a flow measurement" in markdown
+    assert "Counterevidence" in markdown and "Capital intensity" in markdown
+    assert "Refutes" in markdown and "Higher capital expenditure" in markdown
+    assert "Next review: After the official filing" in markdown
+    assert "artifact:synthetic-research-packet" in markdown
+    assert "active method changed: false" in markdown
+    assert "trading allowed: false" in markdown
+    assert "No source-period metrics" in markdown
+    assert "truncated" not in markdown
+    assert view == frozen
+
+
+def test_research_card_does_not_silently_cut_counterevidence_for_capacity() -> None:
+    view = _valid_view()
+    original = view["entities"][0]
+    view["entities"] = []
+    for index in range(3):
+        entity = deepcopy(original)
+        entity["entity_id"] = f"synthetic-{index}"
+        entity["counterevidence"] = ["Unknown source boundary " * 24] * 12
+        view["entities"].append(entity)
+    validate_decision_research_view(view)
+    with pytest.raises(ValueError, match="exceeds card capacity"):
+        build_decision_research_lark_card(view)
+
+
+def test_period_card_keeps_source_numeric_precision() -> None:
+    view = _valid_view()
+    metric = _source_period_metric()
+    metric["value"] = 123456789.123456
+    view["source_period_metrics"] = [metric]
+    view["spot_market_identity"] = _spot_market_identity()
+    view["spot_market_identity"]["contexts"][0]["mark_price"] = 12.123456789
+    card = build_decision_research_lark_card(view)
+    assert "123456789.123456 USD" in card["elements"][0]["text"]["content"]
+    assert "12.123456789" in card["elements"][0]["text"]["content"]
 
 
 def test_lark_card_escapes_dynamic_markdown_without_changing_the_view() -> None:

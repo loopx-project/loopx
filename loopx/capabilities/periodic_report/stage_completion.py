@@ -8,6 +8,7 @@ from ...control_plane.goals.goal_frontier.terminal import (
     GOAL_TERMINAL_STATE_SCHEMA_VERSION,
 )
 from ...control_plane.goals.goal_vision_state import goal_vision_state_is_closed
+from ...control_plane.todos.contract import normalize_todo_replan_obligation_id
 from ...control_plane.work_items.autonomous_replan_ack import (
     normalize_projected_autonomous_replan_ack,
 )
@@ -131,7 +132,10 @@ def derive_periodic_report_stage_completion(
         ]
         if not any(trigger.get("kind") == _SUCCESSOR_TRIGGER for trigger in triggers):
             return None
-        frontier_identity = _text(obligation.get("frontier_identity"))
+        obligation_id = normalize_todo_replan_obligation_id(obligation.get("obligation_id"))
+        # Vision successors carry the accepted obligation identity; an explicit
+        # monitor frontier remains the version for existing stage receipts.
+        frontier_identity = _text(obligation.get("frontier_identity")) or obligation_id or ""
         obligation_agent = _text(obligation.get("agent_id") or obligation.get("claimed_by"))
         if obligation_agent and obligation_agent != agent_id:
             return None
@@ -139,6 +143,8 @@ def derive_periodic_report_stage_completion(
         semantic_delta = _mapping(
             normalized_ack.get("semantic_delta") if normalized_ack else None
         )
+        ack_obligation_id = normalize_todo_replan_obligation_id(semantic_delta.get("obligation_id"))
+        ack_frontier_identity = _text(_mapping(normalized_ack).get("frontier_identity")) or ack_obligation_id or ""
         ack_agent = _text(
             normalized_ack.get("agent_id") or normalized_ack.get("claimed_by")
             if normalized_ack
@@ -154,7 +160,8 @@ def derive_periodic_report_stage_completion(
         if (
             not frontier_identity
             or normalized_ack is None
-            or _text(normalized_ack.get("frontier_identity")) != frontier_identity
+            or ack_frontier_identity != frontier_identity
+            or (obligation_id is not None and ack_obligation_id != obligation_id)
             or _SUCCESSOR_TRIGGER not in ack_trigger_kinds
             or not ack_outcomes.intersection(_SUCCESSOR_OUTCOMES)
             or successor_identity is None
@@ -199,13 +206,16 @@ def derive_periodic_report_stage_completion_from_runs(
     goal_frontier_projection: Mapping[str, Any],
     settled_replan_obligation: Mapping[str, Any] | None = None,
     settled_replan_ack: Mapping[str, Any] | None = None,
+    source_run_path: str | None = None,
 ) -> dict[str, Any] | None:
     """Derive the boundary from durable runtime history and current frontier."""
 
     normalized_agent_id = _text(agent_id)
     if not normalized_agent_id:
         return None
+    current_vision: Mapping[str, Any] | None = None
     successor_vision: Mapping[str, Any] | None = None
+    successor_run: Mapping[str, Any] | None = None
     closed_vision: Mapping[str, Any] | None = None
     outcome_checkpoint: Mapping[str, Any] | None = None
     for raw_run in latest_runs:
@@ -215,10 +225,13 @@ def derive_periodic_report_stage_completion_from_runs(
             vision["generated_at"] = _text(run.get("generated_at"))
         if _text(vision.get("agent_id")) != normalized_agent_id:
             continue
+        if current_vision is None:
+            current_vision = vision
         if successor_vision is None and not goal_vision_state_is_closed(
             vision.get("state")
         ):
             successor_vision = vision
+            successor_run = run
         checkpoint = _mapping(run.get("vision_checkpoint"))
         if (
             closed_vision is None
@@ -232,6 +245,9 @@ def derive_periodic_report_stage_completion_from_runs(
         return None
     terminal_state = _mapping(goal_frontier_projection.get("terminal_state"))
     if _validated_terminal_state(terminal_state):
+        if current_vision is not closed_vision:
+            # Do not skip a newer Vision to reuse an older material closure.
+            return None
         return derive_periodic_report_stage_completion(
             closed_vision=closed_vision,
             outcome_checkpoint=outcome_checkpoint,
@@ -239,6 +255,27 @@ def derive_periodic_report_stage_completion_from_runs(
         )
     if successor_vision is None:
         return None
+    if (
+        source_run_path is not None
+        and _mapping(successor_run).get("json_path") != source_run_path
+    ):
+        return None
+    ack = _mapping(settled_replan_ack)
+    if not _text(ack.get("frontier_identity")):
+        accepted_delta = _mapping(ack.get("semantic_delta"))
+        # The selected Vision and accepted ACK must occupy the same durable run.
+        run = _mapping(successor_run)
+        run_ack = normalize_projected_autonomous_replan_ack(
+            dict(_mapping(run.get("autonomous_replan_ack")))
+        )
+        if (
+            run_ack is None
+            or run_ack.get("semantic_delta") != accepted_delta
+            or _text(run.get("agent_id")) not in {"", normalized_agent_id}
+            or _text(run_ack.get("agent_id") or run_ack.get("claimed_by"))
+            not in {"", normalized_agent_id}
+        ):
+            return None
     return derive_periodic_report_stage_completion(
         closed_vision=closed_vision,
         outcome_checkpoint=outcome_checkpoint,

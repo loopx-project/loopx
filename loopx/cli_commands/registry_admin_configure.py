@@ -3,6 +3,10 @@ from __future__ import annotations
 import argparse
 
 from ..execution_profile import TURN_GRANULARITY_CHOICES
+from ..control_plane.goals.goal_vision_policy import (
+    DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+    MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+)
 from ..orchestration import EXPLORE_HARNESS_PROFILES
 from .registry_admin_peer import (
     register_peer_runtime_arguments,
@@ -31,7 +35,8 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         choices=TURN_GRANULARITY_CHOICES,
         help=(
             "Set sticky goal turn granularity. fine plans small checkpoints within "
-            "a coherent work slice; completed-Todo review cadence defaults to 5 in both modes."
+            "a coherent work slice; review defaults to "
+            f"{DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD} settled work Turns in both modes."
         ),
     )
     configure_goal_parser.add_argument(
@@ -40,7 +45,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         choices=range(1, 6),
         help=(
             "Require goal review after this many same-agent advancement Todo completions "
-            "without a covering outcome checkpoint. Default 5; use 2 or 3 for earlier "
+            "without a covering outcome checkpoint, instead of the default settled-Turn "
             "review. This writes a Goal override; use the clear flag to inherit the "
             "machine default. Applies to standard and fine modes."
         ),
@@ -52,6 +57,18 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
             "Remove the Goal review-cadence override and restore live machine-default "
             "inheritance."
         ),
+    )
+    configure_goal_parser.add_argument(
+        "--execution-replan-after-turns", type=int,
+        choices=range(1, MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD + 1),
+        help=(
+            "Review direction after this many settled work Turns, independently of "
+            f"Todo completion (product default: {DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD})."
+        ),
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-replan-after-turns", action="store_true",
+        help="Remove the Goal effective-Turn override and restore device/default inheritance.",
     )
     configure_goal_parser.add_argument(
         "--quota-compute",
@@ -80,6 +97,11 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Enable or disable waiting-projection repair for this goal.",
     )
     configure_goal_parser.add_argument("--pr-review-wait-for-ci", action=argparse.BooleanOptionalAction, default=None, help="Whether this Goal waits for CI during PR review; omitted inherits the machine default (true).")
+    configure_goal_parser.add_argument("--pr-review-order", choices=("forward", "reverse"), help="Goal default PR review direction; reverse inverts the complete actionable forward queue.")
+    configure_goal_parser.add_argument("--pr-review-agent-order", action="append", default=[], metavar="AGENT=forward|reverse|inherit", help="Persist one registered Agent's review direction; inherit removes only its override. Repeat for multiple Agents.")
+    owners = configure_goal_parser.add_mutually_exclusive_group()
+    owners.add_argument("--pr-review-owner-login", action="append", metavar="LOGIN", help="Replace the additional queue-owner logins; repeat for multiple accounts. The authenticated reviewer remains an owner. Grants no authority.")
+    owners.add_argument("--clear-pr-review-owner-logins", action="store_true", help="Use only the authenticated reviewer as queue owner; preserve direction and CI settings.")
     configure_goal_parser.add_argument("--clear-pr-review-configuration", action="store_true", help="Remove Goal PR review overrides and restore machine defaults.")
     configure_goal_parser.add_argument(
         "--change-quality-enabled",
@@ -213,12 +235,16 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Clear allowed child-agent domains.",
     )
     configure_goal_parser.add_argument(
+        "--explore-mode", choices=("off", "evidence", "planning"),
+        help="Explore Harness: off, evidence only, or evidence with read-only planning. Does not grant spawn authority.",
+    )
+    configure_goal_parser.add_argument(
         "--explore-graph-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
             "Enable or disable automatic Explore Graph projection at material "
-            "refresh boundaries. This is independent from Explore Harness planning."
+            "refresh boundaries. Legacy alias for the Explore Harness evidence layer."
         ),
     )
     configure_goal_parser.add_argument(

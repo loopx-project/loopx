@@ -220,7 +220,7 @@ def test_canonical_history_includes_archives_without_widening_active_lists(tmp_p
     assert {row["todo_id"] for row in active["todos"]} == {"todo_history_84", "todo_monitor"}
     assert all(len(row["text"]) <= 500 and row["text"].endswith("…") for row in active["todos"])
     exact = list_goal_todos(registry_path=registry, goal_id="history-goal", todo_id="todo_history_0")
-    assert exact["todos"][0]["archive_state"] == "archive"
+    assert exact["todo"]["archive_state"] == "archive"
     with pytest.raises(ValueError, match="requires role=agent and status=done"):
         list_goal_todos(registry_path=registry, goal_id="history-goal", read_scope="completed_history")
     with pytest.raises(ValueError, match="read_scope must be"):

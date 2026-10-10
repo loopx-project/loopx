@@ -6,6 +6,60 @@ import re
 import shlex
 from typing import Any
 
+from loopx.control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+
+
+def authoring_input_observations(text: str) -> dict[str, bool]:
+    """Recognize complete reviewed guidance for one-time output qualification.
+
+    These observations never classify runtime authority. Match the structured
+    owner and full instruction, not a keyword in arbitrary operator prose.
+    """
+    readback_purpose = (
+        "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
+        "compare .todo.text, status/claim. Excerpts cannot verify writes. "
+        "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+    )
+    vision_hint = (
+        "Replace example claims/refs with evidence; obey the live contract and total limit. "
+        "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. "
+        "checkpoint-context is only for recovery after the original committed Turn writeback; "
+        "follow its returned same-Turn recovery action, not a fresh-turn preflight."
+    )
+    observed = {"complete_todo_readback": False, "vision_cli_authoring": False}
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            if (value.get("id") == "read_back_authored_todos"
+                    and value.get("kind") == "operator_or_agent_actions"
+                    and value.get("purpose") == readback_purpose
+                    and "--todo-id '<todo-id>'" in str(value.get("command_template", ""))):
+                observed["complete_todo_readback"] = True
+            if (value.get("schema_version") == "goal_vision_replan_contract_v0"
+                    and value.get("authoring_hint") == vision_hint):
+                observed["vision_cli_authoring"] = True
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    try:
+        collect(json.loads(text))
+    except json.JSONDecodeError:
+        # Existential across every rendered candidate: an earlier line whose purpose is
+        # not exact must not mask a later complete instruction.
+        rendered_candidates = re.finditer(
+            r"^\d+\. `read_back_authored_todos` \(operator_or_agent_actions\): (?P<purpose>.*?)\n"
+            r"   - command/source: `loopx [^\n]*--todo-id '<todo-id>'`$",
+            text, re.MULTILINE,
+        )
+        observed["complete_todo_readback"] = any(
+            match.group("purpose") == readback_purpose
+            for match in rendered_candidates
+        )
+    return observed
+
 
 def heartbeat_user_language_prompt_revision(text: str) -> str | None:
     """Attribute the one-time user-language prompt transition in CLI probes.
@@ -19,6 +73,20 @@ def heartbeat_user_language_prompt_revision(text: str) -> str | None:
         "Lang=user; default=en; mix=asked/scoped.",
     )
     return "heartbeat_user_language_v1" if any(rule in text for rule in rules) else None
+
+
+def heartbeat_peer_admission_prompt_revision(text: str) -> str | None:
+    """Attribute readable peer guidance for a one-time CLI budget transition.
+
+    This recognizes the complete reviewed instruction block for validation only;
+    workspace and claim/lease admission remain owned by the live quota contract.
+    """
+    block = (
+        "Follow the current quota claim/lease and workspace contract plus repository rules. "
+        "Follow todo continuation policy. Task-scoped coordination grants no authority over "
+        "other agents. Keep scope in this prompt, not todo metadata."
+    )
+    return "heartbeat_peer_admission_v1" if block in text else None
 
 
 def host_prompt_static_safety_revision(text: str) -> str | None:
@@ -194,6 +262,18 @@ def guided_todo_delta_schema_versions(value: Any) -> list[str]:
 
 def todo_work_counts_schema_versions(value: Any) -> list[str]:
     return _schema_versions_for_key(value, "work_counts")
+
+
+def next_action_basis_count(value: Any) -> int:
+    """Count rendered read fences for the one-time task-step projection change."""
+    if isinstance(value, list):
+        return sum(next_action_basis_count(child) for child in value)
+    if not isinstance(value, dict):
+        return 0
+    basis = value.get("next_action_basis")
+    return int(isinstance(basis, str) and ENVELOPED_SHA256_PATTERN.fullmatch(basis) is not None) + sum(
+        next_action_basis_count(child) for child in value.values()
+    )
 
 
 def markdown_headings(text: str) -> list[str]:

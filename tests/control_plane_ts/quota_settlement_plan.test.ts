@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts";
+import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
+import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 
 const input = {
@@ -19,7 +21,13 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.equal(plan.steps[0].command_condition, "todo_deliverable_complete");
   assert.equal(plan.steps[0].conditional, undefined); // Validation itself is never optional.
   assert.match(plan.steps[0].precondition, /original declaration and current lease/);
+  assert.match(plan.steps[0].precondition, /Use --evidence for an artifact pointer/);
+  assert.match(plan.steps[0].precondition,
+    /--result-file requires approved Goal acceptance criteria bound to this Todo, not merely a Todo validator/);
   assert.match(plan.steps[0].precondition, /Todo done does not settle the Turn/);
+  assert.match(plan.steps[1].precondition, /--agent-vision-json/);
+  assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);
+  assert.match(plan.steps[1].precondition, /acceptance_summary/);
   assert.match(plan.steps[2].precondition, /declared completion validation/);
   assert.match(plan.steps[3].precondition, /matching writeback and quota spend receipts/);
   assert.equal(plan.steps[3].conditional, true);
@@ -37,6 +45,13 @@ test("in-flight progress neither executes completion nor rewrites the declaratio
   assert.equal(plan.steps[0].command_template, undefined);
   assert.equal(plan.steps[0].command_condition, undefined);
   assert.match(plan.steps[0].precondition, /keep the Todo open/);
+  assert.match(plan.steps[1].precondition, /^validation succeeded/);
+  assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
+  assert.match(plan.steps[1].precondition, /failure alone is not progress/);
+  assert.match(plan.steps[1].precondition, /outcome_gap: blocked.*blocker\/evidence IDs.*continuation checks/);
+  assert.equal(plan.steps[1].command_template, "writeback");
+  assert.equal(plan.steps[2].command_template, "spend");
+  assert.equal(plan.identity.turn_instance_id, "turn");
   assert.equal(plan.steps[3].conditional, true);
 });
 
@@ -48,6 +63,14 @@ test("autonomous replan never manufactures a Todo completion step", () => {
   assert.deepEqual(plan.steps.map(step => step.kind), ["validation", "durable_writeback", "quota_spend"]);
   assert.equal(plan.steps[0].command_template, undefined);
   assert.equal(plan.identity.binding_kind, "autonomous_replan");
+  assert.ok(plan.steps.every(step => step.vision_authoring === undefined));
+  assert.match(plan.steps[1].precondition, /^validation succeeded/);
+  assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
+  assert.match(plan.steps[1].precondition, /failure alone is not progress/);
+  assert.match(plan.steps[1].precondition, /outcome_gap: blocked.*blocker\/evidence IDs.*continuation checks/);
+  assert.equal(plan.steps[1].command_template, "writeback");
+  assert.equal(plan.steps[2].command_template, "spend");
+  assert.equal(plan.identity.turn_instance_id, "turn");
 });
 
 test("incomplete command facts or ambiguous identity fail closed", () => {
@@ -59,4 +82,20 @@ test("incomplete command facts or ambiguous identity fail closed", () => {
   assert.throws(() => turnScopedCliSettlementPlan({...input,
     identity: {...input.identity, replan_obligation_id: "replan"},
   }), /cannot bind both/);
+});
+
+
+test("ordinary and in-flight CLI expose one authoring owner without duplicate MCP guidance", () => {
+  for (const delivery_boundary of [undefined, "in_flight_continuation"]) {
+    const wire = settlementPlanPayload(turnScopedCliSettlementPlan({...input, delivery_boundary}));
+    const steps = wire.ordered_steps as Record<string, unknown>[];
+    assert.equal(steps.filter(step => step.vision_authoring).length, 1);
+    assert.deepEqual(steps[1].vision_authoring, visionAuthoringContract());
+    const mcp = projectMcpInteraction({ok: true, normal_delivery_allowed: true,
+      selected_todo: {todo_id: "todo"}, interaction_contract: {cli_channel: {settlement_plan: wire}}});
+    const contract = mcp.interaction_contract as Record<string, Record<string, unknown>>;
+    assert.equal(contract.cli_channel.settlement_plan, undefined);
+    assert.deepEqual(contract.mcp_channel.vision_authoring, steps[1].vision_authoring);
+    assert.match(visionAuthoringContract().authoring_hint as string, /original committed Turn writeback/);
+  }
 });

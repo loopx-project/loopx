@@ -275,7 +275,7 @@ def test_received_reaction_uncertain_operation_never_repeats_provider_create(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, _inbox, project = _fixture(tmp_path)
-    real_write = inbox_reactions_module._write_received_operation
+    real_write = inbox_reactions_module._write_reaction_creation_operation
     write_count = 0
 
     def fail_created_receipt(**kwargs: object) -> None:
@@ -287,7 +287,7 @@ def test_received_reaction_uncertain_operation_never_repeats_provider_create(
 
     monkeypatch.setattr(
         inbox_reactions_module,
-        "_write_received_operation",
+        "_write_reaction_creation_operation",
         fail_created_receipt,
     )
     created: list[tuple[str, str]] = []

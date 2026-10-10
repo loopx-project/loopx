@@ -511,6 +511,7 @@ def record_result(
     scope: CollaborationGoalScope | None = None,
     route: dict[str, Any] | None = None,
     update_id: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ):
     """Persist a receiver conclusion; the transport adapter validates its audience."""
     request_id = row["request_id"]
@@ -535,6 +536,7 @@ def record_result(
             plan = effect_runtime_result("collaboration.result.plan_publication", {
                 "request": row, "phase": phase, "text": text,
                 "decision": decision["decision"], "update_id": update_id,
+                "attachments": attachments,
                 "results": observations,
             })
         except EffectRuntimeRejected as exc:
@@ -568,6 +570,7 @@ def result_identity_matches(reply, row, path):
         effect_runtime_result("collaboration.result.plan_publication", {
             "request": row, "phase": reply.get("phase"), "text": reply.get("text"),
             "decision": reply.get("decision"), "update_id": reply.get("update_id"),
+            "attachments": reply.get("attachments"),
             "results": observations,
         })
     except (EffectRuntimeRejected, OSError, ValueError):
@@ -584,7 +587,7 @@ def _result_observation(key, value):
         "key": key,
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
-            "decision", "result_key", "previous_result_key", "update_id",
+            "decision", "result_key", "previous_result_key", "update_id", "attachments",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),

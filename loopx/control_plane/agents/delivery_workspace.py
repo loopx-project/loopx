@@ -124,3 +124,22 @@ def normalize_delivery_workspace_snapshot(value: Any) -> dict[str, Any] | None:
         ),
     }
     return _workspace_result(_runtime_result("normalize", workspace=prepared))
+
+
+def qualify_delivery_workspace_isolation(
+    workspace: dict[str, Any] | None,
+    *,
+    multi_agent_goal: bool,
+    explicit_peer_worktree_requirement: bool | None,
+    task_repository: str | None = None,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Delegate Git/local isolation policy to the existing typed owner."""
+    result = _runtime_result(
+        "isolation", workspace=workspace, multi_agent_goal=multi_agent_goal,
+        explicit_peer_worktree_requirement=explicit_peer_worktree_requirement,
+        task_repository=task_repository,
+    )
+    required = result.get("peer_independent_worktree_required")
+    if not isinstance(required, bool):
+        raise RuntimeError("TypeScript delivery workspace isolation result shape mismatch")
+    return _workspace_result(result), required

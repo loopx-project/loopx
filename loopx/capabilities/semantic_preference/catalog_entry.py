@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .contract import REQUEST_SCHEMA
+
 
 SEMANTIC_PREFERENCE_CATALOG_ENTRY: dict[str, Any] = {
     "id": "semantic-preference",
@@ -60,7 +62,7 @@ SEMANTIC_PREFERENCE_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "loopx/capabilities/semantic_preference/README.md",
         },
         {
-            "schema_version": "semantic_preference_provider_request_v0",
+            "schema_version": REQUEST_SCHEMA,
             "module": "loopx.capabilities.semantic_preference.contract",
             "doc": "loopx/capabilities/semantic_preference/README.md",
         },

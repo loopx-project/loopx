@@ -15,10 +15,8 @@ from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
     REPO_ROOT,
     GOAL_ID,
-    SELECTED_REPLAN_TODO_ID,
     TODO_ID,
     TURN_ID,
-    _configure_selected_todo_replan_fixture,
     _initialize_git_checkout,
     _run_cli,
     _write_fixture,
@@ -32,7 +30,7 @@ def _assert_checkpoint_instructions(rendered: str) -> None:
     assert "same Goal, Agent, Todo/obligation, Turn, and delivery fields" in rendered
     assert "Remove previously executed state-mutation options" in rendered
     for option in (
-        "--next-action", "--autonomous-replan-recorded", "--repair-delta-kind",
+        "--next-action", "--next-action-basis", "--autonomous-replan-recorded", "--repair-delta-kind",
         "--usage-json", "--usage-codex-session",
     ):
         assert option in rendered
@@ -215,7 +213,9 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
     state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     original_state = state_path.read_bytes()
     if mutation:
-        assert mutation[1] in original_state.decode("utf-8")
+        assert mutation[1] not in original_state.decode("utf-8")
+        assert first["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+        assert first["recommended_action_resolution"]["recommended_action"] == mutation[1]
     supplement = (
         (
             "--vision-unchanged-reason",
@@ -304,30 +304,21 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
     selected_marker = (
-        f"todo_id={SELECTED_REPLAN_TODO_ID} status=open "
+        f"todo_id={TODO_ID} status=open "
         "task_class=advancement_task action_kind=validate "
-        f"claimed_by={AGENT_ID} -->"
+        "-->"
     )
     assert selected_marker in state_text
-    state_path.write_text(
-        state_text.replace(
-            selected_marker,
-            selected_marker.replace(" -->", " validation_command=pytest -->"),
-            1,
-        ),
-        encoding="utf-8",
-    )
     turn_id = "turn-checkpoint-open-validator"
     binding = (
         "--agent-id",
         AGENT_ID,
         "--todo-id",
-        SELECTED_REPLAN_TODO_ID,
+        TODO_ID,
         "--turn-instance-id",
         turn_id,
     )
@@ -339,17 +330,14 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
         "--codex-app",
         "--goal-id",
         GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--turn-instance-id",
-        turn_id,
+        *binding,
         "--scan-path",
         str(project),
         cwd=project,
     )
     assert rc == 0, guard
-    assert guard["decision"] == "autonomous_replan_required"
-    assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    assert guard["decision"] == "run"
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
 
     delivery = (
         "refresh-state",
@@ -358,6 +346,8 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
         *binding,
         "--classification",
         "validated_progress",
+        "--progress-scope",
+        "goal",
         "--delivery-batch-scale",
         "implementation",
         "--delivery-outcome",
@@ -376,14 +366,32 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
         "--suppress-external-sinks",
     )
     mutations = (
-        "--autonomous-replan-recorded",
-        "--repair-delta-kind",
-        "successor_or_supersede",
+        "--next-action",
+        "Inspect the remaining checkpoint recovery scope.",
     )
     rc, first = _run_cli(registry, runtime, *delivery, *mutations, cwd=project)
     assert rc == 0, first
     assert first["appended"] is True
     assert first["vision_checkpoint"]["decision"] == "missing_required"
+
+    checkpoint = first["vision_checkpoint"]
+    assert checkpoint["missing_baseline"] is True
+    assert checkpoint["required_resolution"] == ["write_vision_patch"]
+    instructions = render_state_refresh_markdown(first)
+    _assert_checkpoint_instructions(instructions)
+    assert "No persisted vision baseline is available" in instructions
+    assert "--vision-unchanged-reason" not in instructions
+
+    # A controller may install completion validation before checkpoint repair.
+    # The supplement repairs the existing receipt while the Todo remains open.
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            selected_marker,
+            selected_marker.replace(" -->", " validation_command=pytest -->"),
+            1,
+        ),
+        encoding="utf-8",
+    )
 
     vision = (
         "--vision-summary",
@@ -401,7 +409,7 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     )
 
     wrong_binding = list(delivery)
-    wrong_todo_index = wrong_binding.index(SELECTED_REPLAN_TODO_ID)
+    wrong_todo_index = wrong_binding.index(TODO_ID)
     wrong_binding[wrong_todo_index] = "todo_chain_000000000001"
     rc, wrong_identity = _run_cli(
         registry, runtime, *wrong_binding, *vision, cwd=project

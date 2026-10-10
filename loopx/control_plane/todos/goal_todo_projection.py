@@ -209,6 +209,7 @@ def retained_todo_summary_fields(
             rollout_events=rollout_events,
             item_limit=None,
             text_limit=None,
+            include_content_revision=False,
         )
         for role in ("user", "agent")
     }

@@ -14,6 +14,7 @@ sites fail premerge.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -208,7 +209,7 @@ INPUT_PRODUCER_ANCHOR = {
     "settlement_binding_kind": "loopx/control_plane/effect_program.ts::settlementIdentity",
 }
 PRODUCER_VOCABULARY_ANCHOR = {
-    "effective_action", "turn_route", "loop_disposition", "agent_scope_frontier_action", "turn_result_kind", "lease_action",
+    "effective_action", "turn_route", "loop_disposition", "agent_scope_frontier_action", "turn_result_kind",
     # First cross-runtime vocabulary carrying executed production evidence. One
     # named boundary, not a claim about the rest of the cross-runtime set.
     "settlement_binding_kind",
@@ -237,16 +238,16 @@ RETURN_PATH_ANCHOR = {
 TWIN_ROOT_ANCHOR = "loopx/control_plane"
 TWIN_BUDGET_ANCHOR = 43
 BUDGET_ANCHOR = {
-    "same_runtime_forks": 10,
-    "same_runtime_fork_definitions": 23,
+    "same_runtime_forks": 2,
+    "same_runtime_fork_definitions": 5,
     "conflicting_values": 16,
-    "conflicting_definitions": 55,
-    "schema_version_same_runtime_forks": 1,
+    "conflicting_definitions": 54,
+    "schema_version_same_runtime_forks": 0,
     "multi_value_twins": 8,
     "multi_value_forks": 2,
     "multi_value_forks_semantic": 1,
     "multi_value_fork_definitions": 6,
-    "same_runtime_forks_semantic": 8,
+    "same_runtime_forks_semantic": 2,
     "conflicting_values_semantic": 0,
 }
 # Budgets for the legacy should-run decision fields, anchored the same way so a
@@ -567,6 +568,47 @@ def check_invariant_domain(invariant: dict[str, Any], registry: dict[str, Any]) 
                 f"formal invariant {name} is enforced at {stage} over an empty domain")
     require(domain["verified"] <= domain["registered"],
             f"formal invariant {name} cannot verify more members than the registry holds")
+
+
+# M4 disposed of this private Python input. Keep its import boundary absent,
+# rather than claiming liveness from a compatibility-only enum with no callers.
+# The native lifecycle relation is retained against its actual TypeScript owner.
+RETIRED_LEASE_INPUT_MODULE = "loopx.control_plane.coordination.authority_core"
+RETIRED_LEASE_INPUT_SYMBOLS = frozenset({"LeaseAction", "LeaseModeGateCommand", "CoordinationCommand"})
+
+
+def check_retired_lease_input(registry: dict[str, Any], sources: list[SourceFile]) -> None:
+    from importlib.util import resolve_name
+
+    require("lease_action" not in registry["vocabularies"],
+            "retired lease input must not return to the registry")
+    lifecycle = registry["vocabularies"].get("task_lease_lifecycle_operation", {})
+    require(lifecycle.get("owners") == {
+        "python": None,
+        "typescript": "loopx/control_plane/work_items/task_lease_lifecycle_request.ts::TASK_LEASE_LIFECYCLE_OPERATIONS",
+    }, "native lease lifecycle coverage must retain its actual owner")
+    for source in sources:
+        if source.suffix != ".py":
+            continue
+        module = source.path.removesuffix(".py").replace("/", ".")
+        package = module.rpartition(".")[0]
+        for node in ast.walk(ast.parse(source.text)):
+            if module == RETIRED_LEASE_INPUT_MODULE:
+                names = set()
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                    names.add(node.name)
+                elif isinstance(node, ast.Assign):
+                    names.update(target.id for target in node.targets if isinstance(target, ast.Name))
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+                retired = sorted(names & RETIRED_LEASE_INPUT_SYMBOLS)
+                if retired:
+                    raise Drift(f"{source.path}:{node.lineno}: retired lease input definition {retired}")
+            if isinstance(node, ast.ImportFrom):
+                target = resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module
+                if target == RETIRED_LEASE_INPUT_MODULE:
+                    retired = sorted({alias.name for alias in node.names} & RETIRED_LEASE_INPUT_SYMBOLS)
+                    require(not retired, f"{source.path}:{node.lineno}: retired lease input import {retired}")
 
 
 def check_coverage_floor(registry: dict[str, Any]) -> str:
@@ -1129,6 +1171,7 @@ def main() -> int:
     registry = load_registry()
     coverage = check_coverage_floor(registry)
     sources = load_sources(REPO_ROOT)
+    check_retired_lease_input(registry, sources)
     registry_io_manifest = json.loads(
         (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
     )

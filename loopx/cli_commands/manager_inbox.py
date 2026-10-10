@@ -6,9 +6,11 @@ from ..agent_registry import registered_agent_ids_for_goal
 from ..capabilities.manager_context import (
     acknowledge,
     configure_delivery_target,
+    configure_delivery_scope,
     configure_evidence_scope,
 )
 from ..control_plane.projects.registry_codec import load_project_registry
+from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
 def register_manager_inbox(subparsers, add_format):
@@ -28,6 +30,7 @@ def register_manager_inbox(subparsers, add_format):
             "report",
             "status",
             "configure-read-scope",
+            "configure-delivery-scope",
             "configure-ssh-read-scope",
             "grant-delivery-target",
             "revoke-delivery-target",
@@ -54,12 +57,16 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--channel-id")
     parser.add_argument("--ssh-host")
     parser.add_argument("--read-goal-id", action="append", default=[])
+    parser.add_argument("--local-delivery-scope", choices=("all_registered", "selected"))
+    parser.add_argument("--sender-id", help="For configuring a new delivery source: its independently verified sender.")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--request-id")
     parser.add_argument(
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
     parser.add_argument("--reply-text")
+    parser.add_argument("--attachment-ref", action="append", default=[],
+                        help="For report: explicit relative file in the registered Goal workspace; bound-owner App only, at most four files.")
     parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
     parser.add_argument("--result-key", help="For acknowledge-return: the exact peer result read; defaults to the initial conclusion.")
     parser.add_argument("--related-todo-id", action="append", default=[])
@@ -74,8 +81,20 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        local_delivery_scope = getattr(args, "local_delivery_scope", None)
+        sender_id = getattr(args, "sender_id", None)
+        if args.manager_inbox_action != "configure-delivery-scope" and (local_delivery_scope is not None or sender_id is not None):
+            raise ValueError("--local-delivery-scope and --sender-id are only supported for configure-delivery-scope")
+        if args.manager_inbox_action == "configure-delivery-scope":
+            result = configure_delivery_scope(runtime_root, channel=args.channel_id or "",
+                local_delivery_scope=local_delivery_scope or "", sender_id=sender_id,
+                execute=args.execute)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if getattr(args, "update_id", None) is not None and args.manager_inbox_action != "report":
             raise ValueError("--update-id is only supported for report")
+        if getattr(args, "attachment_ref", None) and args.manager_inbox_action != "report":
+            raise ValueError("--attachment-ref is only supported for report")
         if getattr(args, "result_key", None) is not None and args.manager_inbox_action != "acknowledge-return":
             raise ValueError("--result-key is only supported for acknowledge-return")
         cursor = getattr(args, "cursor", None)
@@ -173,6 +192,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             from ..control_plane.collaboration.peers import read_inbox
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor)
+            result["instruction"] += " " + collaboration_answer_instruction()
             result["followthrough"] += (
                 " CLI: record assessment with manager-inbox acknowledge; optionally associate existing work "
                 "with manager-inbox link. Return audience-ready results with manager-inbox report "
@@ -189,6 +209,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.phase,
                 args.reply_text or "",
                 update_id=getattr(args, "update_id", None),
+                attachment_refs=getattr(args, "attachment_ref", None),
+                workspace=Path.cwd(),
                 registry=registry_path,
             )
         elif args.manager_inbox_action == "link":

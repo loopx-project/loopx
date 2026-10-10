@@ -693,6 +693,26 @@ def test_goal_runtime_defer_uses_user_gate_deadline_before_monitors() -> None:
     ] == "user_gate"
 
 
+def test_goal_runtime_recheck_uses_utc_instant_of_projected_deadlines(monkeypatch):
+    from loopx.control_plane.scheduler import scheduler_hint as module
+
+    now = datetime(2026, 8, 2, 6, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(module, "now_utc", lambda: now)
+    payload = _monitor_wait_payload()
+    for key, identity, due in [
+        ("agent_todo_summary", "earlier", "2026-08-02T14:01:00+08:00"),
+        ("user_todo_summary", "later", "2026-08-02T06:02:00Z"),
+    ]:
+        payload[key] = {"frontier_deadline": {"schema_version": "todo_frontier_deadline_v0",
+            "identity": identity, "source": "user_gate", "next_due_at": due, "candidate_count": 1}}
+    hint = build_scheduler_hint(payload, scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+        SchedulerRuntimeProfile.ARK_MANAGED_AGENT_GOAL))
+    continuation = hint["goal_runtime_continuation"]
+    assert continuation["disposition"] == "defer"
+    assert continuation["recheck_after_seconds"] == 60
+    assert continuation["recheck_source"] == "frontier_earliest_material_transition"
+
+
 def test_quota_human_gate_uses_future_user_gate_deadline_before_monitor() -> None:
     from loopx.control_plane.scheduler import monitor_todo as monitor_todo_mod
     from loopx.control_plane.scheduler import scheduler_hint as scheduler_hint_mod

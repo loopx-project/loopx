@@ -45,10 +45,9 @@ def _marker_value(turn_number: int) -> str:
 def _write_fixture(root: Path, *, turn_count: int) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
-    workspace = root / "workspace"
+    workspace = project
     runtime.mkdir(parents=True)
-    workspace.mkdir(parents=True)
-    (workspace / "docs").mkdir()
+    (workspace / "docs").mkdir(parents=True)
     state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state.parent.mkdir(parents=True)
     state.write_text(

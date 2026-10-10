@@ -373,7 +373,10 @@ required material。
 | M1 | 基于完整 Goal authority 和 receipt 的 optional pure builder；无 consumer 或 writer。 | 批准第 12 节决策与 schema 限制。 | 确定性 fixture、mutation check；若双 runtime 消费则做 Python/TypeScript parity；public-boundary scan。 | 移除 default-off builder 与 projection。 |
 | M2 | 一个只读 Agent-scoped Vision-gap consumer。 | M1 conformance，并由维护者显式批准 consumer 与 recovery UX。 | 端到端证明 drift 可见、同 revision replay 安静且不修改 Vision/Todo/route。 | 禁用 consumer；保留 canonical registry 与 receipt。 |
 
-合并 M0 不授权后续 milestone。
+合并 M0 不授权后续 milestone。附录 D 的 F2 fixture 已在 M1 前以 conformance
+harness 形式签入
+（[examples/goal-direction-baseline-f2-smoke.py](../../../examples/goal-direction-baseline-f2-smoke.py)）；
+这不授权 M1，也不新增任何 runtime builder、writer 或 consumer。
 
 ## 12. 开放决策
 
@@ -400,6 +403,18 @@ required material。
   qualification
 - **对规范设计的影响：** 初始提案
 
+### 2026-10-04 — F2 synthetic fixture（M1 前）
+
+- **基线：** `99839ae`
+- **交付：** 附录 D 的 F2 行以 checked-in public-safe smoke 及其 mutation
+  arm 落地（`examples/goal-direction-baseline-f2-smoke.py`）；第 11 节附注
+  记录了 M1 保持关闭的原因
+- **证据：** smoke 本地通过；`loopx check --scan-path
+  docs/architecture/rfcs` 干净；等待 PR 验证
+- **已知缺口：** 无 runtime builder、writer 或 consumer；F1 与 F3-F8 仍未
+  checked-in
+- **对规范设计的影响：** 无 —— 仅固定附录 D 的 F2
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | Owner / 批准 | 替代方案 | 修改的规范章节 |
@@ -413,6 +428,7 @@ required material。
 | E1 | 已审计当前 Material Frontier 语义。 | `41a95d9` | [Agent Material Frontier](../../reference/protocols/agent-material-frontier-v0.md) | documented | 仅 public contract；无 live material。 |
 | E2 | 路线变更 ownership 保持现有契约。 | `41a95d9` | [Goal Vision and Replan](../../reference/protocols/goal-vision-replan-contract-v0.md) | documented | 不证明 proposed baseline。 |
 | E3 | M0 repository 文档保持 public-safe。 | PR validation | `loopx check --scan-path docs/architecture/rfcs --scan-path docs/development/contributor-tasks.md` | pending | 仅文档 scope。 |
+| E4 | F2 revision-drift 不变量可执行且带 mutation 检查。 | `99839ae` | `python3 examples/goal-direction-baseline-f2-smoke.py` | 等待 PR 验证 | 仅虚构 id；无 runtime builder 或 live material。 |
 
 ## 附录 D：Synthetic drift fixture 计划
 
@@ -433,7 +449,9 @@ scheduler、Goal-amendment 或 route-write effect。
 
 M1 前应把该表变成 checked-in public-safe fixture 与 mutation test。Mutation arm
 必须故意放松 Agent 或 revision 匹配，并证明 F2 或 F3 会失败，从而避免测试因未
-真正执行 happy path 而误通过。
+真正执行 happy path 而误通过。F2 已 checked-in 于
+`examples/goal-direction-baseline-f2-smoke.py` 并带 mutation arm；其余 case
+在 M1 前保持开放。
 
 ## 附录 E：拒绝或已取代方案
 

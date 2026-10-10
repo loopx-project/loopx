@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -10,9 +11,16 @@ from .trace_runtime import TraceLog, require_nonempty_text
 
 
 def _nonnegative(value: float, field_name: str) -> float:
-    normalized = float(value)
-    if normalized < 0:
-        raise ValueError(f"{field_name} must be non-negative")
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a finite non-negative number")
+    try:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{field_name} must be a finite non-negative number"
+        ) from exc
+    if not math.isfinite(normalized) or normalized < 0:
+        raise ValueError(f"{field_name} must be a finite non-negative number")
     return normalized
 
 

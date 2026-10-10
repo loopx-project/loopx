@@ -669,7 +669,9 @@ def test_cached_host_result_cannot_resume_after_goal_recreation(
     )
 
     def write_source_journal() -> None:
-        with admission.source_journal_admission() as source_admission:
+        with admission.source_journal_admission(
+            runtime_root=runtime_root,
+        ) as source_admission:
             assert source_admission is not None
             turn_executor._write_journal(
                 path,
@@ -1059,7 +1061,7 @@ def test_enabled_host_result_rejects_receipt_local_path() -> None:
         (
             "evidence_refs",
             ["file:/tmp/private-result.json"],
-            "opaque 1-192 character public-safe reference",
+            "contains a local path",
         ),
     ],
 )
@@ -1316,11 +1318,15 @@ def test_reserved_managed_start_recovers_after_death_before_the_first_journal_wr
     assert [
         (row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)
     ] == [("reserved", f"{turn_key}:1")]
-    assert not list((runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json"))
+    assert not [
+        path
+        for path in (runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json")
+        if not path.name.endswith(".lock.holder.json")
+    ]
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 1))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
@@ -1366,7 +1372,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 1))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
@@ -1729,8 +1735,8 @@ def test_run_once_recoverable_failed_turn_rejects_session_identity_drift(
         "session_binding_resolver": lambda _turn_envelope: {
             "schema_version": "loopx_turn_session_binding_v0",
             "goal_id": "fixture-goal",
-            "agent_id": "codex-fixture",
-            "todo_id": "todo_from_another_turn",
+            "agent_id": "codex-from-another-agent",
+            "todo_id": "todo_fixture0001",
         },
         "project": tmp_path,
         "runtime_root": tmp_path / "runtime",

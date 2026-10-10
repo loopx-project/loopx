@@ -72,6 +72,73 @@ def test_project_conversation_delivers_only_to_its_registered_goal(fixture):
     assert not pending(root, "other", "peer")["items"]
 
 
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "goal-instance"])
+def test_guidance_upgrade_replays_original_request_without_rewriting_history(
+    fixture, monkeypatch, exact
+):
+    import loopx.capabilities.manager_context as context
+    from loopx.capabilities.manager_context.roundtrip import report
+
+    root, registry, session, turn, request = fixture
+    if exact:
+        data = json.loads(registry.read_text())
+        data["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+        registry.write_text(json.dumps(data))
+    # Persist through the real delivery owner using an older generated guide.
+    # Guidance is adapter metadata; the original user's content is unchanged.
+    with monkeypatch.context() as old_version:
+        old_version.setattr(context, "INSTRUCTION", "Earlier receiver guidance.")
+        first = deliver(root, registry, session=session, turn=turn, request=request)
+    rid = first["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Original assessment")
+    report(root, "research", "worker", rid, "conclusion", "Original result")
+    before = {p.relative_to(_root(root)): p.read_bytes()
+              for p in _root(root).rglob("*.json")}
+
+    for _ in range(2):
+        replay = deliver(root, registry, session=session, turn=turn, request=request)
+        assert replay == {**first, "replayed": True}
+    assert {p.relative_to(_root(root)): p.read_bytes()
+            for p in _root(root).rglob("*.json")} == before
+
+
+@pytest.mark.parametrize("change", ["message", "brief", "recipient"])
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "goal-instance"])
+def test_guidance_upgrade_still_rejects_original_request_content_conflicts(
+    fixture, monkeypatch, exact, change
+):
+    import loopx.capabilities.manager_context as context
+
+    root, registry, session, turn, request = fixture
+    if exact:
+        data = json.loads(registry.read_text())
+        data["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+        registry.write_text(json.dumps(data))
+    with monkeypatch.context() as old_version:
+        old_version.setattr(context, "INSTRUCTION", "Earlier receiver guidance.")
+        first = deliver(root, registry, session=session, turn=turn, request=request)
+    if change == "message":
+        turn = {**turn, "message": "Different original user content"}
+    elif change == "brief":
+        request = {**request, "brief": {
+            "schema_version": "collaboration_brief_v0",
+            "purpose": "A changed output destination",
+            "context": "A changed collaboration context",
+            "constraints": [], "inputs": [], "acceptance": ["Verify the changed destination"],
+            "return_requirement": "Return to the original conversation",
+        }}
+    else:
+        path = next(_root(root).glob("entries/*/" + first["request_id"] + ".json"))
+        _write(path, json.loads(path.read_text()) | {"agent_id": "peer"})
+    before = {p.relative_to(_root(root)): p.read_bytes()
+              for p in _root(root).rglob("*.json")}
+
+    with pytest.raises(ValueError, match="context request identity conflict"):
+        deliver(root, registry, session=session, turn=turn, request=request)
+    assert {p.relative_to(_root(root)): p.read_bytes()
+            for p in _root(root).rglob("*.json")} == before
+
+
 @pytest.mark.parametrize("strict_envelope", [False, True])
 @pytest.mark.parametrize("origin", ["web", "lark"])
 def test_lifecycle_only_registry_cannot_supply_context_recipients(
@@ -108,6 +175,48 @@ def test_lifecycle_only_registry_cannot_supply_context_recipients(
     assert not _root(root).exists()
 
 
+@pytest.mark.parametrize("strict_envelope", [False, True])
+@pytest.mark.parametrize("other_goal", [
+    {"goal_instance_id": "ginst_" + "b" * 32},
+    {},
+    {"goal_instance_id": "invalid"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "id": "unsafe/alias"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "activation_state": "stopped"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "activation_state": "invalid"},
+])
+def test_source_session_catalog_keeps_only_current_instantiated_recipients(
+    fixture, strict_envelope, other_goal
+):
+    from loopx.control_plane.projects import registry_codec
+
+    root, registry, session, turn, request = fixture
+    payload = json.loads(registry.read_text())
+    payload["profile_id"] = registry_codec.SOURCE_SESSION_PROFILE_ID
+    payload["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+    payload["goals"][1].update(other_goal)
+    source_registry = registry.with_name("source-session-registry.json")
+    if strict_envelope:
+        with registry_codec.source_session_registry_transaction(
+            source_registry,
+            operation="create context catalog fixture",
+            create=lambda: payload,
+        ) as transaction:
+            transaction.commit(payload)
+    else:
+        source_registry.write_text(json.dumps(payload))
+    before = source_registry.read_bytes()
+    expected = [request]
+    if other_goal == {"goal_instance_id": "ginst_" + "b" * 32}:
+        expected.insert(0, {"goal_id": "other", "agent_id": "peer"})
+    result = authority(root, source_registry, session, turn)
+    assert result["mode"] == "context_only"
+    assert result["targets"] == expected
+    goal_session = {**session, "channel_id": "goal.research", "goal_id": "research"}
+    assert authority(root, source_registry, goal_session, turn)["targets"] == [request]
+    assert source_registry.read_bytes() == before
+    assert not _root(root).exists()
+
+
 def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     root, registry, session, turn, request = fixture
     assert request in authority(root, registry, session, turn)["targets"]
@@ -119,7 +228,7 @@ def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     assert authority(root, registry, session, turn)["targets"] == [
         {"goal_id": "other", "agent_id": "peer"}
     ]
-    with pytest.raises(ValueError, match="not authorized"):
+    with pytest.raises(ValueError, match="stopped or archived"):
         deliver(root, registry, session=session, turn=turn, request=request)
     assert len(pending(root, "research", "worker")["items"]) == 1
 
@@ -130,7 +239,8 @@ def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     }
 
 
-def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture):
+@pytest.mark.parametrize("local_scope", ["selected", "all_registered"])
+def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture, local_scope):
     root, registry, session, turn, request = fixture
     data = json.loads(registry.read_text())
     data["goals"][0]["activation"] = {
@@ -140,7 +250,7 @@ def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture):
 
     goal_session = {**session, "channel_id": "goal.research", "goal_id": "research"}
     assert authority(root, registry, goal_session, turn)["targets"] == []
-    with pytest.raises(ValueError, match="not authorized"):
+    with pytest.raises(ValueError, match="stopped or archived"):
         deliver(root, registry, session=goal_session, turn=turn, request=request)
 
     lark_session = {**session, "channel_id": "manager.external.group"}
@@ -148,15 +258,16 @@ def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture):
     _write(_root(root) / "policy.json", {
         "schema_version": POLICY_SCHEMA,
         "sources": {lark_session["channel_id"]: {
-            "sender_ids": ["owner"], "targets": [request]
+            "local_delivery_scope": local_scope, "sender_ids": ["owner"], "targets": [request]
         }},
     })
     register_ingress(root, session_id=session["session_id"],
                      client_turn_id=turn["client_turn_id"],
                      channel=lark_session["channel_id"], sender_id="owner",
                      message=turn["message"], source_id="lark:original")
-    assert authority(root, registry, lark_session, lark_turn)["targets"] == []
-    with pytest.raises(ValueError, match="not authorized"):
+    expected = [] if local_scope == "selected" else [{"goal_id": "other", "agent_id": "peer"}]
+    assert authority(root, registry, lark_session, lark_turn)["targets"] == expected
+    with pytest.raises(ValueError, match="stopped or archived"):
         deliver(root, registry, session=lark_session, turn=lark_turn, request=request)
 
     data["goals"][0]["activation"]["state"] = "unreadable"
@@ -219,7 +330,7 @@ def test_original_context_delivery_is_idempotent_without_priority_or_todo_writes
         )
 
 
-def test_external_authority_requires_exact_sender_source_and_recipient(fixture):
+def test_selected_external_authority_requires_exact_sender_source_and_recipient(fixture):
     root, registry, session, turn, request = fixture
     session["channel_id"] = "manager.external.group"
     turn["origin"] = "lark"
@@ -228,7 +339,7 @@ def test_external_authority_requires_exact_sender_source_and_recipient(fixture):
         {
             "schema_version": POLICY_SCHEMA,
             "sources": {
-                session["channel_id"]: {"sender_ids": ["owner"], "targets": [request]}
+                session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [request]}
             },
         },
     )
@@ -275,7 +386,7 @@ def test_operator_delivery_target_preview_grant_revoke_and_live_authority(fixtur
     _write(policy_path, {
         "schema_version": POLICY_SCHEMA,
         "sources": {channel: {
-            "sender_ids": ["owner"], "targets": [other],
+            "local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [other],
             "evidence_goal_ids": ["research", "other"],
             "evidence_ssh_hosts": {"example-host": ["research"]},
         }},
@@ -316,6 +427,9 @@ def test_operator_delivery_target_preview_grant_revoke_and_live_authority(fixtur
     )["changed"]
 
     # Older policy rows may carry metadata; recipient identity is still the pair.
+    assert configure_delivery_target(
+        root, registry, channel=channel, **request, grant=True, execute=True
+    )["changed"]
     saved = json.loads(policy_path.read_text())
     saved["sources"][channel]["targets"] = [other, {**request, "note": "legacy"}, request]
     _write(policy_path, saved)
@@ -336,7 +450,7 @@ def test_operator_target_grant_fails_closed_without_audited_source_or_agent(fixt
         configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
 
     policy_path = _root(root) / "policy.json"
-    source = {"sender_ids": ["owner"], "evidence_goal_ids": ["other"], "targets": []}
+    source = {"local_delivery_scope": "selected", "sender_ids": ["owner"], "evidence_goal_ids": ["other"], "targets": []}
     _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: source}})
     with pytest.raises(ValueError, match="outside the channel read scope"):
         configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
@@ -366,7 +480,7 @@ def test_manager_inbox_cli_previews_and_applies_delivery_scope(fixture, whole_go
     policy_path = _root(root) / "policy.json"
     _write(policy_path, {
         "schema_version": POLICY_SCHEMA,
-        "sources": {channel: {"sender_ids": ["owner"], "targets": []}},
+        "sources": {channel: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": []}},
     })
     base = [
         sys.executable, "-m", "loopx.cli", "--registry", str(registry),
@@ -398,7 +512,7 @@ def test_goal_delivery_grant_inherits_agents_and_rechecks_specific_revocation(fi
     turn["origin"] = "lark"
     policy_path = _root(root) / "policy.json"
     _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: {
-        "sender_ids": ["owner"], "targets": [{"goal_id": "research"}],
+        "local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [{"goal_id": "research"}],
     }}})
     register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
                      channel=channel, sender_id="owner", message=turn["message"], source_id="lark:original")
@@ -424,6 +538,34 @@ def test_goal_delivery_grant_inherits_agents_and_rechecks_specific_revocation(fi
     data["goals"][0]["activation_state"] = "stopped"
     registry.write_text(json.dumps(data))
     assert authority(root, registry, session, turn)["targets"] == []
+
+
+@pytest.mark.parametrize("local_scope", ["selected", "all_registered"])
+def test_agent_revoke_during_goal_revocation_still_denies_original_replay(fixture, local_scope):
+    root, registry, session, turn, request = fixture
+    channel = "manager.external." + "f" * 24
+    session["channel_id"] = channel
+    turn["origin"] = "lark"
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: {
+        "local_delivery_scope": local_scope, "sender_ids": ["owner"],
+        "targets": [{"goal_id": "research"}],
+    }}})
+    register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+                     channel=channel, sender_id="owner", message=turn["message"], source_id="lark:original")
+    receipt = deliver(root, registry, session=session, turn=turn, request=request)
+    configure_delivery_target(root, registry, channel=channel, goal_id="research", grant=False, execute=True)
+    policy_before_preview = policy_path.read_bytes()
+    preview = configure_delivery_target(root, registry, channel=channel, **request, grant=False)
+    assert preview["would_change"] and not preview["granted_before"]
+    assert policy_path.read_bytes() == policy_before_preview
+    assert configure_delivery_target(root, registry, channel=channel, **request, grant=False, execute=True)["changed"]
+    configure_delivery_target(root, registry, channel=channel, goal_id="research", grant=True, execute=True)
+    assert request not in authority(root, registry, session, turn)["targets"]
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=session, turn=turn, request=request)
+    configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
+    assert deliver(root, registry, session=session, turn=turn, request=request)["request_id"] == receipt["request_id"]
 
 
 def test_same_goal_recipients_keep_inboxes_and_decisions_separate(fixture):
@@ -609,7 +751,7 @@ def test_actual_manager_turn_delivers_and_reports_host_receipt(fixture, monkeypa
         assert created and completed["status"] == "completed", completed
         response = completed["response"]
         assert response["context_handoff_receipt"]["status"] == "delivered"
-        assert "已将原消息交给 worker" in response["message"]
+        assert "**已转交给 `worker`。**" in response["message"]
         assert response["proposals"] == [] and response["gate"] is None
         assert len(pending(root, "research", "worker")["items"]) == 1
         assert registry.read_bytes() == original_registry
@@ -630,7 +772,7 @@ def test_provider_wrapper_is_not_forwarded_and_large_registry_is_supported(fixtu
         {
             "schema_version": POLICY_SCHEMA,
             "sources": {
-                session["channel_id"]: {"sender_ids": ["owner"], "targets": [request]}
+                session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [request]}
             },
         },
     )
@@ -662,7 +804,7 @@ def test_lark_bridge_registers_provenance_before_queueing(fixture):
         {
             "schema_version": POLICY_SCHEMA,
             "sources": {
-                session["channel_id"]: {"sender_ids": ["owner"], "targets": [request]}
+                session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [request]}
             },
         },
     )
@@ -703,3 +845,37 @@ def test_lark_bridge_registers_provenance_before_queueing(fixture):
     assert (
         pending(root, "research", "worker")["items"][0]["message"] == "Original intent"
     )
+
+
+def test_sender_bound_default_delivers_across_goals_and_new_registration(fixture):
+    root, registry, session, turn, target = fixture
+    channel = "manager.external." + "d" * 24
+    session = {**session, "channel_id": channel}
+    turn = {**turn, "origin": "lark"}
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {"schema_version": POLICY_SCHEMA,
+                        "sources": {channel: {"sender_ids": ["owner"]}}})
+    register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+                     channel=channel, sender_id="owner", message=turn["message"], source_id="lark:default-request")
+    other = {"goal_id": "other", "agent_id": "peer"}
+    assert authority(root, registry, session, turn)["targets"] == [other, target]
+    receipt = deliver(root, registry, session=session, turn=turn, request=other)
+    assert receipt["status"] == "delivered"
+    assert pending(root, "other", "peer")["items"][0]["message"] == turn["message"]
+    data = json.loads(registry.read_text())
+    data["goals"].append({"id": "new-goal", "repo": str(root),
+                          "coordination": {"registered_agents": ["new-worker"]}})
+    registry.write_text(json.dumps(data))
+    newcomer = {"goal_id": "new-goal", "agent_id": "new-worker"}
+    assert newcomer in authority(root, registry, session, turn)["targets"]
+    original = policy_path.read_bytes()
+    preview = configure_delivery_target(root, registry, channel=channel, **other, grant=False)
+    assert preview["granted_before"] and preview["would_change"]
+    assert policy_path.read_bytes() == original
+    configure_delivery_target(root, registry, channel=channel, **other, grant=False, execute=True)
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=session, turn=turn, request=other)
+    configure_delivery_target(root, registry, channel=channel, goal_id="other", grant=True, execute=True)
+    assert other not in authority(root, registry, session, turn)["targets"]
+    configure_delivery_target(root, registry, channel=channel, **other, grant=True, execute=True)
+    assert deliver(root, registry, session=session, turn=turn, request=other)["request_id"] == receipt["request_id"]

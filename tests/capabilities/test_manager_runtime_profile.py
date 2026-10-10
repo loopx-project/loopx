@@ -100,6 +100,16 @@ def test_external_audience_does_not_inherit_owner_host_tools(tmp_path: Path) -> 
     assert effective["source"] == "external_audience_boundary"
 
 
+@pytest.mark.parametrize("profile", [None, "restricted", "trusted_owner"])
+def test_owner_audience_proof_does_not_replace_the_machine_grant(tmp_path: Path, profile) -> None:
+    if profile is not None:
+        _apply(tmp_path, profile)
+    effective = load_effective_manager_runtime_profile(tmp_path,
+        channel_id="manager.external.native.fixture", owner_manager_audience=True)
+    assert effective["runtime_profile"] == (profile or "restricted")
+    assert effective["standing_grant"] == ("machine_configuration" if profile == "trusted_owner" else "none")
+
+
 def test_unrelated_machine_configuration_does_not_change_manager_revision() -> None:
     before = effective_manager_runtime_profile(
         {

@@ -33,8 +33,13 @@ from .feedback import validate_goal_id
 from .history import load_registry
 from .registry import registry_goals
 from .status import collect_status
-from .status_server import parse_goal_activation_filter
-from .todos import list_goal_todos
+from .status_server import (
+    DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
+    DEFAULT_EXTENSION_PROJECTION_PATH,
+    ExtensionPresentationRequestMixin,
+    parse_goal_activation_filter,
+)
+from .control_plane.todos.list_readback import list_goal_todos
 
 
 def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
@@ -98,7 +103,7 @@ def _status_access_denied(error: BaseException) -> bool:
     return False
 
 
-class ChatStatusRequestMixin:
+class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
     """Serve the full dashboard status contract through the Chat origin."""
 
     server: Any
@@ -182,6 +187,13 @@ class ChatStatusRequestMixin:
                     "registry_revision"
                 ]
             if not delivery_review:
+                projection["local_dashboard_api"] = {
+                    **(projection.get("local_dashboard_api") or {}),
+                    "source": "chat",
+                    "status_url": "/status.json",
+                    "presentation_surfaces_url": DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
+                    "presentation_detail_url": DEFAULT_EXTENSION_PROJECTION_PATH,
+                }
                 attach_host_thread_activity(
                     projection, observers=codex_thread_observers()
                 )

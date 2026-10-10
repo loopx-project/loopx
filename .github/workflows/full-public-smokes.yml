@@ -11,18 +11,6 @@ on:
   schedule:
     # Daily off-hours sweep. The workflow is intentionally not a PR-required check.
     - cron: "37 18 * * *"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/full-public-smokes.yml"
-      - "README.md"
-      - "README.zh-CN.md"
-      - "docs/**"
-      - "examples/**"
-      - "loopx/**"
-      - "pyproject.toml"
-      - "scripts/**"
 
 permissions:
   contents: read
@@ -35,12 +23,38 @@ env:
   LOOPX_USAGE_PING: "0"
 
 jobs:
+  chat-bundle:
+    if: github.repository == 'loopx-project/loopx'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/presentation/dashboard/package-lock.json
+      - run: python scripts/chat_bundle.py build --install
+      - run: python scripts/chat_bundle.py verify --source
+      - uses: actions/upload-artifact@v7
+        with:
+          name: full-public-chat-${{ github.sha }}
+          path: loopx/web/chat/
+          if-no-files-found: error
+          retention-days: 1
+
   full-public-smokes:
+    needs: chat-bundle
     if: github.repository == 'loopx-project/loopx'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      # Background sweeps leave runner capacity for required PR qualification.
+      max-parallel: 2
       matrix:
         include:
           - shard: 0
@@ -72,6 +86,10 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/presentation/dashboard/package-lock.json
 
       - name: Install the shell used by launch-agent contract checks
         run: sudo apt-get update && sudo apt-get install -y zsh
@@ -82,8 +100,18 @@ jobs:
       - name: Install locked TypeScript parser for semantic production checks
         run: npm ci --ignore-scripts
 
-      - name: Build the packaged frontend from source
-        run: python scripts/chat_bundle.py build --install
+      # The shared bundle contains build output, not each runner's test dependencies.
+      - name: Install locked Dashboard smoke dependencies
+        run: npm --prefix apps/presentation/dashboard ci --ignore-scripts
+
+      - name: Download the exact-source frontend built once for this run
+        uses: actions/download-artifact@v7
+        with:
+          name: full-public-chat-${{ github.sha }}
+          path: loopx/web/chat/
+
+      - name: Reject missing, stale or corrupt frontend artifacts
+        run: python scripts/chat_bundle.py verify --source
 
       - name: Preview full-public shard
         run: |
@@ -115,6 +143,7 @@ jobs:
           name: full-public-smokes-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/loopx-smoke-results/full-public-shard-${{ matrix.shard }}.json
           if-no-files-found: ignore
+          retention-days: 7
 
   smoke-fleet-health:
     if: always()
@@ -153,3 +182,4 @@ jobs:
           name: smoke-fleet-health
           path: smoke-health/smoke-fleet-health.json
           if-no-files-found: ignore
+          retention-days: 7

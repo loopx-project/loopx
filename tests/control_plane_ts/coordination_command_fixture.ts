@@ -74,5 +74,6 @@ export async function coordinationCommandFixture(store: AuthorityStore, command:
         exit_code: 0, passed: true, status: "passed", summary: "synthetic validation passed",
         stdout_captured: false, stderr_captured: false, local_path_captured: false} : null}, sourceCheck);
   };
-  return {invoke, operation_id, initial: await store.loadAuthority()};
+  return {invoke, operation_id, completion_todo_id: fixture.completion_todo_id,
+    initial: await store.loadAuthority()};
 }

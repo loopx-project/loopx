@@ -4,16 +4,58 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
 import { receiverDecision, sameRequest } from "./inbox_receipts.ts";
+import { workspaceRef } from "./semantic_request.ts";
 
 // Local storage keys, not task status or authority. Updates keep the existing
 // conclusion phase and append immutable observations in publication order.
 const UPDATE_KEY = /^conclusion-[0-9]{8}$/;
 const UPDATE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 
+export function resultAttachmentRefs(params: JsonObject): JsonObject {
+  if (params.workspace_current === false) {
+    throw new EffectRuntimeRequestError("result file workspace Goal instance changed");
+  }
+  if (!Array.isArray(params.refs) || params.refs.length > 4) {
+    throw new EffectRuntimeRequestError("at most four result attachments are allowed");
+  }
+  const refs = params.refs.map(workspaceRef);
+  if (new Set(refs).size !== refs.length) throw new EffectRuntimeRequestError("duplicate result attachment refs");
+  return {refs};
+}
+
+/** Explicit result files are content-bound observations, never new grants. */
+export function resultAttachments(value: unknown): JsonObject[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 4) {
+    throw new EffectRuntimeRequestError("at most four result attachments are allowed");
+  }
+  let total = 0;
+  const files = value.map((raw) => {
+    const file = requireJsonObject(raw, "result attachment");
+    if (Object.keys(file).sort().join(",") !== "name,ref,sha256,size") {
+      throw new EffectRuntimeRequestError("invalid result attachment fields");
+    }
+    const ref = workspaceRef(file.ref);
+    if (file.name !== ref.split("/").at(-1)
+        || typeof file.sha256 !== "string" || !BARE_SHA256_PATTERN.test(file.sha256)
+        || typeof file.size !== "number" || !Number.isSafeInteger(file.size)
+        || file.size < 1 || file.size > 30 * 1024 * 1024) {
+      throw new EffectRuntimeRequestError("invalid result attachment content");
+    }
+    total += file.size;
+    return {ref, name: file.name, sha256: file.sha256, size: file.size};
+  });
+  if (total > 60 * 1024 * 1024 || new Set(files.map((f) => f.ref)).size !== files.length) {
+    throw new EffectRuntimeRequestError("duplicate or oversized result attachments");
+  }
+  return files;
+}
+
 export function planCollaborationResult(params: JsonObject): JsonObject {
   const request = requireJsonObject(params.request, "result request");
   const phase = requireStringLiteral(params.phase, ["decision", "conclusion"], "result phase");
   const decision = receiverDecision(params.decision);
+  const attachments = resultAttachments(params.attachments);
   if (decision === null) throw new EffectRuntimeRequestError("a receiver decision is required");
   if (typeof params.text !== "string" || !params.text.trim() || Array.from(params.text).length > 20000) {
     throw new EffectRuntimeRequestError("bounded reply text is required");
@@ -28,7 +70,8 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
         || typeof record.text_sha256 !== "string" || !BARE_SHA256_PATTERN.test(record.text_sha256)) {
       throw new EffectRuntimeRequestError("result receipt identity or content conflict");
     }
-    return { key: record.key, value, textSha256: record.text_sha256 };
+    return { key: record.key, value, textSha256: record.text_sha256,
+      attachments: resultAttachments(value.attachments) };
   });
   if (new Set(results.map((r) => r.key)).size !== results.length) {
     throw new EffectRuntimeRequestError("duplicate result observation");
@@ -66,9 +109,11 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   const value: JsonObject = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref"]
     .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
   Object.assign(value, { phase, decision, text: params.text.trim() });
+  if (attachments.length) value.attachments = attachments;
   const key = old?.key ?? (isUpdate ? `conclusion-${String(updates.length + 1).padStart(8, "0")}` : phase);
   if (isUpdate) Object.assign(value, { result_key: key, update_id: updateId, previous_result_key: old?.value.previous_result_key ?? previous });
-  if (old && (old.textSha256 !== createHash("sha256").update(String(value.text)).digest("hex") || old.value.phase !== phase)) {
+  if (old && (old.textSha256 !== createHash("sha256").update(String(value.text)).digest("hex") || old.value.phase !== phase
+      || JSON.stringify(old.attachments) !== JSON.stringify(attachments))) {
     throw new EffectRuntimeRequestError("reply already committed; conflicting replacement rejected; use a stable update_id for a later conclusion");
   }
   if (!old && phase === "decision" && conclusion) {

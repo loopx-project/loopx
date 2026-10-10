@@ -255,10 +255,13 @@ def handle_external_evidence_command(
                 raise ValueError("--execute is required for real public-source reads")
             plan = _load_object(args.plan_json, label="external evidence plan")
             # Canonical identity must pass the typed owner before any HTTP call.
+            request = plan.get("request")
+            selected = plan.get("selected_provider")
             probe_receipt = {"schema_version": "loopx_external_evidence_receipt_v0",
-                "plan_id": plan.get("plan_id"), "request_id": plan.get("request", {}).get("request_id"),
-                "provider_id": plan.get("selected_provider", {}).get("provider_id"),
-                "provider_kind": plan.get("selected_provider", {}).get("provider_kind"),
+                "plan_id": plan.get("plan_id"),
+                "request_id": request.get("request_id") if isinstance(request, Mapping) else None,
+                "provider_id": selected.get("provider_id") if isinstance(selected, Mapping) else None,
+                "provider_kind": selected.get("provider_kind") if isinstance(selected, Mapping) else None,
                 "status": "failed", "sources": [], "summary": "Validation only", "completed_at": "not-executed"}
             validate_receipt(plan, probe_receipt)
             payload = execute_public_github(plan)

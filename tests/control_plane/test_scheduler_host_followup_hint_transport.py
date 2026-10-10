@@ -3,9 +3,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import subprocess
 import zlib
+from pathlib import Path
 
 import pytest
+import test_quota_settlement_cli as settlement
+from canonical_authority_fixture import isolate_sqlite_runtime
+from test_quota_authority_settlement_journey import _execute, _guard, _refresh, _source
 
 from loopx.control_plane.scheduler import scheduler_hint
 from loopx.control_plane.scheduler.scheduler_hint import (
@@ -207,3 +213,76 @@ def test_legacy_hint_builder_without_host_facts_keeps_the_compatibility_route() 
 
     assert FACTS_FLAG not in hint["cli_args"]
     assert hint["cli_args"][-1] == "--execute"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("caller", ["python", "native"])
+def test_failed_quota_invocation_keeps_receipt_ack_and_exact_settlement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, caller: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry, _, _ = _source(
+        tmp_path, provider=provider, extra=f"claimed_by={settlement.AGENT_ID}",
+    )
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0 and guard["normal_delivery_allowed"] is True, guard
+    receipt = guard["heartbeat_receipt"]
+    hint_args = guard["scheduler_hint"]["codex_app"]["ack_hint"]["cli_args"]
+
+    # Exercise the real parameter-error audit, rather than fabricating a receipt.
+    code, rejected = settlement._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", settlement.GOAL_ID, "--agent-id", settlement.AGENT_ID,
+        "--todo-id", settlement.TODO_ID, "--turn-instance-id", settlement.TURN_ID,
+        "--begin-turn", "--scan-path", str(project), cwd=project,
+    )
+    assert code == 1 and rejected["error_code"] == "QUOTA_VALIDATION_FAILED", rejected
+    log_path = runtime / "goals" / settlement.GOAL_ID / "rollout-event-log.jsonl"
+    audit = json.loads(log_path.read_text().splitlines()[-1])
+    assert audit["event_kind"] == "quota_should_run" and "run_id" not in audit
+    code, replay = _guard(project, runtime, registry)
+    assert code == 0 and replay["normal_delivery_allowed"] is True, replay
+    assert replay["heartbeat_receipt"]["settlement_identity"] == receipt["settlement_identity"]
+    assert replay["heartbeat_receipt"]["event_id"] == receipt["event_id"]
+
+    def acknowledge():
+        if caller == "python":
+            return settlement._run_cli(registry, runtime, *hint_args, cwd=project)
+        result = subprocess.run(
+            [str(settlement.REPO_ROOT / "scripts" / "loopx"), "--format", "json", *hint_args],
+            cwd=project, text=True, capture_output=True, check=False,
+            env={**os.environ, "LOOPX_PYTHON": str(tmp_path / "unavailable-python")},
+        )
+        assert result.stdout, result.stderr
+        return result.returncode, json.loads(result.stdout)
+
+    code, ack = acknowledge()
+    assert code == 0 and ack["scheduler_commit"]["written"] is True, ack
+    state_path = Path(ack["scheduler_state_path"])
+    state_bytes = state_path.read_bytes()
+    code, retried = acknowledge()
+    assert code == 0 and retried["scheduler_commit"]["replayed"] is True, retried
+    assert state_path.read_bytes() == state_bytes
+    assert settlement._spend_run_count(runtime) == 0
+    assert audit in [json.loads(line) for line in log_path.read_text().splitlines()]
+
+    code, refreshed = _refresh(
+        project, runtime, registry, "--delivery-boundary", "in_flight_continuation",
+    )
+    assert code == 0, refreshed
+    code, spent = _execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
+    assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    code, settled = _guard(project, runtime, registry)
+    assert code == 0 and settled["effective_action"] == "heartbeat_settled_skip", settled
+    assert settled["heartbeat_receipt"]["settlement_identity"] == receipt["settlement_identity"]
+    assert settlement._spend_run_count(runtime) == 1
+
+    code, newer = _guard(project, runtime, registry, turn_id="turn-followup-newer")
+    assert code == 0 and newer["heartbeat_receipt"]["closeout_required"] is True, newer
+    code, stale = acknowledge()
+    assert code == 1 and stale["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE", stale
+    assert stale["scheduler_state_mutated"] is False
+    assert state_path.read_bytes() == state_bytes
+    assert settlement._spend_run_count(runtime) == 1

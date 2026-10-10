@@ -24,6 +24,14 @@ steps. It owns display normalization only; step completion does not establish
 Goal acceptance or execution authority. The Chat adapter consumes this projection
 without exposing a separate top-level module.
 
+`renderers/conversation_status_markdown.py` renders the existing Core-bound
+conversation snapshot. It leads with execution/recovery state, then the project,
+canonical queue count and current permission or selected recipient. Execution
+ending is not work acceptance; missing observations never become ready. A compact
+observation time remains visible even on delayed or replayed delivery. Lark
+keeps its command menu and full workspace/executor/time diagnostics in `/help`.
+The renderer does not change grants, queue admission, Sessions or receipts.
+
 ## Explore Result Layer
 
 Only the display side of software-exploration topology belongs here:
@@ -38,6 +46,11 @@ Only the display side of software-exploration topology belongs here:
 That keeps topology cards, tables, and graph views close to the dashboard
 without turning presentation code into the source of evidence for vision and
 replan.
+
+`explore_results_api.py` adapts the canonical Explore log and Todo readback for
+the Chat results endpoint. It owns pagination and read error presentation;
+the existing capability and Todo owners retain evidence and state authority.
+Python remains the HTTP transport adapter, without a separate decision owner.
 
 ## Static Site Delivery Contract
 

@@ -133,6 +133,12 @@ export function GoalTasksView({
   const [listView, setListView] = useState(false);
   const [laneSelection, setLaneSelection] = useState({ goalId: "", laneId: "all" });
   const selectedTodoRef = useRef<HTMLElement | null>(null);
+  function selectFromButton(button: HTMLButtonElement, next: WorkspaceDrawerSelection) {
+    // macOS pointer activation need not focus buttons. The drawer uses the
+    // active element to return to the originating task when it closes.
+    button.focus({ preventScroll: true });
+    onSelect(next);
+  }
   useEffect(() => {
     if (!selectedTodoId) return;
     const frame = window.requestAnimationFrame(() => selectedTodoRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }));
@@ -226,7 +232,7 @@ export function GoalTasksView({
         {attentionItems.map((attention) => {
           const age = localizedAttentionAge(attention.updatedAt, t);
           return (
-            <button key={attention.todoId} onClick={() => onSelect({ item: attention, kind: "attention" })} type="button">
+            <button key={attention.todoId} onClick={(event) => selectFromButton(event.currentTarget, { item: attention, kind: "attention" })} type="button">
               <span aria-hidden="true" className="is-attention">!</span>
               <strong>{attention.text}</strong>
               <small>
@@ -240,22 +246,22 @@ export function GoalTasksView({
       </TaskLane>
       <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
         {openAgentTodos.map((todo) => {
-          const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId };
+          const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? t("drawer.notAssigned") };
           const execution = executionRuns.find((item) => item.run.todoId === todo.todoId)?.run;
           return (
             <div className={`personal-task-card${execution ? " has-session" : ""}${selectedTodoId === todo.todoId ? " is-selected" : ""}`} key={todo.todoId} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined}>
-              <button aria-pressed={selectedTodoId === todo.todoId} onClick={() => onSelect({ item: enriched, kind: "todo" })} type="button">
+              <button aria-pressed={selectedTodoId === todo.todoId} onClick={(event) => selectFromButton(event.currentTarget, { item: enriched, kind: "todo" })} type="button">
                 <span>○</span><strong>{todo.text}</strong>
                 <small>
                   {todo.priority ? <span className={`personal-priority-badge is-${todo.priority.toLowerCase()}`}>{todo.priority}</span> : null}
                   {todo.status === "blocked" ? <span className="personal-priority-badge is-blocked">{t("tasks.blocked")}</span> : null}
                   {execution ? <span className="personal-task-session-status">{execution.status === "running" || execution.status === "queued" ? t("runs.running") : execution.status === "failed" ? t("tasks.sessionError") : t("common.waiting")}</span> : null}
                   {todo.status === "deferred" ? <span className="personal-task-session-status">{t("drawer.taskStatusDeferred")}</span> : !execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
-                  {todo.claimedBy ?? goal.agentLabel ?? goal.agentId}
+                  <span>{enriched.ownerLabel}</span>
                 </small>
               </button>
               <div className="personal-task-card-actions">
-                {execution ? <button className="personal-task-session-link" aria-label={t("tasks.openExecution", { name: todo.text })} onClick={() => onSelect({ item: execution, kind: "run" })} title={execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")} type="button"><ExternalLink size={14} /><span>{execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")}</span></button> : null}
+                {execution ? <button className="personal-task-session-link" aria-label={t("tasks.openExecution", { name: todo.text })} onClick={(event) => selectFromButton(event.currentTarget, { item: execution, kind: "run" })} title={execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")} type="button"><ExternalLink size={14} /><span>{execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")}</span></button> : null}
                 {onQuickComplete ? (
                   <button
                     aria-busy={quickCompletingTodoIds?.has(todo.todoId) || undefined}
@@ -270,7 +276,7 @@ export function GoalTasksView({
                       : <Check size={14} />}
                   </button>
                 ) : null}
-                <button aria-label={t("tasks.moreActions", { name: todo.text })} onClick={() => onSelect({ item: enriched, kind: "todo" })} title={t("common.actions")} type="button"><MoreHorizontal size={14} /></button>
+                <button aria-label={t("tasks.moreActions", { name: todo.text })} onClick={(event) => selectFromButton(event.currentTarget, { item: enriched, kind: "todo" })} title={t("common.actions")} type="button"><MoreHorizontal size={14} /></button>
               </div>
             </div>
           );
@@ -279,7 +285,7 @@ export function GoalTasksView({
       </TaskLane>
       <TaskLane listView={listView} count={scheduleItems.length} label={t("tasks.scheduled")} tone="schedule">
         {scheduleItems.map((item) => (
-          <button key={item.id} onClick={() => onSelect({ item: item.schedule, kind: "schedule" })} type="button">
+          <button key={item.id} onClick={(event) => selectFromButton(event.currentTarget, { item: item.schedule, kind: "schedule" })} type="button">
             <span>◷</span><strong>{item.schedule.label}</strong><small>{item.schedule.status === "paused" ? t("schedule.paused") : t("schedule.active")}</small>
           </button>
         ))}

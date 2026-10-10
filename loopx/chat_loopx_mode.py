@@ -16,6 +16,9 @@ from typing import Any, Callable
 
 from .agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from .chat_codex_goal import CodexGoalDriver, validate_goal_chat
+from .control_plane.collaboration.goal_instance_scope import (
+    goal_accepts_collaboration,
+)
 from .control_plane.effect_runtime import effect_runtime_result
 from .control_plane.collaboration.inbox import _read, _root
 from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
@@ -46,7 +49,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "adopt", "messages"],
+                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "revalidate", "adopt", "messages"],
             },
             "binding_id": {"type": "string"},
             "operation_id": {"type": "string"},
@@ -64,9 +67,10 @@ GUIDANCE = (
     "identity and authorized execution catalog. Use loopx_context_read for fresh Goal facts and "
     "loopx_collaboration to organize actual member work. Decide questions, ordering and recovery "
     "yourself; no business-phase script is provided. Members may delegate through the same "
-    "service when authorized. Only current accepted results returned by that service establish "
+    "service when authorized. Only currently usable accepted results returned by that service establish "
     "member completion. Synthesize their actual artifacts and report remaining gaps here. "
-    "Read action=messages between work steps for owner inbox additions. "
+    "For task_failure, repair the original artifact or validation environment before action=revalidate; it reruns checks without Host work. "
+    "When current_use.state=unavailable, repair the declared source or receiver input and read again; do not propagate those artifacts as current facts. Read action=messages between work steps for owner inbox additions. "
     "Do not claim the whole canonical Goal is complete. Keep independent analysis substantive. "
     "Before completing or blocking, return a self-contained report with substantive accepted findings, "
     "exact artifact hashes and remaining gaps; do not require readers to reconstruct earlier streamed replies. "
@@ -298,7 +302,21 @@ class ChatLoopXMode:
             result = service.operations(limit=body.get("limit", 10), cursor=body.get("cursor"))
         return {"ok": True, **result}
 
+    def revalidate_team(self, session_id, body):
+        """Owner-requested original-task checks and existing settlement recovery."""
+        if set(body) != {"operation", "operation_id"}:
+            raise ValueError("revalidation requires only the original operation identity")
+        session = self._session(session_id)
+        settings = (session.get("loopx_mode") or {}).get("settings") or {}
+        if not settings.get("agent_id"):
+            raise ValueError("configure a coordinator identity before revalidation")
+        service, _, _, _ = self._execution(session, settings)
+        from .control_plane.collaboration.peers import require_operation_id
+        return {"ok": True, **service.revalidate(require_operation_id(body["operation_id"]))}
+
     def apply(self, session_id, body, *, work_dir, objective):
+        if body.get("operation") == "revalidate":
+            return self.revalidate_team(session_id, body)
         if body.get("operation") in {"inspect", "operations", "read"}:
             return self.read_team(session_id, body)
         if set(body) - {
@@ -420,7 +438,7 @@ class ChatLoopXMode:
                     "settings": settings,
                     "native": session.get("native_goal") or {},
                     "registered_agents": registered_agent_ids_for_goal(goal),
-                    "goal_active": goal.get("status") not in {"stopped", "archived"},
+                    "goal_active": goal_accepts_collaboration(goal),
                     "execution_binding_valid": True,
                 },
             )
@@ -498,6 +516,17 @@ class ChatLoopXMode:
         wake_turn = None
         if existing:
             request = existing.get("loopx_request") or {}
+            replay_settings = request.get("settings") or {}
+            replay_budget = replay_settings.get("token_budget")
+            request_matches = (
+                request.get("operation") == "wake"
+                and replay_settings.get("agent_id")
+                == (intent.get("requester") or {}).get("agent_id")
+                and isinstance(replay_budget, int)
+                and not isinstance(replay_budget, bool)
+                and existing.get("message")
+                == f"/goal resume --tokens {replay_budget}"
+            )
             wake_turn = {
                 "turn_id": existing.get("turn_id"),
                 "status": existing.get("status"),
@@ -508,6 +537,7 @@ class ChatLoopXMode:
                 "loopx_execution": existing.get("loopx_execution") is True,
                 "operation": request.get("operation"),
                 "intent_id": (request.get("wake") or {}).get("intent_id"),
+                "request_matches": request_matches,
             }
         mode = session.get("loopx_mode") or {}
         settings = mode.get("settings") or {}
@@ -534,7 +564,7 @@ class ChatLoopXMode:
                 "native": session.get("native_goal") or {},
                 "registered_agents": registered_agent_ids_for_goal(goal) if goal else [],
                 "goal_active": goal is not None
-                and goal.get("status") not in {"stopped", "archived"},
+                and goal_accepts_collaboration(goal),
                 "execution_binding_valid": binding_valid,
             },
         )
@@ -831,9 +861,12 @@ class ChatLoopXMode:
                     arguments.get("brief", {}),
                     conversation={"session_id": session_id, "turn_id": turn_id},
                 )
-            elif action in {"read", "wait", "resume"}:
+            elif action in {"read", "wait", "resume", "revalidate"}:
+                if action == "revalidate" and set(arguments) != {"action", "operation_id"}:
+                    raise ValueError("revalidate requires only the original operation identity")
                 result = (
-                    service.resume(operation_id)
+                    service.revalidate(operation_id)
+                    if action == "revalidate" else service.resume(operation_id)
                     if action == "resume"
                     else service.read(operation_id)
                 )
@@ -964,6 +997,7 @@ def pump_delegation_wakes(
     # is already a lazy dependency of LoopXMode.
     from .chat_runtime import ChatTurnAcceptanceUnavailableError
     from .collaboration_mcp import execution_row_path, record_wake, wake_receipt
+    from .control_plane.chat_turn_acceptance import ManagedTurnReplayConflictError
 
     store = controller.store
     root = store.root.parent
@@ -992,6 +1026,26 @@ def pump_delegation_wakes(
                 )
         except LockAcquireTimeoutError:
             continue  # a worker or decision holds the record; retry next tick
+        except ManagedTurnReplayConflictError:
+            try:
+                receipt = record_wake(
+                    record,
+                    lambda wake: wake_receipt(
+                        wake,
+                        "refused",
+                        reason="wake_identity_conflict",
+                        refused_at=time.time(),
+                    ),
+                )
+            except LockAcquireTimeoutError:
+                continue  # another decision holds the record; retry next tick
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                    ChatTurnAcceptanceUnavailableError) as exc:
+                _LOG.warning(
+                    "Delegation wake refusal could not be recorded (%s); retrying",
+                    type(exc).__name__,
+                )
+                continue
         except (OSError, ValueError, KeyError, TypeError, RuntimeError,
                 ChatTurnAcceptanceUnavailableError) as exc:
             # Isolate one record; the others still progress this tick.

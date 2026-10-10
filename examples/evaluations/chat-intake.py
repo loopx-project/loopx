@@ -45,6 +45,10 @@ def score(case, response):
     for ref in case.get("required_evidence_refs", []):
         if ref not in str(response.get("message") or ""):
             errors.append("missing_evidence_ref")
+    brief = (response.get("context_handoff") or {}).get("brief")
+    for ref in case.get("required_handoff_refs", []):
+        if not isinstance(brief, dict) or ref not in json.dumps(brief, ensure_ascii=False):
+            errors.append("missing_handoff_ref")
     # Keep the visible answer and parsed handoff for factual review. Never save
     # raw provider payloads, tool events, credentials or provider error text.
     # Structural success alone cannot establish the correctness of these claims.

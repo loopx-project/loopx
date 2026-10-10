@@ -13,6 +13,37 @@ from loopx_jev.protocol import validate_choice
 from loopx_jev.transport import send, TransportFailure
 
 
+@pytest.mark.parametrize("code", ["unsupported_method", "invalid_request", "io_permission_denied"])
+def test_manual_basis_preserves_only_the_typed_legacy_method_boundary(tmp_path, monkeypatch, code):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeRejected, EffectRuntimePermanentIOError
+    from loopx_jev.runner import read_basis
+
+    path = tmp_path / "basis.json"
+    manifest = {"goal_id": "study", "objective": "Study a declared file",
+                "acceptance": ["Observe its net change"], "evidence": [{"ref": "code.py"}]}
+    path.write_text(json.dumps(manifest))
+    evidence = tmp_path / "code.py"
+    evidence.write_text("before")
+    calls = []
+    def unsupported(method, params):
+        calls.append(method)
+        if code == "io_permission_denied":
+            raise EffectRuntimePermanentIOError("Fixture receipt store denied access", diagnostic_code=code)
+        raise EffectRuntimeRejected("Fixture core rejected the method", diagnostic_code=code)
+    monkeypatch.setattr("loopx.control_plane.effect_runtime.effect_runtime_result", unsupported)
+    if code != "unsupported_method":
+        with pytest.raises(EffectRuntimeRemoteError):
+            read_basis(path, tmp_path)
+    else:
+        basis, current = read_basis(path, tmp_path)
+        assert basis["acceptance"] == manifest["acceptance"]
+        assert "criterion_binding" not in basis
+        assert current()
+        evidence.write_text("after")
+        assert not current()
+    assert calls == ["progress_review.criterion_basis"]
+
+
 @pytest.mark.parametrize("raw", ['{"x":1,"x":2}', '{"x":NaN}', '{"x":Infinity}'])
 def test_ambiguous_json_rejected(raw):
     with pytest.raises(ValueError):

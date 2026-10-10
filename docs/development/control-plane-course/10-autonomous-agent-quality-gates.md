@@ -409,38 +409,33 @@ compatibility flag，都不能改变当前 agent 的最终 decision。
 
 ### 核心代码领读：可见提醒为什么不是 Authority
 
-入口是
-`loopx/control_plane/todos/decision_scope.py::build_required_decision_scope_consistency`：
+Python 入口 `decision_scope.py::build_required_decision_scope_consistency` 只负责
+输入 codec 和返回 schema 检查。规则 owner 是同目录
+`decision_scope.ts::decisionScopeConsistency`；它先区分 live gate 和非阻塞 action，
+再检查 scope、owner 和精确目标：
 
-```python
-gates = [item for item in user_items if is_user_gate_todo_item(item)]
-user_actions = [item for item in user_items if not is_user_gate_todo_item(item)]
-
-matching_gates = [
-    gate
-    for gate in gates
-    if decision_scope_covers(gate.get("decision_scope"), required_scope)
-]
-compatible_gates = [
-    gate
-    for gate in matching_gates
-    if _gate_owner_compatible(gate, agent_id=effective_owner)
-]
-if compatible_gates:
-    continue
+```ts
+const matching = gates.filter(gate => decisionScopeCovers(gate.decision_scope, scope));
+const compatible = matching.filter(gate => addressed(gate, owner));
+const conflicting = compatible.filter(gate =>
+  todoGateRelation(gate, item)?.state === "projection_repair_required");
+if (conflicting.length) {
+  // 记录 required_decision_scope_target_mismatch；不得由另一 gate 掩盖。
+  continue;
+}
+if (compatible.length) continue;
 ```
 
-只有 task class 正确、scope 覆盖且 owner compatible 的 gate 才满足依赖。随后
-`matching_actions` 只用于产出错误归因：
+只有 task class、scope、owner 和精确目标一致的 gate 才满足依赖；依赖一致不等于
+批准或 lease。随后 `matchingActions` 只用于错误归因
+`non_blocking_user_action_scope_collision`，不能成为 authority。只有不兼容 gate 时
+归因 `required_decision_scope_gate_owner_mismatch`；没有匹配来源时归因
+`dangling_required_decision_scope`。standing authority 的冲突与拒绝/取消后的阻塞要求
+也由这个 TS owner 检查。
 
-```python
-if matching_actions:
-    reason_code = "non_blocking_user_action_scope_collision"
-elif matching_gates:
-    reason_code = "required_decision_scope_gate_owner_mismatch"
-else:
-    reason_code = "dangling_required_decision_scope"
-```
+覆盖范围和精确目标的内部 TS 函数仍被组合规则使用。它们已无生产调用方的三个
+Python scalar adapter 与对应 RPC 操作已退役；生产调用继续使用 consistency、
+组合 relation、批量 relations 和 gate scope projection，不能另建 Python 决策源。
 
 沿 `build_required_decision_scope_repair_hint` 再读一步：repair 可以修 projection，但
 `user_action remains non-blocking`，因此 repair route 也没有获得受限 delivery authority。

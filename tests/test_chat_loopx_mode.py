@@ -9,7 +9,7 @@ import pytest
 from loopx.chat_loopx_mode import TOOL
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
-from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from test_chat_project_coordination import project  # noqa: F401
 
 
@@ -67,18 +67,16 @@ def mode(project, monkeypatch):  # noqa: F811
 
     def submit(**kwargs):
         calls.append(kwargs)
-        turn, created = store.create_turn(
+        accepted = store.accept_managed_turn(
             kwargs["session_id"],
             client_turn_id=kwargs["client_turn_id"],
             message=kwargs["message"],
+            attachments=kwargs.get("attachments"),
+            origin=kwargs.get("origin", "web"),
+            loopx_execution=kwargs.get("loopx_execution", False),
+            loopx_request=kwargs.get("loopx_request"),
         )
-        store.update_turn(
-            kwargs["session_id"],
-            turn["turn_id"],
-            loopx_execution=True,
-            loopx_request=kwargs["loopx_request"],
-        )
-        return turn, created
+        return accepted.turn, accepted.created
 
     monkeypatch.setattr(controller, "submit_turn", submit)
     return controller.loopx_mode, session["session_id"], repo, settings, calls
@@ -149,6 +147,26 @@ def test_goal_registry_is_the_execution_config_owner(mode):
                 "execution_config": ".loopx/config/other.json",
             },
         )
+
+
+def test_canonical_stopped_goal_rejects_start_before_turn_creation(mode):
+    service, _, _, settings, calls = mode
+    registry = service.controller.registry_path
+    payload = json.loads(registry.read_text())
+    goal = next(item for item in payload["goals"] if item["id"] == "research")
+    goal.pop("status", None)
+    goal["activation"] = {
+        "schema_version": "loopx_goal_activation_v1",
+        "state": "stopped",
+        "updated_at": "2026-10-06T00:00:00Z",
+        "reason": "Owner stopped the Goal.",
+    }
+    registry.write_text(json.dumps(payload))
+
+    with pytest.raises(EffectRuntimeRejected, match="stopped"):
+        apply(mode, "start", settings=settings)
+
+    assert calls == []
 
 
 def test_unfinished_legacy_session_can_resume_until_goal_config_is_migrated(mode):
@@ -351,6 +369,16 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
                                      "consumer_operation_id": "consumer", "binding_id": "other"})["error"] == "collaboration_request_rejected"
 
+        revalidations = []
+        def revalidate(bound, operation):
+            revalidations.append((bound.agent_id, operation))
+            return {"operation_id": operation}
+        monkeypatch.setattr(Delegations, "revalidate", revalidate)
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original"})["ok"]
+        assert revalidations == [(settings["agent_id"], "original")]
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original",
+                                     "binding_id": "other"})["error"] == "collaboration_request_rejected"
+
         # Pause persists before attempting potentially slow provider interruption.
         def interrupt(**_):
             assert service.store.load_session(sid)["loopx_mode"]["paused"]
@@ -367,6 +395,8 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
                                      "consumer_operation_id": "consumer"})["error"] == "conversation_execution_inactive"
         assert len(decisions) == 1
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original"})["error"] == "conversation_execution_inactive"
+        assert len(revalidations) == 1
         with pytest.raises(Exception, match="active conversation execution"):
             apply(mode, "message", delivery_mode="queue", message="After pause")
         assert adapter.session.read_tool_handler("loopx_context_read", {}) == {

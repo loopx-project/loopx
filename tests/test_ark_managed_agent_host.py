@@ -502,7 +502,7 @@ def test_fresh_host_reconstructs_frontier_from_durable_loopx_state(
     assert replacement_host["selected_todo"]["todo_id"] == CONTINUITY_TODO_ID
     selected = next(
         item
-        for item in todo_readback["agent_todos"]["items"]
+        for item in todo_readback["todos"]
         if item["todo_id"] == CONTINUITY_TODO_ID
     )
     assert selected["note"] == "phase A validated; resume from the durable frontier"

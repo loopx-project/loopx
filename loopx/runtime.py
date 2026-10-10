@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,26 @@ def unique_archive_path(archive_root: Path, goal_id: str, timestamp: str) -> Pat
     return candidate
 
 
+def _archive_source_registry_paths(
+    registry: dict[str, Any],
+    *,
+    registry_path: Path,
+    goal_id: str,
+) -> tuple[Path, ...]:
+    paths: set[Path] = set()
+    for goal in registry_goals(registry):
+        if str(goal.get("id")) != goal_id:
+            continue
+        raw_path = goal.get("source_registry")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = registry_path.expanduser().resolve().parent / path
+        paths.add(path.resolve())
+    return tuple(sorted(paths, key=str))
+
+
 def archive_runtime_goal(
     *,
     registry_path: Path,
@@ -41,7 +62,11 @@ def archive_runtime_goal(
     execute: bool,
 ) -> dict[str, Any]:
     registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(registry, runtime_root_override)
+    runtime_root = resolve_runtime_root(
+        registry,
+        runtime_root_override,
+        registry_path=registry_path,
+    )
     safe_goal_id = validate_goal_id_path_segment(goal_id)
     registered_ids = {str(goal.get("id")) for goal in registry_goals(registry)}
     registry_member = safe_goal_id in registered_ids
@@ -63,8 +88,83 @@ def archive_runtime_goal(
     destination = unique_archive_path(archive_base, safe_goal_id, timestamp)
 
     if execute:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(destination))
+        from .control_plane.coordination.shadow_management import (
+            runtime_artifact_lock_target,
+            shadow_maintenance_lock_target,
+        )
+        from .control_plane.effect_runtime import (
+            CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+        )
+        from .control_plane.goals.source_session_registry_state import guard_path
+        from .file_lock import exclusive_cross_runtime_file_lock
+
+        with ExitStack() as locks:
+            resolved_runtime_root = runtime_root.resolve()
+            locks.enter_context(
+                exclusive_cross_runtime_file_lock(
+                    runtime_artifact_lock_target(
+                        resolved_runtime_root,
+                        safe_goal_id,
+                    ),
+                    operation="archive_runtime_goal_artifacts",
+                    timeout_seconds=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+                )
+            )
+            # Exact writers enter source before maintenance. Match that order so
+            # archive cannot overtake a writer between its admission locks.
+            for source_registry in _archive_source_registry_paths(
+                registry,
+                registry_path=registry_path,
+                goal_id=safe_goal_id,
+            ):
+                locks.enter_context(
+                    exclusive_cross_runtime_file_lock(
+                        guard_path(source_registry, safe_goal_id),
+                        operation="archive_runtime_goal_source",
+                    )
+                )
+            locks.enter_context(
+                exclusive_cross_runtime_file_lock(
+                    shadow_maintenance_lock_target(
+                        resolved_runtime_root,
+                        safe_goal_id,
+                    ),
+                    operation="archive_runtime_goal",
+                    timeout_seconds=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+                )
+            )
+            locks.enter_context(
+                exclusive_cross_runtime_file_lock(
+                    registry_path.expanduser().resolve(),
+                    operation="archive_runtime_goal_registry",
+                )
+            )
+            locked_registry = load_registry(registry_path)
+            registry_member = safe_goal_id in {
+                str(goal.get("id")) for goal in registry_goals(locked_registry)
+            }
+            if registry_member and not allow_registered:
+                raise ValueError(
+                    "goal exists in registry; pass --allow-registered only "
+                    "after confirming it is obsolete"
+                )
+            if not source.exists():
+                raise FileNotFoundError(
+                    f"runtime goal directory does not exist: {source}"
+                )
+            if not source.is_dir():
+                raise ValueError(f"runtime goal path is not a directory: {source}")
+            if source.resolve().parent != goals_root:
+                raise ValueError(
+                    "runtime goal directory resolved outside the goals root"
+                )
+            destination = unique_archive_path(
+                archive_base,
+                safe_goal_id,
+                timestamp,
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(destination))
 
     return {
         "ok": True,

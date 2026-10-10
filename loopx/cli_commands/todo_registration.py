@@ -6,9 +6,11 @@ from collections.abc import Callable
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 from ..todos import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
 from .todo_argument_validation import (
+    TODO_ACTION_FIELDS,
     register_todo_linkage_arguments,
     register_todo_successor_creation_arguments,
 )
+from .action_help import install_action_help
 
 
 def register_todo_command(
@@ -106,7 +108,7 @@ def register_todo_command(
     todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For todo add/update, set the lifecycle status.")
     todo_parser.add_argument("--note", help="Public-safe note to attach to a lifecycle transition.")
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
-    todo_parser.add_argument("--result-file", help="For todo complete, bind a bounded local .json, .md or .txt result to the independently accepted completion.")
+    todo_parser.add_argument("--result-file", help="For todo complete with bound Goal acceptance criteria, bind a bounded local .json, .md or .txt result. A Todo validator alone is insufficient; use --evidence for a local artifact pointer.")
     todo_parser.add_argument(
         "--validation-command",
         help=(
@@ -480,3 +482,6 @@ def register_todo_command(
             "into the Todo section markers."
         ),
     )
+    install_action_help(todo_parser, command_dest="todo_command",
+                        action_fields=TODO_ACTION_FIELDS,
+                        common_fields=frozenset({"goal_id", "subcommand_format"}))

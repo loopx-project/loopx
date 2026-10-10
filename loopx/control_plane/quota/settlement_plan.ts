@@ -4,6 +4,7 @@ import {
   settlementIdentity, type JsonObject, type SettlementIdentityInput,
   type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
+import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
@@ -36,7 +37,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     validation.command_template = requireNonEmptyString(commands.todo_completion, "todo_completion");
     validation.command_condition = "todo_deliverable_complete";
     validation.precondition = "validate the deliverable; when complete, run ordinary Todo completion " +
-      "with its original declaration and current lease before writeback/spend. No invented successor " +
+      "with its original declaration and current lease before writeback/spend. Use --evidence for " +
+      "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
+      "not merely a Todo validator. No invented successor " +
       "or --no-follow-up is required. Todo done does not settle the Turn";
   } else if (inFlight) {
     validation.precondition = "validate bounded in-flight progress; keep the Todo open and its " +
@@ -45,9 +48,16 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const steps: SettlementStep[] = [
     validation,
     {
-      kind: "durable_writeback", owner: "agent", precondition: "validation succeeded",
+      kind: "durable_writeback", owner: "agent",
+      precondition: (inFlight || identity.binding_kind !== "todo" ? "validation succeeded"
+        : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
+          " Pass a new packet with --agent-vision-json.") +
+        " Route elimination needs evidence; failure alone is not progress. " +
+        "outcome_gap: blocked + blocker/evidence IDs; continuation checks.",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
+      // Autonomous replan already carries this owner in its writeback contract.
+      ...(identity.binding_kind === "todo" ? {vision_authoring: visionAuthoringContract()} : {}),
     },
     {
       kind: "quota_spend", owner: "agent",

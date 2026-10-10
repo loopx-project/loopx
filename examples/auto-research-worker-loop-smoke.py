@@ -66,7 +66,7 @@ def main() -> int:
             tmux_bin="tmux",
             reasoning_effort="high",
         )
-        _visible_control, registry, runtime_root = _seed_visible_demo_control_plane(
+        visible_control, registry, runtime_root = _seed_visible_demo_control_plane(
             demo_root=temp,
             goal_id=GOAL_ID,
             objective="Verify worker-loop cannot manufacture auto-research evidence.",
@@ -82,10 +82,10 @@ def main() -> int:
         )
         state_text = state_file.read_text(encoding="utf-8")
         assert "Run `loopx check` against the project registry" not in state_text
-        assert (
-            "Goal-level route delegates to role frontier; panes own execution."
-            in state_text
-        )
+        assert visible_control["registered_agent_count"] == len(AGENT_IDS)
+        assert {todo["agent_id"] for todo in visible_control["seeded_todos"]} == set(AGENT_IDS)
+        assert len({todo["todo_id"] for todo in visible_control["seeded_todos"]}) == len(AGENT_IDS)
+        assert all(todo["todo_id"] in state_text for todo in visible_control["seeded_todos"])
         route_only_state = (
             "## Agent Todo\n\n"
             "- [x] Complete role-frontier auto-research work.\n\n"

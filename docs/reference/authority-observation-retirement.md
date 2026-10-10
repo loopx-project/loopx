@@ -71,3 +71,37 @@ window. The existing outbox instead prepares an entry under the source writer's
 lock, marks durability, then delivers/reconciles that exact entry identity.
 Retiring the observer removes repeated parsing, hashing, retries and a second
 candidate history without discarding that stronger capture contract.
+
+## Source lease-reader cleanup
+
+Source capture reads lease bytes once through the snapshot assembler, retaining
+the complete record and byte inventory for TypeScript verification. The unused
+internal lease-reader helper and its test-only CLI export are removed. The
+terminal-record regression now runs through actual source capture, bootstrap
+and persisted File history, including unknown fields, absent/null/false values,
+cross-Goal rejection and changed-byte rejection before publication.
+Public CLI cutover and original-receipt recovery also retain the complete lease
+and later canonical work through both File and SQLite providers.
+
+This cleanup preserves live source IO, orphan-history inventory, outbox readers
+and codecs, backup import/export and original receipt recovery. It changes no
+provider default or supported migration path and performs no data rewrite.
+Whole-writer retirement still requires its own last-caller and recovery proof.
+
+## Frontier source-adapter cleanup
+
+The unused internal Python standalone frontier-index builder is removed.
+Quota and replan already obtain the complete index from the existing typed
+Todo summary transaction. Their tests now enter through that same producer,
+including exclusion-only Agent lanes, duplicate identities, Unicode and
+microsecond chronology, a complete multi-megabyte source and tail edits beyond
+the display cap. Malformed or missing batched indices fail without a second
+index request. This removes a test-only transport seam; it changes no shipped
+CLI command, checkpoint format or default.
+
+The lossless Python source codec remains: summary composition and long-chain
+replan still use its complete material bytes. The TypeScript frontier owner
+and its versioned wire behavior remain, including historical revision hashes.
+No backup, outbox, receipt or Markdown business writer is deleted. Reverting
+the source change restores the internal import without rewriting stored data;
+whole-writer retirement retains its separate migration and recovery gates.

@@ -63,17 +63,17 @@ names the contract the change is judged against.
 
 ## Execute One Review Plan
 
-Follow `scheduling_policy` and its ranked actionable `review_sequence`; explicit current-request PR selection may override ordering only, never `pull_requests[].review_action_kind` or exact-head idempotency. Generic `re-review`, `重新review`, and `复审` wording selects the named PR; it is not a force-refresh token. Todo/monitor prose may not select work.
+Receive pending current-session requests through `review_execution_contract.decision_procedure.establish_goal` before generic queue selection, including other agents sharing a GitHub account; task intake and claimed action authority are separate judgments. Resolve the selected requests with repeatable `--target-exact-head NUMBER@HEAD_OID`. Follow `scheduling_policy` and its ranked actionable `review_sequence`; explicit current-request PR selection may override ordering only, never `pull_requests[].review_action_kind` or exact-head idempotency. Generic `re-review`, `重新review`, and `复审` wording selects the named PR; it is not a force-refresh token. Todo/monitor prose may not select work.
 When `review_action_kind` is null, the row stays in `pull_requests` inventory but must not appear in `review_sequence`; its `review_plan` and `review_template` are null and `evidence_commands` is empty. Do one compact exact-head conclusion readback and report the existing verdict or bounded invalid/missing reason. Run a fresh audit only when the user explicitly requests fresh evidence despite that result, or supplies a concrete new concern; regenerate with `--fresh-audit-exact-head NUMBER@HEAD_OID`, then execute the complete current plan and never inherit the earlier approval. For every actionable PR:
 
 1. Record the packet's exact head, then follow `review_execution_contract.decision_procedure`:
    the current goal and `problem_context` delivery judgment first, including on re-review,
    then `evidence_commands` and repository-native validation.
-2. Fill `review_plan.result_template`; preserve missing evidence as `unverified` and never
-   infer `verified` from metadata or CI. Execute its repository-reuse, default-off, authority
-   and real-path counterfactuals rather than repeating them as prose. Fill `result.reviewer`
-   per `review_execution_contract.reviewer_declaration`, open the body with its `body_marker`
-   line, and read `problem_context.spec_basis`'s specification before the diff.
+2. Fill `review_plan.result_template`; missing evidence stays `unverified`; never infer `verified` from metadata or CI.
+   Execute repository-reuse, default-off, authority and real-path counterfactuals, not prose declarations.
+   Fill `result.reviewer` per `review_execution_contract.reviewer_declaration`; open with its `body_marker` line.
+   Read `problem_context.spec_basis`'s specification before the diff, plus any `repository_experience` advice.
+   In `problem_context`, state adoption, rejection or irrelevance with current-head evidence; do not inherit a case verdict or treat context delivery as semantic application or demonstrated utility.
 3. Apply `completion_gate` literally: save final Markdown in `review_body`, then check
    evidence and that exact body. Follow capability-owned floors and scope counterfactuals;
    prose cannot replace missing execution:
@@ -90,7 +90,7 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
 
 Each PR needs independent evidence and a standalone card; a queue table is a preface only.
 
-For managed review, pass `--goal-id GOAL` and follow the packet’s resolved `wait_for_ci`: false means never fetch, poll, or wait for CI; true retains CI observation. Apply the packet's `validation_matrix.failure_attribution` before treating a red required check as a PR blocker. An independently verified unchanged baseline failure or external outage can hold merge readiness without forcing `REQUEST_CHANGES` on an unrelated PR; missing attribution or missing affected-invariant coverage still blocks approval. Configure one Goal with `configure-goal --goal-id GOAL --no-pr-review-wait-for-ci --execute`; clear with `--clear-pr-review-configuration --execute`.
+For managed review, pass `--goal-id GOAL` and follow the packet’s resolved `wait_for_ci`: false means never fetch, poll, or wait for CI; true retains available CI observation and the merge gate's CI policy. It does not require every CI job to finish or succeed before `APPROVE` when independent current evidence covers the changed invariants. Follow `validation_matrix.validation_source`: `required` marks decisive review evidence, not branch protection; record merely pending remote jobs as separate diagnostic rows, and keep an invariant unverified when CI is its only decisive coverage. Pending CI alone is never a `REQUEST_CHANGES` reason. Apply `validation_matrix.failure_attribution`, including its `evidence_scope`, to current required checks. An independently attributed unchanged baseline failure or external outage can hold merge readiness without forcing `REQUEST_CHANGES` on an unrelated PR. Preserve earlier failures and the current evidence that supersedes them in existing evidence fields; historical root-cause completeness alone is not an approval gate. Current unattributed failures, material instability and missing affected-invariant coverage still block; selecting one successful rerun does not resolve them. Configure one Goal with `configure-goal --goal-id GOAL --no-pr-review-wait-for-ci --execute`; clear with `--clear-pr-review-configuration --execute`.
 
 ## Publish And Read Back
 For an open PR, publish validated actionable findings by default unless the user

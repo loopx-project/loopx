@@ -86,6 +86,30 @@ def test_selection_after_warning_display_cap_keeps_exact_gap():
     assert selected["completed_without_successor_count"] == 1
 
 
+def test_warning_consumers_share_typed_guidance_without_mutating_continuation():
+    from copy import deepcopy
+    from loopx.control_plane.todos.succession_warning import build_todo_succession_warning_lanes
+
+    records = [work("todo_stage", completion_continuation="active_goal"),
+               work("todo_next", status="open", done=False)]
+    before = deepcopy(records)
+    result = summary(records)
+    warning = result["todo_succession_warning"]
+    assert warning["count"] == 1
+    assert "ordinary Todo completion needs no artificial successor" in warning["recommended_action"]
+    assert result["completed_without_successor_items"][0]["recommended_action"] == warning["recommended_action"]
+    assert result["first_executable_items"][0]["todo_id"] == "todo_next"
+    assert "terminal_closure_proof" not in result
+    for cap in (0, 1, 12):
+        projected = build_todo_succession_warning_lanes(result, item_limit=cap)
+        assert projected["completed_without_successor_count"] == 1
+        assert projected["todo_succession_warning"]["recommended_action"] == warning["recommended_action"]
+    legacy = build_todo_succession_warning_lanes({"completed_without_successor_count": 1}, item_limit=0)
+    assert "current quota settlement/replan contract" in legacy["todo_succession_warning"]["recommended_action"]
+    assert "todo complete" not in legacy["todo_succession_warning"]["recommended_action"]
+    assert records == before
+
+
 def test_changed_item_cannot_reuse_old_graph_evaluation():
     result = summary([work("todo_closed", no_followup=True)])
     result["items"][0]["no_followup"] = False
@@ -99,6 +123,40 @@ def test_explicit_route_flag_is_not_overridden_by_legacy_prose_hint():
     result = build_todo_handoff_gate_states([gate])[0]
     assert result["route_continuation_replan_required"] is False
     assert result["gate_state"] == "blocking"
+
+
+@pytest.mark.parametrize("status,done,flag,label,expected", [
+    ("open", False, None, "STALE handoff closeout", True),
+    ("open", False, False, "stale handoff closeout", False),
+    ("done", True, True, "", True),
+    ("done", True, None, "stale handoff closeout", False),
+    ("deferred", False, None, "stale handoff closeout", False),
+    ("open", True, None, "stale handoff closeout", False),
+    ("open", False, None, "handoff closeout", False),
+])
+def test_route_replan_retains_explicit_and_legacy_advisory_semantics(status, done, flag, label, expected):
+    gate = work("todo_gate", status=status, done=done, text=label,
+                excluded_agents=["agent-b"], unblocks_todo_id="todo_work")
+    if flag is not None:
+        gate["route_continuation_replan_required"] = flag
+    result = build_todo_handoff_gate_states([gate])[0]
+    assert (result.get("route_continuation_replan_required") is True) is expected
+    # A replan hint never resolves ownership or the handoff's successor.
+    assert result["successor_count"] == 0
+    assert result["excluded_agents"] == ["agent-b"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("route_continuation_replan_required", False),
+    ("text", "handoff closeout"),
+])
+def test_filtered_summary_rejects_changed_route_facts(field, value):
+    gate = work("todo_gate", status="open", done=False, text="stale handoff closeout",
+                excluded_agents=["agent-b"], unblocks_todo_id="todo_work")
+    source = summary([gate])
+    source["items"][0][field] = value
+    with pytest.raises(Exception, match="matching full-source"):
+        filtered_todo_summary(source, role="agent", todo_id="todo_gate")
 
 
 def test_archived_identity_can_be_recreated_but_duplicate_active_authority_rejects():
@@ -140,6 +198,25 @@ def test_evaluation_does_not_mutate_or_expand_input_rows():
     assert rows[0] is not original
     assert json.dumps(rows, sort_keys=True) == before
     assert "succession_evaluation" not in original
+
+
+@pytest.mark.parametrize("unqualified_position", [0, 1])
+def test_ephemeral_evidence_cannot_be_supplied_by_public_fields(unqualified_position):
+    from loopx.control_plane.todos.succession_warning import (
+        evaluate_succession, succession_evaluations,
+    )
+
+    rows = [work("todo_source", no_followup=True)]
+    evaluations = evaluate_succession(rows)
+    assert succession_evaluations(rows) == evaluations
+    assert succession_evaluations([]) == []
+    forged = {**rows[0], "succession_evaluation": evaluations[0]}
+    mixed = list(rows)
+    mixed.insert(unqualified_position, forged)
+
+    with pytest.raises(ValueError, match="matching full-source succession evaluation"):
+        succession_evaluations(mixed)
+    assert succession_evaluations(rows) == evaluations
 
 
 @pytest.mark.parametrize("mutation", ["columns", "row_width", "cardinality"])

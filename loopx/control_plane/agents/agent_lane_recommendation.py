@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from typing import Any
 
 from ..effect_program import ReceiptBoundMonitorPhase
+from ..progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
@@ -34,7 +34,6 @@ PublicSafeText = Callable[..., str | None]
 ActionAlignment = Callable[[Any, Any], bool]
 TimestampParser = Callable[[Any], Any]
 AGENT_LANE_NEXT_ACTION_SCHEMA_VERSION = "agent_lane_next_action_v0"
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 
 
 def build_explicit_advancement_next_action(
@@ -397,13 +396,6 @@ def _first_executable_todo_text(agent_todo_summary: dict[str, Any] | None) -> st
     return None
 
 
-def _todo_ids_from_action(value: Any) -> set[str]:
-    text = str(value or "")
-    if not text:
-        return set()
-    return set(re.findall(r"\btodo_[A-Za-z0-9_]+\b", text))
-
-
 def selected_recommended_action_from_work_lane(
     item: dict[str, Any],
     *,
@@ -551,7 +543,7 @@ def build_agent_lane_next_action(
             )
         )
 
-    preferred_todo_ids = _todo_ids_from_action(active_next_action)
+    preferred_todo_ids: set[str] = set()
     receipt_todo_id = normalize_todo_id(receipt_bound_todo_id)
     override_todo_id = (
         normalize_todo_id(selected_todo_override.get("todo_id"))
@@ -690,6 +682,8 @@ def selected_action_with_agent_lane(
 ) -> Any:
     if not isinstance(agent_lane_next_action, dict):
         return selected_action
+    if agent_lane_next_action.get("next_step"):
+        return agent_lane_next_action["next_step"]
     if agent_lane_next_action.get("source") not in {
         "capability_gate.runnable_candidates",
         "agent_todo_summary.active_next_action_executable_items",
@@ -708,5 +702,5 @@ def selected_action_with_agent_lane(
         return selected_action
     if confidence not in {"selected", "candidate"}:
         return selected_action
-    lane_text = str(agent_lane_next_action.get("text") or "").strip()
+    lane_text = str(agent_lane_next_action.get("next_step") or agent_lane_next_action.get("text") or "").strip()
     return lane_text or selected_action

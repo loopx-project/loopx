@@ -1,8 +1,9 @@
 """Lark post presentation; shared by all inbox reply callers.
 
 This is provider formatting, not conversation state or effect authority. The
-post's CommonMark parser rejects closing strong delimiters between punctuation
-and a following word. Move that trailing punctuation outside the emphasis;
+post renderer rejects some closing strong delimiters between punctuation and
+a following word or non-ASCII symbol (for example a fullwidth separator). Move
+that trailing punctuation outside the emphasis;
 visible text is unchanged and inline/fenced code remains authored.
 """
 
@@ -11,12 +12,13 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from xml.etree import ElementTree
 from collections.abc import Mapping
 from typing import Any
 
 
 def normalize_lark_markdown_emphasis(text: str) -> str:
-    """Repair paired strong spans at punctuation/word boundaries only.
+    """Repair paired strong spans at provider punctuation boundaries only.
 
     This deliberately is not a new Markdown parser. The provider still owns
     Markdown rendering. Escapes, code, link destinations, unmatched markers and
@@ -107,7 +109,13 @@ def _normalize_strong_line(line: str) -> str:
                 and suffix > opening
                 and not line[suffix - 1].isspace()
                 and end < len(line)
-                and line[end].isalnum()
+                and (
+                    line[end].isalnum()
+                    or (
+                        not line[end].isascii()
+                        and unicodedata.category(line[end]).startswith("S")
+                    )
+                )
             ):
                 edits.append((suffix, end, "**" + line[suffix:cursor]))
             opening = None
@@ -131,13 +139,17 @@ def lark_markdown_post_content(text: str) -> str:
     )
 
 
-def _single_markdown_post(value: Any) -> str | None:
+def _single_markdown_post(value: Any, attachment_keys: tuple[str, ...] = ()) -> str | None:
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
             return None
-    if not isinstance(value, Mapping) or set(value) != {"zh_cn"}:
+    if not isinstance(value, Mapping) or set(value) != ({"zh_cn", "files"} if attachment_keys else {"zh_cn"}):
+        return None
+    if attachment_keys and (not isinstance(value.get("files"), list)
+                            or tuple(file.get("key") for file in value["files"] if isinstance(file, Mapping)) != attachment_keys
+                            or len(value["files"]) != len(attachment_keys)):
         return None
     locale = value["zh_cn"]
     if not isinstance(locale, Mapping) or set(locale) - {"title", "content"}:
@@ -158,7 +170,7 @@ def _single_markdown_post(value: Any) -> str | None:
     )
 
 
-def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any]) -> bool:
+def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any], attachment_keys: tuple[str, ...] = ()) -> bool:
     data = payload.get("data")
     calls = payload.get("api")
     if calls is None and isinstance(data, Mapping):
@@ -170,24 +182,80 @@ def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any]) -> b
     return (
         isinstance(body, Mapping)
         and body.get("msg_type") == "post"
-        and _single_markdown_post(body.get("content"))
+        and _single_markdown_post(body.get("content"), attachment_keys)
         == normalize_lark_markdown_emphasis(text)
     )
 
 
-def lark_markdown_readback_matches(*, text: str, message: Mapping[str, Any]) -> bool:
-    """Accept the raw post or CLI's md text, never a plain-text lookalike."""
+def _readback_post(message: Mapping[str, Any], attachment_keys: tuple[str, ...],
+                   attachment_names: tuple[str, ...]) -> tuple[str, tuple[str, ...]] | None:
     if message.get("msg_type", message.get("message_type")) != "post":
-        return False
+        return None
     if message.get("mentions") not in (None, []):
-        return False
+        return None
+    if attachment_names and len(attachment_names) != len(attachment_keys):
+        return None
     body = message.get("body")
-    if isinstance(body, Mapping):
-        actual = _single_markdown_post(body.get("content"))
+    actual = body.get("content") if isinstance(body, Mapping) else message.get("content")
+    files = []
+    if isinstance(body, Mapping) or not isinstance(actual, str):
+        if isinstance(actual, str):
+            try:
+                actual = json.loads(actual)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(actual, Mapping) and attachment_keys:
+            files = actual.get("files")
+        keys = tuple(file.get("key") for file in files if isinstance(file, Mapping)) if isinstance(files, list) else ()
+        actual = _single_markdown_post(actual, keys)
     else:
-        actual = message.get("content")
-        if not isinstance(actual, str):
-            actual = _single_markdown_post(actual)
-    return isinstance(actual, str) and actual.replace(
+        if attachment_keys:
+            # The CLI renders the post's attachment zone as trailing file tags.
+            lines = actual.rstrip().splitlines()
+            try:
+                tags = [ElementTree.fromstring(tag.strip()) for tag in lines[-len(attachment_keys):]]
+            except ElementTree.ParseError:
+                return None
+            if any(tag.tag != "file" or len(tag) or (tag.text or "").strip() or tag.tail for tag in tags):
+                return None
+            files = [tag.attrib for tag in tags]
+            actual = "\n".join(lines[:-len(attachment_keys)]).rstrip()
+    if not isinstance(actual, str) or not isinstance(files, list) or len(files) != len(attachment_keys):
+        return None
+    keys = []
+    for index, file in enumerate(files):
+        if not isinstance(file, Mapping) or not re.fullmatch(r"file_[A-Za-z0-9_-]{1,240}", str(file.get("key") or "")):
+            return None
+        key = file["key"]
+        if attachment_names:
+            # Feishu may replace upload keys with message-scoped resource keys.
+            # A replacement must retain the exact ordered display name; bytes
+            # are independently downloaded and hashed by the transport.
+            name = file.get("name")
+            if name != attachment_names[index] and not (name is None and key == attachment_keys[index]):
+                return None
+        elif key != attachment_keys[index]:
+            return None
+        keys.append(key)
+    return actual, tuple(keys)
+
+
+def lark_markdown_readback_attachment_keys(*, text: str, message: Mapping[str, Any],
+                                         attachment_keys: tuple[str, ...] = (),
+                                         attachment_names: tuple[str, ...] = ()) -> tuple[str, ...] | None:
+    """Resolve keys only from the exact post; this alone never verifies files."""
+    parsed = _readback_post(message, attachment_keys, attachment_names)
+    if parsed is None:
+        return None
+    actual, keys = parsed
+    return keys if actual.replace(
         "\r\n", "\n"
-    ).strip() == normalize_lark_markdown_emphasis(text)
+    ).strip() == normalize_lark_markdown_emphasis(text) else None
+
+
+def lark_markdown_readback_matches(*, text: str, message: Mapping[str, Any],
+                                 attachment_keys: tuple[str, ...] = (),
+                                 attachment_names: tuple[str, ...] = ()) -> bool:
+    """Accept the raw post or CLI's md text, never a plain-text lookalike."""
+    return lark_markdown_readback_attachment_keys(text=text, message=message,
+        attachment_keys=attachment_keys, attachment_names=attachment_names) is not None

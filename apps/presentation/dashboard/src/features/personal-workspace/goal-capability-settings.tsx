@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Code2, LoaderCircle, RefreshCw } from "lucide-react";
 
 import {
@@ -10,13 +10,14 @@ import {
   type GoalConfigurationPreview,
   type GoalConfigurationPartialWrite,
 } from "../../data/chat";
-import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../../data/capability-configuration";
+import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
+import { ContentReferenceWorkbench } from "./content-reference-workbench";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoalNotification } from "./personal-workspace-model";
 
 type CapabilityCatalogProps = Readonly<{
@@ -34,6 +35,23 @@ type CapabilityMutationState = Readonly<{
   partialWrite: GoalConfigurationPartialWrite | null;
   preview: GoalConfigurationPreview | null;
 }>;
+
+function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>) {
+  const writable = projectEditableCapabilityConfiguration(selected.configuration_editor, draft, selected.default);
+  if (selected.capability_id === "pull_request_review" && !Object.hasOwn(selected.current ?? {}, "owner_logins")
+    && JSON.stringify(writable.owner_logins ?? []) === JSON.stringify(selected.effective_configuration?.configuration?.owner_logins ?? [])) {
+    delete writable.owner_logins;
+  }
+  if (selected.capability_id === "pull_request_review"
+    && !Object.hasOwn(selected.current ?? {}, "wait_for_ci") && !Object.hasOwn(selected.current ?? {}, "review_order")) {
+    const effective = selected.effective_configuration?.configuration;
+    if (effective && writable.wait_for_ci === effective.wait_for_ci && writable.review_order === effective.review_order) {
+      delete writable.wait_for_ci;
+      delete writable.review_order;
+    }
+  }
+  return writable;
+}
 
 function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   goalId: string;
@@ -57,13 +75,13 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   useEffect(() => {
     setEditorMode("guided");
     setJsonDraft("");
+    const current = (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
+      ?? selected?.effective_configuration?.configuration ?? selected?.default;
     setMutation({
       busy: null,
       draft: projectEditableCapabilityConfiguration(
         selected?.configuration_editor ?? { fields: [] },
-        selected?.current
-        ?? selected?.effective_configuration?.configuration
-        ?? selected?.default,
+        selected?.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current) : current,
         selected?.default,
       ),
       partialWrite: null,
@@ -77,7 +95,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
     setError(null);
     try {
-      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration);
+      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration));
       setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
@@ -91,11 +109,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
-      const writableDraft = projectEditableCapabilityConfiguration(
-        selected.configuration_editor,
-        mutation.draft,
-        selected.default,
-      );
+      const writableDraft = goalWriteDraft(selected, mutation.draft);
       const result = await applyGoalConfiguration(
         goalId,
         selected.capability_id,
@@ -254,10 +268,37 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
       />
 
       <article aria-label={localizedSelected.display_name} className="personal-capability-detail" tabIndex={0}>
-        <CapabilityDetailHeader capability={selected} locale={locale}
-          source={localizedSelected.effective_configuration?.source} />
-        <CapabilityEditorStatus available={editorAvailable} t={t}
-          description={readOnlyReason} />
+        {localizedSelected.capability_id === "content_ops" ? <h2>{localizedSelected.display_name}</h2> : <CapabilityDetailHeader capability={selected} locale={locale}
+          source={localizedSelected.effective_configuration?.source} />}
+        {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
+          description={readOnlyReason} />}
+
+        {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
+          <h3>{locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}</h3>
+          <button type="button" onClick={onApplied}>{locale === "zh-CN" ? "重新读取审查证据" : "Recheck review evidence"}</button>
+          <p>{selected.observation.read_state === "unavailable" ? (locale === "zh-CN" ? "审查存储不可读，当前判断未知。" : "Review storage unavailable; current judgment unknown.")
+            : selected.observation.read_state === "missing" ? (locale === "zh-CN" ? "尚无审查回执。" : "No review receipts yet.")
+            : `${selected.observation.receipt_count} ${locale === "zh-CN" ? "条已读取回执" : "loaded receipts"}`}</p>
+          <p>{locale === "zh-CN" ? "过期 / 拒收" : "Stale / rejected"}: {selected.observation.stale_receipts} / {selected.observation.rejected_receipts}</p>
+          {selected.observation.latest ? <>
+            <p>{locale === "zh-CN" ? "最新审查" : "Latest review"}: {selected.observation.latest.status}</p>
+            <p>{locale === "zh-CN" ? "与目标的关系" : "Relation to goal"}: {selected.observation.latest.judgments.choice?.relation ?? "unknown"}</p>
+            <p>{locale === "zh-CN" ? "新证据增量" : "Evidence increment"}: {selected.observation.latest.judgments.choice?.increment ?? "unknown"}</p>
+            {selected.observation.latest.evidence_scope ? <>
+              <p>{selected.observation.latest.evidence_scope.criterion_binding.origin === "goal_acceptance"
+                ? (locale === "zh-CN" ? "绑定任务的规范验收条款" : "Bound to canonical task acceptance criteria")
+                : (locale === "zh-CN" ? "依据操作者研究条款；不证明规范验收关联" : "Operator study basis; canonical acceptance binding is unverified")}</p>
+              {selected.observation.latest.criterion_current === false ? <p role="alert">{locale === "zh-CN" ? "条款或任务关联已变化，旧判断不可作为当前依据。" : "Criteria or task binding changed; the old judgment is unavailable for current use."}</p> : null}
+              <p>{locale === "zh-CN" ? "仅观察声明文件在两个检查点之间的净变化" : "Observed only the net change of declared files between two checkpoints"}</p>
+              <details><summary>{locale === "zh-CN" ? "观察范围与条款版本" : "Observed scope and criterion version"}</summary>
+                <code>{selected.observation.latest.evidence_scope.criterion_binding.criteria_sha256}</code>
+                <p>{selected.observation.latest.evidence_scope.criterion_binding.criterion_ids?.join(", ")}</p>
+                <p>{selected.observation.latest.evidence_scope.files.join(", ")}</p>
+              </details>
+            </> : <p>{locale === "zh-CN" ? "旧回执未记录所选条款及文件覆盖范围。" : "Legacy receipt did not record selected criteria or file coverage."}</p>}
+          </> : null}
+          <p>{locale === "zh-CN" ? "此观察不证明任务完成；未命中漂移条件也不等于工作符合目标。" : "This observation does not prove completion; a drift condition not met does not establish on-goal work."}</p>
+        </section> : null}
 
         {localizedSelected.capability_id === "lark_event_inbox" ? (
           <section className="personal-capability-linked-setting">
@@ -299,7 +340,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
           {editorMode === "guided" ? <section className="personal-capability-field-summary">
             <CapabilityConfigurationFields
               disabled={Boolean(busy)}
-              copy={localizedCapabilityFieldCopy(locale)}
+              copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
               editor={localizedSelected.configuration_editor}
               onChange={changeDraft}
               value={draft}
@@ -328,10 +369,10 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
             </button>
           </footer>
         ) : null}
-        <CapabilityConfigurationSummary key={selected.capability_id} values={[
+        {localizedSelected.capability_id !== "content_ops" ? <CapabilityConfigurationSummary key={selected.capability_id} values={[
           { label: t("capabilities.goalValue"), value: localizedSelected.current },
           { label: t(localizedSelected.machine_current ? "capabilities.machineValue" : "capabilities.defaultValue"), value: localizedSelected.machine_current ?? localizedSelected.default },
-        ]} t={t} />
+        ]} t={t} /> : null}
       </article>
     </div>
   );
@@ -347,18 +388,23 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
   const [inspection, setInspection] = useState<GoalConfigurationInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const readGeneration = useRef(0);
 
   function load() {
     if (!goalId) return;
+    const generation = ++readGeneration.current;
     setLoading(true);
     setError(null);
+    // Withdraw the previous observation during a recheck; preserve navigation.
+    setInspection(current => current ? {...current, capability_catalog: {...current.capability_catalog,
+      capabilities: current.capability_catalog.capabilities.map(item => item.observation ? {...item, observation: undefined} : item)}} : null);
     void fetchGoalConfiguration(goalId)
-      .then(setInspection)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed")))
-      .finally(() => setLoading(false));
+      .then(value => {if (generation === readGeneration.current) setInspection(value);})
+      .catch((reason: unknown) => {if (generation === readGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed"));})
+      .finally(() => {if (generation === readGeneration.current) setLoading(false);});
   }
 
-  useEffect(load, [goalId]);
+  useEffect(() => {setInspection(null); load(); return () => {readGeneration.current++;};}, [goalId]);
 
   if (!goalId) {
     return <p className="personal-capability-empty">{t("capabilities.chooseGoal")}</p>;

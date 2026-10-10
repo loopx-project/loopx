@@ -67,7 +67,10 @@ def test_tracked_product_runtime_source_is_not_private_state(
     assert payload["scanned_files"] == 1
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads mode 000 files")
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="mode 000 read denial needs a non-root POSIX host",
+)
 def test_scan_public_boundary_reports_unreadable_file(tmp_path: Path) -> None:
     (tmp_path / "ok.md").write_text("hello\n", encoding="utf-8")
     locked = tmp_path / "locked.md"

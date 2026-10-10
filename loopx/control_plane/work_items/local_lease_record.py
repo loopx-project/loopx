@@ -35,7 +35,7 @@ def read_lease(path: Path) -> dict[str, Any] | None:
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeError) as exc:
         raise TaskLeaseError(
             f"lease file is not valid JSON: {path}",
             code="corrupt_lease",

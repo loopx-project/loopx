@@ -1,10 +1,62 @@
 # Continue work in Goal Chat
 
+## Select an existing Codex provider for ordinary Chat
+
+An operator can set `LOOPX_CHAT_CODEX_MODEL_PROVIDER` to a provider ID already
+defined in the managed `CODEX_HOME/config.toml`. Ordinary project and steward
+conversations pass this selection to Codex's native `thread/start` or
+`thread/resume` and verify the returned provider before starting a Turn. A
+missing or different readback fails; it never creates a replacement thread.
+Without the override, provider selection remains unchanged. Managed Goal
+execution keeps its own host binding and ignores this ordinary-Chat setting.
+
+For example, where upstream WebSocket connections repeatedly fail, a native
+Responses provider with `requires_openai_auth = true` and
+`supports_websockets = false` can retain the existing Codex authentication while
+using HTTP streaming. Define a separate provider ID: current Codex versions
+reject overrides of the reserved `openai` ID. Use `name = "OpenAI"` for the
+same Codex backend, leave `base_url` unset, and verify actual native capabilities
+and live reply timing before adopting it. This is an optional transport
+mitigation, not a claim that every disconnect has this cause. No retry or
+timeout budget changes, credentials, policy grants or alternative model runner
+are added by LoopX.
+
+The existing macOS LaunchAgent installer preserves the selection across
+upgrades. Set an explicit empty value to clear it when regenerating the service.
+At an idle service boundary, restore the previous provider and restart the
+existing owner; retain the original Session/history and read back its provider.
+Changing only an environment variable does not reconfigure an already running
+app-server. HTTP streaming remains streaming; the stdio connection between
+LoopX and Codex is unaffected.
+
 The existing **Goal → Chat** can be the project coordinator. The local steward
 handles cross-Goal intake and owner attention; a project conversation or a
 registered peer can coordinate work within one Goal. Both reuse the existing
 [delegation service](local-delegation.md), independently governed member Turns
 and TS task acceptance. A coordinator role alone grants no execution authority.
+
+## Source references in conversation answers
+
+Project, steward and collaboration answers share source-reference guidance.
+Repository-relative Markdown destinations do not identify an openable source in
+chat. For verified public repository content, the Agent should establish the
+canonical repository and revision it actually read, then cite an absolute
+permalink. A project name, an old link or the current remote branch is not enough
+to identify that revision. Private, ignored, unpublished or locally modified
+content must not be presented as that public version.
+
+Local artifact links are appropriate only where the receiving channel can
+resolve the authorized artifact. Otherwise the answer retains a plain file or
+section reference and names a material access/version gap. Making a citation
+clickable does not authorize publication or upload. This is authoring guidance,
+not a URL verifier: the channel renderer preserves authored destinations and
+delivery readback verifies what was sent, not source truth or recipient access.
+
+项目、管家和协作回复共用来源引用指导。聊天中的仓库相对路径不能作为可打开的
+来源网址；已核验的公开仓库内容应引用实际读取版本及正确仓库的绝对永久链接。
+私有、忽略、未发布或本地修改的内容不能冒充公开版本。只有接收渠道能解析已授权
+产物时才使用本地文件链接，否则保留文件／章节说明，并指出重要的访问或版本缺口。
+引用需要可用，不构成上传或发布授权；此指导不替代来源核验或渠道实际验收。
 
 ## Enable LoopX mode
 
@@ -119,7 +171,10 @@ messages; images use the ordinary conversation after pausing.
   requires the Chat service to be running; stopping it leaves intents pending.
 - To roll back, pause/close the Chat service before installing an older build.
   Disabling mode or deleting a binding does not cancel already admitted children;
-  use their own execution/recovery controls and retain their evidence.
+  stop one with `loopx delegation stop --execute` (or `stop_delegation`), read
+  its receipt, and retain its evidence. Only `settled` proves the worker
+  acknowledged and released its locks, its native host exited and its hard
+  lease was released or proven not owed; stopped work needs a new operation id.
 
 The ordinary native command path also remains available without delegation:
 
@@ -175,6 +230,8 @@ Turn 保持 `wake_dispatch_pending`；中断派发后仍处于 queued 的 Turn �
 协调员保留只读沙箱，成员权限来自各自执行绑定，不继承管家的扩大权限。
 成员通过验收与协调员报告、整个 Goal 验收分别显示；本模式不直接完成报告 Todo
 或整个 Goal。额度是含历史用量的总量，正在执行的请求可能超额，成员另行计量。
-回滚旧版本前先暂停或关闭 Chat 服务；退出或撤销绑定不自动取消已启动的成员。
+回滚旧版本前先暂停或关闭 Chat 服务；退出或撤销绑定不自动取消已启动的成员，
+用 `loopx delegation stop --execute`（或 `stop_delegation`）停止单个成员并阅读回执：
+只有 `settled` 证明 worker 已确认并释放锁、原生 host 已退出，且硬租约已释放或被证明无需释放；已停止的工作需要新的 operation id。
 此按钮目前限本机 managed Codex Goal 对话，不宣称 Lark、挂接会话或其他主力
 驱动等价。可用下方示例准备一次隔离的本地 DSH＋云端 Ark 协作。

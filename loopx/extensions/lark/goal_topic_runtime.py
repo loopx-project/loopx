@@ -44,6 +44,7 @@ from .goal_channel_contracts import (
 )
 from .goal_channel_targets import goal_channel_target_for_name
 from .goal_topic_connections import decide_lark_topic_event
+from .goal_topic_dispatch import ProfileEventDispatch
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
 from .manager_reply_delivery import (
     load_delivery as _load_manager_delivery,
@@ -69,6 +70,7 @@ from .manager_reply_parts import (
     manager_part_delivery_readback,
 )
 from .manager_reply_format import repair_manager_reply_text
+from .private_json import write_private_json_atomic
 from .outbound import LarkOutboundTextError, safe_lark_plain_text_fallback
 from .inbox_reactions import (
     _create_reaction,
@@ -103,13 +105,15 @@ class LarkGoalTopicTurnFailed(RuntimeError):
 
 _EVENT_PROJECTION = (
     '{schema_version:"lark_event_inbox_event_v0",'
-    "event_id:(.event_id // .message_id // .id),"
-    "message_id:(.message_id // .id),"
-    "create_time:.create_time,content:.content,"
-    "sender_id:(.sender_id // .sender.id // .sender.sender_id "
-    "// .event.sender.sender_id // .event.sender.id),"
+    "event_id:(.event_id // .header.event_id // .message_id // .event.message.message_id // .id),"
+    "message_id:(.message_id // .message.message_id // .event.message.message_id // .id),"
+    "create_time:(.create_time // .message.create_time // .event.message.create_time),"
+    "content:(.content // .message.content // .event.message.content),"
+    "sender_id:(.sender_id.open_id? // .sender_id // .sender.id // .sender.sender_id.open_id? // .sender.sender_id "
+    "// .event.sender.sender_id.open_id? // .event.sender.sender_id // .event.sender.id),"
     "sender_type:(.sender_type // .sender.sender_type // .event.sender.sender_type),"
-    "chat_id:.chat_id,"
+    "chat_id:(.chat_id // .message.chat_id // .event.message.chat_id),chat_type:(.chat_type // .message.chat_type // .event.message.chat_type),"
+    "message_type:(.message_type // .msg_type // .message.message_type // .event.message.message_type),"
     "root_id:(.root_id // .message.root_id // .event.message.root_id),"
     "parent_id:(.parent_id // .reply_to // .message.parent_id // .message.reply_to "
     "// .event.message.parent_id // .event.message.reply_to),"
@@ -152,6 +156,10 @@ def _active_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict[str, 
                     "bot_app_id": str(identity.get("bot_app_id") or ""),
                 },
             )
+    for profile, config in dict(snapshot.get("private_profiles") or {}).items():
+        if profile in profiles:
+            raise ValueError("an App cannot own both private and group listeners")
+        profiles[profile] = dict(config)
     return profiles
 
 
@@ -297,6 +305,100 @@ def _event_payloads(stdout: Any) -> list[Mapping[str, Any]]:
     return events
 
 
+def _profile_event_route(
+    *,
+    profile: str,
+    snapshot: Mapping[str, Any],
+    event: Mapping[str, Any],
+) -> tuple[
+    tuple[Mapping[str, Any], dict[str, Mapping[str, Any]], dict[str, Any]] | None, str
+]:
+    """Select the existing profile/target/Topic scope; never grant turn authority."""
+
+    profile_config = _active_profile_configs(snapshot).get(profile)
+    if profile_config is None:
+        return None, "inactive"
+    target_payload = snapshot.get("target_payload")
+    target_payload = target_payload if isinstance(target_payload, Mapping) else {}
+    binding_payloads = snapshot.get("binding_payloads")
+    binding_payloads = binding_payloads if isinstance(binding_payloads, Mapping) else {}
+    active_target_refs = {
+        str(binding.get("target_ref") or "")
+        for goal_id, payload in binding_payloads.items()
+        if isinstance(payload, Mapping)
+        for binding in bindings_for_goal(payload, str(goal_id))
+        if binding.get("enabled") is True
+    }
+    chat_id = str(event.get("chat_id") or "")
+    target_match = _target_for_profile_chat(
+        target_payload,
+        profile=profile,
+        chat_id=chat_id,
+        bot_app_id=str(profile_config.get("bot_app_id") or ""),
+        active_target_refs=active_target_refs,
+        root_id=str(event.get("root_id") or ""),
+        binding_payloads=binding_payloads,
+    )
+    if target_match is None:
+        return None, "target_unmatched"
+    target_ref, _target = target_match
+    routed_event = dict(event)
+    root_id = str(routed_event.get("root_id") or "")
+    if not MESSAGE_ID_PATTERN.fullmatch(root_id) and not has_manager_binding(
+        binding_payloads, target_ref
+    ):
+        candidate_roots = _topic_roots_for_target(
+            binding_payloads,
+            target_ref=target_ref,
+        )
+        if len(candidate_roots) > 1:
+            return None, "topic_context_ambiguous"
+        if not candidate_roots:
+            return None, "topic_context_missing"
+        routed_event["root_id"] = candidate_roots[0]
+    return (
+        target_payload,
+        _binding_payloads_for_target(binding_payloads, target_ref=target_ref),
+        routed_event,
+    ), "matched"
+
+
+def _profile_event_lane(
+    *,
+    profile: str,
+    snapshot: Mapping[str, Any],
+    event: Mapping[str, Any],
+    runtime_root: str | Path,
+) -> tuple[str, ...]:
+    """Only serialize transport work; actual ingress re-reads its authority."""
+
+    scoped, _status = _profile_event_route(
+        profile=profile, snapshot=snapshot, event=event
+    )
+    if scoped is not None:
+        targets, bindings, routed_event = scoped
+        decision = decide_lark_topic_event(
+            target_payload=targets,
+            binding_payloads=bindings,
+            event=routed_event,
+            runtime_root=runtime_root,
+        )
+        route = decision.get("route") or {}
+        if route:
+            if route.get("conversation_kind") == "manager":
+                source = "manager." + _opaque_digest(route.get("app_ref"), event.get("chat_id"))
+            else:
+                # Compatibility direct_session opens/resumes this exact channel.
+                source = "topic." + _opaque_digest(
+                    route.get("app_ref"), route.get("target_ref"),
+                    route.get("topic_root_message_id"),
+                )
+            if route.get("session_id"):
+                return (source, "session." + str(route["session_id"]))
+            return (source,)
+    return ("unmatched." + _opaque_digest(profile, event.get("chat_id")),)
+
+
 def poll_lark_goal_topic_profile_once(
     *,
     profile: str,
@@ -307,6 +409,7 @@ def poll_lark_goal_topic_profile_once(
     provider_runner: Any = subprocess.run,
     reply_runner: CommandRunner = _default_simple_runner,
     proposal_deliverer: ProposalDeliverer | None = None,
+    private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
 ) -> dict[str, Any]:
     """Consume one bounded event batch for an App and reuse Inbox reply/ACK."""
 
@@ -342,62 +445,30 @@ def poll_lark_goal_topic_profile_once(
             "replied_count": 0,
         }
 
-    target_payload = snapshot.get("target_payload")
-    target_payload = target_payload if isinstance(target_payload, Mapping) else {}
-    binding_payloads = snapshot.get("binding_payloads")
-    binding_payloads = binding_payloads if isinstance(binding_payloads, Mapping) else {}
-    active_target_refs = {
-        str(binding.get("target_ref") or "")
-        for goal_id, payload in binding_payloads.items()
-        if isinstance(payload, Mapping)
-        for binding in bindings_for_goal(payload, str(goal_id))
-        if binding.get("enabled") is True
-    }
     events = _event_payloads(result.get("stdout"))
     replied_count = 0
     event_statuses: list[str] = []
     event_reasons: list[str | None] = []
     for event in events:
-        chat_id = str(event.get("chat_id") or "")
-        target_match = _target_for_profile_chat(
-            target_payload,
-            profile=profile,
-            chat_id=chat_id,
-            bot_app_id=str(profile_config.get("bot_app_id") or ""),
-            active_target_refs=active_target_refs,
-            root_id=str(event.get("root_id") or ""),
-            binding_payloads=binding_payloads,
-        )
-        if target_match is None:
-            event_statuses.append("target_unmatched")
+        if profile in dict(snapshot.get("private_profiles") or {}):
+            private_result = private_admitter(profile, dict(event)) if private_admitter else {"status": "private_admission_unavailable"}
+            event_statuses.append(str(private_result.get("status") or "unknown"))
             event_reasons.append(None)
             continue
-        target_ref, _target = target_match
-        routed_event = dict(event)
-        root_id = str(routed_event.get("root_id") or "")
-        if not MESSAGE_ID_PATTERN.fullmatch(root_id) and not has_manager_binding(
-            binding_payloads, target_ref
-        ):
-            candidate_roots = _topic_roots_for_target(
-                binding_payloads,
-                target_ref=target_ref,
-            )
-            if len(candidate_roots) > 1:
-                event_statuses.append("topic_context_ambiguous")
-                event_reasons.append(None)
-                continue
-            if not candidate_roots:
-                event_statuses.append("topic_context_missing")
-                event_reasons.append(None)
-                continue
-            routed_event["root_id"] = candidate_roots[0]
+        scoped, rejection = _profile_event_route(
+            profile=profile,
+            snapshot=snapshot,
+            event=event,
+        )
+        if scoped is None:
+            event_statuses.append(rejection)
+            event_reasons.append(None)
+            continue
+        target_payload, binding_payloads, routed_event = scoped
         try:
             event_result = process_lark_goal_topic_event(
                 target_payload=target_payload,
-                binding_payloads=_binding_payloads_for_target(
-                    binding_payloads,
-                    target_ref=target_ref,
-                ),
+                binding_payloads=binding_payloads,
                 event=routed_event,
                 runtime_root=runtime_root,
                 goal_contexts=(
@@ -439,6 +510,7 @@ def stream_lark_goal_topic_profile(
     reply_runner: CommandRunner = _default_simple_runner,
     health_sink: HealthSink | None = None,
     proposal_deliverer: ProposalDeliverer | None = None,
+    private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
     review_callback_handler: ReviewCallbackHandler | None = None,
 ) -> dict[str, Any]:
     """Keep one bounded long-lived CLI consumer attached between messages."""
@@ -500,6 +572,23 @@ def stream_lark_goal_topic_profile(
                 if callback_stream is not None:
                     callback_stream.terminate()
                 return
+            if dispatch.failed:
+                # A worker can fail while stdout waits indefinitely for the
+                # next event. Unblock that reader so close drains active work
+                # and raises into the existing service retry owner. Do not set
+                # stop: failure must not become a requested, non-retrying exit.
+                try:
+                    with result_lock:
+                        if health_sink is not None:
+                            health_sink(
+                                {"status": "failed", "error_code": "lark_event_listener_failed"}
+                            )
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    if callback_stream is not None:
+                        callback_stream.terminate()
+                return
             if callback_stream is not None and callback_stream.disconnected():
                 callback_disconnected.set()
                 if process.poll() is None:
@@ -524,55 +613,38 @@ def stream_lark_goal_topic_profile(
         name=f"loopx-lark-stop-{profile}",
         daemon=True,
     )
-    watcher.start()
     event_count = 0
     replied_count = 0
     provider_ready = False
     exit_reason: str | None = None
-    try:
-        stdout = process.stdout
-        if stdout is None:
-            return {
-                "ok": False,
-                "status": "stream_failed",
-                "event_count": 0,
-                "replied_count": 0,
-            }
-        for line in stdout:
-            if stop.is_set():
-                break
-            stripped = line.strip()
-            if stripped.startswith(_EVENT_READY_PREFIX):
-                provider_ready = True
-                if health_sink is not None:
-                    health_sink({"status": "listening", "error_code": None})
-                continue
-            if stripped.startswith("[event] exited "):
-                match = _EVENT_EXIT_REASON.search(stripped)
-                exit_reason = match.group(1) if match else None
-                continue
-            if stripped.startswith(_EVENT_DIAGNOSTIC_PREFIX):
-                continue
-            result = poll_lark_goal_topic_profile_once(
-                profile=profile,
-                snapshot=snapshot_provider(),
-                runtime_root=runtime_root,
-                answer=answer,
-                consume_runner=lambda _args, payload=line: {
-                    "returncode": 0,
-                    "stdout": payload,
-                    "stderr": "",
-                },
-                provider_runner=provider_runner,
-                reply_runner=reply_runner,
-                proposal_deliverer=proposal_deliverer,
-            )
+    result_lock = threading.Lock()
+
+    def handle_event(line: str) -> None:
+        nonlocal event_count, replied_count, provider_ready
+
+        result = poll_lark_goal_topic_profile_once(
+            profile=profile,
+            snapshot=snapshot_provider(),
+            runtime_root=runtime_root,
+            answer=answer,
+            consume_runner=lambda _args, payload=line: {
+                "returncode": 0,
+                "stdout": payload,
+                "stderr": "",
+            },
+            provider_runner=provider_runner,
+            reply_runner=reply_runner,
+            proposal_deliverer=proposal_deliverer,
+            private_admitter=private_admitter,
+        )
+        with result_lock:
+            failed = dispatch.failed
             if int(result.get("event_count") or 0) and not provider_ready:
                 # A provider event is stronger readiness evidence than a
                 # diagnostic marker and protects compatibility with providers
                 # that omit the marker while still emitting the typed stream.
                 provider_ready = True
-                if health_sink is not None:
+                if health_sink is not None and not failed:
                     health_sink({"status": "listening", "error_code": None})
             event_count += int(result.get("event_count") or 0)
             replied_count += int(result.get("replied_count") or 0)
@@ -581,8 +653,10 @@ def stream_lark_goal_topic_profile(
                 reasons = list(result.get("event_reasons") or [])
                 health_sink(
                     {
-                        "status": "listening",
-                        "error_code": None,
+                        "status": "failed" if failed else "listening",
+                        "error_code": (
+                            "lark_event_listener_failed" if failed else None
+                        ),
                         "event_count": int(result.get("event_count") or 0),
                         "replied_count": int(result.get("replied_count") or 0),
                         "last_event_status": str(statuses[-1]) if statuses else None,
@@ -605,18 +679,62 @@ def stream_lark_goal_topic_profile(
                     ),
                     flush=True,
                 )
+
+    dispatch = ProfileEventDispatch(handle_event, stop)
+    watcher.start()
+    stream_failed = True
+    try:
+        stdout = process.stdout
+        if stdout is None:
+            return {
+                "ok": False,
+                "status": "stream_failed",
+                "event_count": 0,
+                "replied_count": 0,
+            }
+        for line in stdout:
+            if stop.is_set():
+                break
+            stripped = line.strip()
+            if stripped.startswith(_EVENT_READY_PREFIX):
+                with result_lock:
+                    provider_ready = True
+                    if health_sink is not None and not dispatch.failed:
+                        health_sink({"status": "listening", "error_code": None})
+                continue
+            if stripped.startswith("[event] exited "):
+                match = _EVENT_EXIT_REASON.search(stripped)
+                exit_reason = match.group(1) if match else None
+                continue
+            if stripped.startswith(_EVENT_DIAGNOSTIC_PREFIX):
+                continue
+            # Batch-shaped provider records are split before scheduling, so an
+            # unrelated conversation in a batch can progress independently too.
+            for event in _event_payloads(line):
+                lane = _profile_event_lane(
+                    profile=profile,
+                    snapshot=snapshot_provider(),
+                    event=event,
+                    runtime_root=runtime_root,
+                )
+                if not dispatch.submit(lane, json.dumps(event, ensure_ascii=False)):
+                    break
+        stream_failed = False
     finally:
-        watcher_done.set()
-        if process.poll() is None:
-            process.terminate()
         try:
-            returncode = process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            returncode = process.wait(timeout=3)
-        watcher.join(timeout=1)
-        if callback_stream is not None:
-            callback_stream.close()
+            dispatch.close(cancel_pending=stream_failed)
+        finally:
+            watcher_done.set()
+            if process.poll() is None:
+                process.terminate()
+            try:
+                returncode = process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                returncode = process.wait(timeout=3)
+            watcher.join(timeout=1)
+            if callback_stream is not None:
+                callback_stream.close()
     stopped = stop.is_set()
     # A bus can die after registering the consumer and tell the CLI to exit
     # successfully with reason=signal (e.g. a Feishu/Lark domain mismatch).
@@ -866,13 +984,7 @@ def _inbox_config(
         },
     }
     config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = config_path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    os.chmod(temporary, 0o600)
-    temporary.replace(config_path)
+    write_private_json_atomic(config_path, payload)
     return config_path, config_ref
 
 

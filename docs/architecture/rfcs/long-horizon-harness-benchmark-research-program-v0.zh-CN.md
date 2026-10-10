@@ -457,6 +457,40 @@ answer 相似这一事实来推断作弊。
 run identity、固定 policy/environment digest、parity status、disposition、reason code 与
 redacted evidence reference。公开 receipt 不能把未知的 private audit 升级为 `eligible`。
 
+#### 声明反馈权限与评测时机
+
+完整性资格必须比较实际访问与预注册实验协议。协议包含两个独立选择：solver 能否请求并
+收到原生评测反馈，以及独立 evaluator 仅在求解结束后运行，还是也在求解期间采样交付物。
+后台采样本身不授权向 solver 返回分数、诊断、日志或评测产物。Solver 自编的本地验证与
+访问独立 evaluator 分开处理。
+
+当前 `benchmark_integrity_policy_v0` 实现支持区分网络权限，却无条件要求
+`official_feedback_blinded` 与 `verifier_started_after_agent`。它不能为上述全部协议提供
+资格判定。这是尚未闭合的 toolkit/runner 契约缺口，不是原生允许反馈构成作弊的证据。
+契约及证据交付前，相关 receipt 继续保持未合格；实际为 false 的 boolean 不得填成 true。
+
+下一份有界实现归既有 `benchmark-toolkit` owner：共享 policy 决策进入其类型化 TypeScript
+边界，provider 专属观测留在原生 runner。扩展既有 policy 和 receipt，不在 runner 再建
+一套 eligibility 判断。保留当前盲反馈、求解后评测的默认行为与负例。显式协议必须在准入
+前固定，并与 runner 的实际观测绑定；看到结果后修改协议不能让旧运行获得资格。
+
+验收需要通过真实 runner 和 qualification 入口覆盖反馈/时机的全部四种组合，并包括：
+
+- 允许的反馈只携带 benchmark 声明的响应。隐藏测试、参考答案及 evaluator 实现仍不可
+  访问；分数响应不授权读取它们的底层文件或其他 trial。
+- 盲反馈后台评测使用 controller 持有的交付物快照与 evaluator。分数存储、提交端点、
+  凭证、日志及网络路由均不能形成面向 solver 的反馈通路，resume 后也必须成立。
+- Runner 证据把实际身份、挂载、环境和网络规则绑定到本次运行。证据缺失或矛盾仍未合格；
+  命令扫描无命中、声明了某个模式，都不能单独证明隔离。
+- Provider 凭证排除是独立边界。由 solver 的 OS 用户持有的凭证文件即使权限为 `0600`，
+  shell 仍可读取。不能据此声明排除成立，也不能为了准入某种反馈模式而豁免它。
+- 反馈消融只改变反馈可用性：任务要求、迭代引导、交付物选择、预算、评测频率及源码固定
+  保持一致。获准的 harness 自修复与实际 evaluator 访问分别记录。
+
+此 checkpoint 定义验收，不代表已安装支持，也不新增访问权限。Runner 隔离与协议支持
+均仍是结果可计入的前置条件。诊断观察保留原资格状态；后续集成不得改写历史 receipt 或
+运行中的实验。
+
 ## 7. 架构与 ownership
 
 ```mermaid
@@ -552,6 +586,14 @@ non-material event mix；它不能证明 benchmark integrity，也不能复用�
 研究应估计 model/work-class-specific response curve，而不是一个全局 tool-call 或 Todo-count
 threshold。更宽并不天然更好。
 
+拟议[长作业修订](hierarchical-agent-stride-control-v0.zh-CN.md#75-长作业与决策-checkpoint修订提案)
+测试**决策时机**，不延后 Turn 记账。先 shadow capture 一个 provider 的 validated
+result/checkpoint 和绑定 monitor；只有通过资格验证的 opt-in arm 才能抑制
+unchanged model admission。原生评测、job 资源、deadline 与所有欠付 Turn
+settlement 保持一致。测量 observer CPU/IO、模型 token/call、result-to-decision
+latency、漏结果、重复执行/debit 与总预算下原生结果。Callback 丢失必须按已声明
+observation deadline 恢复。训练更久或 bookkeeping call 更少，单独都不够资格。
+
 ### 8.2 Evidence、空转检测与 semantic replan
 
 核心假设是 durable coverage ledger 与 semantic progress observation 能阻止重复 maintenance
@@ -562,6 +604,15 @@ successor、coverage-backed exhaustion、blocker 或 no-follow-up。
 LHTB 是首要动态实验场，因为 partial reward 与 checkpoint 可以显示方向变化是否产生进展。
 DeepSWE 验证相同机制能否改善 repository outcome，且不依赖 reward-specific shortcut。
 ALE 验证它能否迁移到异构专业工作流。
+
+拟议[实验决策路径](research-exploration-control-plane-v0.zh-CN.md#115-由证据驱动的实验决策修订提案)
+把 result adoption 与 cadence 分别验证。固定 session continuity、planning、model
+和总预算，对比仅交付 evidence 与 evidence-linked continuation/successor adoption，
+独立比较成立后再组合机制。包含有效负证据、inconclusive/conflicting measurement、
+失败前置条件、有依据复验、未覆盖的同 family probe 与 input 改变后重开 scope。
+除原生结果和成本外，判断实际执行的 next action 是否遵循 scoped result。
+Citation/schema compliance 单独不够；压制有用实验的强制 pivot 算失败。
+这些是拟议 study，不是当前 C2/C4 evidence，也不授予 job launch 权限。
 
 ### 8.3 研究探索与组合
 

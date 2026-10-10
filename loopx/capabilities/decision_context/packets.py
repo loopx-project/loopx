@@ -5,17 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
 from ...control_plane.runtime.public_safety import (
     REMOTE_LOCATION_SURFACE_PATTERN,
-    SECRET_LIKE_SURFACE_PATTERN,
     find_public_safe_local_path,
 )
+from ...public_safe_text import CREDENTIAL_CATEGORIES
 from ...public_safe_text import COMPACT_TOKEN_PATTERN as _TOKEN_RE
+from ...public_safe_text import classify_private_text
 
 DECISION_EVIDENCE_PACKET_SCHEMA_VERSION = "decision_evidence_packet_v0"
 DECISION_PROPOSAL_SCHEMA_VERSION = "decision_proposal_v0"
@@ -45,22 +45,13 @@ DECISION_REVIEW_DISPOSITIONS = {
 # by find_public_safe_local_path; this site keeps its own rejection message and
 # length limit for whatever the owner recognizes.
 #
-# Local threshold policy only: the credential *shapes* are decided once by
-# SECRET_LIKE_SURFACE_PATTERN, which this site consults in addition to this list.
-_CREDENTIAL_RE = re.compile(
-    "(?i)("
-    + "|".join(
-        [
-            "Author" + "ization:",
-            "Bear" + r"er\s+[A-Za-z0-9._-]+",
-            "api" + r"[_-]?key",
-            "pass" + "word",
-            "sec" + "ret",
-            "begin " + r"(?:rsa |open)?private key",
-        ]
-    )
-    + ")"
-)
+# Refs #5136, direction 1: one categorized call decides the credential question.
+# The alternation list this site kept beside SECRET_LIKE_SURFACE_PATTERN was a
+# shape list rather than the "local threshold policy" its comment claimed, and it
+# was byte-identical to the copy in material_lifecycle/_validation.py. The owner
+# covers the one spelling that list reached and its category arms do not -- a
+# credential label glued into a field name -- through the
+# ``include_compound_field_assignment`` opt-in this face passes.
 _UNSAFE_FIELDS = {
     "api_key",
     "content",
@@ -85,7 +76,11 @@ def _compact_text(value: Any, *, field: str, max_len: int = 320) -> str:
         raise ValueError(f"{field} must not contain a local path")
     if REMOTE_LOCATION_SURFACE_PATTERN.search(text):
         raise ValueError(f"{field} must use an opaque source reference, not a raw URL")
-    if SECRET_LIKE_SURFACE_PATTERN.search(text) or _CREDENTIAL_RE.search(text):
+    if classify_private_text(
+        text,
+        categories=CREDENTIAL_CATEGORIES,
+        include_compound_field_assignment=True,
+    ):
         raise ValueError(f"{field} contains a credential-like value")
     return text
 
@@ -113,7 +108,7 @@ def _iso_timestamp(value: Any, *, field: str) -> str:
 def _score(value: Any, *, field: str) -> float:
     try:
         score = float(value)
-    except (TypeError, ValueError) as exc:
+    except (OverflowError, TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be a number") from exc
     if not math.isfinite(score) or not 0.0 <= score <= 1.0:
         raise ValueError(f"{field} must be finite and between 0 and 1")

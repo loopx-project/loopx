@@ -32,6 +32,40 @@ PROJECT_COORDINATION_GUIDANCE = (
 PROJECT_CONTEXT_VERSION = 2
 
 
+def apply_context_handoff(
+    controller, scope, session, turn, response, context, *, execution_allowed
+):
+    """Apply a requested handoff while the source scope remains current."""
+    if response.get("context_handoff") is None:
+        return response
+    if scope["kind"] == "unavailable":
+        raise ValueError("context handoff requires a scoped conversation")
+    from .capabilities.manager_context.execution import handoff_response
+    from .chat_manager_context import manager_authorization_scope_is_current
+
+    expected_scope_id = context.get("authorization_scope_id")
+    if scope["kind"] == "external_audience" and expected_scope_id is None:
+        current_session = controller.store.load_session(session["session_id"]) or {}
+        expected_scope_id = current_session.get("manager_authorization_scope_id")
+    return handoff_response(
+        controller.coordination_runtime_root,
+        controller.registry_path,
+        session=session,
+        turn=turn,
+        source_store=controller.store,
+        response=response,
+        source_authorized=lambda: scope["kind"] != "external_audience"
+        or manager_authorization_scope_is_current(
+            controller.registry_path,
+            controller.manager_scope_resolver,
+            session,
+            expected_scope_id,
+            runtime_root=controller.coordination_runtime_root,
+        ),
+        execution_allowed=execution_allowed,
+    )
+
+
 def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope):
     """Prepare the same evidence/handoff path for each supported conversation."""
     from .chat_runtime import CodexAppServerAdapter, CodexChatAgentError
@@ -40,16 +74,20 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
     from .capabilities.manager_runtime import manager_runtime_session_fields
 
     session_id = session["session_id"]
+    runtime_root = getattr(controller, "coordination_runtime_root", controller.store.root.parent)
     from .chat_manager_context import collect_manager_turn_context
     event_sink("agent.phase", {"phase": "manager_context", "label": "正在读取当前 Goal 的工作与协作" if scope["kind"] == "owner_goal" else "正在读取授权范围内的 Goal 状态"})
     context = collect_manager_turn_context(
-        controller.registry_path, session, controller.store.root.parent, controller.manager_scope_resolver,
+        controller.registry_path, session, runtime_root, controller.manager_scope_resolver,
         **({"include_details": False} if isinstance(adapter, CodexAppServerAdapter) else {}),
         # An interactive endpoint reads the declared sources on
         # demand, but a prompt-only segment can only receive them,
         # so it gets the bounded read inline.
         remote_evidence=not isinstance(adapter, CodexAppServerAdapter),
     )
+    if scope.get("bound_steward") is True and isinstance(context.get("bound_steward"), dict):
+        from .capabilities.native_chat.external_conversations import ChatExternalConversations
+        context["bound_steward"]["executions"] = ChatExternalConversations(controller).commission_evidence(session)
     controller.store.append_event(session_id, turn_id, kind="manager.context", payload=context)
     if scope["kind"] == "external_audience":
         scope_id = str(context.get("authorization_scope_id") or "")
@@ -69,7 +107,8 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 if controller.adapters.get(session_id) is adapter:
                     controller.adapters.pop(session_id, None)
             manager_runtime = controller.manager_runtime_profile(
-                str(session.get("channel_id") or "manager")
+                str(session.get("channel_id") or "manager"),
+                steward_context=session.get("steward_context"),
             )
             adapter = controller._start_adapter(
                 agent_id=str(session["agent_id"]),
@@ -97,12 +136,19 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 controller.adapters[session_id] = adapter
     from .capabilities.manager_context import authority
     context["context_delegation"] = authority(
-        controller.store.root.parent, controller.registry_path, session,
+        runtime_root, controller.registry_path, session,
         controller.store.load_turn(session_id, turn_id) or {},
     )
+    from .capabilities.manager_context.execution import catalog
+    execution_catalog = catalog(
+        runtime_root, controller.registry_path, session,
+        controller.store.load_turn(session_id, turn_id) or {},
+    )
+    if execution_catalog["bindings"] or not execution_catalog["available"]:
+        context["context_execution"] = execution_catalog
     if isinstance(adapter, CodexAppServerAdapter):
         from .capabilities.manager_context.inspection import ManagerInspection, manager_index
-        from .chat_manager_context import manager_authorization_scope_id
+        from .chat_manager_context import manager_authorization_scope_is_current
         expected_scope_id = context.get("authorization_scope_id")
         def scope_valid() -> bool:
             if scope["kind"] == "owner_portfolio":
@@ -112,11 +158,16 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 return bool(current and current.get("status") != "closed"
                             and current.get("goal_id") == session.get("goal_id")
                             and current.get("channel_id") == session.get("channel_id"))
-            current = controller.manager_scope_resolver(session) if controller.manager_scope_resolver else None
-            return isinstance(current, list) and manager_authorization_scope_id(current, runtime_root=controller.store.root.parent, channel_id=session.get("channel_id")) == expected_scope_id
+            return manager_authorization_scope_is_current(
+                controller.registry_path,
+                controller.manager_scope_resolver,
+                session,
+                expected_scope_id,
+                runtime_root=runtime_root,
+            )
         inspection = ManagerInspection(
             context=context, registry_path=controller.registry_path,
-            runtime_root=controller.store.root.parent,
+            runtime_root=runtime_root,
             owner_scope=scope["private_conversation"],
             channel_id=session.get("channel_id"),
             scope_valid=scope_valid,
@@ -126,7 +177,7 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 (lambda: controller.manager_scope_resolver(session) if controller.manager_scope_resolver else [])
             ),
             delegation_authority=lambda: authority(
-                controller.store.root.parent, controller.registry_path, session,
+                runtime_root, controller.registry_path, session,
                 controller.store.load_turn(session_id, turn_id) or {},
             ),
             record=lambda result: controller.store.append_event(

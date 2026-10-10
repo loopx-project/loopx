@@ -14,26 +14,13 @@
           <h1 id="startup-title">LoopX</h1>
         </header>
         <p class="status-line">
-          <span id="status">正在启动本地控制面</span>
+          <span id="status">正在打开 LoopX</span>
           <span aria-hidden="true" class="status-dots"><i></i><i></i><i></i></span>
         </p>
         <div aria-hidden="true" class="progress"></div>
         <p id="boot-elapsed" class="boot-note" aria-live="off">正在读取启动进度…</p>
-        <p id="boot-detail" class="boot-note">正在检查 App 配套组件和本地服务。</p>
-        <section id="pairing" class="pairing" hidden aria-labelledby="pairing-title">
-          <h2 id="pairing-title">App 与 CLI 运行时不一致，请选择如何对齐</h2>
-          <p class="pairing-lead">本地服务要求两者使用同一个运行时版本。Goal 数据不会被删除。</p>
-          <dl class="pairing-revisions">
-            <div><dt>本机 CLI 运行时</dt><dd id="pairing-installed">未检测到</dd></div>
-            <div><dt>本 App 自带运行时</dt><dd id="pairing-bundled">未知</dd></div>
-          </dl>
-          <div class="pairing-actions">
-            <button id="pairing-update" class="pairing-primary" type="button">升级：更新 App 与运行时 / Update App and runtime</button>
-            <button id="pairing-align" type="button">回退 CLI：改用本 App 自带运行时 / Use this App's runtime</button>
-          </div>
-          <p id="pairing-status" class="pairing-status" role="status" aria-live="polite"></p>
-          <p class="pairing-note">「更新 App 与运行时」把两层一起前进到当前通道的最新构建。「回退 CLI」用本 App 自带的运行时快照替换本机 CLI；若本机 CLI 更新，这会把它回退到 App 的版本。</p>
-        </section>
+        <p id="boot-detail" class="boot-note">正在准备最新可用版本。</p>
+
       </section>
       <details class="recovery">
         <summary>恢复与更新 / Recovery & updates</summary>
@@ -43,6 +30,7 @@
         <button id="update" type="button">检查更新 / Check for updates</button>
         <p id="update-status" role="status"></p>
         <button id="repair" type="button">修复当前版本 / Repair this version</button>
+        <button id="forget-selection" type="button">清除记住的运行时选择 / Forget runtime choice</button>
         <button id="rollback" type="button" hidden>恢复上版并准备重启 / Restore previous version</button>
         <details>
           <summary>诊断信息 / Diagnostics</summary>

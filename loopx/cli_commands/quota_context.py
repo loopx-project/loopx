@@ -29,6 +29,7 @@ from ..control_plane.scheduler.state import (
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..turn_identity import mint_turn_instance_id, normalize_turn_instance_id
+from .quota_cache_freshness import cached_goal_projection_miss_reason
 from .quota_request import (
     QUOTA_COMMAND_DETAIL_SECTIONS,
     quota_detail_sections_from_args,
@@ -322,13 +323,22 @@ def prepare_quota_command_context(
             status_payload is not None
             and command in QUOTA_SCHEDULER_COMMANDS
             and status_goal_id
-            and not cached_goal_run_index_is_current(
-                status_payload, runtime_root=runtime_root, goal_id=status_goal_id,
-            )
         ):
-            status_payload = None
-            cache_metadata["hit"] = False
-            cache_metadata["miss_reason"] = "run_index_changed"
+            if not cached_goal_run_index_is_current(
+                status_payload, runtime_root=runtime_root, goal_id=status_goal_id,
+            ):
+                status_payload = None
+                cache_metadata["hit"] = False
+                cache_metadata["miss_reason"] = "run_index_changed"
+            elif cache_miss_reason := cached_goal_projection_miss_reason(
+                status_payload,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=status_goal_id,
+            ):
+                status_payload = None
+                cache_metadata["hit"] = False
+                cache_metadata["miss_reason"] = cache_miss_reason
     if status_payload is None:
         collector = status_collector or collect_status
         status_payload = collector(

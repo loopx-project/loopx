@@ -78,15 +78,16 @@ def test_business_hours_skip_the_utc8_weekend():
 
 def test_default_responders_match_the_published_roster():
     """The metric counts appointed reviewers, so the list has to be the roster."""
+    roster_section = GOVERNANCE.read_text(encoding="utf-8").split(
+        "## Maintainer And Review Roster\n", 1
+    )[1].split("## Review Service Levels", 1)[0]
     roster = {
         match.group(1).casefold()
         for match in re.finditer(
-            r"^\| \[`@([^`]+)`\]\([^)]*\) \| ", GOVERNANCE.read_text(encoding="utf-8"), re.M
+            r"^\| \[`@([^`]+)`\]\([^)]*\) \| ", roster_section, re.M
         )
     }
-    assert set(report.DEFAULT_RESPONDERS) <= roster, sorted(roster)
-    # The roster table lists exactly the accounts the report treats as responders.
-    assert set(report.DEFAULT_RESPONDERS) == {"huangruiteng", "steven-kid", "maxliux5"}
+    assert set(report.DEFAULT_RESPONDERS) == roster, sorted(roster)
 
 
 def test_actor_identity_comes_from_the_typed_actor_not_the_login():

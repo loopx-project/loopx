@@ -83,7 +83,8 @@ def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatc
         claimed_by=AGENT_ID, agent_id=AGENT_ID)
     replay = call(*guard_args)
     assert replay["heartbeat_receipt"]["settlement_identity"] == admitted["heartbeat_receipt"]["settlement_identity"]
-    assert replay.get("selected_todo") is None
+    assert replay["selected_todo"]["todo_id"] == monitor["todo_id"]
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
     assert replay["should_run"] is False
     assert replay["safe_bypass_allowed"] is False
     assert replay["execution_obligation"]["must_attempt_work"] is False

@@ -8,10 +8,15 @@ import { isAbsolute } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
-import { projectReplanHistory } from "./replan_history.ts";
+import { projectSettledReplanHistory } from "./replan_history_settlement.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export async function projectReplanHistorySnapshot(value: unknown): Promise<JsonObject> {
+  return projectSettledReplanHistory(await readReplanSnapshot(value));
+}
+
+/** Shared local transport; the requesting typed owner still interprets the facts. */
+export async function readReplanSnapshot(value: unknown): Promise<unknown> {
   const request = requireJsonObject(value, "replan history snapshot");
   requireStringLiteral(request.schema_version, ["replan_history_snapshot_v0"], "snapshot schema");
   const path = requireNonEmptyString(request.path, "snapshot path");
@@ -46,5 +51,5 @@ export async function projectReplanHistorySnapshot(value: unknown): Promise<Json
     // partial history or a Python decision after an unverifiable snapshot.
     throw new EffectRuntimeRequestError("replan history snapshot unavailable or invalid; regenerate from the source");
   }
-  return projectReplanHistory(payload);
+  return payload;
 }

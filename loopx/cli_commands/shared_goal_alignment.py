@@ -138,16 +138,16 @@ def handle_shared_goal_alignment_command(
         if getattr(args, "project", None):
             project_path = Path(args.project).expanduser()
         else:
-            try:
-                resolved_project, _ = resolve_todo_state_path(
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
+            resolved_project, _ = resolve_todo_state_path(
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                require_existing=False,
+            )
+            if resolved_project is None:
+                raise ValueError(
+                    "goal project is not configured in the registry; pass --project"
                 )
-                project_path = resolved_project
-            except Exception:
-                project_path = None
-        if project_path is None:
-            project_path = Path.cwd()
+            project_path = resolved_project
 
         runtime_root = (
             Path(runtime_root_arg).expanduser() if runtime_root_arg else None

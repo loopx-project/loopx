@@ -409,6 +409,35 @@ test("pending selection qualifies only after current hard-lane arbitration", () 
   });
 });
 
+test("only runnable replan-only deferral permits one inline guard reentry", () => {
+  const selected = candidate("todo_selected001", "Review the selected route.", "P1");
+  const request = {
+    schema_version: ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION,
+    requested_todo_id: selected.todo_id,
+    candidate: selected,
+    should_run: true,
+    normal_delivery_allowed: false,
+    delivery_preemptions: ["autonomous_replan", "delivery_not_allowed"],
+  };
+  const replan = qualifyActionSelection(request);
+  assert.equal(replan.state, "deferred");
+  assert.equal(replan.inline_reentry_allowed, true);
+  assert.equal(replan.selected_todo, undefined);
+  for (const extra of ["blocking_work_lane", "control_repair", "heartbeat_receipt",
+    "ready_deferred_successor_priority_preemption"]) {
+    assert.equal(qualifyActionSelection({...request,
+      delivery_preemptions: [...request.delivery_preemptions, extra],
+    }).inline_reentry_allowed, undefined);
+  }
+  for (const patch of [
+    {should_run: false}, {candidate: null}, {delivery_preemptions: []},
+    {delivery_preemptions: ["delivery_not_allowed"]},
+    {normal_delivery_allowed: true},
+  ]) {
+    assert.equal(qualifyActionSelection({...request, ...patch}).inline_reentry_allowed, undefined);
+  }
+});
+
 test("pending selection rejects a Todo absent from the current eligible set", () => {
   assert.deepEqual(qualifyActionSelection({
     schema_version: ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION,

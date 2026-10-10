@@ -1,6 +1,7 @@
 /** Read-only decision dependency rules over one complete source snapshot.
  * A consistent dependency is not approval, a lease, or a mutation receipt. */
 import type {JsonObject} from "../effect_program.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, optionalNonEmptyString, requireBoolean, requireInteger} from "../runtime_decode.ts";
 import {gateAddressesAgent} from "./agent_scope.ts";
 import {
@@ -227,22 +228,19 @@ export function projectTodoGateScopes(request: JsonObject): JsonObject {
 export function evaluateDecisionScope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "decision scope request");
   if (request.schema_version !== DECISION_SCOPE_REQUEST_SCHEMA) throw new TypeError("decision scope request schema mismatch");
-  let result: JsonObject | boolean | null | (JsonObject | null)[][];
+  let result: JsonObject | null | (JsonObject | null)[][];
   switch (request.operation) {
     case "fallback": result = selectScopedGateFallback(request); break;
     case "gate_scopes": result = projectTodoGateScopes(request); break;
     case "consistency": result = decisionScopeConsistency(request); break;
     case "standing": result = scopeStandingAuthority(request.authority, optionalNonEmptyString(request.agent_id, "agent_id")); break;
-    case "covers": result = decisionScopeCovers(request.gate_scope, request.required_scope); break;
     case "relations": {
       const items = rows(request.items);
       result = rows(request.gates).map(gate => items.map(item => todoGateRelation(gate, item)));
       break;
     }
     case "relation": result = todoGateRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
-    case "scope_relation": result = decisionScopeRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
-    case "exact_relation": result = exactTodoGateRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
-    default: throw new TypeError("unsupported decision scope operation");
+    default: throw new EffectRuntimeRequestError("unsupported decision scope operation");
   }
   return {schema_version: "todo_decision_scope_result_v0", result};
 }

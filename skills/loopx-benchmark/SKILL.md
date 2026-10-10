@@ -1,13 +1,21 @@
 ---
 name: loopx-benchmark
-description: Use when a LoopX-managed goal runs, tracks, scores, or analyzes a benchmark experiment through benchmark-toolkit, including experiment-board rows, solver arms, integrity qualification, matched comparisons, or case insights. Do not use for casual benchmark discussion, ordinary software microbenchmarks, or eval mentions without LoopX experiment state.
+description: "Operate or analyze LoopX-managed benchmark experiments through benchmark-toolkit, including trajectory-based effectiveness and efficiency diagnosis, matched comparisons, run selection and integrity. Solving an assigned task under an existing runner does not by itself select this skill. Excludes casual benchmark discussion and ordinary software microbenchmarks."
 ---
 
 # LoopX Benchmark Workflow
 
-Use this skill for a LoopX-managed benchmark experiment. The builtin
+Use this skill to operate or analyze a LoopX-managed benchmark experiment. The builtin
 `benchmark-toolkit` capability owns provider-neutral experiment state and
 integrity boundaries. This packaged skill is its task-triggered Agent playbook.
+
+An assigned solver follows its task instructions and current execution contract.
+The words “benchmark”, “evaluation”, or “submission” in that task do not grant
+the operator role or require experiment-board discovery. Use this workflow when
+the requested work actually includes run management, analysis of an active run,
+or post-run analysis; an explicit request to use the skill still applies. Keep
+the solver's task-local validation and authorized submission path distinct from
+experiment management.
 
 The capability is catalog-ready without a per-Goal enable switch. Installing
 this skill does not grant runner, shell, network, credential, private-evidence,
@@ -74,11 +82,48 @@ explicitly exploratory and retain the relevant limitations and counterexamples.
 - **Monitor an active campaign:** read the board and runtime-owned projections;
   update only on material run transitions. Do not manufacture progress from a
   timer tick.
+- **Diagnose effectiveness or trajectory efficiency:** follow the analysis below.
+  For active runs, use authorized solver/runtime observations and released score
+  projections; keep findings provisional and hidden evaluator evidence closed.
 - **Analyze a terminal run:** wait until solving is terminal and scoring is
   complete before reading hidden evaluator evidence or writing a case insight.
 
 For a generic library microbenchmark or an eval with no LoopX Goal/board, use
 the task's normal tools instead of imposing this workflow.
+
+## Diagnose effectiveness and trajectory efficiency
+
+Start with the task's real success criterion and evaluator behavior, then explain
+which work produced useful progress. Keep score quality and operational efficiency
+separate: fewer bytes, calls or tokens are not proof of a better task outcome.
+
+1. Read the board and align source, model, task, budget, feedback mode, sampling,
+   evaluator and concurrency. Compare common elapsed windows and label unmatched
+   history as diagnostic. Missing or invalid scores remain distinct from zero;
+   use the task's native ranking when identifying a retained best result.
+2. Inspect representative early, middle and late trajectory segments, including
+   stalls and counterexamples. Record the selection rule and sample denominator.
+   Connect actions to changed artifacts, validation and scored snapshots; count
+   planning, control reads, tool recovery and actual task work separately. Use
+   hidden task/evaluator evidence only after solver and scoring are terminal.
+3. Separate candidate causes: task difficulty or strategy, model token throughput,
+   control interaction overhead, tool failures, and evaluator/feedback delay.
+   Align artifact capture, grading and delivery times with solver activity.
+   Compare both wall time and useful progress per token/active work interval where
+   measured; a score slope or a token-rate difference alone cannot identify the
+   cause. Preserve unknowns when telemetry is absent.
+4. Turn the strongest supported cause into a small discriminating intervention
+   or ablation within existing authority. Reuse current qualified baselines and
+   change one relevant factor where possible; disclose unavoidable confounds.
+   Prioritize expected task benefit and technical depth over packet size or PR
+   count. If repeated reads are wasteful, verify the consumer's obligations before
+   reducing them; a planning or recovery change must still lead to useful work.
+5. Report observations, causal hypotheses and validated effects distinctly,
+   including regressions and remaining uncertainty. Use
+   [loopx-performance-diagnosis](../loopx-performance-diagnosis/SKILL.md) only for
+   an evidenced owned-process cost; return its measurements to this task-level
+   analysis. Do not substitute profiler hotspots for outcome evidence or require
+   profiling to inspect duplicate content and unnecessary interactions.
 
 ## Experiment sequence
 
@@ -174,13 +219,48 @@ the task's normal tools instead of imposing this workflow.
   confirmed disclosure plus causal use disqualifies the score.
 - `classify-artifacts` classifies benchmark artifact paths without reading them;
   use it before reading or publishing any candidate artifact.
-- The solver lane must not read hidden tests, verifier sources, gold answers, or
-  official feedback during the solving phase. The post-run analyst may read full
-  private evidence only after the solver is terminal and scoring is complete.
+- The solver lane must not read hidden tests, verifier sources or gold answers.
+  During solving, official feedback is limited to what the declared run protocol
+  releases to that solver. The post-run analyst may read full private evidence
+  only after the solver is terminal and scoring is complete.
 - `capability bind` selects an external provider implementation for a Goal; it
   is not the activation mechanism for this builtin capability. Todo
   `required_capability` fields remain runtime prerequisites, not product
   capability switches.
+
+## Curate live comparison views
+
+When the user wants a persistent experiment overview, keep a stable per-task
+entry point backed by an explicit maintained selection, rather than sending a
+new long run-query URL after every restart. Keep task switching and full history
+one interaction away. Use the existing board/runtime projections for run state
+and the provider's authorized score projection; a display selection must not
+become a second source of score, integrity, or countability truth.
+
+- Include the requested baseline families and feedback modes, current experiments,
+  and important mechanism ablations. Do not silently reduce baselines to the
+  official runner: single-task and native-Goal controls may be essential. If a
+  requested baseline is unavailable, say so instead of substituting another arm.
+- By default, move superseded or problem-stopped attempts out of the core view,
+  while retaining their original traces, scores, retirement reason and replacement
+  reference in history. Never select by score or hide a valid low-scoring arm.
+  An explicitly requested historical baseline may remain visible, with its actual
+  status and incomplete duration labeled; display inclusion is not qualification.
+- Keep historical baselines distinct from current experiments. Expose each arm's
+  runner setting, source/scorer version, feedback mode, budget and sampling cadence
+  through concise labels and accessible details. Mark unmatched versions or budgets
+  as diagnostic context rather than implying a causal comparison.
+- Compare common elapsed sampling windows. Show each completed score promptly,
+  with pending, evaluating, failed and missing points distinguishable; never fill
+  missing scores with zero or splice different attempts into one curve. Preserve
+  original capture times and terminal samples.
+- Reconcile the selection on admission, replacement and retirement while keeping
+  the entry URL stable. Maintain campaign-specific identifiers in private operator
+  state; put only reusable guidance in the shipped skill.
+- Verify the rendered view: requested baselines and active ablations appear,
+  retired attempts are reachable through history, and links survive a selection
+  update. Review the populated first viewport for readable labels and navigation;
+  a correct query alone does not establish a usable comparison view.
 
 ## Campaign monitoring and post-run insight
 

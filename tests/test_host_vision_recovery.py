@@ -14,12 +14,31 @@ spec.loader.exec_module(fixture)
 
 
 def vision(state="no_followup"):
+    path_outcome = {
+        "no_followup": "no_change",
+        "vision_closed": "replan",
+    }.get(state, "continue")
+    path_change = {
+        "no_followup": {"stopped": ["No further fixture delivery is claimed."]},
+        "vision_closed": {"changed": ["Close the validated fixture stage."]},
+    }.get(
+        state,
+        {"retained": ["Keep the remaining explicit Todo as the delivery frontier."]},
+    )
     return {
         "schema_version": "goal_vision_replan_contract_v0", "state": state,
         "vision_patch": {
             "vision_summary": "Deliver the finite local ledger specification.",
             "acceptance_summary": "Replay, reversal and CLI atomic output verified.",
             "last_patch_summary": "Local acceptance tests passed; no external delivery is requested.",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": path_outcome,
+            "prior_assumption": "The current milestone still required validation.",
+            "observed_reality": "The fixture acceptance passed with a verified Todo transition.",
+            "evidence_refs": ["fixture:synthetic-lifecycle-acceptance"],
+            **path_change,
         },
     }
 

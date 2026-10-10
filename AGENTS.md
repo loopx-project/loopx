@@ -381,6 +381,16 @@ objective. Record the tradeoff in existing PR validation/review evidence, not a
 new approval workflow. Hard limits and frozen experiment/promotion criteria
 retain their owning authority and cannot be reclassified to erase a failure.
 
+LoopX is a semantic control plane: agent-consumed prose is part of its behavior
+contract. Before shortening packet guidance, compare obligations clause by
+clause, including ordering, evidence provenance, modality, scope qualifiers,
+continuation and stop conditions. Stable fields, commands and decision codes
+do not prove that shorter instructions preserve those obligations. A regression
+ceiling is not frozen authority: prefer an evidence-backed limit increase when
+compression would discard useful meaning. Use the existing review capability's
+`observable_semantics.decision_text_assessment`; do not optimize for a green
+size test at the expense of the caller's decision.
+
 ### Refactor Real-Path Validation
 
 Before delivering a refactor, validate the affected production entrypoint and

@@ -4,7 +4,7 @@ import wire from "./succession_wire_v1.json" with {type: "json"};
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
+import {jsonObject, requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 
 export const HANDOFF_STATES = ["blocking", "cleared_without_successor", "cleared_with_successor",
   "cleared_no_followup", "superseded", "deferred"] as const;
@@ -19,6 +19,7 @@ interface Row {
   active: boolean; advancement: boolean; noFollowup: boolean; tracked: boolean;
   successors: string[]; supersededBy: string | null; unblocks: string | null;
   resumes: string | null; handoff: boolean;
+  done: boolean; routeFlag: boolean | null; legacyRouteLabel: string;
 }
 function id(value: unknown): string | null {
   if (value === null) return null;
@@ -34,6 +35,9 @@ function decode(value: unknown): Row {
   const status = requireStringLiteral(facts.status, ["open", "blocked", "done", "deferred"], "status");
   const active = requireBoolean(facts.active, "active");
   const advancement = requireBoolean(facts.advancement, "advancement");
+  if (typeof facts.legacy_route_label !== "string") {
+    throw new EffectRuntimeRequestError("legacy route label must be text");
+  }
   if (!Array.isArray(facts.successors) || !Array.isArray(facts.context_fields) ||
       facts.context_fields.some(field => typeof field !== "string")) {
     throw new EffectRuntimeRequestError("succession lists must be arrays");
@@ -47,7 +51,10 @@ function decode(value: unknown): Row {
       if (!target) throw new EffectRuntimeRequestError("successor identity cannot be null");
       return target;
     }), supersededBy: id(facts.superseded_by), unblocks: id(facts.unblocks),
-    resumes: id(facts.resumes), handoff: requireBoolean(facts.handoff, "handoff")};
+    resumes: id(facts.resumes), handoff: requireBoolean(facts.handoff, "handoff"),
+    done: requireBoolean(facts.done, "done"),
+    routeFlag: facts.route_flag === null ? null : requireBoolean(facts.route_flag, "route_flag"),
+    legacyRouteLabel: facts.legacy_route_label};
 }
 function handoffState(row: Row, successors: readonly string[]): HandoffState | null {
   if (!row.active || !row.handoff) return null;
@@ -56,6 +63,16 @@ function handoffState(row: Row, successors: readonly string[]): HandoffState | n
   if (row.status !== "done") return "blocking";
   if (row.noFollowup) return "cleared_no_followup";
   return successors.length ? "cleared_with_successor" : "cleared_without_successor";
+}
+
+/** Retain the historical prose hint only as a replan advisory. An explicit
+ * boolean wins, including false; this never clears a gate or grants work.
+ * Retire the hint when the supported route-closeout writers emit typed flags. */
+function routeReplanRequired(row: Row): boolean {
+  if (row.routeFlag !== null) return row.routeFlag;
+  if (!row.active || !row.handoff || row.done || row.status === "done" || row.status === "deferred") return false;
+  const label = row.legacyRouteLabel.toLowerCase();
+  return label.includes("stale") && label.includes("handoff") && label.includes("closeout");
 }
 
 /** The same edge index drives live readback and bounded archive capture. */
@@ -96,7 +113,8 @@ export function evaluateTodoSuccession(values: readonly unknown[]): JsonObject[]
     return {schema_version: EVALUATION_SCHEMA, item_sha256: canonicalAuthoritySha256(row.facts),
       successor_todo_ids: successors, unresolved_successor_ids: declared.filter(target => !resolved.includes(target)),
       tracked_completion: row.tracked, successor_gap: row.tracked && !row.noFollowup && successors.length === 0,
-      handoff_state: handoffState(row, successors)};
+      handoff_state: handoffState(row, successors),
+      route_continuation_replan_required: routeReplanRequired(row)};
   });
 }
 
@@ -112,11 +130,13 @@ export function validateTodoSuccession(facts: unknown, value: unknown): JsonObje
   }
   requireBoolean(evaluation.tracked_completion, "tracked_completion");
   requireBoolean(evaluation.successor_gap, "successor_gap");
+  requireBoolean(evaluation.route_continuation_replan_required, "route_continuation_replan_required");
   if (evaluation.handoff_state !== null) requireStringLiteral(evaluation.handoff_state, HANDOFF_STATES, "handoff_state");
   const successors = evaluation.successor_todo_ids as string[];
   if (evaluation.tracked_completion !== row.tracked ||
       evaluation.successor_gap !== (row.tracked && !row.noFollowup && successors.length === 0) ||
       evaluation.handoff_state !== handoffState(row, successors) ||
+      evaluation.route_continuation_replan_required !== routeReplanRequired(row) ||
       new Set(successors).size !== successors.length || successors.includes(row.id ?? "")) {
     throw new EffectRuntimeRequestError("inconsistent Todo succession evaluation");
   }
@@ -208,4 +228,48 @@ export function projectTodoClosure(value: unknown): JsonObject {
   }
   if (noFollowup) result.closure_intent = {schema_version: "todo_closure_intent_v0", kind: "no_followup", derived: true, count: noFollowup};
   return result;
+}
+
+/** Validate retained source witnesses at the quota read boundary. Malformed
+ * evidence is an invalid observation, never an exception or closure authority.
+ * A bounded display may retain a full-source proof but cannot manufacture it. */
+export function validateTodoClosureSource(value: unknown): JsonObject {
+  const source = requireJsonObject(value, "Todo closure source");
+  const proof = jsonObject(source.source_proof), terminal = jsonObject(source.terminal_closure_proof);
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  const total = source.total_count, open = source.open_count, done = source.done_count, deferred = source.deferred_count;
+  const countsValid = count(total) && count(open) && count(done) && count(deferred) && total === open + done + deferred;
+  const sourceValid = proof !== null && proof.schema_version === "todo_source_proof_v0" &&
+    (proof.role === "user" || proof.role === "agent") && proof.derived === true &&
+    typeof source.source_section === "string" && source.source_section.trim() !== "" &&
+    count(proof.item_count) && proof.item_count === total;
+  const rows = source.items, monitors = source.monitor_open_items;
+  const covered = count(total) && Array.isArray(rows) &&
+    (total === 0 ? rows.length === 0 : rows.length > 0 && rows.length <= total);
+  const rowsValid = Array.isArray(rows) && rows.every(value => {
+    const row = jsonObject(value);
+    return row !== null && ((row.status === "done" && row.done === true) || row.watch_only === true) &&
+      row.route_continuation_replan_required !== true;
+  });
+  const monitorsValid = Array.isArray(monitors) && monitors.every(value => jsonObject(value)?.watch_only === true);
+  const terminalValid = countsValid && sourceValid && source.schema_version === "todo_summary_v0" &&
+    covered && rowsValid && monitorsValid && source.deferred_item_count === 0 && source.deferred_resume_count === 0 &&
+    source.convergence_open_count === 0 && source.completed_without_successor_count === 0 && source.route_continuation_replan_count === 0 &&
+    terminal !== null && terminal.schema_version === "todo_terminal_closure_proof_v0" && terminal.role === proof!.role &&
+    terminal.source_section === source.source_section && count(terminal.item_count) && terminal.item_count === total &&
+    count(terminal.monitor_open_count) && count(terminal.watch_only_monitor_count) &&
+    terminal.all_todos_done === (terminal.monitor_open_count === 0) &&
+    (terminal.monitor_open_count === 0 || terminal.all_convergent_todos_done === true) &&
+    terminal.monitor_open_count === terminal.watch_only_monitor_count &&
+    terminal.monitor_open_count === monitors.length &&
+    terminal.successor_gap_count === 0 && terminal.route_replan_count === 0 &&
+    count(terminal.no_followup_count) && terminal.derived === true;
+  const intent = jsonObject(source.closure_intent);
+  const intentValid = terminalValid && intent !== null && intent.schema_version === "todo_closure_intent_v0" &&
+    intent.kind === "no_followup" && intent.derived === true && count(intent.count) && count(done) &&
+    intent.count > 0 && intent.count <= done && intent.count === terminal!.no_followup_count;
+  return {source_completeness: {schema_version: "todo_source_completeness_v0",
+    status: terminalValid ? "valid" : "invalid", source: "structured_todo_projection",
+    role: proof?.role ?? null, terminal_closure: terminalValid ? "valid" : "invalid"},
+    closure_intent: intentValid ? {...intent, source: "todo_no_followup"} : null};
 }

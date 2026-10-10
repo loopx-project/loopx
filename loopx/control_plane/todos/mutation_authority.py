@@ -98,24 +98,6 @@ def normalize_todo_lifecycle_authority(
     return normalized
 
 
-def todo_lifecycle_authority_for_goal(
-    goal: Mapping[str, Any] | None,
-    *,
-    agent_id: str,
-    registered_agents: list[str],
-) -> dict[str, Any] | None:
-    if not isinstance(goal, Mapping):
-        return None
-    coordination = goal.get("coordination")
-    if not isinstance(coordination, Mapping):
-        return None
-    grants = normalize_todo_lifecycle_authority(
-        coordination.get("todo_lifecycle_authority"),
-        registered_agents=registered_agents,
-    )
-    return next((grant for grant in grants if grant["agent_id"] == agent_id), None)
-
-
 def todo_update_authority_action(
     *,
     existing_role: str,

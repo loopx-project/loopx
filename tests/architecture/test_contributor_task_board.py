@@ -47,7 +47,16 @@ def check_board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         )
         check()
 
-    return run, board, tmp_path
+    # Negative controls target a disposable row rather than a real task that
+    # legitimately disappears when delivered. The default run still checks
+    # the untouched production board against the real RFC generator.
+    first_row = smoke["contributor_board_claimable_rows"](board)[0]
+    fixture_row = (
+        "| GH-C9999 | [RFC](../architecture/rfcs/goal-direction-baseline-v0.md) "
+        "| Synthetic admission gap. Exit: preserve canonical admission. "
+        "| Focused admission negative controls | Available |"
+    )
+    return run, board.replace(first_row, fixture_row, 1), tmp_path
 
 
 def edit_row(
@@ -58,7 +67,7 @@ def edit_row(
     task_id: str | None = None,
     gap: str | None = None,
 ) -> str:
-    line = next(line for line in board.splitlines() if line.startswith("| GH-C89b |"))
+    line = next(line for line in board.splitlines() if line.startswith("| GH-C9999 |"))
     cells = [cell.strip() for cell in line.strip("|").split("|")]
     for index, value in ((0, task_id), (1, anchor), (2, gap), (4, status)):
         if value is not None:

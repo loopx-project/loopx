@@ -43,7 +43,8 @@ def readback(plan: dict, receipt: dict, admission: dict | None = None,
             try:
                 add_source(project, url_or_path=source["source_ref"], tool="external-evidence",
                     title="Public evidence", claims=[{"text": source["finding"], "stance": "neutral"}],
-                    external_evidence=_lineage(normalized, source), expected_question=plan["request"]["objective"])
+                    external_evidence=_lineage(normalized, source), expected_question=plan["request"]["objective"],
+                    source_accessed_at=source["accessed_at"], source_publication_date=source["publication_date"])
             except ValueError as error:
                 # A bounded partial projection is retained. Retrying is idempotent
                 # for the same identity; failed sources never count as covered.

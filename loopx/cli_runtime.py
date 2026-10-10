@@ -40,6 +40,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"codex-cli-visible-driver-run",
 		"codex-cli-visible-driver-plan",
 		"codex-cli-visible-session-proof",
+		"commands",
 		"demo",
 		"doctor",
 		"first-run-report",
@@ -66,7 +67,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
 _SELECTED_COMMANDS = _STATUS_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
-	"authority-archive", "extension", "slash-commands",
+	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 }
 
 
@@ -258,6 +259,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.authority_archive import register_authority_archive_command
 
 		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "coordination-shadow":
+		from .cli_commands.coordination_shadow import register_coordination_shadow_command
+
+		register_coordination_shadow_command(subparsers, add_subcommand_format)
 	elif command == "extension":
 		from .cli_commands.extension import register_extension_commands
 
@@ -299,6 +304,13 @@ def _dispatch_common_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
+	if args.command == "coordination-shadow":
+		from .cli_commands.coordination_shadow import handle_coordination_shadow_command
+
+		return handle_coordination_shadow_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
 	if args.command == "extension":
 		from .cli_commands.extension import handle_extension_command
 
@@ -328,7 +340,7 @@ def _dispatch_common_command(
 		return 0
 	if args.command == "delegation":
 		from .cli_commands.delegation import handle_delegation
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 
@@ -399,7 +411,7 @@ def _dispatch_common_command(
 		)
 		from .cli_commands.todo import handle_todo_command
 		from .cli_rollout import append_cli_rollout_event
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 

@@ -165,17 +165,6 @@ export function requireTodoCompletionMetadataValue(value: unknown): JsonObject {
   };
 }
 
-export function selectTodoCompletionContinuation(value: unknown): JsonObject {
-  const request = requestObject(value, "continuation_for_write");
-  return {
-    schema_version: TODO_COMPLETION_STATE_RESULT_SCHEMA,
-    continuation: completionContinuationForWrite(
-      requiredBoolean(request.no_followup, "no_followup"),
-      requiredBoolean(request.has_successor, "has_successor"),
-    ),
-  };
-}
-
 export function selectTodoCompletionState(value: unknown): TodoCompletionStateResult {
   const request = requestObject(value, "evaluate");
   const todo = requiredObject(request.todo, "todo");

@@ -6,64 +6,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...history import load_registry
-from ...registry import find_registry_goal
 from . import local_authority_shadow_outbox as outbox
 from .local_authority_shadow_projection import LEASE_PARTITION
+from .legacy_writer_fence import (
+    ActiveStateAuthorityMutationError as ActiveStateAuthorityMutationError,
+    require_prose_state_write_allowed as require_prose_state_write_allowed,
+)
 from .runtime_shadow import resolve_coordination_runtime_shadow_config
 from .shadow_goal_scope import shadow_goal_scope
 from .shadow_management import ShadowManagementError, read_shadow_capture_binding, require_shadow_primary_write_allowed
-
-
-class ActiveStateAuthorityMutationError(ValueError):
-    """A prose-only writer attempted to change canonical coordination state."""
-
-    code = "active_state_authority_mutation_forbidden"
-    payload = {"primary_writeback_preserved": True}
-
-
-def require_prose_state_write_allowed(
-    *, registry_path: Path, runtime_root: Path, goal_id: str, state_path: Path,
-    original_text: str, planned_text: str,
-) -> None:
-    """Under S, enforce source maintenance and the owned prose-only invariant."""
-
-    from .legacy_writer_fence import require_registry_source_write_allowed
-    require_registry_source_write_allowed(
-        registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
-        state_file=state_path, canonical_mutation=False,
-    )
-
-    from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-    from ..todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
-    from .local_authority_shadow_adapter import todo_partition_projector
-    from .local_authority_shadow_projection import partition_comparison_view
-
-    try:
-        goal = find_registry_goal(load_registry(registry_path), goal_id)
-        events = load_rollout_events(
-            rollout_event_log_path(runtime_root, goal_id),
-            limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
-        )
-        projector = todo_partition_projector(
-            goal, state_path=state_path, rollout_events=events,
-        )
-        # Todo projections include the read-time resume-condition evaluation
-        # clock. Compare the same semantic view used by shadow continuity
-        # digests so an owned prose update is not rejected merely because the
-        # two projections were evaluated milliseconds apart.
-        original_projection = partition_comparison_view(projector(original_text))
-        planned_projection = partition_comparison_view(projector(planned_text))
-        if original_projection != planned_projection:
-            raise ActiveStateAuthorityMutationError(
-                "prose update would change canonical Todo or handoff state"
-            )
-    except ActiveStateAuthorityMutationError:
-        raise
-    except Exception as error:
-        raise ActiveStateAuthorityMutationError(
-            "prose update cannot prove that canonical coordination state is unchanged"
-        ) from error
 
 
 def begin_todo_runtime_shadow_capture(
@@ -140,7 +91,7 @@ def write_captured_todo_state(
 ) -> None:
     """Under the primary lock, prepare before replacement and mark only after durability."""
 
-    from ..todos.active_state_editing import atomic_write_state_text
+    from ..runtime.document_io import atomic_write_state_text
 
     def write() -> None:
         capture.prepare(text)

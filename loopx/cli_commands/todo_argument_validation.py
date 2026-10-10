@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterable
+from pathlib import Path
 
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 
@@ -138,6 +139,18 @@ _TODO_ADD_UNSUPPORTED_FIELDS = (
 )
 _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 
+# The same strict subset drives validation and action help. Complex lifecycle
+# commands retain full help until their conditional grammar is centralized.
+TODO_ACTION_FIELDS = {
+    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "state_file", "project", "dry_run"}),
+    "receipt": frozenset({"operation_id"}),
+    "result-read": frozenset({"todo_id"}),
+    "plan": frozenset({"text", "agent_id", "project"}),
+    "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
+    "claim": frozenset({"role", "todo_id", "claimed_by", "agent_id", "state_file",
+                        "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version", "project", "dry_run"}),
+}
+
 
 def register_todo_linkage_arguments(
     todo_parser: argparse.ArgumentParser,
@@ -155,8 +168,9 @@ def register_todo_linkage_arguments(
         dest="successor_todo_ids",
         action="append",
         help=(
-            "For todo update/complete, link an existing successor todo to the "
-            "current todo. Repeat for multiple successors."
+            "For todo update/complete, or canonical supersede, link an existing "
+            "successor todo to the current todo. Supersede links and retires "
+            "atomically. Repeat for multiple successors."
         ),
     )
     todo_parser.add_argument(
@@ -286,15 +300,7 @@ def _validate_todo_option_subset(args: argparse.Namespace, allowed_fields: Itera
 def validate_todo_list_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
         args,
-        {
-            "role",
-            "todo_id",
-            "status",
-            "agent_id",
-            "todo_limit",
-            "todo_thin",
-            "state_file",
-        },
+        TODO_ACTION_FIELDS["list"],
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
         "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
         "--format; "
@@ -304,7 +310,7 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
 
 def validate_todo_receipt_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
-        args, {"operation_id"},
+        args, TODO_ACTION_FIELDS["receipt"],
         "todo receipt only accepts --goal-id, --operation-id, and --format; unsupported: ",
     )
     if not args.operation_id:
@@ -315,14 +321,14 @@ def validate_todo_result_read_options(args: argparse.Namespace) -> None:
     if not args.todo_id:
         raise ValueError("todo result-read requires --todo-id")
     _validate_todo_option_subset(
-        args, {"todo_id"},
+        args, TODO_ACTION_FIELDS["result-read"],
         "todo result-read only accepts --goal-id, --todo-id, and --format; unsupported: ",
     )
 
 
 def validate_todo_plan_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
-        args, {"text", "agent_id"},
+        args, TODO_ACTION_FIELDS["plan"],
         "todo plan only accepts --goal-id, --agent-id, --text, --project and --format; unsupported: ",
     )
     if not args.text or not args.agent_id:
@@ -334,7 +340,7 @@ def validate_todo_project_markdown_options(args: argparse.Namespace) -> None:
         raise ValueError("todo project-markdown requires --provider-revision")
     _validate_todo_option_subset(
         args,
-        {"state_file", "execute", "provider_revision"},
+        TODO_ACTION_FIELDS["project-markdown"],
         "todo project-markdown only accepts --goal-id, --provider-revision, "
         "--project, --state-file, --execute, and "
         "--format; unsupported: ",
@@ -352,28 +358,70 @@ def validate_todo_add_options(args: argparse.Namespace) -> None:
         raise ValueError("todo add does not support --successor-todo-id; use todo update/complete to link existing successor work")
 
 
+_TODO_CLAIM_FIELDS = TODO_ACTION_FIELDS["claim"]
+
+
+class TodoClaimArgumentError(ValueError):
+    """CLI grammar rejection; does not decide whether a claim is authorized."""
+
+    def recovery(
+        self, args: argparse.Namespace, *, registry_path: Path,
+        runtime_root_arg: str | None,
+    ) -> dict[str, object]:
+        missing = [
+            flag for flag, field in (("--todo-id", "todo_id"), ("--claimed-by", "claimed_by"))
+            if not getattr(args, field, None)
+        ]
+        if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
+            missing.append("--task-lease-idempotency-key")
+        cli_args = ["--registry", str(registry_path), "--format", "json"]
+        if runtime_root_arg is not None:
+            cli_args.extend(["--runtime-root", runtime_root_arg])
+        cli_args.extend(["todo", "claim", "--goal-id", args.goal_id])
+        # Reuse the grammar owner; preserve identities and zero-valued CAS versions.
+        for flag, field in TODO_OPTION_FIELDS:
+            value = getattr(args, field, None)
+            if field in _TODO_CLAIM_FIELDS and value is not None and value != "":
+                cli_args.extend([flag, str(value)])
+        if args.project:
+            cli_args.extend(["--project", args.project])
+        if args.dry_run:
+            cli_args.append("--dry-run")
+        return {
+            "command": "loopx todo claim",
+            "cli_args": cli_args,
+            "requires_flags": missing,
+            "remove_flags": unsupported_todo_options(args, allowed_fields=_TODO_CLAIM_FIELDS),
+            "reason": (
+                "Review removed flags, append missing flags with explicit values, then retry. "
+                "Claim authority and canonical lease checks still apply; this is not an admission."
+            ),
+        }
+
+
 def validate_todo_claim_options(args: argparse.Namespace) -> None:
+    if getattr(args, "turn_instance_id", None):
+        raise TodoClaimArgumentError(
+            "--turn-instance-id is supported only by todo complete/supersede settlement"
+        )
     if not args.todo_id:
-        raise ValueError("todo claim requires --todo-id")
+        raise TodoClaimArgumentError("todo claim requires --todo-id")
     if not args.claimed_by:
-        raise ValueError("todo claim requires --claimed-by")
+        raise TodoClaimArgumentError("todo claim requires --claimed-by")
     if args.clear_claim:
-        raise ValueError(
+        raise TodoClaimArgumentError(
             "todo claim requires --claimed-by and does not support --clear-claim"
         )
-    _validate_todo_option_subset(
-        args,
-        {
-            "role", "todo_id", "claimed_by", "agent_id", "state_file",
-            "claim_operation_id", "task_lease_idempotency_key",
-            "task_lease_expected_version",
-        },
-        "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
-        "--claim-operation-id, --task-lease-idempotency-key, "
-        "--task-lease-expected-version, --project, --state-file, and --dry-run; unsupported: ",
-    )
+    unsupported = unsupported_todo_options(args, allowed_fields=_TODO_CLAIM_FIELDS)
+    if unsupported:
+        raise TodoClaimArgumentError(
+            "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
+            "--claim-operation-id, --task-lease-idempotency-key, "
+            "--task-lease-expected-version, --project, --state-file, and --dry-run; unsupported: "
+            + ", ".join(unsupported)
+        )
     if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
-        raise ValueError(
+        raise TodoClaimArgumentError(
             "--task-lease-expected-version requires --task-lease-idempotency-key"
         )
 
@@ -492,8 +540,8 @@ def validate_todo_supersede_options(args: argparse.Namespace) -> None:
     validate_successor_routing_options(args)
     if any(getattr(args, field) for field in ("blocks_agent", "clear_blocks_agent", "excluded_agents", "clear_excluded_agents", "global_gate", "clear_global_gate", "unblocks_todo_id", "resume_when")):
         raise ValueError("todo supersede does not update current todo routing metadata; use todo update first")
-    if args.successor_todo_ids:
-        raise ValueError("todo supersede does not support --successor-todo-id; use --next-agent-todo or update the source todo before supersede")
+    if args.successor_todo_ids and (args.next_agent_todo or args.next_user_todo):
+        raise ValueError("--successor-todo-id links existing work and cannot be combined with --next-agent-todo or --next-user-todo")
     if any(getattr(args, field) for field in ("monitor_target_key", "cadence", "next_due_at", "expires_at")):
         raise ValueError("todo supersede does not update target or monitor schedule metadata; use todo update before supersede")
 

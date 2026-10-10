@@ -8,7 +8,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_file_lock
+from ..coordination.shadow_management import (
+    runtime_artifact_lock_target,
+    shadow_maintenance_lock_target,
+)
 from ..effect_runtime import EffectRuntimeConflict, effect_runtime_result
 from .turn_journal_runtime import (
     write_turn_journal,
@@ -57,18 +61,51 @@ def journal_committed_effect_id(journal: Mapping[str, Any]) -> str | None:
     return effect_id or None
 
 
+def _turn_journal_goal_route(path: Path) -> tuple[Path, str] | None:
+    resolved = path.expanduser().resolve()
+    turns_dir = resolved.parent
+    goal_dir = turns_dir.parent
+    goals_dir = goal_dir.parent
+    if turns_dir.name != "turns" or goals_dir.name != "goals":
+        return None
+    return goals_dir.parent, goal_dir.name
+
+
 def write_turn_journal_checkpoint(
     path: Path,
     journal: Mapping[str, Any],
     *,
     source_admission: Mapping[str, Any] | None = None,
 ) -> None:
-    write_turn_journal(
-        str(path),
-        journal,
-        expected_effect_id=journal_committed_effect_id(journal),
-        source_admission=source_admission,
-    )
+    def write() -> None:
+        write_turn_journal(
+            str(path),
+            journal,
+            expected_effect_id=journal_committed_effect_id(journal),
+            source_admission=source_admission,
+        )
+
+    route = _turn_journal_goal_route(path)
+    if route is None:
+        write()
+        return
+    runtime_root, goal_id = route
+
+    def write_under_maintenance() -> None:
+        with exclusive_cross_runtime_file_lock(
+            shadow_maintenance_lock_target(runtime_root, goal_id),
+            operation="turn_journal_runtime_artifact_commit",
+        ):
+            write()
+
+    if source_admission is not None:
+        write_under_maintenance()
+        return
+    with exclusive_cross_runtime_file_lock(
+        runtime_artifact_lock_target(runtime_root, goal_id),
+        operation="turn_journal_runtime_artifact_guard",
+    ):
+        write_under_maintenance()
 
 
 def load_loopx_turn_plan_from_journal(
@@ -132,6 +169,7 @@ def turn_journal_observed_capabilities(
     runtime_root: Path,
     *,
     settlement_identity: Mapping[str, Any],
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> list[str] | None:
     """Read exact terminal Turn evidence through the native journal owner.
 
@@ -139,11 +177,14 @@ def turn_journal_observed_capabilities(
     capabilities. Historical evidence never grants current execution authority.
     """
 
+    request = {
+        "runtime_root": str(runtime_root.resolve()),
+        "settlement_identity": dict(settlement_identity),
+    }
+    if goal_ref is not None:
+        request["goal_ref"] = dict(goal_ref)
     try:
-        payload = effect_runtime_result("turn_journal.observed_capabilities", {
-            "runtime_root": str(runtime_root.resolve()),
-            "settlement_identity": dict(settlement_identity),
-        })
+        payload = effect_runtime_result("turn_journal.observed_capabilities", request)
     except (RuntimeError, ValueError):
         return None
     if not isinstance(payload, dict) or set(payload) != {"observed_capabilities"}:

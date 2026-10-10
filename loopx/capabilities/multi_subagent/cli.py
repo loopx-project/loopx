@@ -25,10 +25,14 @@ def register_native_child_commands(subparsers, add_format):
     parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
     parser.add_argument("--operation-id", help="Stable identity for one host-native child operation.")
     parser.add_argument("--stage", choices=("decision", "result", "review"))
-    parser.add_argument("--operation", choices=("spawn", "followup", "skip"))
-    parser.add_argument("--outcome")
-    parser.add_argument("--entrypoint-id", help="Opaque host entrypoint identity, not a host-specific enum.")
-    parser.add_argument("--reason-code")
+    parser.add_argument("--operation", choices=("spawn", "followup", "skip"),
+                        help="Required for decision; optional matching decision identity for result/review.")
+    parser.add_argument("--outcome", help="Decision: started/capacity_rejected/host_failed/skipped; "
+                        "result: completed/failed/cancelled; review: accepted/deferred/rejected.")
+    parser.add_argument("--entrypoint-id", help="Opaque host entrypoint identity; required for decision, "
+                        "optional matching echo for result/review.")
+    parser.add_argument("--reason-code", help="Typed decision reason, or optional opaque diagnostic code "
+                        "for result/deferred/rejected. Accepted reviews use evidence/validation refs instead.")
     parser.add_argument("--evidence-ref", help="Public-safe opaque reference for accepted evidence.")
     parser.add_argument("--validation-ref", help="Public-safe opaque reference for parent validation.")
     parser.add_argument("--execute", action="store_true", help="Append the receipt; otherwise preview only.")

@@ -81,6 +81,133 @@ def _restore_windows_user_path(pwsh: str, encoded_path: str) -> None:
     )
 
 
+def test_windows_candidate_failure_reports_required_doctor_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "checks": [
+            {
+                "id": "typescript_control_plane_ready",
+                "required": True,
+                "ok": False,
+                "detail": "runtime unavailable",
+                "recommended_action": "Install the supported Node.js runtime.",
+            }
+        ],
+        "release_candidate": {
+            "checks": [
+                {
+                    "id": "representative_cli_commands",
+                    "required": True,
+                    "ok": True,
+                }
+            ]
+        },
+        "diagnostics": "x" * 2500,
+    }
+    monkeypatch.setattr(
+        windows_install.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 1, stdout=json.dumps(payload), stderr=""
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"doctor\.typescript_control_plane_ready") as exc_info:
+        windows_install._validate_candidate(
+            tmp_path / "release", python=Path(sys.executable), skills_dir=tmp_path / "skills"
+        )
+
+    assert "detail=runtime unavailable" in str(exc_info.value)
+    assert "recommended_action=Install the supported Node.js runtime." in str(
+        exc_info.value
+    )
+    assert "diagnostics" not in str(exc_info.value)
+
+
+def test_windows_candidate_failure_preserves_structured_error_without_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "ok": False,
+        "error": "selected Node.js runtime is unsupported",
+        "recommended_action": "Install Node.js 22 or newer.",
+    }
+    monkeypatch.setattr(
+        windows_install.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 1, stdout=json.dumps(payload), stderr=""
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        windows_install._validate_candidate(
+            tmp_path / "release", python=Path(sys.executable), skills_dir=tmp_path / "skills"
+        )
+
+    assert "selected Node.js runtime is unsupported" in str(exc_info.value)
+    assert "Install Node.js 22 or newer." in str(exc_info.value)
+    assert "no failed required checks reported" not in str(exc_info.value)
+
+
+def test_windows_candidate_failure_keeps_all_ids_and_late_node_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failures = [
+        {
+            "id": check_id,
+            "required": True,
+            "ok": False,
+            "detail": f"{check_id} detail " + ("x" * 380),
+            "recommended_action": f"Repair {check_id} " + ("y" * 380),
+        }
+        for check_id in (
+            "command_package_same_root",
+            "representative_cli_commands",
+            "representative_cli_imports",
+            "typescript_effect_runtime_ready",
+        )
+    ]
+    monkeypatch.setattr(
+        windows_install.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 1, stdout=json.dumps({"checks": failures}), stderr=""
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        windows_install._validate_candidate(
+            tmp_path / "release", python=Path(sys.executable), skills_dir=tmp_path / "skills"
+        )
+
+    message = str(exc_info.value)
+    for check_id in (
+        "command_package_same_root",
+        "representative_cli_commands",
+        "representative_cli_imports",
+        "typescript_effect_runtime_ready",
+    ):
+        assert f"doctor.{check_id}" in message
+    assert "typescript_effect_runtime_ready detail=" in message
+    assert "recommended_action=Repair typescript_effect_runtime_ready" in message
+
+
+def test_doctor_failure_summary_marks_ids_that_exceed_its_budget() -> None:
+    summary = windows_install._doctor_failure_summary(
+        json.dumps(
+            {
+                "checks": [{"id": "x" * 2100, "required": True, "ok": False}],
+            }
+        )
+    )
+
+    assert summary is not None
+    assert len(summary) <= 2000
+    assert "1 required failed check IDs omitted by the summary limit" in summary
+
+
 def test_chat_bundle_preflight_preserves_stdout_with_legacy_pointer(
     tmp_path: Path,
     capfd: pytest.CaptureFixture[str],

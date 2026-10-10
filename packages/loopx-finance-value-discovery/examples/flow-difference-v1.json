@@ -1,0 +1,68 @@
+{
+  "schema_version": "finance_flow_difference_input_v1",
+  "total": {
+    "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context": {
+      "startDate": "2001-01-01Z",
+      "endDate": "2001-09-30Z"
+    },
+    "economic_period": {
+      "context_source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_ref": "synthetic:period:nine_months",
+      "role": "cash_flow",
+      "start": "2001-01-01T00:00:00Z",
+      "end": "2001-10-01T00:00:00Z",
+      "start_basis": "calendar"
+    },
+    "statement_basis": {
+      "subject_ref": "synthetic:issuer",
+      "metric_ref": "operating_cash_flow",
+      "filing_ref": "synthetic:filing",
+      "version_ref": "synthetic:original",
+      "scope_ref": "nine_months",
+      "evidence_ref": "synthetic:row:nine_months",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "value": "95"
+    },
+    "aggregation_kind": "flow",
+    "accuracy": {
+      "decimals": "INF"
+    }
+  },
+  "prefix": {
+    "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context": {
+      "startDate": "2001-01-01Z",
+      "endDate": "2001-06-30Z"
+    },
+    "economic_period": {
+      "context_source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_ref": "synthetic:period:six_months",
+      "role": "cash_flow",
+      "start": "2001-01-01T00:00:00Z",
+      "end": "2001-07-01T00:00:00Z",
+      "start_basis": "calendar"
+    },
+    "statement_basis": {
+      "subject_ref": "synthetic:issuer",
+      "metric_ref": "operating_cash_flow",
+      "filing_ref": "synthetic:filing",
+      "version_ref": "synthetic:original",
+      "scope_ref": "six_months",
+      "evidence_ref": "synthetic:row:six_months",
+      "unit": {
+        "currency": "USD",
+        "scale": 6
+      },
+      "value": "60"
+    },
+    "aggregation_kind": "flow",
+    "accuracy": {
+      "decimals": "INF"
+    }
+  },
+  "compatibility": null
+}

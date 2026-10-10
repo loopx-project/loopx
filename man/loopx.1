@@ -1,4 +1,4 @@
-.TH LOOPX 1 "" "LoopX 1.2.4" "User Commands"
+.TH LOOPX 1 "" "LoopX 1.3.1" "User Commands"
 .SH NAME
 loopx \- control-plane helper for long-running agent work
 .SH SYNOPSIS
@@ -73,7 +73,7 @@ Open Goal Studio, ask the read\-only Agent for a bounded Todo, and approve its p
 Build a compact evidence packet when behavior is surprising.
 .TP
 \fBloopx review\-packet \-\-goal\-id <goal\-id>\fR
-Render a handoff or review packet with any required evidence\-log reads.
+Render a handoff or review packet with host\-projected replan context.
 .TP
 \fBloopx goal\-channel \-\-help\fR
 Set up, inspect, sync, or notify the provider channel bound to one goal.
@@ -86,9 +86,6 @@ Read source\-bound Manager context and record the receiving Agent's decision.
 .TP
 \fBloopx goal\-lifecycle \-\-help\fR
 Preview, stop, or resume a Goal without deleting its history, todos, or evidence.
-.TP
-\fBloopx evidence\-log \-\-goal\-id <goal\-id> \-\-agent\-id <agent\-id> \-\-thin\fR
-Read the current agent's thin public\-safe ledger before replan or handoff.
 .TP
 \fBloopx agent\-capabilities \-\-help\fR
 Inspect or correct a registered Agent's observed runtime capabilities.

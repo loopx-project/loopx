@@ -53,6 +53,7 @@ from .turn_cadence import managed_cadence_start
 from .turn_decision import collect_turn_status_payload
 from .turn_dsh_host import build_dsh_host_runner
 from .turn_rendering import build_turn_error_payload
+from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
 from .turn_todo_writeback import (
     write_turn_repair_update,
     write_turn_validated_completion,
@@ -278,7 +279,10 @@ def execute_turn_run_once(
                 state_file=None,
                 classification=str(result["classification"]),
                 recommended_action=str(result["recommended_action"]),
-                next_action=str(result["next_action"]),
+                # A host's next_action is follow-up guidance, not refresh-state's
+                # explicit within-task step edit (which requires a runnable Todo).
+                # Keep both host texts in the durable host_result, including for
+                # completion/repair, without decorating a completed or blocked task.
                 delivery_batch_scale=str(result["delivery_batch_scale"]),
                 delivery_outcome=str(result["delivery_outcome"]),
                 delivery_workspace_path=delivery_workspace_path,
@@ -774,7 +778,7 @@ def execute_turn_run_once(
                     "model": args.codex_model,
                     "reasoning_effort": args.codex_reasoning_effort,
                     "mcp_server": args.codex_mcp_server_json,
-                    "timeout_seconds": max(1.0, args.timeout_seconds - 5.0),
+                    "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
                 }
                 if goal_admission is not None:
                     options["goal_admission"] = goal_admission
@@ -794,7 +798,7 @@ def execute_turn_run_once(
                         ),
                         **options,
                     )
-                return run_codex_cli_host(request, **options)
+                return run_codex_cli_host(request, registry_path=registry_path, **options)
 
             host_runner = run_built_in_host
 
@@ -860,7 +864,7 @@ def execute_turn_run_once(
         )
 
         execution_started = bool(args.execute)
-        return run_loopx_turn_once(
+        result = run_loopx_turn_once(
             payload,
             host_argv=raw_argv,
             host_runner=host_runner,
@@ -892,6 +896,13 @@ def execute_turn_run_once(
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
         )
+        if args.execute:
+            result.update(drain_committed_turn_post_writeback_hooks(
+                registry_path=registry_path, runtime_root=runtime_root,
+                identity=settlement_identity, goal_ref=goal_ref,
+                available_capabilities=args.available_capabilities,
+            ))
+        return result
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure
         from ..usage_ping import capture_failure
 

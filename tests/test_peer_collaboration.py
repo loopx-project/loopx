@@ -146,7 +146,7 @@ def external_scenario(scenario):
     _write(policy_path, {
         "schema_version": POLICY_SCHEMA,
         "sources": {session["channel_id"]: {
-            "sender_ids": ["fixture-owner"],
+            "local_delivery_scope": "selected", "sender_ids": ["fixture-owner"],
             "targets": [{"goal_id": "delivery", "agent_id": agent}
                         for agent in ("builder", "reviewer")],
         }},
@@ -164,13 +164,16 @@ def external_scenario(scenario):
     return root, registry, brief, store, session, turn, receipt["request_id"]
 
 
-@pytest.mark.parametrize("whole_goal", [False, True])
-def test_granted_external_peer_request_returns_through_original_conversation(external_scenario, whole_goal):
+@pytest.mark.parametrize("scope", ["selected_agent", "selected_goal", "all_registered"])
+def test_granted_external_peer_request_returns_through_original_conversation(external_scenario, scope):
     root, registry, brief, store, session, turn, parent = external_scenario
-    if whole_goal:
+    if scope != "selected_agent":
         policy_path = _root(root) / "policy.json"
         policy = json.loads(policy_path.read_text())
         policy["sources"][session["channel_id"]]["targets"] = [{"goal_id": "delivery"}]
+        if scope == "all_registered":
+            del policy["sources"][session["channel_id"]]["local_delivery_scope"]
+            del policy["sources"][session["channel_id"]]["targets"]
         _write(policy_path, policy)
     path = root / "external-review.json"
     path.write_text(json.dumps(brief))
@@ -620,6 +623,41 @@ def test_special_file_read_is_bounded_and_stopped_goal_remains_readable(scenario
         request(root, registry, "delivery", "builder", "reviewer", "stopped", brief)
 
 
+def test_canonical_stopped_goal_rejects_peer_request_before_any_write(scenario):
+    root, registry, brief, *_ = scenario
+    config = json.loads(registry.read_text())
+    goal = config["goals"][0]
+    goal.pop("status", None)
+    goal["activation"] = {
+        "schema_version": "loopx_goal_activation_v1",
+        "state": "stopped",
+        "updated_at": "2026-10-06T00:00:00Z",
+        "reason": "Owner stopped the Goal.",
+    }
+    registry.write_text(json.dumps(config))
+    state_root = root / ".local/manager-context"
+    before = {
+        path.relative_to(state_root): path.read_bytes()
+        for path in state_root.rglob("*.json")
+    }
+
+    with pytest.raises(ValueError, match="stopped"):
+        request(
+            root,
+            registry,
+            "delivery",
+            "builder",
+            "reviewer",
+            "canonical-stopped",
+            brief,
+        )
+
+    assert {
+        path.relative_to(state_root): path.read_bytes()
+        for path in state_root.rglob("*.json")
+    } == before
+
+
 def test_nested_coordinators_return_to_each_immediate_requester(scenario):
     """Worker -> coordinator -> specialist works without a manager root request."""
     root, registry, brief, *_ = scenario
@@ -740,6 +778,37 @@ def test_peer_update_rejects_another_results_read_and_consumption_receipts(scena
     consumed.write_bytes((folder / "conclusion.consumed.json").read_bytes())
     with pytest.raises(ValueError, match="receipt scope"):
         returns(root, "delivery", "builder")
+
+
+def test_a_failed_input_readiness_leaves_no_read_receipt(scenario, monkeypatch):
+    """A read that did not complete is not a delivered read.
+
+    #5511 reported that the Windows readiness crash left the request already
+    looking read in `reads/`. That ordering was real: 025be07e3 later committed
+    inbox reads after response validation instead of before it, and nothing has
+    held the new ordering since. A receipt is evidence of a completed read only,
+    so a raising readiness probe must leave `reads/` untouched and the next
+    completed read must record it.
+    """
+
+    from loopx.control_plane.collaboration import peers
+    from loopx.control_plane.collaboration.inbox import _root
+
+    root, registry, _, _, _, _, request_id = scenario
+    receipt = _root(root) / "reads" / f"{request_id}.json"
+
+    def _fail_readiness(*args, **kwargs):
+        raise AttributeError("module 'os' has no attribute 'O_NONBLOCK'")
+
+    monkeypatch.setattr(peers, "_input_readiness_for_goal", _fail_readiness)
+    with pytest.raises(AttributeError, match="O_NONBLOCK"):
+        peers.read_inbox(root, registry, "delivery", "builder")
+    assert not receipt.exists()
+
+    monkeypatch.undo()
+    assert peers.read_inbox(root, registry, "delivery", "builder")["items"]
+    assert receipt.is_file()
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 extended path regression")
 def test_peer_exchange_survives_long_private_store_paths(scenario):
     root, registry, brief, *_ = scenario
@@ -784,3 +853,78 @@ def test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest(scenario):
     assert readiness["status"] == "available"
     assert readiness["observed_sha256"] == readiness["expected_sha256"] == digest
     assert readiness["content_supplied"] is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 workspace input path regression")
+def test_peer_read_qualifies_long_workspace_input(scenario):
+    import shutil
+
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+    root, registry, brief, *_ = scenario
+    long_ref = "inputs/" + "/".join(("a" * 65, "b" * 65, "c" * 65))
+    long_directory = windows_extended_path(root / long_ref)
+    long_directory.mkdir(parents=True)
+    outside = root.parent / "outside-inputs"
+    try:
+        content = b"before\r\n\x1aafter\r\n\x00\xff"
+        artifact = long_directory / "packet.bin"
+        changed = long_directory / "changed.bin"
+        artifact.write_bytes(content)
+        changed.write_bytes(content)
+        expected = hashlib.sha256(content).hexdigest()
+        outside.mkdir()
+        (outside / "secret.bin").write_bytes(b"outside-secret")
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(long_directory / "junction"), str(outside)],
+            check=True, capture_output=True, text=True,
+        )
+        assert len(str(root / long_ref / "packet.bin")) > 260
+        inputs = [
+            {"ref": long_ref + "/packet.bin", "description": "Long input", "sha256": expected},
+            {"ref": long_ref + "/changed.bin", "description": "Changed input", "sha256": "0" * 64},
+            {"ref": long_ref + "/missing.bin", "description": "Missing input", "sha256": expected},
+            {"ref": long_ref + "/junction/secret.bin", "description": "Outside input",
+             "sha256": hashlib.sha256(b"outside-secret").hexdigest()},
+        ]
+        packet = root / "long-input-brief.json"
+        packet.write_text(json.dumps({**brief, "inputs": inputs}), encoding="utf-8")
+        sent = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+                   "--operation-id", "long-workspace-input", "--brief-file", str(packet))
+        item = cli(root, registry, "reviewer", "read")["items"][0]
+        assert item["request_id"] == sent["request_id"]
+        readiness = item["input_readiness"]
+        assert [row["status"] for row in readiness] == [
+            "available", "changed", "unavailable", "outside_workspace"
+        ]
+        assert readiness[0]["observed_sha256"] == readiness[0]["expected_sha256"] == expected
+        assert readiness[1]["observed_sha256"] == expected
+        assert readiness[3]["observed_sha256"] is None
+        assert all(row["content_supplied"] is False for row in readiness)
+        assert input_readiness(registry, "delivery", {"inputs": [{"ref": "../outside.txt"}]})[0][
+            "status"
+        ] == "outside_workspace"
+    finally:
+        long_tree = windows_extended_path(root / "inputs" / ("a" * 65))
+        assert long_tree.resolve().is_relative_to(windows_extended_path(root).resolve())
+        shutil.rmtree(long_tree)
+        if outside.exists():
+            assert outside.resolve().parent == root.parent.resolve()
+            shutil.rmtree(outside)
+
+
+def test_default_local_forwarding_keeps_revocations_after_original_delivery(external_scenario):
+    root, registry, brief, _store, session, _turn, parent = external_scenario
+    policy_path = _root(root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    source = policy["sources"][session["channel_id"]]
+    source.pop("local_delivery_scope")
+    source.pop("targets")
+    _write(policy_path, policy)
+    first = request(root, registry, "delivery", "builder", "analyst", "default-hop", brief, parent)
+    assert first["request_id"]
+    # The source's current exceptions also protect later hops, not only Chat.
+    policy["sources"][session["channel_id"]]["blocked_targets"] = [{"goal_id": "delivery", "agent_id": "reviewer"}]
+    _write(policy_path, policy)
+    with pytest.raises(ValueError, match="reviewer is not authorized"):
+        request(root, registry, "delivery", "analyst", "reviewer", "blocked-hop", brief, first["request_id"])

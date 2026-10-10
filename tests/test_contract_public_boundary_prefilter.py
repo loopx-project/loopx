@@ -1,11 +1,60 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from typing import Any
 
 import pytest
 
 from loopx import contract
+
+
+@pytest.mark.parametrize("tracked,pruned", [(False, False), (True, False), (True, True)])
+def test_scan_enumeration_uses_resolved_symlink_suffix_and_local_name(
+    tmp_path: Path, tracked: bool, pruned: bool
+) -> None:
+    scan_root = tmp_path / ("node_modules" if pruned else "public")
+    scan_root.mkdir()
+    target = tmp_path / "target.md"
+    target.write_text("public", encoding="utf-8")
+    distinct = tmp_path / "distinct.md"
+    distinct.write_text("public", encoding="utf-8")
+    unsupported = tmp_path / "target.ts"
+    unsupported.write_text("not a directory scan input", encoding="utf-8")
+    local = tmp_path / "target.local.json"
+    local.write_text("local", encoding="utf-8")
+    regular = scan_root / "regular.md"
+    regular.write_text("public", encoding="utf-8")
+    (scan_root / "regular.ts").write_text("unsupported", encoding="utf-8")
+    (scan_root / "alias.ts").symlink_to(target)
+    (scan_root / "distinct.txt").symlink_to(distinct)
+    (scan_root / "alias.local.json").symlink_to(target)
+    (scan_root / "unsupported.md").symlink_to(unsupported)
+    (scan_root / "local.md").symlink_to(local)
+    (scan_root / "broken.ts").symlink_to(tmp_path / "absent.md")
+    if tracked:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-f", "--", scan_root.name], check=True)
+
+    # Git ownership includes tracked files under otherwise pruned directories.
+    # Directory eligibility follows the canonical target, not the alias name.
+    # The pruned-root fast path preserves Git's per-alias observations.
+    expected = [distinct, regular, target, target] if pruned else [distinct, regular, target]
+    assert contract.iter_scan_files(scan_root) == sorted(expected)
+    if tracked:
+        assert set(contract._tracked_scan_files(scan_root)) == {distinct, regular, target}
+
+    # A later retarget must be observed; no eligibility result may be cached.
+    (scan_root / "alias.ts").unlink()
+    (scan_root / "alias.ts").symlink_to(local)
+    (scan_root / "alias.local.json").unlink()
+    assert contract.iter_scan_files(scan_root) == sorted([distinct, regular])
+
+
+def test_explicit_scan_file_keeps_unsupported_suffix(tmp_path: Path) -> None:
+    explicit = tmp_path / "explicit.ts"
+    explicit.write_text("explicit input", encoding="utf-8")
+    assert contract.iter_scan_files(explicit) == [explicit]
 
 
 @pytest.mark.parametrize(
@@ -110,3 +159,69 @@ def test_prefilter_preserves_all_boundary_hit_categories(tmp_path: Path) -> None
         "sample.md:4: internal_task_id",
         "sample.md:5: private_ip",
     ]
+
+
+@pytest.mark.parametrize(
+    "separator",
+    [
+        "\n",
+        "\r",
+        "\r\n",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    ],
+)
+def test_prefilter_preserves_unicode_line_numbers_and_multiple_rules(
+    tmp_path: Path, separator: str
+) -> None:
+    # The folded necessary condition cannot change original line coordinates,
+    # rule order, the public-host exception, or credential-reference handling.
+    lines = [
+        "ordinary " * 50,
+        "Author\u0131zation: literal host 10" + ".1.2.3",
+        "pa\u017f\u017fword=${EXAMPLE_KEY}",
+        "https://open.lark" + "office.com host 172" + ".31.2.3",
+        "pa\u00dfword=literal",  # casefold expands; the authoritative regex refuses it
+        "ordinary again",
+    ]
+    (tmp_path / "sample.md").write_text(separator.join(lines), encoding="utf-8")
+    payload = contract.scan_public_boundary([tmp_path])
+    assert payload["hits"] == [
+        "sample.md:2: credential",
+        "sample.md:2: private_ip",
+        "sample.md:4: private_ip",
+    ]
+    assert payload["credential_reference_hits"] == ["sample.md:3: credential"]
+
+
+def test_prefilter_literals_are_substrings_not_regex_syntax(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RecordingPattern:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def search(self, line: str) -> None:
+            self.lines.append(line)
+
+    pattern = RecordingPattern()
+    monkeypatch.setattr(
+        contract,
+        "LEAK_RULES",
+        {
+            "private_ip": contract.LeakRule(
+                pattern=pattern,  # type: ignore[arg-type]
+                required_literals=("a|b", "10."),
+            ),
+        },
+    )
+    lines = ["a or b", "10x", "actual a|b", "actual 10.", "ordinary"]
+    (tmp_path / "sample.md").write_text("\n".join(lines), encoding="utf-8")
+    assert contract.scan_public_boundary([tmp_path])["ok"] is True
+    assert pattern.lines == ["actual a|b", "actual 10."]

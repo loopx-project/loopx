@@ -33,14 +33,16 @@ from .speculative_scheduler import (
 from .todo_branch_plan import (
     DEFAULT_BRANCH_WIDTH,
     MAX_BRANCH_WIDTH,
+    TOKEN_PATTERN,
     _branch_confidence,
     _branch_expected_evidence_units,
     _branch_score,
+    _candidate_readiness,
     _claim_command,
     _compact_text,
     _frontier_tokens,
     _lease_command,
-    _monitor_lane_exclusion,
+    _execution_exclusion,
     _required_capabilities,
     _required_write_scopes,
     _shared_dependency_capabilities,
@@ -276,7 +278,6 @@ COMMON_TOPIC_TOKENS = {
     "with",
     "without",
 }
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_:\-]{3,}")
 
 
 def worker_harness_profile_names() -> tuple[str, ...]:
@@ -396,6 +397,7 @@ def _todo_candidate(
     task_class = todo_item_task_class(dict(item))
     required_capabilities = _required_capabilities(item)
     candidate = {
+        **_candidate_readiness(item),
         "todo_id": todo_id,
         "text": _compact_text(item.get("text") or item.get("title")),
         "priority": item.get("priority"),
@@ -640,21 +642,23 @@ def _build_worker_branch_candidates(
         )
     )
 
-    monitor_lanes = [
+    excluded_candidates = [
         exclusion
         for candidate in todo_candidates
-        if (exclusion := _monitor_lane_exclusion(candidate)) is not None
+        if (exclusion := _execution_exclusion(candidate)) is not None
     ]
     blocked = [
         {**candidate, "selection_status": "blocked_claimed_by_other"}
         for candidate in todo_candidates
         if candidate.get("task_class") != TODO_TASK_CLASS_MONITOR
+        if candidate["actionable_open"]
         if candidate.get("claimed_by") and candidate.get("claimed_by") != normalized_agent
     ]
     eligible = [
         candidate
         for candidate in todo_candidates
         if candidate.get("task_class") != TODO_TASK_CLASS_MONITOR
+        if candidate["actionable_open"]
         if not (candidate.get("claimed_by") and candidate.get("claimed_by") != normalized_agent)
     ]
 
@@ -749,7 +753,7 @@ def _build_worker_branch_candidates(
         )
 
     branch_candidates.sort(key=_branch_sort_key)
-    return branch_candidates, [*monitor_lanes, *blocked]
+    return branch_candidates, [*excluded_candidates, *blocked]
 
 
 def _baseline_worker_lanes(branch_candidates: Sequence[Mapping[str, Any]], *, width: int) -> dict[str, Any]:
@@ -1250,6 +1254,9 @@ def build_explore_worker_branch_plan(
             "registered goal's spawn_policy (spawn_allowed, max_children) to receive "
             "suggested commands; execution stays in the normal LoopX lifecycle."
             if gate["state"] == GATE_STATE_ANALYSIS_ONLY
+            else "No actionable worker branch was selected. Inspect rejected candidates and "
+            "their resume conditions; replan when readiness changes."
+            if not selected
             else "Use quota should-run, then execute each selected worker branch through "
             "normal LoopX claim, lease, todo execution, explore writeback, refresh-state, "
             "and quota spend-slot."

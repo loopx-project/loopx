@@ -190,11 +190,14 @@ def _int_number(value: Any, *, default: int) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return default
     if isinstance(value, str):
         try:
             return int(float(value.strip()))
-        except ValueError:
+        except (ValueError, OverflowError):
             return default
     return default
 
@@ -807,6 +810,7 @@ def build_quota_plan(
             "agent_todos",
             "active_state_next_action",
             "active_state_next_action_entries",
+            "recommendation_context",
             "standing_decision_authority",
             "long_task_cadence_hint",
             "stale_latest_run_warning",
@@ -1225,8 +1229,7 @@ def record_quota_monitor_poll(
                 todo_id=normalized_receipt_todo_id,
                 role="agent",
             )
-            items = bound_records.get("todos") or []
-            auxiliary_settlement_todo = items[0] if len(items) == 1 else None
+            auxiliary_settlement_todo = bound_records.get("todo")
     effective_todo_id = normalized_observation_todo_id or (
         normalized_receipt_todo_id if not target_key else None
     )

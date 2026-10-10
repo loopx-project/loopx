@@ -63,6 +63,23 @@ old source entry's absence of disclosure.
 help/version 不启动观测；上述环境变量及既有 disabled 设置继续关闭观测。
 这是有意消除入口漂移，不宣称与旧源入口“不展示告知”的行为逐字等价。
 
+The bootstrap also pins the process's own `stdin`/`stdout`/`stderr` to UTF-8,
+matching the codec LoopX already pins for text-mode file and subprocess I/O. On
+a host whose locale is not UTF-8 (for example `cp936` on a zh-CN Windows
+console) redirected CLI output now carries UTF-8 instead of locale bytes, and a
+non-ASCII argument, title or the status alert marker no longer raises
+`UnicodeEncodeError`. A real console already reports UTF-8 and is left untouched.
+Input stays strict: a malformed request is still rejected exactly like the
+`--metadata-json <file>` route, so only the codec changes, not the strictness
+of input decoding.
+
+Bootstrap 现将进程自身的 `stdin`/`stdout`/`stderr` 固定为 UTF-8，与 LoopX 已对
+文本文件与子进程 I/O 固定的编码一致。在非 UTF-8 宿主（例如 zh-CN Windows 控制台
+的 `cp936`）上，重定向的 CLI 输出改为 UTF-8 而非本地编码字节；非 ASCII 参数、
+标题或 status 告警标记不再触发 `UnicodeEncodeError`。真实控制台本身即报告
+UTF-8，不做改动。输入解码保持严格：非法请求内容仍与 `--metadata-json <file>`
+入口一样被拒绝，本变更只改编码，不改变输入解码的严格性。
+
 The affected journey is source CLI invocation, including managed/canary callers
 that execute that module. Frontend and Lark do not gain a new control, schema or
 configuration authority. They consume the same existing command projections and
@@ -74,6 +91,63 @@ No frontend asset or layout changes, so no repackaging is needed for this slice.
 控件、schema 或配置 owner，继续消费同一既有投影及回执；本次不新验收它们的投递
 transport。现有 usage-settings HTTP 交互验证共享机器设置。没有前端资源或布局
 改动，因此此切片无需重新打包前端。
+
+## Claim argument recovery / Claim 参数恢复
+
+Parsed `todo claim` usage errors now include `error_code=todo_claim_invalid_arguments`
+and one `recovery` object. Its `cli_args` is an argv array with the original
+registry/runtime, Goal/Todo, supplied actor/executor, project/state path,
+preview, operation identity and lease/CAS values. Review `remove_flags`, then
+append each `requires_flags` entry with an explicit value before retrying.
+Retry from the original working directory when supplied paths are relative.
+A missing executor is never inferred from the actor. The command can still
+fail admission, registration, ownership, source-mode or lease validation.
+This is recovery guidance, not an authority grant or automatic retry.
+Unknown flags, invalid flag values and parser-required global inputs retain
+their existing argparse diagnostics before this handler is reached.
+
+For example, a claim with an actor but no `--claimed-by`, plus an unsupported
+`--turn-instance-id`, reports both in the same packet. The retry excludes the
+Turn flag; it neither starts a new Turn nor re-fetches a quota packet. A lease
+expected version of `0` is retained, including when its missing idempotency key
+must be supplied. Canonical-only flags on legacy state remain a source-mode
+rejection; this grammar projection does not remove them or promote state.
+
+The existing Python CLI grammar/formatting adapter owns this local error code
+and argv projection. The shared TypeScript claim transaction remains the
+authority owner; no new capability, setting, provider or bridge RPC is added.
+JSON and Markdown expose the same repair facts. Source and console CLI callers
+gain the guidance; frontend/Lark controls and persisted contracts do not change.
+Successful commands retain their output. Invalid claim option combinations now
+use the claim-specific validator before shared checks, so their first human
+diagnostic can differ; existing claim-specific and Turn diagnostics remain.
+
+已解析的 `todo claim` 用法错误现在返回上述 error code 和一个 `recovery`：`cli_args` 用 argv
+数组保留原路由、Goal/Todo、已提供的 actor/executor、project/state、preview、
+operation 身份和 lease/CAS。先检查 `remove_flags`，再为每个 `requires_flags`
+补入显式值后重试；路径为相对路径时，沿用原调用的工作目录。不会从 actor 猜执行者。
+修复语法后仍可能被注册、所有权、source mode 或 lease 校验拒绝。这是恢复指引，
+不授予权限，也不自动执行。
+未知 flag、非法 flag 值和缺 parser 必填输入仍先走既有 argparse 诊断。
+缺 `--claimed-by` 又误带 Turn 参数时，一次 packet 同时列出两处；修复不另建 Turn
+或重新读取 quota。CAS=0 保留，缺 lease key 时必须填写；legacy 上的 canonical 参数
+继续按模式拒绝，不静默删除或 promote。语法／展示沿用 Python CLI adapter，
+事务权限仍归 TS claim owner；不新增 capability、设置、provider 或 RPC。
+JSON/Markdown 展示相同事实，source/console 获得指引，frontend/Lark 控件和持久合同
+不变。成功输出保持原行为；非法参数先经过 claim validator，首条人类诊断可能改变，
+既有 claim 专属和 Turn 诊断保留。
+
+Real CLI tests execute the returned argv against isolated Legacy, File and
+SQLite state, including preview/replay, actor mismatch, canonical-mode refusal,
+hard-lease admission and CAS=0. They do not qualify PostgreSQL transaction
+changes, sustained provider performance, model retry rates or benchmark scores.
+Measure the error-plus-recovery journey: the richer error costs more bytes;
+avoiding a separate help lookup is a consumer benefit, not backend IO savings.
+
+真实 CLI 测试在隔离 Legacy/File/SQLite 上执行返回的 argv，覆盖 preview/replay、
+actor 错配、canonical 模式拒绝、hard lease 和 CAS=0；不代表 PostgreSQL 事务改动、
+长程 provider 性能、模型重试率或 benchmark 得分验收。应测整个错误到恢复路径：
+错误本身增加字节，省掉一次 help 是调用方收益，不等于后端 IO 优化。
 
 ## Qualification / 验收
 

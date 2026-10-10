@@ -105,8 +105,8 @@ Both reuse the same Turn host adapters; neither changes the steward default.
 
 A managed host binding names four things: the host adapter, the provider, the
 model, and where the credential comes from. The DSH binding is the DSH Turn host
-with provider `deepseek-official`, model `deepseek-v4-flash` (DeepSeek V4.1
-Flash) at reasoning effort `high`, an endpoint from the operator environment
+with provider `deepseek-official`, model `deepseek-flash` (DeepSeek-V4.1-Flash)
+at reasoning effort `high`, an endpoint from the operator environment
 (`DEEPSEEK_BASE_URL`) and a credential from the operator environment
 (`DEEPSEEK_API_KEY`).
 
@@ -161,17 +161,24 @@ the channel Session on the endpoint the machine now selects.
 
 Both managed surfaces resolve their **execution profile** from one owner
 (`loopx/control_plane/turn_driver/execution_profile.py`): provider
-`deepseek-official`, model `deepseek-v4-flash` (DeepSeek V4.1 Flash) and reasoning
+`deepseek-official`, model `deepseek-flash` (DeepSeek-V4.1-Flash) and reasoning
 effort `high`, overridable by `LOOPX_TURN_PROVIDER` / `LOOPX_TURN_MODEL` /
 `LOOPX_TURN_REASONING_EFFORT` and, at lower precedence, the legacy `DSH_PROVIDER`
 / `DSH_MODEL`. The readback is one line, `execution_profile`, shaped
-`deepseek-v4-flash@high` in the shipped case, with the provider prepended only
+`deepseek-flash@high` in the shipped case, with the provider prepended only
 when it is not the shipped one; it is one line because every plan payload carries
 it and the agent-facing output budget is a contract, and whichever values the
 line names are the values that run, so an owner-set model appears as itself.
 Credentials authenticate the selected profile and never choose it; the one
 thing a credential resolves is the shipped *host* default of a bounded Turn
 nobody selected, and that resolution carries its own readback source.
+
+**Revision (2026-10-04):** the shipped model default moved from the retired
+`deepseek-v4-flash` spelling to the canonical `deepseek-flash` id of the same
+DeepSeek-V4.1-Flash generation. The retired spelling is still accepted by the
+vendor endpoint and remains available as an explicit `LOOPX_TURN_MODEL` /
+`DSH_MODEL` override, so a host that pins it is a configuration change rather
+than a code change.
 
 Evidence for this binding, separated by source:
 
@@ -313,24 +320,91 @@ These are integration-cost and contract observations, not claims that Pi lacks
 events or DSH cannot support other models. Both expose control-capable APIs;
 passivity is a property of the selected adapter and its loaded dependencies.
 
-The two LoopX surfaces that depend on dsh do not move together. The bounded Turn
-host uses the Python SDK/runtime pin recorded above (`0.1.5rc1`, the released
-channel). The dsh-side plugin (`packages/dsh-loopx-plugin`) now builds its
-development, host, and client surfaces on the same released `0.1.5-rc.2` line
-instead of the retired `0.1.1-rc.2` one, and its npm peer ranges admit only
-`>=0.1.5-rc.1`. Three upstream moves forced that, so it is a new release line
-rather than a patch: the 0.1.5 line no longer publishes
-`@deepseek-ai/dsh-client-runtime` (last released 0.1.1-rc.2), which moves the
-`slots` service seat to `@deepseek-ai/dsh-client-ui-renderer` — the package this
-manifest now names in `dsh.client.inject`; `Session.events` became
-`Session.snapshotEvents()` and `Inbox.hasPending` became the two pending queues;
-and the shared `/api` bridge addresses Remote methods as `<namespace>/<method>`
-with a single `args` payload field. One `dsh.client.inject` list cannot order
-boot rows for both generations at once, so the plugin cannot claim both. The L1
-observer contract above is unchanged: the observer still consumes only
-`session/created`, `session/event`, and `session/disposed`, and now treats
-token-level `assistant/chunk` rows as retired input replayed from older durable
-logs instead of a live event type.
+The bounded Turn host's Python SDK/runtime pin remains separate from the
+independently versioned `packages/dsh-loopx-plugin`. The plugin source now pins
+its development, host, and Client packages to `0.2.0-rc.2`, retaining the supported
+0.1.5 and explicit 0.1.7 prerelease peer ranges. It registers its initialization
+message source, resets Session state at `agent/created`, and keeps Connection
+Peer admission in the upstream transport. Client revisions remain opaque.
+Bootstrap and runtime consumers require LoopX 1.2.4 or newer, including the
+released Windows peer-file fix; an explicit outdated CLI fails before install.
+The retired 0.1.1 Client runtime is still unsupported; the renderer owns slots,
+and the shared `/api` carrier retains `<namespace>/<method>` and `args`.
+
+The npm distribution channel requires the exact GitHub release artifact,
+the qualified `latest` tag, and repository search selecting `dsh-loopx-plugin`
+instead of the monorepo root. The registry smoke qualifies package-name
+installation and removal locally; CI covers Linux and Windows. Direct release
+installation reported in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93)
+was shipped independently in [Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14).
+It uses the authoritative catalog command and does not require publishing this
+provider to npm. [The beta.6 GitHub package](https://github.com/loopx-project/loopx/releases/tag/dsh-loopx-plugin-v0.1.1-beta.6)
+is published from merged commit `5eee730c2`; downloaded bytes match the built
+artifact. Its [personal illustrated upgrade guide](https://my.feishu.cn/docx/Q8pOdO1jco0y10xBDCkce87Xngc)
+was read back with three real DSH screenshots.
+[Catalog PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+merged on 2026-10-08; its deployed awesome directory selects beta.6.
+However, on 2026-10-10 the [DSH Hub website](https://dsh-plugin.org/plugins/loopx-project/loopx)
+and both `api.dsh-plugin.org/plugins.en.json` and `plugins.zh.json` still
+select beta.5 in the LoopX row's `ic` and `igc` commands. Current Hub releases
+consume those separate feeds, not the awesome directory. This is an unresolved
+consumer metadata gap, tracked in [Hub #146](https://github.com/dshplugin/dsh-plugin-hub/issues/146);
+neither the directory merge nor a Hub upgrade establishes its adoption.
+[Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98)
+shipped in [Hub 1.5.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.5.0).
+The npm-published 1.5.0 backend and Client helpers passed beta.6 install,
+installed identity, pinned update and removal through native DSH 0.2 HTTP routes
+with the proposed catalog URL. A fresh isolated macOS DSH 0.2.0-rc.2 profile
+also installed the published beta.6 URL with pnpm 11.25.0 and Hub 1.6.4;
+both package versions, all four LoopX rows and real web-host loading were read
+back. These direct-install results do not qualify the stale Hub feed's route.
+
+New [#5786](https://github.com/loopx-project/loopx/issues/5786) and
+[#5796](https://github.com/loopx-project/loopx/issues/5796) report
+`ERR_PNPM_MISSING_TARBALL_INTEGRITY` while attempting beta.5. Clean macOS
+profiles install published beta.6 with pnpm 11.25.0 and 12.6.0 using existing
+stores. A synthetic missing-checksum lockfile reproduces the refusal with
+pnpm 12.6.0; `--force` and `--fix-lockfile` also fail. Preserving the old
+lockfile and resolving again restores the checksum and installation with
+integrity checks enabled. The reports do not establish how their lockfiles
+lost the checksum. [Hub #102](https://github.com/dshplugin/dsh-plugin-hub/pull/102)
+merged on 2026-10-07; current published Hub 1.6.4 includes the policy diagnostics,
+English/Chinese recovery copy and backend-recorded command reporting. Its
+earlier packed candidate passed the real macOS failure dialog and persisted
+notification readback. Shipping that guidance does not repair existing
+lockfiles or establish the origin of the reported Windows failures.
+[LoopX #6053](https://github.com/loopx-project/loopx/issues/6053) still attempts
+beta.5 with Hub 1.6.3; its wrapper alone cannot identify the inner pnpm error.
+
+The published package passed native CLI URL installation, beta.5-on-compatible-0.1.5
+to beta.6-on-0.2 upgrade/removal, and offline plugin-tarball installation/removal.
+A clean Linux container used the released LoopX 1.2.4 wheel to verify PEP 668
+private bootstrap, skills, authentication and GoalBar readback. The original
+source-wheel Docker script did not pass unchanged because its Chat bundle was
+unbuilt; the independent release-wheel harness used artifact copying instead
+of host bind mounts. A real macOS DSH 0.2 browser with a synthetic Goal and
+preconfigured unique binding passed Start/Pause through the published CLI:
+`active` and `stopped` were read back, and an unactivated Session queued no new
+model turn. This does not qualify Windows desktop market installation,
+initialization, control, upgrade/removal or model-driven continuation. Network
+recovery still depends on external connectivity; an offline plugin archive
+requires compatible host/CLI dependencies or their caches. Native browser hot
+uninstall failed again on 2026-10-10 with published beta.6 and Hub 1.6.4: the
+dependency was removed, but withdrawing `loopxBootstrap` stopped the shared Web
+rows and disconnected the browser. A follow-up source candidate removes those
+shared dependencies while retaining the native Loader readiness wait and
+LoopX-owned Host/Driver gating. Its packed real 0.2.0-rc.2 and 0.1.5-rc.2 smokes
+passed delayed initialization before readiness, live-disable with a surviving
+Web host and retired LoopX route, and cold boot with the package disabled. Real
+macOS Hub 1.6.4 browser uninstall completed, removed the dependency and preserved
+the host through page refresh. This candidate is not a new published release;
+for published beta.6, close DSH before CLI removal and restart it afterwards.
+[Issue #5671](https://github.com/loopx-project/loopx/issues/5671)
+also reports a missing Windows desktop-host CLI module before plugin loading;
+that host packaging failure needs its own Windows/upstream readback. The L1 observer still
+consumes only
+`session/created`, `session/event`, and `session/disposed`; this compatibility
+repair does not close its separately budgeted C0/C1 or overhead qualification.
 
 ## Data and Authority Flow
 

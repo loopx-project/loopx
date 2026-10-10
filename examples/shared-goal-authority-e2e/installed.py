@@ -142,9 +142,20 @@ print(json.dumps({'executable': sys.executable, 'package': str(package),
         self.report["provenance"] = provenance
         self.checked("installed_python_ts_json_resources", resource_count=len(provenance["resources"]))
 
+        storage_defaults = {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": "file",
+            "canonical_creation": False, "new_goal_handoff_mode": "hard_lease"}
+        storage_defaults_path = self.cwd / "goal-storage-defaults.json"
+        storage_defaults_path.write_text(json.dumps(storage_defaults), encoding="utf-8")
+        storage_preview = self.cli("legacy_goal_storage_preview", "machine-config", "preview", "--namespace",
+            "goal_storage", "--config-json", str(storage_defaults_path))
+        self.cli("legacy_goal_storage_apply", "machine-config", "apply", "--namespace", "goal_storage",
+            "--config-json", str(storage_defaults_path), "--expected-plan-revision",
+            str(storage_preview["plan_revision"]), "--execute")
         self.cli("console_project_bootstrap", "bootstrap", "--project", str(self.project),
             "--goal-id", GOAL, "--objective", "Qualify installed authority transactions.",
             "--no-global-sync")
+        self.cli("console_handoff_mode_hard_lease", "handoff-mode", "set", "--goal-id", GOAL,
+            "--mode", "hard_lease")
         # Set configuration only, before shadow bootstrap creates the real binding.
         registry = json.loads(self.registry.read_text())
         goal = next(item for item in registry["goals"] if item["id"] == GOAL)
@@ -152,8 +163,6 @@ print(json.dumps({'executable': sys.executable, 'package': str(package),
             "runtime_shadow": {"schema_version": "loopx_coordination_runtime_shadow_config_v0",
                 "enabled": True, "provider": "file_v0"}})
         self.registry.write_text(json.dumps(registry))
-        self.cli("console_handoff_mode_hard_lease", "handoff-mode", "set", "--goal-id", GOAL,
-            "--mode", "hard_lease")
         boot = self.cli("console_shadow_bootstrap", "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")["bootstrap"]
         require(boot.get("status") == "applied" and bool(boot.get("capture_lineage_id")), f"bootstrap not applied: {boot}")
         self.checked("real_baseline_bootstrap", capture_lineage_id=boot["capture_lineage_id"])

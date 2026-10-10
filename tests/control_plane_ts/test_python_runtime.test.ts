@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import test from "node:test";
@@ -55,14 +55,18 @@ test("a worktree venv wins over an unusable system python3", t => {
     t.skip("POSIX launcher precedence; Windows discovery runs in the native CI lane");
     return;
   }
-  const directory = mkdtempSync(join(tmpdir(), "loopx-test-python-venv-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "loopx-test-python-venv-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   mkdirSync(join(directory, "scripts"));
-  mkdirSync(join(directory, ".venv", "bin"), { recursive: true });
   const fakeBin = join(directory, "bin");
   mkdirSync(fakeBin);
   copyFileSync(join(root, "scripts", "loopx-python.sh"), join(directory, "scripts", "loopx-python.sh"));
-  symlinkSync(resolveTestPython(), join(directory, ".venv", "bin", "python"));
+  // A symlink without pyvenv.cfg may report the base executable on macOS;
+  // qualify actual environment precedence with a real disposable venv.
+  const environment = spawnSync(resolveTestPython(), ["-m", "venv", "--without-pip", join(directory, ".venv")], {
+    encoding: "utf8", timeout: 20_000,
+  });
+  assert.equal(environment.status, 0, environment.stderr);
   const systemMarker = join(directory, "system-python-was-used");
   const fakeSystem = join(fakeBin, "python3");
   writeFileSync(fakeSystem, `#!/bin/sh\ntouch '${systemMarker}'\nexit 1\n`, { mode: 0o755 });

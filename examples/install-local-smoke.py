@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -809,7 +810,7 @@ def main() -> int:
         assert payload["ok"] is True, payload
         assert payload["schema_version"] == "heartbeat_agent_input_v1", payload
         expected_quota_guard = (
-            'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
+            f'loopx --registry {shlex.quote(str((home / ".loopx" / "registry.global.json").resolve()))} --format json '
             'quota should-run --goal-id installer-smoke-goal '
             '--turn-instance-id "${LOOPX_TURN:?}"'
         )
@@ -833,7 +834,9 @@ def main() -> int:
         assert "```sh\nLOOPX_TURN=<current_time_iso>\n" in payload["task_body"], payload
         assert "not a command-prefix assignment" in payload["task_body"], payload
         assert "guard; 2 stalls->replan" in payload["task_body"], payload
-        assert "no-change=surface_only/no spend" in payload["task_body"], payload
+        assert "Exact monitor settlement=no refresh/spend" in payload["task_body"], payload
+        assert "Admitted work: settlement_plan even if artifacts unchanged" in payload["task_body"], payload
+        assert "no-change=surface_only/no spend" not in payload["task_body"], payload
 
         canary_cli = subprocess.run(
             [
@@ -858,8 +861,18 @@ def main() -> int:
         canary_payload = json.loads(canary_cli.stdout)
         assert canary_payload["cli_bin"] == "loopx-canary", canary_payload
         assert "loopx-canary doctor" in canary_payload["cli_preflight"], canary_payload
-        assert "loopx-canary --format json" in canary_payload["quota_guard_command"], canary_payload
-        assert "loopx-canary heartbeat-prompt --compact" in canary_payload["task_body"], canary_payload
+        guard_argv = shlex.split(canary_payload["quota_guard_command"])
+        assert guard_argv[0] == "loopx-canary", canary_payload
+        assert guard_argv[guard_argv.index("--format") + 1] == "json", canary_payload
+        assert guard_argv[guard_argv.index("--registry") + 1] == str(
+            (home / ".loopx" / "registry.global.json").resolve()
+        ), canary_payload
+        # Brief diagnostics expose only the selected generator. The task body
+        # still teaches the compact drill-down; do not resurrect its removed
+        # diagnostic alias to qualify the installed CLI.
+        assert "compact_prompt_command" not in canary_payload, canary_payload
+        assert canary_payload["brief_prompt_command"].startswith("loopx-canary "), canary_payload
+        assert "heartbeat-prompt --compact" in canary_payload["task_body"], canary_payload
         canary_task_body = canary_payload["task_body"]
         # Brief mode renders one bounded guard block: it deliberately omits the
         # accountable refresh/spend pair, which belongs to the full and compact

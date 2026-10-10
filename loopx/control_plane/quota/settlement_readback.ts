@@ -32,7 +32,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
-  isAcceptedInFlightWriteback,
+  isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
@@ -51,6 +51,7 @@ import {
   normalizeHeartbeatTodoId as normalizeTodoId,
   optionalHeartbeatString as optionalString,
   selectEffectiveHeartbeatReceipt,
+  heartbeatWorkRequalification,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -86,6 +87,7 @@ interface ReadbackRequest {
   resolve_original_binding: boolean;
   borrow_source_admission: boolean;
   refresh_retry: RefreshRetryRequest | null;
+  heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
 }
 
@@ -121,6 +123,14 @@ function settlementScope(
     throw new EffectRuntimeRequestError("goal_id must be a single path segment");
   }
   return {runtimeRoot, goalId};
+}
+
+/** Validate the canonical scope before callers perform optional receipt IO. */
+export function validateQuotaSettlementScope(
+  runtimeRootValue: unknown,
+  goalIdValue: unknown,
+): { runtimeRoot: string; goalId: string } {
+  return settlementScope(runtimeRootValue, goalIdValue);
 }
 
 /** Receipt verification owns progress; a durable debit alone is not settlement. */
@@ -246,6 +256,8 @@ function decodeRequest(
     resolve_original_binding: request.resolve_original_binding === true,
     borrow_source_admission: request.borrow_source_admission === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
+    heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
+      : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
     owner,
   };
 }
@@ -1003,12 +1015,12 @@ function readQuotaSettlementFromRequest(
     );
   }
   const explicitAgentId = normalizeAgentId(request.agent_id);
-  const ownerRuns = snapshot.runs.filter((run) =>
-    quotaOwnerOwnsProjection(request.owner, run.goal_ref)
-  );
-  const ownerEvents = snapshot.events.filter((event) =>
-    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
-  );
+  // Only latest-Turn inference needs the full run history. Explicit readback
+  // must use the existing Turn indexes before applying the Goal owner fence;
+  // otherwise a batch over N Turns repeatedly scans all N receipts.
+  const ownerRuns = request.infer_turn_instance_id
+    ? snapshot.runs.filter((run) => quotaOwnerOwnsProjection(request.owner, run.goal_ref))
+    : [];
   const explicitEvents = !request.infer_turn_instance_id &&
       explicitAgentId !== null && request.turn_instance_id !== null
     ? indexedEvents(
@@ -1019,7 +1031,7 @@ function readQuotaSettlementFromRequest(
     ).filter((event) =>
       quotaOwnerOwnsProjection(request.owner, event.goal_ref)
     )
-    : ownerEvents;
+    : snapshot.events.filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
   const identityResult = resolveIdentity(
     request,
     explicitEvents,
@@ -1074,6 +1086,8 @@ function readQuotaSettlementFromRequest(
   const spendEvent = findStepEvent(events, identity, "quota_spend");
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
+  const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
+    .some((receipt) => receipt !== null);
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
@@ -1119,8 +1133,8 @@ function readQuotaSettlementFromRequest(
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
-  const inFlightWriteback = writeback.failure === null &&
-    isAcceptedInFlightWriteback(writebackRun, identity);
+  const progressWriteback = writeback.failure === null &&
+    isAcceptedProgressWriteback(writebackRun, identity);
   const replanWriteback = writeback.failure === null &&
     isAcceptedReplanWriteback(writebackRun, identity);
   const monitorPhase = receiptBoundMonitorPhase({
@@ -1134,7 +1148,7 @@ function readQuotaSettlementFromRequest(
   // reducer so completion, retirement or archival cannot reopen that Turn.
   const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
-    writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback || replanWriteback,
+    writeback_completes_binding: todoBoundReplan || blockedNoSpend || progressWriteback || replanWriteback,
     completion_receipt_present: completionEvent !== null,
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,
@@ -1185,9 +1199,12 @@ function readQuotaSettlementFromRequest(
     replay_phase: replayPhase,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
-      [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
-        .some((receipt) => receipt !== null),
+      closeoutStarted,
     ),
+    ...(request.heartbeat_reentry_guard === null ? {} : {
+      heartbeat_reentry_qualification: heartbeatWorkRequalification(heartbeatReceipt,
+        request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted),
+    }),
   };
 }
 

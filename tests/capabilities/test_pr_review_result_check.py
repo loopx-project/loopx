@@ -52,12 +52,20 @@ def _review(*, area="product_runtime"):
                 for dimension in ("long_horizon", "user_experience")
             }
         if key == "observable_semantics":
+            row["decision_text_assessment"] = {"verdict": "not_applicable",
+                "checked_scope": "Synthetic local formatter and its unchanged callers.",
+                "reason": "No agent-consumed decision text changes in this consistency fixture."}
             row["scope_coverage"] = {"decision": "not_applicable",
                 "reason": "Synthetic local formatter has no eligibility gate or covered subjects."}
         if key == "code_volume":
             row["compatibility_assessment"] = {
                 "decision": "not_applicable",
                 "reason": "Local formatting fixture; no protocol, adapter or persisted format change.",
+            }
+        if key == "change_proportionality":
+            row["architecture_assessment"] = {
+                "decision": "not_applicable",
+                "reason": "Inspected local formatter; no mechanism ownership, default or phase changes.",
             }
         if key == "semantic_alignment":
             row.update(
@@ -266,6 +274,106 @@ def test_unrelated_baseline_red_check_does_not_force_request_changes():
     result["review_body"] = result["review_body"].replace(
         "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
+
+
+@pytest.mark.parametrize("current_status", ["passed", "failed", "unverified", "skipped"])
+def test_public_cli_judges_current_coverage_without_erasing_history(
+    tmp_path, monkeypatch, capsys, current_status,
+):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
+    packet, result = _review()
+    row = next(item for item in result["evidence"]["validation_matrix"]["items"]
+               if item["case_id"] == "material_negative_or_failure")
+    row.update(
+        status=current_status,
+        command_or_check="pytest tests/test_delegation_effect_stop_receipt.py",
+        result=(
+            "Historical run at base bbbbbbb: request timed out; root cause unknown. "
+            "Current review evidence: " + (
+                "independent isolated runs and loaded concurrent runs at the exact head "
+                "cover lost replies, stale ownership and descendant drain; every planned "
+                "run passed with unchanged assertions and deadlines. This covers the "
+                "exposed invariant without claiming the old timeout's cause was fixed."
+                if current_status == "passed" else
+                "one rerun passed, but the full bounded run set does not establish "
+                "descendant drain under concurrent load."
+            )
+        ),
+        skip_or_failure_reason="none" if current_status == "passed" else
+            "Current drain invariant is not established; prior history does not waive it.",
+    )
+    # The public entrypoint validates declarations, not the truth of this sealed
+    # scenario. No new historical-failure classification or waiver is supplied.
+    packet_path, result_path = tmp_path / "packet.json", tmp_path / "result.json"
+    packet_path.write_text(json.dumps(packet))
+    result_path.write_text(json.dumps(result))
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    monkeypatch.setattr(
+        "loopx.cli_commands.pr_review.resolve_current_github_repository",
+        lambda: pytest.fail("result check must not discover GitHub"),
+    )
+    exit_code = main(["--format", "json", "pr-review", "--check-result",
+                      str(result_path), "--packet", str(packet_path)])
+    checked = json.loads(capsys.readouterr().out)
+    assert exit_code == (0 if current_status == "passed" else 1)
+    assert checked["approval_consistent"] is (current_status == "passed")
+    assert not checked["evidence_truth_verified"]
+    assert not checked["external_writes_performed"]
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+    if current_status == "passed":
+        result["verdict"] = "REQUEST_CHANGES"
+        result["review_body"] = result["review_body"].replace(
+            "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+        assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
+
+
+@pytest.mark.parametrize("coverage", ["passed", "pending", "unverified", "failed"])
+def test_public_cli_separates_pending_ci_from_decisive_review_coverage(
+    tmp_path, monkeypatch, capsys, coverage,
+):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
+    packet, result = _review()
+    matrix = result["evidence"]["validation_matrix"]["items"]
+    decisive = next(row for row in matrix if row["case_id"] == "repository_required_checks")
+    decisive.update(
+        status=coverage,
+        command_or_check="Repository real-backend recovery and rejection suite at the exact head",
+        result="Independent source and installed recovery preserve full values and reject tampering."
+        if coverage == "passed" else "The affected recovery invariant is not established.",
+        skip_or_failure_reason="none" if coverage == "passed" else "Decisive coverage is missing.",
+    )
+    matrix.append({
+        "case_id": "remote_ci_observation",
+        "invariant_or_case": "Branch-protection jobs remain queued; no current failure observed.",
+        "command_or_check": "Available exact-head GitHub checks",
+        "status": "pending",
+        "result": "CI is pending; this observation does not establish or refute recovery.",
+        "required": False,
+        "skip_or_failure_reason": "Separate configured merge-readiness hold; local coverage judged above.",
+    })
+    packet_path, result_path = tmp_path / "packet.json", tmp_path / "result.json"
+    packet_path.write_text(json.dumps(packet))
+    result_path.write_text(json.dumps(result))
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    monkeypatch.setattr(
+        "loopx.cli_commands.pr_review.resolve_current_github_repository",
+        lambda: pytest.fail("offline result check must not discover GitHub"),
+    )
+    code = main(["--format", "json", "pr-review", "--check-result",
+                 str(result_path), "--packet", str(packet_path)])
+    checked = json.loads(capsys.readouterr().out)
+    assert code == (0 if coverage == "passed" else 1)
+    assert checked["approval_consistent"] is (coverage == "passed")
+    assert not checked["evidence_truth_verified"]
+    assert not checked["external_writes_performed"]
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+    if coverage == "passed":
+        result["verdict"] = "REQUEST_CHANGES"
+        result["review_body"] = result["review_body"].replace(
+            "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+        assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
 
 
 def test_required_red_check_needs_causal_attribution_and_unchanged_failure():
@@ -480,6 +588,68 @@ def test_semantic_alignment_cannot_hide_unknown_or_invalid_candidate(
 
     assert blocker in checked["approval_blockers"]
     assert not checked["approval_consistent"]
+
+
+def _decision_text_review():
+    packet, result = _review()
+    result["evidence"]["observable_semantics"]["decision_text_assessment"] = {
+        "verdict": "equivalent",
+        "checked_scope": "Recommended action before a long Todo lane, both quota and Turn projections.",
+        "reason": "A formatting-only edit preserves the independently specified ordering obligation.",
+        "consumer": "Agent deciding whether it may continue its current Todo.",
+        "clause_comparisons": [{
+            "baseline_clause": "Replan before continuing the lane.",
+            "head_clause": "Before continuing the lane, replan.",
+            "obligation_or_condition": "Replan precedes continuation.",
+            "assessment": "Same actor, prerequisite and continuation scope.",
+        }],
+        "counterfactuals": [{
+            "triggering_state": "Long lane still has a runnable Todo and an unresolved replan.",
+            "expected_obligation": "Replan first; a runnable Todo does not waive the prerequisite.",
+            "observed_result": "Synthetic fixture declares both caller readbacks carry that instruction.",
+            "evidence_ref": "observable_semantics.comparison_rows",
+            "status": "passed",
+        }],
+        "evidence_refs": ["observable_semantics", "validation_matrix"],
+    }
+    return packet, result
+
+
+@pytest.mark.parametrize("mutation", ["omitted", "fields_only", "empty_clauses", "empty_counterfactuals",
+                                      "unverified", "failed", "lost_ordering", "unproved_equivalence"])
+def test_green_validation_cannot_approve_missing_or_lost_instruction_semantics(mutation):
+    packet, result = _decision_text_review()
+    assert check_review_result(packet, result)["approval_consistent"]
+    observation = result["evidence"]["observable_semantics"]
+    row = observation["decision_text_assessment"]
+    if mutation == "omitted":
+        del observation["decision_text_assessment"]
+    elif mutation == "fields_only":
+        observation["decision_text_assessment"] = {
+            "verdict": "equivalent", "checked_scope": "Quota JSON",
+            "reason": "Fields, enums and size tests are unchanged/green.",
+        }
+    elif mutation.startswith("empty_"):
+        row["clause_comparisons" if mutation == "empty_clauses" else "counterfactuals"] = []
+    elif mutation in ("unverified", "failed"):
+        row["counterfactuals"][0]["status"] = mutation
+    else:
+        row["verdict"] = "unintended_drift" if mutation == "lost_ordering" else "not_yet_proven"
+        row["clause_comparisons"][0]["head_clause"] = "Replan; continue the lane."
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert any(x.startswith("observable_semantics:decision_text_assessment")
+               for x in checked["approval_blockers"])
+
+
+def test_semantic_change_needs_authorization_beyond_a_compression_target():
+    packet, result = _decision_text_review()
+    row = result["evidence"]["observable_semantics"]["decision_text_assessment"]
+    row["verdict"] = "intentional_change_validated"
+    assert not check_review_result(packet, result)["approval_consistent"]
+    row["authorization_basis"] = "Synthetic accepted caller contract explicitly changes ordering."
+    assert check_review_result(packet, result)["approval_consistent"]
+    assert not check_review_result(packet, result)["evidence_truth_verified"]
 
 
 def test_no_candidate_exits_after_scope_and_reason() -> None:

@@ -24,9 +24,6 @@ from .control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
     read_goal_configuration_with_source_route,
 )
-from .control_plane.goals.goal_vision_policy import (
-    normalize_completed_todo_replan_threshold,
-)
 from .orchestration import subagent_model_configuration_options
 
 CHAT_GOAL_CONFIGURATION_PATH = "/api/chat/goal-configuration"
@@ -112,10 +109,11 @@ def _peer_task_coordination_options(config: Mapping[str, Any]) -> dict[str, Any]
 
 def _explore_harness_options(config: Mapping[str, Any]) -> dict[str, Any]:
     profile = str(config.get("profile") or "").strip() or None
+    if "mode" in config and "enabled" in config:
+        raise ValueError("Use Explore mode or the legacy enabled flag, not both")
     return {
-        "explore_harness_enabled": _boolean_configuration(
-            "explore_harness", config, "enabled"
-        ),
+        **({"explore_mode": config["mode"]} if "mode" in config else {
+            "explore_harness_enabled": _boolean_configuration("explore_harness", config, "enabled")}),
         "explore_harness_profile": profile,
         "clear_explore_harness_profile": profile is None,
     }
@@ -191,7 +189,7 @@ def _goal_capability_options(
         if capability_id == "periodic_report":
             return {"clear_periodic_report_configuration": True}
         if capability_id == "todo_replan_cadence":
-            return {"clear_execution_replan_after_todos": True}
+            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True}
         if capability_id == "pull_request_review":
             return {"clear_pull_request_review_configuration": True}
         if capability_id == "change_quality_qualification":
@@ -204,7 +202,7 @@ def _goal_capability_options(
     config = dict(configuration)
     allowed: dict[str, set[str]] = {
         "goal_capability_organization": {"mode", "discovery_budget_minutes", "max_trials"},
-        "todo_replan_cadence": {"completed_todos"},
+        "todo_replan_cadence": {"completed_todos", "count_unit", "count"},
         "multi_subagent": {
             "enabled",
             "max_children",
@@ -215,8 +213,8 @@ def _goal_capability_options(
         },
         "peer_task_coordination": {"coordinator_agent_id"},
         "explore_graph": {"enabled"},
-        "explore_harness": {"enabled", "profile"},
-        "pull_request_review": {"wait_for_ci", "review_priority"},
+        "explore_harness": {"mode", "enabled", "profile"},
+        "pull_request_review": {"wait_for_ci", "review_order", "agent_orders", "review_priority", "owner_logins"},
         "change_quality_qualification": {"enabled", "safe_fix", "strict_receipt"},
         "progress_review": {"mode", "signal", "drift_threshold", "contract_revision"},
         "local_authority_shadow": {"enabled"},
@@ -238,11 +236,11 @@ def _goal_capability_options(
     if capability_id == "goal_capability_organization":
         return {"capability_improvement_configuration": config}
     if capability_id == "todo_replan_cadence":
-        return {
-            "execution_replan_after_todos": normalize_completed_todo_replan_threshold(
-                config.get("completed_todos")
-            ),
-        }
+        from .capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
+        cadence = normalize_replan_cadence_configuration(config)
+        option = ("execution_replan_after_turns" if cadence["count_unit"] == "effective_turns"
+                  else "execution_replan_after_todos")
+        return {option: cadence["count"]}
     if capability_id == "periodic_report":
         return {"periodic_report_configuration": config}
     if capability_id == "reward_memory":
@@ -419,6 +417,14 @@ class GoalConfigurationRequestMixin:
                 result,
                 machine_namespaces=self._goal_configuration_machine_namespaces(),
             )
+            from .agent_registry import load_goal_from_registry
+            from .capabilities.progress_review.context import external_progress_review_context
+            goal = load_goal_from_registry(self.server.registry_path, goal_ids[0].strip())
+            observation = external_progress_review_context(goal or {}, getattr(self.server, "runtime_root", None))
+            if observation is not None:
+                for capability in response.get("capability_catalog", {}).get("capabilities", []):
+                    if capability.get("capability_id") == "progress_review":
+                        capability["observation"] = observation["summary"]
         except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
             self._send_error(
                 str(exc),

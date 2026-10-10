@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +27,16 @@ from benchmark.runtime.worker import run_once
 def test_invalid_entry_rejected_before_model_call(kwargs):
     with pytest.raises(ValueError):
         Execution(**kwargs)
+
+
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "loopx-goal", "plain", "native-goal"])
+def test_task_entry_defaults_to_planning_only_for_loopx_modes(mode):
+    kwargs = {"mode": mode}
+    if mode == "turn":
+        kwargs["validation_command"] = ("python", "validate.py")
+    expected = "loopx-planned" if mode in {"heartbeat", "turn", "loopx-goal"} else "seeded-todo"
+    assert Execution(**kwargs).task_entry == expected
+    assert Execution(**kwargs, task_entry="seeded-todo").task_entry == "seeded-todo"
 
 
 @pytest.fixture
@@ -107,11 +119,24 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
     }
 
 
-def test_planning_writes_real_todo_then_reuses_it_without_executing_task(planning_env):
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
+    planning_env, context
+):
+    planning_env["LOOPX_ITERATION_CONTEXT"] = context
+    if context == "fresh":
+        planning_env.pop("LOOPX_TASK_ENTRY")  # Omitted worker setting uses the same planner.
     ids = []
-    for _ in range(2):
+    for invocation in range(2):
         receipt = run_once(planning_env)
         assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
+        # Planning cannot attest to an execution that has not happened yet.
+        assert "planning_session_reused_for_execution" not in receipt["planning"]
+        persisted = json.loads(Path(planning_env["LOOPX_PLANNING_RESULT"]).read_text())
+        assert persisted == receipt["planning"]
+        expected_action = "resume" if context == "resume" and invocation else "start_new"
+        assert receipt["session"]["action"] == expected_action
+        assert receipt["session"]["session_id"] == "planning-fixture-session"
         ids.append(receipt["planning"]["todo_ids"])
     state = Path(planning_env["LOOPX_REGISTRY"]).with_name("state.md").read_text()
     assert ids[0] == ids[1] and len(ids[0]) == 1
@@ -120,7 +145,8 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(plannin
     argv = json.loads(
         (Path(planning_env["LOOPX_CODEX_HOME"]) / "seen-argv.json").read_text()
     )
-    assert "features.goals=false" in argv and "resume" not in argv
+    assert "features.goals=false" in argv
+    assert ("resume" in argv) == (context == "resume")
     assert not list(
         Path(planning_env["LOOPX_RUNTIME_ROOT"]).rglob("benchmark-pending-turn.json")
     )
@@ -196,7 +222,7 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
 
     async def cli(environment, args, **kwargs):
         calls.append(args)
-        return {"after": {"execution_profile": {"replan_after_completed_todos": 3}}}
+        return {"after": {"execution_profile": {"replan_after_effective_turns": 6}}}
 
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
@@ -226,7 +252,6 @@ def test_planning_budget_and_blocked_handoff_use_the_real_adapter_run(
     agent = harbor.BenchmarkCodex(
         logs_dir=tmp_path,
         model_name="openai/fixture",
-        task_entry="loopx-planned",
         turn_timeout_sec=250,
         scheduler_timeout_sec=500,
     )
@@ -304,6 +329,62 @@ def test_late_scheduler_wake_does_not_open_an_unfinishable_turn(planning_env, mo
     assert not (Path(env["LOOPX_RUNTIME_ROOT"]) / "benchmark-pending-turn.json").exists()
 
 
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "plain", "native-goal", "loopx-goal"])
+def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode):
+    from benchmark.runtime.scheduler import worker_command
+
+    env = planning_env | {
+        "LOOPX_EXECUTION_MODE": mode, "LOOPX_TASK_STAGE": "execute",
+        "LOOPX_TASK_ENTRY": "seeded-todo",
+        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 100),
+    }
+    if mode == "turn":
+        env["LOOPX_VALIDATION_COMMAND_JSON"] = '["python", "check.py"]'
+    registry = Path(env["LOOPX_REGISTRY"])
+    registered = json.loads(registry.read_text())
+    registered["goals"][0]["domain"] = "project"
+    registered["goals"][0]["adapter"] = {
+        "kind": "read_only_project_map_v0", "status": "connected-read-only",
+    }
+    registry.write_text(json.dumps(registered))
+    # An isolated File authority remains runnable: only the benchmark owner
+    # knows its separate phase deadline. Exercise the real quota CLI, not a
+    # synthetic scheduler decision that happens to terminate on the next read.
+    cli = [env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
+           "--runtime-root", env["LOOPX_RUNTIME_ROOT"]]
+    subprocess.run([*cli, "todo", "add", "--goal-id", env["LOOPX_GOAL_ID"],
+                    "--role", "agent", "--claimed-by", env["LOOPX_AGENT_ID"],
+                    "--text", "[P0] Complete synthetic task", "--execute"],
+                   env=env, check=True, capture_output=True, text=True)
+    def quota():
+        result = subprocess.run([
+            *cli, "quota", "should-run", "--goal-id", env["LOOPX_GOAL_ID"],
+            "--agent-id", env["LOOPX_AGENT_ID"], "--runtime-profile", "generic_cli",
+            "--include-detail", "scheduler",
+        ], env=env, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+    before = quota()
+    assert before["should_run"] is True
+    command = worker_command(env, python=sys.executable,
+        source=str(Path(__file__).resolve().parents[2]),
+        state_file=str(Path(env["LOOPX_RUNTIME_ROOT"]) / "scheduler.json"),
+        host_timeout=500)
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if mode in {"heartbeat", "turn"}:
+        assert "status=wake_requested_stop" in result.stdout
+    receipts = list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["budget_exhausted"] and receipt["host_invoked"] is False
+    assert not Path(env["LOOPX_CODEX_HOME"]).exists()
+    assert not (Path(env["LOOPX_RUNTIME_ROOT"]) / "benchmark-pending-turn.json").exists()
+    after = quota()
+    assert after["should_run"] is True
+    assert after["quota"]["spent_slots"] == before["quota"]["spent_slots"]
+
+
 def test_remaining_phase_time_caps_later_host_windows(planning_env, monkeypatch):
     from benchmark.runtime import worker
 
@@ -325,7 +406,7 @@ def test_remaining_phase_time_caps_later_host_windows(planning_env, monkeypatch)
 
 
 @pytest.mark.parametrize("status", ["open", "blocked", "done", "deferred"])
-def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
+def test_seeded_task_acceptance_survives_phase_update_without_reviving_terminal_work(
     planning_env, tmp_path, monkeypatch, status
 ):
     import contextlib
@@ -354,6 +435,9 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
         agent._phase_number = 1
         await agent._seed_phase(None, cwd=planning_env["LOOPX_PROJECT"])
         original = agent._seeded_todo_id
+        first = await cli(None, ["todo", "list", "--goal-id", "planning-goal",
+                                "--role", "agent", "--todo-id", original])
+        initial_text = first["todo"]["text"]
         transition = (["complete", "--no-follow-up", "--note", "Synthetic task independently validated; no remaining work"]
                       if status == "done" else ["update", "--status", status])
         if status == "deferred":
@@ -364,6 +448,17 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
         await agent._seed_phase(None, cwd=planning_env["LOOPX_PROJECT"])
         listed = await cli(None, ["todo", "list", "--goal-id", "planning-goal", "--role", "agent"])
         todos = {t["todo_id"]: t for t in listed["todos"]}
+        # Both the first task and a later phase keep the native task's full
+        # acceptance in scope, without preplanning a successor or reviving work.
+        assert todos[agent._seeded_todo_id]["text"] == (
+            "[P0] Complete the task in /opt/loopx-benchmark/control/task-phase-002.md. "
+            "Inspect the workspace, implement and validate against the task's full "
+            "requirements and acceptance criteria. Keep unmet requirements explicit "
+            "when judging task completion."
+        )
+        assert initial_text == todos[agent._seeded_todo_id]["text"].replace(
+            "task-phase-002.md", "task-phase-001.md"
+        )
         if status in {"open", "blocked"}:
             assert agent._seeded_todo_id == original and len(todos) == 1
             assert todos[original]["status"] == status
@@ -374,3 +469,144 @@ def test_seeded_followup_uses_real_todo_delta_without_reviving_terminal_work(
             assert "task-phase-001.md" in todos[original]["text"]
 
     asyncio.run(scenario())
+
+
+def test_sforge_planning_entry_runs_inside_native_process_and_reuses_receipt(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)}
+    assert prepare_entry(env)
+    initial = list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(initial) == 1
+    assert prepare_entry(env)
+    assert list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json")) == initial
+    # Real process boundary retains the native transport environment and deadline.
+    marker = Path(env["LOOPX_PROJECT"]) / "handoff.json"
+    target = "import os,json,pathlib; pathlib.Path(%r).write_text(json.dumps({k:os.environ[k] for k in ['HTTPS_PROXY','LOOPX_PHASE_DEADLINE_EPOCH','LOOPX_TASK_STAGE']}))" % str(marker)
+    proxy = "http://api-only.invalid:9090"
+    result = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_entry",
+                             sys.executable, "-c", target], env=env | {"HTTPS_PROXY": proxy},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert Path(env["LOOPX_PLANNING_RESULT"]).with_name("execution-started").exists()
+    assert json.loads(marker.read_text()) == {"HTTPS_PROXY": proxy,
+        "LOOPX_PHASE_DEADLINE_EPOCH": env["LOOPX_PHASE_DEADLINE_EPOCH"],
+        "LOOPX_TASK_STAGE": "execute"}
+    saved = Path(env["LOOPX_PLANNING_RESULT"])
+    valid = json.loads(saved.read_text())
+    for mutation in ({"state_readback_verified": False}, {"todo_ids": ["missing"]},
+                     {"status": "blocked"}, {"todo_ids": valid["todo_ids"] * 2}):
+        saved.write_text(json.dumps(valid | mutation))
+        with pytest.raises(ValueError):
+            prepare_entry(env)
+    changed = valid | {"input_digest": "stale"}
+    saved.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="current task"):
+        prepare_entry(env)
+
+
+def test_sforge_planner_uses_trial_deadline_instead_of_a_stage_cap(planning_env, monkeypatch):
+    from benchmark.runtime.sforge_entry import prepare_entry
+
+    communicate = subprocess.Popen.communicate
+    observed = []
+
+    def capture(process, *args, **kwargs):
+        if process.args[0] == planning_env["CODEX_BIN"]:
+            observed.append(kwargs["timeout"])
+        return communicate(process, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", capture)
+    # Even an inherited shared-worker cap cannot shorten native SForge planning.
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 1200)}
+    assert prepare_entry(env)
+    assert len(observed) == 1 and 1100 < observed[0] <= 1200
+    assert Path(env["LOOPX_PLANNING_RESULT"]).exists()
+
+
+def test_shared_harbor_planning_default_remains_bounded(tmp_path):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture")
+    assert agent.planning_timeout == 300
+
+
+def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):
+    from benchmark.runtime import sforge_entry
+
+    monkeypatch.setattr(sforge_entry, "prepare_entry", lambda env: True)
+    monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", str(time.time() + 150))
+    monkeypatch.setenv("LOOPX_PLANNING_RESULT", str(tmp_path / "planning.json"))
+    monkeypatch.setattr(sys, "argv", ["sforge-entry", "execution-must-not-start"])
+    monkeypatch.setattr(os, "execvpe", lambda *args: pytest.fail("Execution after exhausted planning"))
+    assert sforge_entry.main() == 1
+    assert not (tmp_path / "execution-started").exists()
+
+
+def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 150)}
+    assert not prepare_entry(env)
+    assert not Path(env["LOOPX_PLANNING_RESULT"]).exists()
+    assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
+    result = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_entry",
+        sys.executable, "-c", "raise SystemExit('execution must not start')"],
+        env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "execution must not start" not in result.stderr
+    assert not Path(env["LOOPX_PLANNING_RESULT"]).with_name("execution-started").exists()
+
+
+def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
+    from benchmark.runtime.sforge_entry import prepare_entry
+    Path(planning_env["CODEX_BIN"]).write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+    with pytest.raises(RuntimeError):
+        prepare_entry(planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600)})
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+
+
+@pytest.mark.parametrize("settings,field,value", [
+    ({}, "replan_after_effective_turns", 6),
+    ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
+    ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
+])
+def test_runner_cadence_persists_through_real_configure_goal(
+    planning_env, tmp_path, monkeypatch, settings, field, value
+):
+    import contextlib
+    import io
+    pytest.importorskip("harbor")
+    from benchmark.runtime import harbor
+    from loopx.cli import main
+
+    monkeypatch.setattr(harbor, "_GOAL_ID", "planning-goal")
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+
+    async def cli(environment, args, **kwargs):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main([
+                "--format", "json", "--registry", planning_env["LOOPX_REGISTRY"],
+                "--runtime-root", planning_env["LOOPX_RUNTIME_ROOT"], *args,
+            ])
+        assert code == 0, output.getvalue()
+        return json.loads(output.getvalue())
+
+    async def prepared(*args, **kwargs):
+        return True
+
+    async def no_pending(**kwargs):
+        return SimpleNamespace(return_code=1)
+
+    monkeypatch.setattr(agent, "_loopx", cli)
+    monkeypatch.setattr(agent, "_registry_exists", prepared)
+    monkeypatch.setattr(agent, "_write_task_document", prepared)
+    asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task",
+                                     cwd=planning_env["LOOPX_PROJECT"]))
+    readback = asyncio.run(cli(None, ["configure-goal", "--goal-id", "planning-goal"]))
+    profile = readback["after"]["execution_profile"]
+    assert profile[field] == value
+    other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
+             else "replan_after_effective_turns")
+    assert other not in profile
+    assert agent._replan_receipt() == {field: value}

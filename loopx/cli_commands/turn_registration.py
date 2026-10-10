@@ -48,6 +48,21 @@ def register_turn_commands(
             "Host Session binding check."
         ),
     )
+    inspect_journal.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Poll the read-only journal projection and emit one progress event "
+            "per changed phase/status until the Turn is terminal. With --format "
+            "json, events are newline-delimited JSON."
+        ),
+    )
+    inspect_journal.add_argument(
+        "--watch-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between journal reads while --watch is active (default: 1).",
+    )
 
     plan = command_sub.add_parser(
         "plan",
@@ -311,7 +326,8 @@ def register_turn_commands(
             "run_dsh_turn(...) used instead of the DeepSeek Harness SDK."
         ),
     )
-    run_once.add_argument("--timeout-seconds", type=float, default=120.0)
+    run_once.add_argument("--timeout-seconds", type=float, default=None,
+                          help="Optional execution deadline; by default wait for host completion or cancellation.")
     run_once.add_argument(
         "--retry-failed-turn",
         action="store_true",

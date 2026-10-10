@@ -61,6 +61,98 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("surface,output_format,feature,growth", [
+    ("start_goal_guided", "json", "complete_todo_readback", (948, 6, 894)),
+    ("start_goal_guided_command_pack_detail", "markdown", "complete_todo_readback", (436, 2, 0)),
+    ("quota_should_run", "json", "vision_cli_authoring", (3049, 94, 1807)),
+    ("loopx_turn_plan", "json", "vision_cli_authoring", (237, 0, 237)),
+])
+def test_authoring_growth_is_bounded_one_time_and_surface_scoped(
+    surface, output_format, feature, growth,
+):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base = _row(
+        row_id=f"surface/{surface}/small/{output_format}", format=output_format,
+        chars=1000, utf8_bytes=1000, lines=20, compact_payload_chars=800,
+        authoring_inputs={feature: False},
+    )
+    candidate = {
+        **base, "authoring_inputs": {feature: True},
+        "chars": 1000 + growth[0], "utf8_bytes": 1000 + growth[0],
+        "lines": 20 + growth[1], "compact_payload_chars": 800 + growth[2],
+    }
+    result = _compare_row(base, candidate)
+    assert not result["failures"]
+    assert result["review_signals"]
+    # No waiver for an already-upgraded or unobserved base, or another surface.
+    assert _compare_row({**base, "authoring_inputs": {feature: True}}, candidate)["failures"]
+    assert _compare_row({**base, "authoring_inputs": {}}, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "authoring_inputs": {feature: False}})["failures"]
+    assert _compare_row(
+        {**base, "row_id": f"surface/status/small/{output_format}"},
+        {**candidate, "row_id": f"surface/status/small/{output_format}"},
+    )["failures"]
+    # Retain independent metric limits; a declared transition is not unlimited.
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        inflated = {**candidate, metric: base[metric] + result["allowances"][metric] + 1}
+        assert _compare_row(base, inflated)["failures"]
+
+
+def test_authoring_observations_require_complete_structured_or_rendered_guidance():
+    from loopx.control_plane.testing.cli_output_semantics import authoring_input_observations
+
+    purpose = (
+        "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
+        "compare .todo.text, status/claim. Excerpts cannot verify writes. "
+        "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+    )
+    step = {
+        "id": "read_back_authored_todos", "kind": "operator_or_agent_actions",
+        "purpose": purpose,
+        "command_template": "loopx --format json todo list --goal-id test --todo-id '<todo-id>'",
+    }
+    rendered = (
+        f"5. `read_back_authored_todos` (operator_or_agent_actions): {purpose}\n"
+        f"   - command/source: `{step['command_template']}`"
+    )
+    for text in (json.dumps({"steps": [step]}), rendered):
+        assert authoring_input_observations(text)["complete_todo_readback"]
+        assert not authoring_input_observations(text.replace("Excerpts cannot verify writes. ", ""))[
+            "complete_todo_readback"
+        ]
+        assert not authoring_input_observations(text.replace("--todo-id", "--limit"))[
+            "complete_todo_readback"
+        ]
+    assert not authoring_input_observations(json.dumps({"note": rendered}))["complete_todo_readback"]
+    # The rendered line has to carry exactly the structured purpose. The reader takes the
+    # line as free text and compares it, so words around the purpose must not be accepted.
+    for surrounding in (f"{purpose} extra", f"extra {purpose}"):
+        assert not authoring_input_observations(rendered.replace(purpose, surrounding))[
+            "complete_todo_readback"
+        ]
+    # Existential across rendered candidates: a structurally matching line whose purpose
+    # is not exact must not mask a later complete instruction, in either order.
+    incomplete = rendered.replace(purpose, f"{purpose} extra")
+    assert authoring_input_observations(incomplete + "\n" + rendered)["complete_todo_readback"]
+    assert authoring_input_observations(rendered + "\n" + incomplete)["complete_todo_readback"]
+    assert not authoring_input_observations(incomplete + "\n" + incomplete)[
+        "complete_todo_readback"
+    ]
+    hint = (
+        "Replace example claims/refs with evidence; obey the live contract and total limit. "
+        "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. "
+        "checkpoint-context is only for recovery after the original committed Turn writeback; "
+        "follow its returned same-Turn recovery action, not a fresh-turn preflight."
+    )
+    authoring = {"schema_version": "goal_vision_replan_contract_v0", "authoring_hint": hint}
+    assert authoring_input_observations(json.dumps(authoring))["vision_cli_authoring"]
+    assert not authoring_input_observations(json.dumps({"authoring_hint": hint}))["vision_cli_authoring"]
+    assert not authoring_input_observations(json.dumps({**authoring, "authoring_hint": hint[:100]}))[
+        "vision_cli_authoring"
+    ]
+
+
 def test_thin_bilingual_byte_allowance_does_not_relax_character_or_quota_limits():
     from loopx.control_plane.testing.cli_output_differential import _compare_row
 
@@ -79,6 +171,36 @@ def test_thin_bilingual_byte_allowance_does_not_relax_character_or_quota_limits(
     base["row_id"] = "surface/quota_should_run/small/markdown"
     candidate["row_id"] = base["row_id"]
     assert _compare_row(base, candidate)["failures"]
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_readable_peer_admission_growth_is_one_time_and_thin_only(output_format):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import (
+        heartbeat_peer_admission_prompt_revision,
+    )
+
+    block = (
+        "Follow the current quota claim/lease and workspace contract plus repository rules. "
+        "Follow todo continuation policy. Task-scoped coordination grants no authority over "
+        "other agents. Keep scope in this prompt, not todo metadata."
+    )
+    marker = heartbeat_peer_admission_prompt_revision(block)
+    assert marker == "heartbeat_peer_admission_v1"
+    assert heartbeat_peer_admission_prompt_revision(block.replace("no authority", "authority")) is None
+    base = _row(
+        row_id=f"surface/heartbeat_prompt_thin/small/{output_format}",
+        format=output_format, chars=1_000, utf8_bytes=1_000, compact_payload_chars=1_000,
+    )
+    candidate = {**base, "chars": 1_160, "compact_payload_chars": 1_160,
+                 "heartbeat_peer_admission_prompt_revision": marker}
+    assert not _compare_row(base, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "chars": 1_161})["failures"]
+    assert _compare_row(candidate, {**candidate, "chars": 1_250})["failures"]
+    assert _compare_row(base, {**candidate, "heartbeat_peer_admission_prompt_revision": None})["failures"]
+    for surface in ("quota_should_run", "heartbeat_prompt_brief"):
+        other = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
+        assert _compare_row(other, {**candidate, "row_id": other["row_id"]})["failures"]
 
 
 def test_sync_commit_uses_main_as_cli_output_base() -> None:
@@ -701,7 +823,7 @@ def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
 def test_unknown_action_signature_coverage_migration_fails_closed() -> None:
     candidate = _row(
         action_signature_sha256="unknown-semantic-signature",
-        action_signature_coverages=["turn_envelope_action_dimensions_v5"],
+        action_signature_coverages=["turn_envelope_action_dimensions_v999"],
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
@@ -1151,3 +1273,80 @@ def test_malformed_command_never_grants_route_growth(command, render) -> None:
 def test_json_escaped_paths_and_duplicate_arguments_are_counted_once() -> None:
     command = """loopx --format json --registry '/tmp/a \"quoted\" path' --registry /tmp/final --runtime-root '/tmp/root path' turn plan"""
     assert command_route_counts(json.dumps({"command": command})) == {"registry": 1, "runtime_root": 1}
+
+
+@pytest.mark.parametrize('row_id', [
+    'surface/status/small/json', 'surface/quota_should_run/small/json',
+    'variant/status_task_graph_detail/small/json',
+])
+def test_task_step_read_fence_growth_is_bounded_one_time_and_view_scoped(row_id):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base = _row(row_id=row_id, chars=1000, utf8_bytes=1000, lines=50,
+                compact_payload_chars=1000, next_action_basis_count=0)
+    candidate = {**base, 'chars': 1180, 'utf8_bytes': 1180, 'lines': 55,
+                 'compact_payload_chars': 1130, 'next_action_basis_count': 1}
+    observed = _compare_row(base, candidate)
+    assert not observed['failures']
+    assert any('read fences' in signal for signal in observed['review_signals'])
+    limit = 256 if row_id.startswith('variant/') else 192
+    assert _compare_row(base, {**candidate, 'chars': 1001 + limit})['failures']
+    assert _compare_row({**base, 'next_action_basis_count': 1}, candidate)['failures']
+    for invalid in (True, '1', -1, 5):
+        assert _compare_row(base, {**candidate, 'next_action_basis_count': invalid})['failures']
+    for other in ('surface/diagnose/small/json', 'surface/status/small/markdown'):
+        other_format = 'markdown' if other.endswith('/markdown') else 'json'
+        assert _compare_row({**base, 'row_id': other, 'format': other_format},
+            {**candidate, 'row_id': other, 'format': other_format})['failures']
+
+
+def test_read_fence_probe_counts_only_canonical_digest_shapes():
+    from loopx.control_plane.testing.cli_output_semantics import next_action_basis_count
+
+    valid = 'sha256:' + 'a' * 64
+    assert next_action_basis_count({'route': {'next_action_basis': valid},
+        'peers': [{'next_action_basis': valid}]}) == 2
+    for invalid in (None, True, 'a' * 64, valid + '\n', 'sha256:' + 'z' * 64):
+        assert next_action_basis_count({'next_action_basis': invalid}) == 0
+
+
+def test_dense_replan_growth_is_one_time_and_keeps_semantic_checks():
+    paths = ['$.autonomous_replan_obligation.replan_context.' + key
+             for key in ('core_goal', 'evidence', 'coverage_ledger')]
+    base = _row(row_id='surface/quota_should_run/crowded/json', surface_id='quota_should_run', scenario='crowded')
+    candidate = {**base, 'json_shape_paths': [*base['json_shape_paths'], *paths],
+                 'chars': base['chars'] + 6600, 'lines': base['lines'] + 88}
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))['ok']
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt({**candidate, 'chars': candidate['chars'] + 6600}))['ok']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt({**candidate, 'chars': base['chars'] + 7001}))['ok']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt({**candidate, 'action_signature_sha256': 'changed'}))['ok']
+    ordinary_base = {**base, 'row_id': 'surface/quota_should_run/small/json'}
+    ordinary_head = {**candidate, 'row_id': ordinary_base['row_id']}
+    assert not compare_cli_output_receipts(_receipt(ordinary_base), _receipt(ordinary_head))['ok']
+
+
+def test_only_retired_evidence_command_with_real_replacement_is_allowed():
+    base = _row(row_id='surface/evidence_log_thin/small/json', surface_id='evidence_log_thin')
+    replacement = _row(row_id='variant/review_packet_full/small/json', json_shape_paths=[
+        '$.replan_context.core_goal', '$.replan_context.evidence', '$.replan_context.coverage_ledger'])
+    result = compare_cli_output_receipts(_receipt(base), _receipt(replacement))
+    assert result['ok'] and result['review_required']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt())['ok']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt({**replacement, 'json_shape_paths': []}))['ok']
+    assert not compare_cli_output_receipts(_receipt({**base, 'row_id': 'surface/status/small/json'}), _receipt(replacement))['ok']
+
+
+@pytest.mark.parametrize("previous", range(5))
+def test_settlement_v5_migration_does_not_waive_output_growth(previous):
+    base = _row(action_signature_coverages=[f"turn_envelope_action_dimensions_v{previous}"])
+    candidate = {**base, "action_signature_sha256": "settlement-signature",
+                 "action_signature_coverages": ["turn_envelope_action_dimensions_v5"]}
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result["ok"] and result["review_required"]
+    assert not compare_cli_output_receipts(
+        _receipt(base), _receipt({**candidate, "chars": 50_000}),
+    )["ok"]
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(base))["ok"]
+    assert not compare_cli_output_receipts(
+        _receipt(candidate), _receipt({**candidate, "action_signature_sha256": "lost-identity"}),
+    )["ok"]

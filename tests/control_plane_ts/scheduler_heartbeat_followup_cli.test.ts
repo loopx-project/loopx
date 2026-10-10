@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { isSupportedNodeVersion } from "../../loopx/control_plane/runtime/node_version.ts";
 
 type CleanupContext = {
   after(callback: () => void | Promise<void>): void;
@@ -20,6 +21,14 @@ const entrypoint = fileURLToPath(
 const goalId = "goal-followup-cli";
 const agentId = "agent-followup-cli";
 const turnId = "turn-followup-cli";
+
+test("heartbeat follow-up CLI applies minimum Node prerelease precedence", () => {
+  assert.equal(isSupportedNodeVersion("22.22.2"), false);
+  assert.equal(isSupportedNodeVersion("22.22.3-rc.1"), false);
+  assert.equal(isSupportedNodeVersion("22.22.3"), true);
+  assert.equal(isSupportedNodeVersion("22.22.4-rc.1"), true);
+  assert.equal(isSupportedNodeVersion("22.22.3+build.1"), true);
+});
 
 async function tempRuntime(t: CleanupContext): Promise<string> {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-followup-cli-"));

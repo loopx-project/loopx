@@ -41,27 +41,12 @@ def _todo_text(item: dict[str, Any]) -> str:
     return str(item.get("text") or "").strip()
 
 
-def _stale_handoff_closeout_replan_required(gate: dict[str, Any]) -> bool:
-    # Legacy compatibility only: old authors did not write the typed route flag.
-    # Do not use this prose hint for successor existence, gate state or permission.
-    # Retire it after the remaining route-closeout writers emit the typed flag.
-    if isinstance(gate.get("route_continuation_replan_required"), bool):
-        return gate["route_continuation_replan_required"] is True
-    if _todo_done(gate):
-        return False
-    label = " ".join(
-        str(gate.get(key) or "")
-        for key in ("action_kind", "title", "text")
-        if str(gate.get(key) or "").strip()
-    ).lower()
-    return "stale" in label and "handoff" in label and "closeout" in label
-
-
 def _compact_handoff_gate(
     gate: dict[str, Any],
     *,
     state: HandoffGateState,
     successor_ids: list[str],
+    route_replan_required: bool,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": TODO_HANDOFF_GATE_SCHEMA_VERSION,
@@ -104,7 +89,7 @@ def _compact_handoff_gate(
     superseded_by = normalize_todo_id(payload.get("superseded_by"))
     if superseded_by:
         payload["superseded_by"] = superseded_by
-    if _stale_handoff_closeout_replan_required(gate):
+    if route_replan_required:
         payload["route_continuation_replan_required"] = True
         payload.setdefault(
             "route_continuation_reason",
@@ -125,7 +110,8 @@ def build_todo_handoff_gate_states(
     decisions = evaluations if evaluations is not None else project_succession(todo_items)
     gates = [
         _compact_handoff_gate(item, state=HandoffGateState(decision["handoff_state"]),
-            successor_ids=decision["successor_todo_ids"])
+            successor_ids=decision["successor_todo_ids"],
+            route_replan_required=decision["route_continuation_replan_required"])
         for item, decision in zip(todo_items, decisions, strict=True)
         if decision["handoff_state"] is not None
     ]
@@ -156,48 +142,3 @@ def handoff_ready_successor_todo_ids(value: dict[str, Any]) -> set[str]:
             if normalized:
                 ready.add(normalized)
     return ready
-
-
-def build_todo_handoff_gate_lanes(
-    value: dict[str, Any],
-    *,
-    agent_identity: dict[str, Any] | None,
-    item_limit: int,
-) -> dict[str, Any]:
-    handoff_gates = todo_summary_handoff_gates(value)
-    if not handoff_gates:
-        return {}
-    lanes: dict[str, Any] = {
-        "handoff_gate_count": len(handoff_gates),
-        "handoff_gates": handoff_gates[:item_limit],
-    }
-    agent_id = (
-        normalize_todo_claimed_by(agent_identity.get("agent_id"))
-        if isinstance(agent_identity, dict)
-        else None
-    )
-    if agent_id:
-        current_agent_items = [
-            item
-            for item in handoff_gates
-            if agent_id in normalize_todo_excluded_agents(item.get("excluded_agents"))
-        ]
-        cleared_without_successor = [
-            item
-            for item in current_agent_items
-            if item.get("gate_state")
-            == HandoffGateState.CLEARED_WITHOUT_SUCCESSOR.value
-        ]
-        lanes.update(
-            {
-                "current_agent_handoff_gate_count": len(current_agent_items),
-                "current_agent_handoff_gates": current_agent_items[:item_limit],
-                "current_agent_cleared_without_successor_handoff_count": len(
-                    cleared_without_successor
-                ),
-                "current_agent_cleared_without_successor_handoff_gates": (
-                    cleared_without_successor[:item_limit]
-                ),
-            }
-        )
-    return lanes

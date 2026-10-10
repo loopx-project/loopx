@@ -95,16 +95,22 @@ test("a host wake reuses the resume facts and returns a typed outcome, never an 
   assert.throws(() => planChatMode({...input, origin: "host"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "web"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "external"}), /local managed/);
-  assert.throws(() => planChatMode({...wake, session: {...enabled, channel_id: "manager"}}));
+  for (const changes of [{channel_id: "manager"}, {channel_id: "manager.external.test"},
+    {session_mode: "attached_host"}, {agent_id: "other"}]) {
+    assert.deepEqual(planChatMode({...wake, session: {...enabled, ...changes}}),
+      {operation: "wake", state: "refused", reason: "no_wake_owner"});
+  }
 });
 
 test("only a provider-dispatched wake Turn is dispatch evidence; a queued or merely starting one is replayed", () => {
   const own = {turn_id: "wake-turn", loopx_execution: true, operation: "wake", intent_id: intent.intent_id};
-  const queued = {...own, status: "queued", started_at: null};
+  const queued = {...own, status: "queued", started_at: null, request_matches: true};
   // Queued, not started: replay the same Turn; its own active id does not block it.
   const replay = planChatMode({...wake, wake_turn: queued, session: {...enabled, active_turn_id: "wake-turn"}});
   assert.equal(replay.state, "admitted");
   assert.equal(replay.dispatch, "replay");
+  assert.deepEqual(planChatMode({...wake, wake_turn: {...queued, request_matches: false}}),
+    {operation: "wake", state: "refused", reason: "wake_identity_conflict"});
   // The replay keeps every boundary of a new wake.
   const held: [JsonObject, string, string][] = [
     [{session: {...enabled, active_turn_id: "wake-turn", loopx_mode: {enabled: true, paused: true}}}, "pending", "lead_paused"],

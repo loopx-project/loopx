@@ -70,7 +70,7 @@ def test_original_source_reply_waits_for_ack_and_rechecks_authority(
     policy = {
         "schema_version": POLICY_SCHEMA,
         "sources": {
-            session["channel_id"]: {"sender_ids": ["owner"], "targets": [target]}
+            session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}
         },
     }
     _write(_root(root) / "policy.json", policy)

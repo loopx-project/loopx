@@ -1,5 +1,6 @@
 /** Bounded native planning edits. Compose the public rule owner in-process;
  * this plan never grants authority, reads storage, or emits a lease effect. */
+import {isExploreReferenceAppend} from "./field_update.ts";
 import {normalizeTodoPriority} from "./priority.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
@@ -22,7 +23,7 @@ const STRINGS = new Set(["status", "evidence", "reason", "task_class", "continua
   "resume_when", "unblocks_todo_id", "bound_agent", "blocks_agent"]);
 const BOOLEANS = new Set(["clear_priority", "clear_resume_when", "no_followup", "goal_bound", "clear_blocks_agent",
   "global_gate", "clear_global_gate"]);
-const FIELDS = new Set(["priority", ...STRINGS, ...BOOLEANS, "successor_todo_ids", "monitor_metadata",
+const FIELDS = new Set(["append_explore_result_node_refs", "priority", ...STRINGS, ...BOOLEANS, "successor_todo_ids", "monitor_metadata",
   ...TODO_WORK_REQUIREMENT_FIELDS, ...TODO_OWNERSHIP_INTENT_FIELDS, ...TODO_DECISION_METADATA_FIELDS]);
 
 /** A separate intent namespace preserves the shipped text/note patch and its
@@ -36,6 +37,10 @@ export function normalizeNativePlanningIntent(value: unknown): JsonObject {
     if (!FIELDS.has(field)) throw new AuthorityStoreProtocolError(`Todo planning update does not own ${field}`);
     if ((TODO_WORK_REQUIREMENT_FIELDS as readonly string[]).includes(field)) continue;
     if ((TODO_OWNERSHIP_INTENT_FIELDS as readonly string[]).includes(field)) continue;
+    if (field === "append_explore_result_node_refs") {
+      intent[field] = normalizeTodoWorkRequirements({explore_result_node_refs: value}).explore_result_node_refs;
+      continue;
+    }
     if (field === "priority") {
       intent.priority = normalizeTodoPriority(value);
       continue;
@@ -87,11 +92,15 @@ export function planNativeTodoUpdate(todo: JsonObject, intent: JsonObject,
     context: {goal_id: head.goal_id, role: todo.role, actor_agent_id: actor,
       registered_agents: [...agents], items: head.todos,
       monitor_observation: observation ?? null, enforce_monitor_boundedness: observation === undefined}});
-  if ((planned.target_status === "done" && kind === "planning") ||
+  // Evidence from the just-completed work may be attached at its ordinary
+  // writeback. This changes no lifecycle field and retains normal admission.
+  const evidenceOnly = todo.status === "done" && isExploreReferenceAppend(intent);
+  if ((planned.target_status === "done" && kind === "planning" && !evidenceOnly) ||
       (planned.monitor_poll_transition != null && observation === undefined)) {
     throw new AuthorityStoreProtocolError("native planning update cannot complete work or commit a Monitor observation");
   }
   const updates = requireJsonObject(planned.metadata_updates, "Todo planning metadata updates");
+  if (evidenceOnly) return {updates: {explore_result_node_refs: updates.explore_result_node_refs}};
   if (planned.monitor_poll_transition != null) {
     updates.material_change_generation = requireJsonObject(planned.monitor_poll_transition, "Monitor transition").material_change_generation;
   }

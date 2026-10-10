@@ -64,10 +64,24 @@ def qualify(source: str, root: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute-public-provider", action="store_true")
-    parser.add_argument("--source", required=True)
+    parser.add_argument("--source")
     args = parser.parse_args()
     if not args.execute_public_provider:
-        parser.error("--execute-public-provider is required for anonymous public GETs")
+        # The public fleet must exercise default-off refusal without fetching a
+        # source. The owning CLI rejects before opening even the absent plan.
+        with tempfile.TemporaryDirectory(prefix="lxe-off-") as folder:
+            result = subprocess.run([sys.executable, "-m", "loopx.entrypoint",
+                "external-evidence", "execute", "--plan-json",
+                str(Path(folder) / "absent.json"), "--format", "json"],
+                capture_output=True, text=True, timeout=30)
+            payload = json.loads(result.stdout)
+            assert result.returncode == 1, payload
+            assert "--execute is required" in payload["error"], payload
+        print(json.dumps({"ok": True, "default_off_refusal_verified": True,
+            "provider_executed": False, "live_journey_qualified": False}))
+        return
+    if not args.source:
+        parser.error("--source is required with --execute-public-provider")
     with tempfile.TemporaryDirectory(prefix="lxe-") as folder:
         print(json.dumps(qualify(args.source, Path(folder)), sort_keys=True))
 

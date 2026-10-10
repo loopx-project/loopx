@@ -6,7 +6,7 @@ import {dirname, join, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {claimFileMutationLock, mutationLockOwner, releaseFileMutationLock,
+import {appendJsonLineSync, claimFileMutationLock, mutationLockOwner, releaseFileMutationLock,
   releaseFileMutationLockClaim, withFileMutationLock, type FileMutationLockClaim} from "../effect_runtime_io.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireLocalAuthorityRuntimeRoot} from "../coordination/local_authority_provider.ts";
@@ -100,8 +100,8 @@ function runPath(value: unknown, runsDir: string, extension: string): string {
   return path;
 }
 
-function writeSynced(path: string, text: string, append = false): void {
-  const fd = openSync(path, append ? "a" : "w", 0o600);
+function writeSynced(path: string, text: string): void {
+  const fd = openSync(path, "w", 0o600);
   try { writeFileSync(fd, text, {encoding: "utf8"}); fsyncSync(fd); }
   finally { closeSync(fd); }
 }
@@ -277,7 +277,7 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
       try {
         writeSynced(jsonPath, JSON.stringify(record, null, 2) + "\n");
         writeSynced(markdownPath, requireNonEmptyString(request.markdown, "checkpoint Markdown"));
-        writeSynced(indexPath, JSON.stringify(row) + "\n", true);
+        appendJsonLineSync(indexPath, row);
       } catch { unknown("checkpoint append outcome is uncertain"); }
       return {ok: true, replayed: false, context, json_path: jsonPath, markdown_path: markdownPath};
     });

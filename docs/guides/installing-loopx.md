@@ -16,6 +16,7 @@ Choose one installation owner and keep it authoritative:
 | --- | --- | --- | --- |
 | Normal release | Python package environment | `python3 -m pip install loopx` | `loopx update apply` or the manual pip sequence below |
 | Isolated CLI on an externally managed machine | `pipx` | `pipx install loopx` | `pipx upgrade loopx`, then refresh LoopX host material |
+| Existing uv tool environment | `uv` | `uv tool install loopx` | `uv tool upgrade loopx`, then refresh LoopX host material |
 | Contributor or source qualification | Git checkout | clone/fetch plus `scripts/install-local.sh` | update the checkout explicitly, rerun the installer, validate `loopx-canary` before promotion |
 | No-clone recovery fallback | LoopX archive snapshot | published archive installer | `loopx update apply` |
 
@@ -40,6 +41,20 @@ Upgrading from an older Node 22 installation requires restarting the managed
 runtime with `loopx doctor --restart-runtime` after the new Node is on `PATH`.
 SQLite remains opt-in and checks the actual embedded SQLite version before
 opening authority state.
+
+A managed runtime that cannot publish its startup locator returns the existing
+safe filesystem/lock diagnostic code, such as `mutation_lock_timeout`,
+`io_is_directory`, or Windows `io_permission_denied` for an occupied locator
+directory, instead of only an exit status. The message does not echo
+locator paths, tokens or Node stack traces. Inspect the named local ownership
+or filesystem problem before retrying; the diagnostic neither removes a live
+owner's lock nor repairs a foreign locator. It does not identify every possible
+startup crash: an exit without a typed envelope remains `runtime_exited_before_ready`.
+
+中文：启动 locator 发布失败会返回既有文件系统/锁诊断码，不回显路径、token 或
+Node 堆栈。先核对本机对应的占用或文件系统问题；诊断不会删除活进程持有的锁、
+修复未知 locator，也不证明所有启动退出都已归因。没有 typed envelope 的退出仍
+保留 `runtime_exited_before_ready`。
 
 The CI and release lanes use Node.js 24 LTS. Node.js 26 remains a non-blocking
 forward-compatibility probe and is not a supported-version promise. After the
@@ -67,6 +82,72 @@ pipx install loopx
 loopx workflow-skills --install
 loopx doctor
 ```
+
+## macOS service identity and workspace selection
+
+Use the existing `scripts/macos-dashboard-launchagent.sh` from a matching
+checkout to manage the status and Chat services. `LOOPX_BIN_DIR` selects the
+single installed CLI owner; the helper asks that command's installation-only
+doctor for its Python executable and service identity. It does not install a
+second model runner or read registered projects to qualify the package.
+
+```bash
+LOOPX_GLOBAL_REGISTRY="$HOME/.loopx/registry.global.json" \
+LOOPX_CHAT_CODEX_HOME="$HOME/.codex" \
+LOOPX_CHAT_SCAN_PATHS_JSON='["/absolute/path/to/project-one", "/absolute/path/to/project-two"]' \
+bash scripts/macos-dashboard-launchagent.sh install
+bash scripts/macos-dashboard-launchagent.sh status
+```
+
+The generated Chat plist preserves the registry, selected Codex home and
+workspace directory array across `install`/`restart`; an explicit environment
+override changes that selection. Paths must be existing absolute directories;
+up to 32 are accepted. Selection enables discovery, while Core authorization
+still owns conversation grants. An empty array retains the CLI's default
+scan behavior. Existing plists without a workspace array also retain that
+behavior until an operator explicitly selects directories. Missing or malformed
+selected paths fail before either plist is replaced. The resolved registry is
+passed verbatim, including when its filename differs from the default global
+registry filename.
+
+For an existing Chat service with an explicit `--runtime-root`, set
+`LOOPX_CHAT_RUNTIME_ROOT` to that same absolute directory at its first managed
+install. Optional `LOOPX_CHAT_IDLE_TIMEOUT_SECONDS` and
+`LOOPX_CHAT_HARD_TIMEOUT_SECONDS` preserve its positive execution timeouts.
+The helper records these selections in the Chat plist and retains them on
+later installs when overrides are omitted, including legacy explicit command
+arguments. Without a selection, the CLI defaults remain in effect.
+
+The Chat root is independent of the global status registry. Selecting it does
+not copy sessions, grant workspace access or change the status service's root.
+Invalid selections fail before either plist changes. Quiesce the previous owned
+Chat listener before switching to launchd, and read back the original Sessions
+and one consumer per App. A generated plist alone does not qualify recovery
+after logout or reboot.
+
+The helper reads the full `/status.json` contract with a one-second connection
+deadline and a 15-second total deadline. A responding feed that takes longer
+than five seconds can therefore still show its schema and write-API setting.
+HTTP failures and feeds that miss the deadline remain unavailable; old schemas
+still carry the restart warning. This bounded diagnostic allowance does not
+reduce feed latency or qualify sustained service performance.
+
+Snapshot identities retain their release id and source revision. A non-editable
+wheel instead exposes an additive `package_fingerprint` in the existing
+`loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package
+files, including Python, TypeScript and frontend assets. Editable, unowned,
+redirected or incomplete packages cannot claim this fingerprint. It distinguishes
+same-version artifacts for local service reuse; it does not certify a release,
+publisher or source commit. Both services capture their identity at startup, so
+an in-place upgrade cannot make an old process report the replacement's identity.
+An unqualified install fails before the helper stops an existing service.
+
+After upgrading with the chosen package manager, use `restart` to replace the
+owned local services and verify the exact running Chat identity. `stop` unloads
+them; `uninstall` also removes their two plists. Restoring a prior package through
+the same installation owner and restarting provides rollback. Source and
+synthetic canary evidence do not establish actual login-after-reboot or provider
+message acceptance.
 
 ## Native Windows PowerShell 7
 

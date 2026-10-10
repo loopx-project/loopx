@@ -1,5 +1,7 @@
 mod bundled_runtime;
 mod maintenance;
+mod runtime_selection;
+mod service_endpoints;
 mod services;
 mod update_backup;
 
@@ -124,7 +126,7 @@ fn boot_failure_message(error: &str) -> String {
     // The pairing decision is not a failure: the window is waiting for the
     // operator to choose between updating the App and aligning the CLI.
     if error == "runtime_pairing_required" {
-        return "本机 LoopX 运行时与 App 自带的运行时不一致，请在上方选择「更新 App 与运行时」或「回退 CLI 到本 App 版本」后继续。"
+        return "请选择继续使用已安装的运行时，或更新 App；选择后同一个窗口会继续打开工作区。"
             .to_string();
     }
     let is_stable_code = !error.is_empty()
@@ -180,10 +182,12 @@ pub fn run() {
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
     // and backend together instead of reusing a separately built asset bundle.
+    let endpoints = service_endpoints::ServiceEndpoints::allocate(!cfg!(dev))
+        .expect("could not allocate LoopX loopback endpoints");
     #[cfg(dev)]
     let web_origin = "http://127.0.0.1:5173".to_string();
     #[cfg(not(dev))]
-    let web_origin = "http://127.0.0.1:8767/chat/".to_string();
+    let web_origin = endpoints.workspace_origin();
     let services = Arc::new(Mutex::new(None::<ServiceSet>));
     let services_for_setup = Arc::clone(&services);
     let navigation_origin: Url = web_origin.parse().expect("valid desktop origin");
@@ -276,7 +280,7 @@ pub fn run() {
                             }
                         }
                     }
-                    match maintenance::start_services(&handle) {
+                    match maintenance::start_services(&handle, &endpoints) {
                         Ok(None) => {
                             std::thread::sleep(std::time::Duration::from_millis(200));
                             continue;
@@ -308,9 +312,26 @@ pub fn run() {
                                         window.eval(format!("window.loopxBootFailed({encoded})"));
                                 }
                             }
-                            for _ in 0..10 {
+                            // A blocked runtime choice is not work to repeat
+                            // every two seconds. Keep recovery responsive while
+                            // bounding Core doctor probes of an unchanged CLI.
+                            let rounds = if matches!(
+                                error.as_str(),
+                                "runtime_identity_unavailable"
+                                    | "runtime_pairing_required"
+                                    | "runtime_selection_invalid"
+                                    | "runtime_selection_unavailable"
+                            ) {
+                                150
+                            } else {
+                                10
+                            };
+                            for _ in 0..rounds {
                                 if shutting_down_for_setup.load(Ordering::Acquire) {
                                     return;
+                                }
+                                if maintenance::reconnect_requested(&handle) {
+                                    break;
                                 }
                                 std::thread::sleep(std::time::Duration::from_millis(200));
                             }
@@ -506,20 +527,20 @@ mod tests {
     #[test]
     fn maintenance_acl_accepts_both_transports_only_on_the_app_origin() {
         use tauri::utils::acl::RemoteUrlPattern;
-        let page: tauri::Url = "http://127.0.0.1:8767/chat/".parse().unwrap();
+        let page: tauri::Url = "http://127.0.0.1:49123/chat/".parse().unwrap();
         let old: RemoteUrlPattern = page.to_string().parse().unwrap();
-        assert!(!old.test(&"http://127.0.0.1:8767".parse().unwrap()));
+        assert!(!old.test(&"http://127.0.0.1:49123".parse().unwrap()));
         let pattern: RemoteUrlPattern = super::maintenance_origin(&page).parse().unwrap();
         for allowed in [
-            "http://127.0.0.1:8767",
-            "http://127.0.0.1:8767/chat/?goal=x",
+            "http://127.0.0.1:49123",
+            "http://127.0.0.1:49123/chat/?goal=x",
         ] {
             assert!(pattern.test(&allowed.parse().unwrap()), "{allowed}");
         }
         for denied in [
-            "http://127.0.0.1:8766/chat/",
-            "http://localhost:8767/chat/",
-            "https://127.0.0.1:8767/chat/",
+            "http://127.0.0.1:8767/chat/",
+            "http://localhost:49123/chat/",
+            "https://127.0.0.1:49123/chat/",
             "https://example.com/chat/",
         ] {
             assert!(!pattern.test(&denied.parse().unwrap()), "{denied}");
@@ -532,7 +553,7 @@ mod tests {
         let style = include_str!("../../static/boot.css");
         let script = include_str!("../../static/boot.js");
 
-        assert!(html.contains("正在启动本地控制面"));
+        assert!(html.contains("正在打开 LoopX"));
         assert!(html.contains("aria-busy=\"true\""));
         assert!(html.contains("aria-live=\"polite\""));
         assert!(html.contains("class=\"status-dots\""));
@@ -540,21 +561,12 @@ mod tests {
         assert!(style.contains("@keyframes mark-breathe"));
         assert!(style.contains("prefers-reduced-motion: reduce"));
         assert!(style.contains("main[data-state=\"error\"] .progress::after"));
-        assert!(style.contains("main[data-state=\"decision\"] .progress"));
         assert!(style.contains("--warning: #f5a623"));
         assert!(script.contains("desktop_update_status"));
         assert!(script.contains("window.loopxBootRetrying"));
         // Services connect concurrently, so the phase names the loopback set
         // until one connection outlives its peer and can be named on its own.
-        assert!(script.contains("正在连接本地服务"));
-        assert!(script.contains("正在连接状态服务"));
-        assert!(script.contains("正在连接管家对话服务"));
-        // The first screen must offer both operator choices, not a repair path
-        // that silently replaces the CLI runtime.
-        assert!(html.contains("id=\"pairing-align\""));
-        assert!(html.contains("回退 CLI"));
-        assert!(script.contains("runtime_pairing_required"));
-        assert!(script.contains("\"align_runtime\""));
+        assert!(script.contains("正在打开工作区"));
         // The boot surface must derive its error projection from the polled
         // snapshot itself and name the known fresh-Mac installer failure.
         assert!(script.contains("runtime_install_exit_2"));
@@ -564,11 +576,11 @@ mod tests {
     #[test]
     fn boot_failure_message_appends_stable_codes_only() {
         use super::boot_failure_message;
-        // The pairing decision names both operator choices instead of the
+        // The pairing decision names the forward choices instead of the
         // generic startup failure text.
         let pairing = boot_failure_message("runtime_pairing_required");
-        assert!(pairing.contains("更新 App 与运行时"));
-        assert!(pairing.contains("回退 CLI 到本 App 版本"));
+        assert!(pairing.contains("已安装的运行时"));
+        assert!(pairing.contains("更新 App"));
         assert!(!pairing.contains("错误码"));
         assert_eq!(
             boot_failure_message("runtime_install_exit_2"),

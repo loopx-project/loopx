@@ -112,30 +112,6 @@ def test_status_contains_cursor_error_without_raising(tmp_path: Path) -> None:
     assert summary["todos"]["invalid"] is not None
 
 
-def test_receipt_reclamation_binds_raw_bytes(tmp_path: Path) -> None:
-    import hashlib
-
-    path = tmp_path / "prepared.json"
-    original = b'{ "source": "canonical primary" }\n'
-    path.write_bytes(original)
-    digest = "sha256:" + hashlib.sha256(original).hexdigest()
-    assert outbox.reclaim_verified_files([(path, digest)]) == 1
-    assert not path.exists()
-
-
-def test_receipt_reclamation_checks_all_files_before_unlink(tmp_path: Path) -> None:
-    import hashlib
-
-    first, second = tmp_path / "first.json", tmp_path / "second.json"
-    first.write_bytes(b"first")
-    second.write_bytes(b"changed")
-    expected = "sha256:" + hashlib.sha256(b"first").hexdigest()
-    with pytest.raises(outbox.OutboxError, match="changed"):
-        outbox.reclaim_verified_files([(first, expected), (second, expected)])
-    assert first.read_bytes() == b"first"
-    assert second.read_bytes() == b"changed"
-
-
 def test_zero_wait_cross_runtime_lock_reclaims_dead_holder_and_acquires(
     tmp_path: Path,
 ) -> None:

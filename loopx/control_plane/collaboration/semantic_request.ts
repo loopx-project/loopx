@@ -25,7 +25,7 @@ function lines(value: unknown, label: string): string[] {
   return value.map((item, index) => text(item, `${label}[${index}]`, 1000));
 }
 
-function workspaceRef(value: unknown): string {
+export function workspaceRef(value: unknown): string {
   const ref = text(value, "input.ref", 512);
   // References never fetch URLs or expose a sender's absolute filesystem path.
   if (ref.startsWith("/") || ref.includes("\\") || ref.includes(":")
@@ -86,7 +86,7 @@ export function normalizeCollaborationBrief(value: unknown): JsonObject {
 
 export function normalizeCollaborationRequest(value: unknown): JsonObject {
   const request = requireJsonObject(value, "request");
-  exactKeys(request, ["goal_id", "agent_id", "brief"], ["goal_id", "agent_id"]);
+  exactKeys(request, ["goal_id", "agent_id", "brief", "execution_binding_id"], ["goal_id", "agent_id"]);
   const result: JsonObject = {};
   for (const key of ["goal_id", "agent_id"]) {
     const id = requireNonEmptyString(request[key], key);
@@ -94,6 +94,14 @@ export function normalizeCollaborationRequest(value: unknown): JsonObject {
     result[key] = id;
   }
   if (request.brief !== undefined) result.brief = normalizeCollaborationBrief(request.brief);
+  // Selection is data, not a grant. The host separately rechecks the source,
+  // operator binding, canonical task, acceptance and governed Turn admission.
+  if (request.execution_binding_id !== undefined) {
+    if (!result.brief || typeof request.execution_binding_id !== "string" || !ID.test(request.execution_binding_id)) {
+      throw new EffectRuntimeRequestError("execution selection requires an exact binding and semantic brief");
+    }
+    result.execution_binding_id = request.execution_binding_id;
+  }
   return result;
 }
 

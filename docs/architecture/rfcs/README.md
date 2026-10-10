@@ -116,6 +116,14 @@ failure leaves the generated files untouched.
 
 ## Control-Plane Kernel, State, And Migration
 
+- [Complete State Recovery and Controlled Reactivation v0](complete-state-recovery-v0.md)
+  ([中文版](complete-state-recovery-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; backup creation and configuration-only
+    isolated recovery exist, but complete-state verification and reactivation do not.
+  - **Current boundary:** M1 is read-only archive verification, safe extraction
+    into a new inert workspace and an isolated audit with
+    `execution_authority_granted=false`; no activation or live-state mutation.
+
 - [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md)
   ([中文版](composable-state-machines-recovery-verification-v0.zh-CN.md))
   - **Delivery on `main`:** Design only; existing local conformance is not full composition qualification.
@@ -392,6 +400,13 @@ failure leaves the generated files untouched.
     shipped as an integrated path.
 
 ## Operator Experience And Observability
+
+- [Personal Follow-through historical proposal](personal-follow-through-v0.md)
+  ([中文版](personal-follow-through-v0.zh-CN.md))
+  - **Current boundary:** Design ownership and acceptance belong to the
+    [capable manager](capable-manager-semantic-handoff-v0.md). The
+    [Lark personal profile](../../product/use-cases/office-operations/personal-follow-through.md)
+    retains source interpretation and evaluation; the installed journey remains unqualified.
 
 - [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md)
   - **Delivery on `main`:** Core slice implemented.

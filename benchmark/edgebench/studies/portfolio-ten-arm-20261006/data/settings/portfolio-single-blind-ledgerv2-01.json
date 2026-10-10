@@ -1,0 +1,101 @@
+{
+  "runner_argv": [
+    "--task",
+    "portfolio_risk_calibration",
+    "--run-id",
+    "portfolio-single-blind-ledgerv2-01",
+    "--worker",
+    "single",
+    "--feedback",
+    "blind",
+    "--model",
+    "gpt-6.1-sol",
+    "--effort",
+    "xhigh",
+    "--timeout",
+    "64800",
+    "--eval-interval",
+    "300",
+    "--submission-cooldown",
+    "120"
+  ],
+  "deployment_parameters_omitted": [
+    "tasks-dir",
+    "log-dir",
+    "judge-url",
+    "api-proxy-url",
+    "credential-source"
+  ],
+  "images": {
+    "judge": {
+      "image_id": "sha256:59c0ceb1e9912cdcc5f1f0859266c1555a8324ede52b7101fb6e9aaee7070755",
+      "native_tag": "edgebench-ledger-v2.judge.portfolio_risk_calibration:59c0ceb1e9912cdc"
+    },
+    "work": {
+      "image_id": "sha256:b159da9b7eb2beb71ee59bf9f9752bc1c84f744594c11e204330dfedabae3399",
+      "native_tag": "edgebench-ledger-v2.work.portfolio_risk_calibration:b159da9b7eb2beb7"
+    }
+  },
+  "evaluator_cohort": "ledger-v2",
+  "loopx_execution": {
+    "mode": "single",
+    "task_entry": null,
+    "replan_after_completed_todos": null,
+    "explore_harness_profile": null,
+    "child_execution_authority": null
+  },
+  "source_derived_defaults": {
+    "worker_cpu_limit": 4,
+    "worker_memory_limit": "16g",
+    "judge_cpu_limit": 4,
+    "judge_memory_limit": "8g",
+    "turn_timeout_seconds": null
+  },
+  "settings_evidence": {
+    "runner_argv": "captured-launch-command-allowlist",
+    "images": "captured-launch-image-inventory",
+    "runner": "terminal-runtime-receipt",
+    "worker_profile": "installed-worker-profile",
+    "loopx_execution": "pinned-runner-source",
+    "source_derived_defaults": "pinned-runner-source"
+  },
+  "unknown": [
+    "codex_binary_digest",
+    "sforge_distribution_digest",
+    "image_remote_repository",
+    "effective_token_spend",
+    "effective_cost",
+    "random_seed"
+  ],
+  "feedback_contract": "Local validation and model API; no judge URL, token or submission command; host samples withheld from worker.",
+  "run_id": "portfolio-single-blind-ledgerv2-01",
+  "case_id": "portfolio_risk_calibration",
+  "arm_id": "single-blind",
+  "attempt": 1,
+  "source_study_id": "portfolio-worker-matrix-ledger-v2",
+  "source_benchmark_id": "edgebench-ledger-v2",
+  "runner": {
+    "worker": "single",
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh",
+    "timeout_seconds": 64800,
+    "feedback": "blind",
+    "internet": false,
+    "eval_interval": 300,
+    "submission_cooldown": 120,
+    "loopx_commit": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "runner_commit": "91a4672164238fc2ddc394d61901910984c5e84a",
+    "task_sha256": "d07eb2e3fd7d0984dd59c5424eab8d2364a035a150feedf039316d6914701053"
+  },
+  "worker_profile": {
+    "profile": "single",
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "xhigh",
+    "timeout_seconds": 64800,
+    "stop_hook": false,
+    "outer_resume": false,
+    "explore_graph": false,
+    "explore_harness": false,
+    "feedback": "blind"
+  }
+}

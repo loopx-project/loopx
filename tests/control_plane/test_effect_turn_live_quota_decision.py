@@ -629,10 +629,7 @@ def test_turn_start_read_is_required_before_ordinary_work(tmp_path: Path) -> Non
     )
 
     required_reads = packet["interaction_contract"]["agent_channel"]["required_reads"]
-    assert (
-        required_reads
-        == packet["interaction_contract"]["cli_channel"]["required_reads"]
-    )
+    assert "required_reads" not in packet["interaction_contract"]["cli_channel"]
     assert required_reads == [
         {
             "kind": "operator_inbox",
@@ -643,6 +640,8 @@ def test_turn_start_read_is_required_before_ordinary_work(tmp_path: Path) -> Non
             "reason": "turn-start hook synchronized new operator inbox evidence",
             "source": "turn_start_capability_hook",
             "ordering": "before_work",
+            "hook_id": "operator_inbox.turn_start_sync_0",
+            "capability_id": "operator-inbox",
         }
     ]
     assert packet["interaction_contract"]["user_channel"]["notify"] == "NOTIFY"
@@ -725,7 +724,7 @@ def test_unsettled_inbox_material_preempts_on_following_turn(
 
     assert packet["effective_action"] == "operator_inbox_material_review_due"
     assert packet["work_lane_contract"]["priority_preemption"] is True
-    assert "required_reads" not in packet["interaction_contract"]["agent_channel"]
+    assert packet["interaction_contract"]["agent_channel"]["required_reads"] == []
 
 
 def test_fresh_direct_reply_still_preempts_selected_work(
@@ -880,7 +879,7 @@ def test_turn_start_read_is_not_projected_for_empty_or_failed_dispatch(
             turn_start_hook_dispatch=dispatch,
         )
 
-        assert "required_reads" not in packet["interaction_contract"]["agent_channel"]
+        assert packet["interaction_contract"]["agent_channel"]["required_reads"] == []
         assert "required_reads" not in packet["interaction_contract"]["cli_channel"]
 
 
@@ -901,8 +900,10 @@ def test_duplicate_required_inbox_routes_project_one_public_safe_read(
         turn_start_hook_dispatch=dispatch,
     )
 
-    assert len(packet["required_reads"]) == 1
-    assert packet["required_reads"][0]["command"] == command
+    reads = packet["interaction_contract"]["agent_channel"]["required_reads"]
+    assert len(reads) == 1
+    assert reads[0]["command"] == command
+    assert "required_reads" not in packet
 
 
 def test_prior_closeout_identity_conflict_fails_closed(
