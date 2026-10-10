@@ -3,9 +3,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +28,14 @@ from .pi_goal_mode.installation import (
 )
 from .slash_command_files import (
     CommandFacadeSpec,
+    MANAGED_MARKER_PREFIX,
     front_matter as _front_matter,
     install_skill_facade as _install_skill_facade,
     managed_marker as _managed_marker,
     retire_managed_file as _retire_managed_file,
     retire_status as _retire_status,
     skill_body as _skill_body,
+    skill_facade_content,
     target_status as _target_status,
 )
 from .skill_install_readback import retire_duplicate_managed_skills
@@ -307,6 +311,94 @@ def _command_skill_content(spec: CommandFacadeSpec, *, surface: str) -> str:
         surface=surface,
         front_matter_name=str(spec["name"]),
     )
+
+
+class SkillFacadeReadbackStatus(str, Enum):
+    """Local filesystem diagnostics; these do not classify host readiness."""
+
+    READY = "ready"
+    MISSING = "missing"
+    STALE = "stale"
+    USER_OWNED = "user_owned"
+    UNREADABLE = "unreadable"
+
+
+_MAX_SKILL_FACADE_READ_BYTES = 1024 * 1024
+
+
+def inspect_skill_facades(skills_dir: Path) -> dict[str, dict[str, Any]]:
+    """Read the canonical facades without changing files or running a host.
+
+    Compare the installer's current rendering, allowing its existing cli_bin
+    parameter to vary consistently. No independent phrase list defines freshness.
+    """
+    cli_placeholder = "__LOOPX_FACADE_CLI_PARAMETER__"
+    summaries: dict[str, dict[str, Any]] = {}
+    for spec in _command_prompt_specs(cli_bin=cli_placeholder, include_legacy_aliases=False):
+        name = str(spec["name"])
+        path = skills_dir / name / "SKILL.md"
+        status = SkillFacadeReadbackStatus.MISSING
+        reason = "The managed command facade is missing; refresh this host's surface."
+        exists = False
+        configured_cli_bin = None
+        try:
+            with path.open("rb") as handle:
+                content = handle.read(_MAX_SKILL_FACADE_READ_BYTES + 1)
+            exists = True
+            if len(content) > _MAX_SKILL_FACADE_READ_BYTES:
+                status = SkillFacadeReadbackStatus.UNREADABLE
+                reason = (
+                    "The command facade exceeds the 1 MiB diagnostic read limit; "
+                    "reduce its size or resolve the command-name collision. The file is preserved."
+                )
+                text = None
+            else:
+                text = content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+            if text is None:
+                pass
+            elif MANAGED_MARKER_PREFIX not in text:
+                status = SkillFacadeReadbackStatus.USER_OWNED
+                reason = (
+                    "A user-owned file occupies this command; the installer preserves it. "
+                    "Resolve the name collision before installing the managed facade."
+                )
+            else:
+                template = skill_facade_content(spec)
+                parts = template.split(cli_placeholder)
+                pattern = re.escape(parts[0])
+                for index, part in enumerate(parts[1:]):
+                    pattern += (
+                        r"(?P<cli_bin>[^\r\n]+?)" if index == 0 else r"(?P=cli_bin)"
+                    ) + re.escape(part)
+                match = re.fullmatch(pattern, text)
+                if match is not None:
+                    status = SkillFacadeReadbackStatus.READY
+                    configured_cli_bin = match.groupdict().get("cli_bin")
+                    reason = "The file matches the current managed facade; runtime skill loading is unverified."
+                else:
+                    status = SkillFacadeReadbackStatus.STALE
+                    reason = "The managed facade differs from the current installer; refresh this host's surface."
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeError):
+            exists = True
+            status = SkillFacadeReadbackStatus.UNREADABLE
+            reason = "The command facade cannot be read as UTF-8; check its file type and read access."
+        ready = status is SkillFacadeReadbackStatus.READY
+        summaries[name] = {
+            "path": str(path),
+            "candidate_paths": [str(path)] if exists else [],
+            "route_count": int(exists),
+            "route_conflict": False,
+            "source_root": str(skills_dir) if exists else None,
+            "managed_externally": False,
+            "exists": exists,
+            "required_phrases": ready,
+            "readback_status": status.value,
+            "reason": reason,
+            "cli_bin": configured_cli_bin,
+        }
+    return summaries
 
 
 def materialize_loopx_entry_skill(

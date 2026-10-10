@@ -245,3 +245,15 @@ def test_frontend_source_inputs_ignore_placeholder_checkout_line_endings(tmp_pat
 
     asset.write_bytes(b"<svg><path/></svg>\n")
     assert builder.contract.source_inputs(tmp_path) != original
+
+
+@pytest.mark.parametrize("name", ["contract.ts", "contract.json"])
+def test_provider_contract_update_invalidates_packaged_frontend(source, tmp_path, name):
+    # A changed caller contract must not ship with previously built controls.
+    contract = tmp_path / "loopx/zcode_goal_mode" / name
+    contract.parent.mkdir(parents=True)
+    contract.write_text("original contract", encoding="utf-8")
+    builder.build(None)
+    contract.write_text("changed contract", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="source changed"):
+        validate_bundle(builder.OUTPUT, source_root=tmp_path)

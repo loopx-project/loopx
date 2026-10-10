@@ -1,0 +1,14 @@
+.personal-zcode-goal > summary, .personal-zcode-diagnostics > summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; font-size: 13px; font-weight: 500; }
+.personal-zcode-goal label { display: grid; gap: 6px; margin-block: 12px; font-size: 12px; color: var(--pw-muted, #666); }
+.personal-zcode-goal input, .personal-zcode-goal select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; padding: 8px 10px; background: var(--pw-surface, #fff); color: var(--pw-text, #171717); font: inherit; }
+.personal-zcode-goal .personal-zcode-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-block: 12px; }
+.personal-zcode-goal .personal-zcode-actions > button { min-height: 44px; margin-top: 0; }
+.personal-detail-card.personal-zcode-goal dl > div { grid-template-columns: minmax(110px, .8fr) minmax(0, 1fr); }
+.personal-zcode-goal .personal-zcode-help { font-size: 12px; color: var(--pw-muted, #666); }
+.personal-zcode-goal .personal-zcode-error { color: var(--pw-red, #b42318); }
+.personal-zcode-goal dd { overflow-wrap: anywhere; }
+.personal-zcode-goal :is(summary, input, select, button):focus-visible { outline: 2px solid var(--pw-text, #171717); outline-offset: 3px; }
+.personal-zcode-diagnostics { border-top: 1px solid var(--pw-line, #ebebeb); margin-top: 12px; }
+
+.personal-zcode-model > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: 12px; }
+.personal-zcode-model > button { min-height: 44px; }

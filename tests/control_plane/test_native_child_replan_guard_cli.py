@@ -67,6 +67,8 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, tod
         "domain": "synthetic-replan",
         "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
         "quota": {"compute": 1.0, "window_hours": 24},
+        # This history contains no effective-Turn settlement witnesses.
+        "execution_profile": {"replan_after_completed_todos": 5},
         "spawn_policy": {"mode": "multi_subagent", "allowed": True, "max_children": 6},
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
     }]}))

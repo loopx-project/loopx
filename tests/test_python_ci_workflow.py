@@ -18,9 +18,12 @@ WORKFLOW = (WORKFLOW_ROOT / ".github/workflows/python-tests.yml").read_text(enco
 
 def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     kernel = WORKFLOW.split("  kernel-static-checks:\n", 1)[1].split(
+        "  dashboard-browser:\n", 1,
+    )[0]
+    dashboard = WORKFLOW.split("  dashboard-browser:\n", 1)[1].split(
         "  dashboard-acceptance:\n", 1,
     )[0]
-    dashboard = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split(
+    coverage = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split(
         "  checks:\n", 1,
     )[0]
     aggregate = WORKFLOW.split("  checks:\n", 1)[1].split(
@@ -40,6 +43,11 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     assert int(dashboard_timeout.group(1)) >= 25
     assert "python -m ruff check" not in dashboard
     assert "python -m mypy" not in dashboard
+    assert "shard: [1, 2, 3]" in dashboard
+    assert "LOOPX_PERSONAL_WORKSPACE_SHARD" in dashboard
+    assert "needs: [changes, dashboard-browser]" in coverage
+    assert "merge-dashboard-coverage.mjs" in coverage
+    assert "name: dashboard-coverage\n" in coverage
 
     assert "if: always() && needs.changes.outputs.core_tests == 'true'" in aggregate
     assert "NEEDS_JSON: ${{ toJSON(needs) }}" in aggregate
@@ -260,7 +268,7 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
     assert "workflow_dispatch:" in WORKFLOW
     assert "--force-full" in WORKFLOW
     assert "impact-shadow" not in WORKFLOW
-    assert "matrix:\n        shard: [1, 2, 3, 4]" in WORKFLOW
+    assert "matrix:\n        shard: [1, 2, 3, 4, 5, 6]" in WORKFLOW
 
 
 def test_windows_lane_rebuilds_the_frontend_without_a_usable_python3() -> None:
@@ -295,10 +303,10 @@ def test_windows_lifecycle_suite_references_existing_tests() -> None:
     ] == []
 
 
-def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
+def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
     tmp_path: Path,
 ) -> None:
-    # Real pytest-split + xdist + coverage, in four distinct checkout roots.
+    # Real pytest-split + xdist + coverage, in six distinct checkout roots.
     # Each shard alone misses a function; their union must cover the whole file.
     shard_step = WORKFLOW.split("name: Run test shard", 1)[1]
     template = shard_step.split("run: >-", 1)[1].split("      - name:", 1)[0]
@@ -307,7 +315,7 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
         if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))
     }
     seen: list[set[str]] = []
-    for shard in (1, 2, 3, 4):
+    for shard in (1, 2, 3, 4, 5, 6):
         root = tmp_path / f"checkout-{shard}"
         root.mkdir()
         (root / "ci_subject.py").write_text(
@@ -319,7 +327,9 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
             "def test_first_one():\n    assert first() == 1\n"
             "def test_first_two():\n    assert first() == 1\n"
             "def test_second_one():\n    assert second() == 2\n"
-            "def test_second_two():\n    assert second() == 2\n",
+            "def test_second_two():\n    assert second() == 2\n"
+            "def test_first_three():\n    assert first() == 1\n"
+            "def test_second_three():\n    assert second() == 2\n",
             encoding="utf-8",
         )
         (root / "pyproject.toml").write_text(
@@ -346,8 +356,8 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
         (root / ".coverage").rename(destination / ".coverage")
 
     assert all(seen)
-    assert sum(map(len, seen)) == len(set.union(*seen)) == 4
-    assert set.union(*seen) == {"test_first_one", "test_first_two", "test_second_one", "test_second_two"}
+    assert sum(map(len, seen)) == len(set.union(*seen)) == 6
+    assert set.union(*seen) == {"test_first_one", "test_first_two", "test_second_one", "test_second_two", "test_first_three", "test_second_three"}
     # Reuse the real aggregate shell commands, with a 100% synthetic oracle.
     step = WORKFLOW.split("name: Combine complete coverage", 1)[1]
     script = step.split("run: |", 1)[1].split("      - uses:", 1)[0]
@@ -355,7 +365,7 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
     script = script.replace("--fail-under=19.6", "--fail-under=100")
     root = tmp_path / "checkout-1"
     (tmp_path / "coverage-shards").rename(root / "coverage-shards")
-    for shard in (1, 2, 3, 4):
+    for shard in (1, 2, 3, 4, 5, 6):
         data = root / "coverage-shards" / f"python-coverage-{shard}" / ".coverage"
         held = data.with_name("held")
         data.rename(held)
@@ -378,7 +388,7 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
         capture_output=True, check=False,
     )
     assert missing.returncode != 0
-    assert re.search(r"shard: \[1, 2, 3, 4\]", WORKFLOW)
+    assert re.search(r"shard: \[1, 2, 3, 4, 5, 6\]", WORKFLOW)
     assert "include-hidden-files: true" in WORKFLOW
     assert "--cov-fail-under" not in template
 
@@ -437,7 +447,7 @@ def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
     assert "needs.changes.outputs.core_tests == 'true'" in producer
     aggregate = WORKFLOW.split("  checks:\n", 1)[1].split("    steps:", 1)[0]
     assert "chat-bundle-browser" in aggregate
-    for name in ("chat-bundle-browser", "kernel-static-checks", "typescript-core", "dashboard-acceptance", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
+    for name in ("chat-bundle-browser", "kernel-static-checks", "typescript-core", "dashboard-browser", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
         assert "needs: [changes, chat-bundle]" in job
         assert "name: chat-bundle-${{ github.sha }}" in job
@@ -467,7 +477,7 @@ def test_typescript_shards_select_every_test_file_exactly_once() -> None:
 
 def test_typescript_core_shards_feed_one_complete_coverage_report() -> None:
     core = WORKFLOW.split("  typescript-core:\n", 1)[1].split("  typescript-coverage:\n", 1)[0]
-    report = WORKFLOW.split("  typescript-coverage:\n", 1)[1].split("  dashboard-acceptance:\n", 1)[0]
+    report = WORKFLOW.split("  typescript-coverage:\n", 1)[1].split("  dashboard-browser:\n", 1)[0]
     assert "shard: [1, 2, 3]" in core
     assert "fail-fast: false" in core
     assert 'node-version: "22.22.3"' in core

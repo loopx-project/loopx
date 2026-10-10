@@ -176,22 +176,20 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         semantic_json_keys=("route", "turn_envelope", "effects", "boundary"),
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
-            "small": {"json": 12_500, "markdown": 300},
-            # Required vision carries the validator's complete authoring schema,
-            # executable registry-bound commands and the overflow diagnostic.
-            # Paired fixed-path output with Agent vision: 16,735 -> 17,408;
-            # added objective/evidence advice preserves all prior obligations.
-            # 18,000 leaves bounded headroom; ordinary paths remain unchanged.
-            # Keep the line, per-Todo and fixed semantic-growth guards below.
+            "small": {"json": 14_000, "markdown": 600},
+            # Pinned main/head costs match on each platform. Windows emits
+            # 13,467 / 335 small, 14,982 / 375 multi-Agent and 17,371 / 444
+            # crowded with vision. Keep the full schema, routed commands,
+            # temporal/evidence obligations and independent growth guards.
             "crowded": {"json": 18_000, "markdown": 600},
-            "multi_agent": {"json": 14_500, "markdown": 600},
+            "multi_agent": {"json": 15_500, "markdown": 600},
         },
         max_lines={
-            "small": {"json": 320, "markdown": 12},
-            # Complete Agent vision state renders in 427 lines; 440 leaves 13.
+            "small": {"json": 350, "markdown": 12},
+            # Windows complete Agent vision state renders in 444 lines.
             # Characters and per-Todo growth remain independent cost guards.
-            "crowded": {"json": 440, "markdown": 12},
-            "multi_agent": {"json": 370, "markdown": 12},
+            "crowded": {"json": 460, "markdown": 12},
+            "multi_agent": {"json": 390, "markdown": 12},
         },
         scale_axis="todo_count",
         max_json_growth_chars_per_unit=60,
@@ -486,8 +484,8 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "boundary",
         ),
         markdown_anchor=None,
-        max_chars={"json": 14_000},
-        max_lines={"json": 360},
+        max_chars={"json": 15_000},
+        max_lines={"json": 380},
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_run_once_preview",
@@ -540,7 +538,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("task_body", "quota_guard_command", "interface_budget"),
         markdown_anchor="# Heartbeat Automation Prompt",
-        max_chars={"json": 13_000, "markdown": 11_500},
+        max_chars={"json": 13_500, "markdown": 11_500},
         max_lines={"json": 58, "markdown": 155},
     ),
     CliOutputModeVariantSpec(

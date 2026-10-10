@@ -10,6 +10,7 @@ the facade dead-ends at argparse and the surface is decorative.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,11 @@ def test_agent_onboarding_setup_command_installs_the_zcode_surface(
         "HOME": str(tmp_path / "home"),
         ZCODE_HOME_ENV: str(tmp_path / "zcode"),
     }
+    if os.name == "nt":
+        env["USERPROFILE"] = env["HOME"]
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        env["PATH"] = str(Path(shutil.which("node") or "").parent)
+        env["PYTHONUTF8"] = "1"
     if "PYTHONPATH" in os.environ:  # keep hermetic when run from a worktree
         env["PYTHONPATH"] = os.environ["PYTHONPATH"]
 
@@ -73,6 +79,7 @@ def test_zcode_home_env_override_wins_over_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv(ZCODE_HOME_ENV, str(tmp_path / "custom-zcode"))
     assert zcode_home() == tmp_path / "custom-zcode"
     monkeypatch.delenv(ZCODE_HOME_ENV, raising=False)
@@ -145,11 +152,8 @@ def test_agent_type_catalog_and_scheduler_binding() -> None:
     }
 
 
-def test_activation_uses_skill_facade_loop_without_claiming_unintegrated_native_binding() -> None:
-    """ZCode integrates via the skill facade while native Goal Mode and
-    Automations bindings are not yet connected. The packet must accurately
-    describe the quota-gated agent turn loop without claiming unintegrated
-    native bindings."""
+def test_activation_keeps_skill_facade_default_and_exposes_explicit_native_opt_in() -> None:
+    """The existing skill loop stays default; a separate native CLI binding is opt-in."""
     packet = build_host_loop_activation_packet(
         agent_type=HOST_SURFACE,
         goal_id="surface-goal",
@@ -161,10 +165,41 @@ def test_activation_uses_skill_facade_loop_without_claiming_unintegrated_native_
     assert packet["host_mutation"]["host_loop_primitive"] is None
     assert packet["host_mutation"]["loop_driver"] == "agent_cli_turn_loop"
     assert (
-        "LoopX is currently integrated with ZCode via skill facade"
+        "The default ZCode entry remains the LoopX skill facade"
         in packet["host_mutation"]["missing_host_tool_gate"]
     )
     assert packet["setup_command"] == _surface_install_command(HOST_SURFACE, "loopx", ".")
     assert "quota should-run" in " ".join(packet["activation_steps"])
     assert "quota should-run" in _start_instruction(HOST_SURFACE)
     assert packet["entry_command_hint"] == "the LoopX skill installed in ZCODE_HOME/skills"
+
+    native = packet["native_goal_provider"]
+    assert native["default_off"] is True
+    assert native["execution_mode"] == "managed_runtime"
+    assert native["requires_explicit_host_selection"] is True
+    assert set(native["commands"]) == {"bind", "start", "pause", "resume", "stop", "status"}
+    assert "zcode-goal bind --goal-id surface-goal --agent-id probe-agent" in native["commands"]["bind"]
+    assert "no per-model-call token limit" in native["quota_boundary"]
+
+
+@pytest.mark.parametrize("agent_id", [None, "unregistered-agent"])
+def test_legacy_skill_activation_does_not_advertise_an_unregistered_native_actor(agent_id: str | None) -> None:
+    packet = build_host_loop_activation_packet(
+        agent_type=HOST_SURFACE, goal_id="surface-goal", agent_id=agent_id,
+        registered_agents=[],
+    )
+    assert packet["activation_allowed"] is True
+    assert packet["activation_state"] == "legacy_unscoped"
+    assert packet["commands"]["heartbeat_prompt_json"]
+    assert packet["activation_method"] == "run_agent_cli_loop_gated_by_quota"
+    assert packet["native_goal_provider"]["commands"] == {}
+
+
+def test_native_activation_uses_the_existing_normalized_actor_selection() -> None:
+    packet = build_host_loop_activation_packet(
+        agent_type=HOST_SURFACE, goal_id="surface-goal",
+        registered_agents=[" probe-agent ", "probe-agent"],
+    )
+    assert packet["agent_id"] == "probe-agent"
+    assert packet["identity_contract"]["registered_agents"] == ["probe-agent"]
+    assert "--agent-id probe-agent" in packet["native_goal_provider"]["commands"]["bind"]

@@ -53,12 +53,25 @@ def register_doctor_command(
             "skill delivery replaces the Codex skill-directory check."
         ),
     )
+    for option, help_text in (
+        ("--zcode-cli", "ZCode CLI executable or existing JS bundle; requires --agent-type zcode."),
+        ("--zcode-desktop", "ZCode Desktop executable, installation directory or .app bundle; requires --agent-type zcode."),
+        ("--zcode-source", "ZCode source checkout; its package and built CLI versions are reported separately. Requires --agent-type zcode."),
+    ):
+        parser.add_argument(option, metavar="PATH", help=help_text)
     return parser
 
 
 def handle_doctor_command(
     args: argparse.Namespace, print_payload: PrintPayload, *, registry_path: Path | None = None,
 ) -> int:
+    host_options = {
+        name: getattr(args, name, None)
+        for name in ("zcode_cli", "zcode_desktop", "zcode_source")
+        if getattr(args, name, None) is not None
+    }
+    if host_options and args.agent_type != "zcode":
+        raise ValueError("ZCode path options require doctor --agent-type zcode.")
     restart: dict[str, Any] | None = None
     if bool(getattr(args, "restart_runtime", False)):
         from ..control_plane.effect_runtime import restart_effect_runtime
@@ -70,6 +83,7 @@ def handle_doctor_command(
         installation_only=bool(getattr(args, "installation_only", False)),
         registry_path=registry_path,
         runtime_root_override=getattr(args, "runtime_root", None),
+        **host_options,
     )
     if restart is not None:
         payload["effect_runtime_restart"] = restart

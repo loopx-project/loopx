@@ -1,3 +1,4 @@
+import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionActions } from "./attention-actions";
 import { AttentionDetailCard } from "./attention-detail-card";
@@ -803,6 +804,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 </>
               )}
             </section>
+            {selection.item.zcodeGoalEligibleAgentIds?.length ? <ZCodeGoalControl key={selection.item.goalId} goal={selection.item} readOnly={readOnly} /> : null}
             {!readOnly ? <div className="personal-drawer-action-grid">
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("heartbeat", selection.item.goalId)} type="button"><Radio size={16} />{t("drawer.setupHeartbeat")}</button>
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("monitor", selection.item.goalId)} type="button"><CalendarClock size={16} />{t("drawer.scheduleAdd")}</button>

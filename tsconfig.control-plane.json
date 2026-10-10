@@ -172,6 +172,8 @@
     "tests/control_plane_ts/goal_amendment_proposal.test.ts",
     "tests/control_plane_ts/goal_instance_identity.test.ts",
     "tests/control_plane_ts/chat_session_lifecycle.test.ts",
-    "tests/control_plane_ts/test_python_runtime.test.ts"
+    "tests/control_plane_ts/test_python_runtime.test.ts",
+    "loopx/zcode_goal_mode/*.ts",
+    "tests/control_plane_ts/zcode*.test.ts"
   ]
 }

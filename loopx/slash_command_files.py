@@ -92,6 +92,19 @@ def skill_body(
     ) + "\n"
 
 
+def skill_facade_content(spec: CommandFacadeSpec) -> str:
+    """Render the shared command facade installed in a host's skill root."""
+    return skill_body(
+        command=str(spec["command"]),
+        title=f"LoopX {spec['command']}",
+        description=str(spec["description"]),
+        argument_hint=str(spec["argument_hint"]),
+        instructions=list(spec["instructions"]),
+        surface="claude-skills",
+        front_matter_name=str(spec["name"]),
+    )
+
+
 def _is_legacy_upgradable_loopx_file(existing: str) -> bool:
     return any(signature in existing for signature in LEGACY_UPGRADABLE_SIGNATURES)
 
@@ -186,15 +199,7 @@ def install_skill_facade(
                 }
             )
             continue
-        content = skill_body(
-            command=str(spec["command"]),
-            title=f"LoopX {spec['command']}",
-            description=str(spec["description"]),
-            argument_hint=str(spec["argument_hint"]),
-            instructions=list(spec["instructions"]),
-            surface="claude-skills",
-            front_matter_name=str(spec["name"]),
-        )
+        content = skill_facade_content(spec)
         installed.append(
             {
                 "surface": surface,

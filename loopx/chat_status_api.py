@@ -168,6 +168,7 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                 limit=self.server.limit,
                 goal_id=goal_id,
                 include_public_boundary_scan=False,
+                include_zcode_goal_eligibility=not delivery_review,
                 include_task_graph=delivery_review,
                 activation_state_filter=activation_state_filter,
                 include_goal_subagent_configuration=(

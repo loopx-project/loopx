@@ -669,7 +669,7 @@ def test_agent_handoff_one_shot_consumption_survives_concurrent_retry_and_restar
 
 @pytest.mark.parametrize("change", ["expires", "rebound", "stopped", "archived", "payload"])
 def test_agent_handoff_fails_closed_on_expiry_binding_activation_or_terms_drift(
-    tmp_path: Path, change: str
+    tmp_path: Path, change: str,
 ) -> None:
     service, store = _service(tmp_path)
     proposal = _claim_agent_operation(service, store)
@@ -969,11 +969,12 @@ def test_lifecycle_only_source_profile_cannot_acquire_new_operation_authority(
     assert (store.path.read_bytes() if store.path.exists() else None) == before
 
 
-@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("historical,expected_error", [(False, ActionConflictError), (True, ValueError)])
 def test_replacement_session_reconciles_under_its_current_binding_without_reconsumption(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     historical: bool,
+    expected_error: type[Exception],
 ) -> None:
     from loopx.thread_agent_binding import (
         bind_thread_agent_in_registry,

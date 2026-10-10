@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import runpy
 import re
 from pathlib import Path
@@ -77,7 +78,8 @@ def test_runner_uses_the_pytest_scenario_alias_without_rewriting_stdout(
     assert root.name.startswith("loopx-cli-budget-")
     assert len(root.name.removeprefix("loopx-cli-budget-")) == 12
     assert not root.exists()  # The shared context cleans up its alias.
-    assert str(root) in emitted[0]  # Full CLI command paths are still emitted.
+    # Full paths remain in the untouched JSON wire, including escaped Windows backslashes.
+    assert json.dumps(str(root))[1:-1] in emitted[0]
     assert rows[0]["row_id"] == "surface/loopx_turn_plan/crowded/json"
     assert rows[0]["chars"] == len(emitted[0])
     assert (

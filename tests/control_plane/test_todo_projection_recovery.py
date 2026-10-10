@@ -446,5 +446,5 @@ def test_objective_display_never_changes_canonical_authority(canonical_display, 
     assert _read(runtime) == before
     state.write_text("<!-- unreadable display")
     code, result = _cli(registry, "list", "--goal-id", "goal-a")
-    assert code == 0 and result["todos"][0]["todo_id"] == "todo_active", result
+    assert code == 0 and next(row for row in result["todos"] if row["role"] == "agent")["todo_id"] == "todo_active", result
     assert _read(runtime) == before

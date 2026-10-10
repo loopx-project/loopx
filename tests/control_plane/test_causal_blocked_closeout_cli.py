@@ -81,21 +81,26 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert rc == 0, original
     digest = original["todo"]["completion_validation_sha256"]
     if defer:
-        # An unsatisfied todo_done wait fences execution. Acquire the lease
-        # before installing that wait, then defer and release it atomically.
-        rc, successor = cli("todo", "update", "--goal-id", GOAL_ID,
-                            "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
-                            "--successor-todo-id", ALTERNATIVE_TODO_ID)
-        assert rc == 0, successor
+        # Admit the existing executable work before its dependency is installed.
+        # A new lease after the causal wait would violate the completion fence.
         rc, acquired = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
                            "--owner", AGENT_ID, "--idempotency-key", "execution-wait", "--ttl-seconds", "900")
         assert rc == 0, acquired
+        rc, wait = cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                       "--agent-id", AGENT_ID, "--resume-when", f"{kind}:{MONITOR_ID}",
+                       "--successor-todo-id", ALTERNATIVE_TODO_ID,
+                       "--task-lease-idempotency-key", "execution-wait",
+                       "--task-lease-expected-version", str(acquired["lease"]["version"]))
+        assert rc == 0, wait
+        # The atomic owner-deferral accepts only unchanged work and its wait.
+        # Link planning is a separate fenced edit, not part of lease retirement.
         rc, suspended = cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
                             "--agent-id", AGENT_ID, "--status", "deferred",
                             "--resume-when", f"{kind}:{MONITOR_ID}", "--reason", "Dependency pending",
                             "--task-lease-idempotency-key", "execution-wait",
                             "--task-lease-expected-version", str(acquired["lease"]["version"]))
         assert rc == 0, json.dumps(suspended, indent=2)
+        assert suspended["deferred_transition"]["lease_retirement"] == "released"
         rc, lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
         assert rc == 0 and lease["lease"]["status"] == "released", lease
     else:

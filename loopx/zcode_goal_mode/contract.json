@@ -1,0 +1,11 @@
+{
+  "actions": {
+    "bind": true,
+    "select_model": true,
+    "start": true,
+    "pause": true,
+    "resume": true,
+    "stop": true,
+    "status": true
+  }
+}

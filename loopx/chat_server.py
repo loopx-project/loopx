@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .presentation import configuration_api as config_api
 from .attached_session_api import AttachedSessionRequestMixin
+from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import (
     TodoReviewPreviewConflict,
     apply_todo_review_preview,
@@ -456,6 +457,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
 
 
 class ChatRequestHandler(
+    ZCodeGoalRequestMixin,
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
     ExploreResultsRequestMixin,
@@ -1389,6 +1391,8 @@ class ChatRequestHandler(
             return self._handle_extension_presentation_surfaces()
         if path == DEFAULT_EXTENSION_PROJECTION_PATH:
             return self._handle_extension_projection(parse_qs(urlparse(self.path).query))
+        if self._dispatch_zcode_goal(path):
+            return
         if path == "/api/chat/projects":
             self._send_json({"ok": True, "projects": [
                 {"project_ref": context["project_ref"], "title": Path(context["workspace_path"]).name,
@@ -1483,6 +1487,8 @@ class ChatRequestHandler(
         if not self._require_loopback_origin():
             return
         path = urlparse(self.path).path
+        if self._dispatch_zcode_goal(path, apply=True):
+            return
         post_dispatch = {
             CHAT_SESSIONS_PATH: self._create_session,
             CHAT_ATTACH_SESSION_PATH: self._attach_session,

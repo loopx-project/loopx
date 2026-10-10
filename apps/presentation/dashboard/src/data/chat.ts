@@ -1,6 +1,6 @@
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import { parseTurnStep, type TurnStep } from "./turn-steps";
+import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
 import { actionSourceBasisSchema } from "./action-source-basis.js";
 
@@ -2343,7 +2343,7 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
   );
 }
 
-export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract";
+export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract.js";
 const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
@@ -2450,6 +2450,7 @@ export async function changePrivateAgentTarget(bindingId: string, revision: numb
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
   }));
 }
+
 
 // Display validation only; finding status semantics remain owned by Explore.
 const exploreResultPageSchema = z.object({

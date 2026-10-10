@@ -63,7 +63,9 @@ def test_closed_replan_only_accepts_existing_native_operations(
     assert refreshed["settlement_progress"]["state"] == "spend_required"
     ack = json.loads(Path(refreshed["json_path"]).read_text())["autonomous_replan_ack"]
     assert ack["recorded"] is True
-    assert "fresh_vision_path_outcome" in ack["semantic_delta"]["outcomes"]
+    # The preceding Todo add durably acknowledged the runnable successor.
+    # Refresh reads that original ACK rather than substituting a later path outcome.
+    assert "new_runnable_successor" in ack["semantic_delta"]["outcomes"]
     reject(*base, "record", "--operation-id", "op-new", "--stage", "decision",
         "--operation", "spawn", "--outcome", "started", "--entrypoint-id", "generic_host",
         "--execute", reason="open, work-admitted")

@@ -513,8 +513,11 @@ def _assert_turn_plan_writeback_routes(
     # Budget compaction must not discard or redirect the writeback target.
     action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
     argv = shlex.split(action)
-    assert argv[argv.index("--registry") + 1] == str(registry_path)
-    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
+    assert argv.count("--registry") == argv.count("--runtime-root") == 1
+    # Windows drive-rooted aliases are canonicalized by the runtime owner.
+    # Compare target identity while retaining each complete route exactly once.
+    assert Path(argv[argv.index("--registry") + 1]).resolve() == registry_path.resolve()
+    assert Path(argv[argv.index("--runtime-root") + 1]).resolve() == runtime.resolve()
 
 
 def _mode_variant_commands(
@@ -1694,8 +1697,8 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
-    # ever-growing temp/worker prefix. Do not shorten rendered paths or raise
-    # the absolute output ceiling to make this case pass.
+    # ever-growing temp/worker prefix. Keep full routes and this workload;
+    # presentation-budget changes require matched base/head cost evidence.
     # Reuse the other budget fixtures' short namespace. A canary's nested
     # TMPDIR can already exceed 128 characters before we create this root.
     parent = Path("/tmp").resolve()
@@ -1926,14 +1929,12 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
     assert exit_code == 0, text
     payload = json.loads(text)
     full_decision = shlex.split(payload["detail_ref"]["full_decision"])
-    # A cold read must preserve the originating source as well as the host
-    # profile, rather than silently switching to the operator's default Goal.
-    for option, value in (
-        ("--registry", str(registry_path)), ("--runtime-root", str(runtime)),
-        ("--goal-id", GOAL_ID), ("--agent-id", AGENT_IDS[0]), ("--format", "json"),
-    ):
-        assert full_decision[full_decision.index(option) + 1] == value
-    assert full_decision[0] == "loopx" and "--codex-app" in full_decision
+    # A cold read must preserve the complete originating source and host profile.
+    assert full_decision == [
+        "loopx", "--registry", str(registry_path), "--runtime-root", str(runtime),
+        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_IDS[0], "--codex-app",
+    ]
     read_rc, read_text = _invoke_cli(full_decision[1:])
     assert read_rc == 0, read_text
     assert json.loads(read_text)["goal_id"] == GOAL_ID
@@ -1977,9 +1978,9 @@ def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
     def assert_selected_runtime_root(command: str) -> None:
         argv = shlex.split(command)
         assert argv[0] == "loopx"
-        assert "--runtime-root" in argv
+        assert argv.count("--runtime-root") == 1
         assert argv[argv.index("--runtime-root") + 1] == str(runtime)
-        assert "--registry" in argv
+        assert argv.count("--registry") == 1
         assert argv[argv.index("--registry") + 1] == str(registry_path)
 
     assert cli_channel["next_cli_actions"]

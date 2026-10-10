@@ -88,6 +88,7 @@ include = ["loopx*"]
 "loopx.opencode2_goal_mode" = ["*.mjs", "README.md"]
 "loopx.pi_goal_mode" = ["*.ts", "*.mjs", "README.md"]
 "loopx.kunluncode_goal_mode" = ["README.md"]
+"loopx.zcode_goal_mode" = ["README.md", "*.ts", "contract.json", "images/*.png"]
 
 [tool.setuptools.data-files]
 "share/loopx/skills/loopx-material" = [

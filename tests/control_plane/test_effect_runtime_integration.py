@@ -1213,9 +1213,11 @@ def test_request_startup_retry_boundary(
     assert attempts["count"] == expected_attempts
 
 
+@pytest.mark.parametrize("retirement_lock_delay", [0, 2.1], ids=["uncontended", "locator-contended"])
 def test_managed_runtime_releases_memory_after_idle_timeout(
     tmp_path: Path,
     monkeypatch,
+    retirement_lock_delay: float,
 ) -> None:
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
@@ -1228,7 +1230,20 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
 
     original = effect_runtime.effect_runtime_result("runtime.ping", {})
     original_pid = int(original["pid"])
-    deadline = time.monotonic() + 2
+    # Retirement acquires the shared locator lock, whose legal wait is 5 s.
+    # The previous 2 s deadline was shorter than that contract. This bounds
+    # eventual cleanup without changing the 150 ms server idle policy.
+    deadline = time.monotonic() + 6
+    if retirement_lock_delay:
+        info_path = effect_runtime._runtime_info_path(fingerprint)
+        lock_path = Path(f"{info_path}.ts-effect.lock")
+        lock_path.write_text(json.dumps({"pid": os.getpid(), "token": "retirement-holder"}))
+        try:
+            time.sleep(retirement_lock_delay)
+            assert info_path.exists(), "retirement must respect the locator writer fence"
+            assert effect_runtime._pid_is_alive(original_pid)
+        finally:
+            lock_path.unlink(missing_ok=True)
     while list(runtime_dir.glob("runtime-*.json")) and time.monotonic() < deadline:
         time.sleep(0.025)
 
@@ -1313,7 +1328,8 @@ def test_runtime_drains_admitted_write_before_exit(
             if not disconnect:
                 result = pending.result(timeout=3)
                 assert result["appended"] is True and result["replayed"] is False
-            deadline = time.monotonic() + 3
+            # Allow the existing 5 s locator-lock budget, plus the idle window.
+            deadline = time.monotonic() + 6
             while info_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.025)
             assert not info_path.exists(), "settled runtime must still retire when idle or stopped"

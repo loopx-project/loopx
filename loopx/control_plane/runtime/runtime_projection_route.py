@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import queue
 import threading
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from ..goals.activation import (
     GoalActivationState,
@@ -509,6 +509,7 @@ def _source_routes_for_registry(
     activation_state_filter: GoalActivationState | str | None = None,
     source_registry_read_timeout_seconds: float = SOURCE_REGISTRY_READ_TIMEOUT_SECONDS,
     registry: dict[str, Any] | None = None,
+    source_goal_observer: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> list[tuple[Path, Path, str, str | None]]:
     if registry is None:
         registry = load_registry(registry_path)
@@ -534,6 +535,10 @@ def _source_routes_for_registry(
             else registry_path.resolve()
         )
         if source_registry is None:
+            if source_goal_observer is not None:
+                matches = [item for item in registry_goals(registry)
+                           if str(item.get("id") or "") == current_goal_id]
+                source_goal_observer(current_goal_id, matches[0] if len(matches) == 1 else None)
             continue
         source_key = str(source_registry)
         if source_key not in source_reads:
@@ -542,6 +547,10 @@ def _source_routes_for_registry(
                 timeout_seconds=source_registry_read_timeout_seconds,
             )
         source_payload, source_error = source_reads[source_key]
+        if source_goal_observer is not None:
+            matches = [item for item in registry_goals(source_payload)
+                       if str(item.get("id") or "") == current_goal_id] if source_payload is not None else []
+            source_goal_observer(current_goal_id, matches[0] if len(matches) == 1 else None)
         if source_payload is None:
             source_runtime = runtime_root
         else:
@@ -608,6 +617,7 @@ def collect_runtime_projection_route_diagnostics(
     activation_state_filter: GoalActivationState | str | None = None,
     source_registry_read_timeout_seconds: float = SOURCE_REGISTRY_READ_TIMEOUT_SECONDS,
     registry: dict[str, Any] | None = None,
+    source_goal_observer: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     source_routes = _source_routes_for_registry(
@@ -617,6 +627,7 @@ def collect_runtime_projection_route_diagnostics(
         activation_state_filter=activation_state_filter,
         source_registry_read_timeout_seconds=source_registry_read_timeout_seconds,
         registry=registry,
+        source_goal_observer=source_goal_observer,
     )
     if registry is None:
         registry = load_registry(registry_path)

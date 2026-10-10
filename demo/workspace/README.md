@@ -25,7 +25,7 @@ Only a new empty directory or this demo's matching manifest is accepted. Prepare
 | Home Energy Buying Guide | 12 source cards, three household profiles, 27 tariff/efficiency combinations, conflicting assumptions, five-section editorial plan | Cost assumptions; publication approval |
 | Riverside Neighborhood Website | Six pages, 18-route inventory, 24 accessibility criteria, navigation/form review findings, content permissions, rollback and handoff | Content freeze; deployment approval |
 
-Each project has seven replayed completion checkpoints, five ready tasks, four blocked tasks and two deferred follow-ups. Dependency notes retain predecessor IDs; deferred tasks use real `todo_done` resume conditions. Two watch-only monitors have cadence and next-due metadata. No scheduler or live Agent is started by the demo.
+Each project has seven replayed completion checkpoints, five ready tasks, four blocked tasks and two deferred follow-ups. Checkpoints complete through the canonical Todo owner in an isolated soft-claim replay; they do not acquire an execution lease. Dependency notes retain predecessor IDs; deferred tasks use real `todo_done` resume conditions. Two watch-only monitors have cadence and next-due metadata. No scheduler or live Agent is started by the demo.
 
 Switch Board/List, filter by Agent, expand completed history, inspect the owner decisions and scheduled watches. `BRIEF.md`, `working-table.csv`, `calculations.json` and `DELIVERY-PLAN.md` preserve the planning inputs and dependencies. The energy sensitivity table and event contingency are calculated when preparing the workspace.
 
@@ -44,7 +44,7 @@ These are authored scenario replays using real LoopX APIs and state transitions,
 
 Each newly prepared story Goal selects the existing `soft_claim` handoff mode before tasks are seeded. The stories have named claim owners but no live managed worker or execution identity, so the replay does not acquire task leases. This setting applies only to the isolated demo Goals and does not change LoopX defaults.
 
-The demo does not import personal registries, session history or credentials, and does not sync into the global registry. Prepare, advance and serve run in a separate HOME/CODEX_HOME with a minimal environment; even preparation never discovers personal default registries. The loopback server uses unavailable Agent/Lark binaries. Chat and Lark connection errors are intentional isolation and do not qualify live IM behavior. Stop with Ctrl-C.
+The demo does not import personal registries, session history or credentials, and does not sync into the global registry. Prepare, advance and serve run in a separate HOME (USERPROFILE on Windows) and CODEX_HOME with a minimal environment; even preparation never discovers personal default registries. The loopback server uses unavailable Agent/Lark binaries. Chat and Lark connection errors are intentional isolation and do not qualify live IM behavior. Stop with Ctrl-C.
 
 This remains a source-checkout demo under `demo/`, outside the installed wheel and capability catalog. Screenshots and recordings belong in ignored `output/playwright/`. Keep real operating statistics separately timestamped with their counting scope.
 

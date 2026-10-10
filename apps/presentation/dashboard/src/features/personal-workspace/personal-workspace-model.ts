@@ -160,6 +160,10 @@ export type WorkspaceGoal = {
     lastActivityAt?: string | null;
     state?: string | null;
   }>;
+  /** Canonical registered identities; discovered task claimants do not grant binding authority. */
+  registeredAgentIds?: string[];
+  /** Host-compatible registered IDs from the canonical backend; absence grants no controls. */
+  zcodeGoalEligibleAgentIds?: string[];
   agentLaneCount?: number;
   agentLabel?: string;
   agentSentence: string;
