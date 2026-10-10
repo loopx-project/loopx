@@ -213,8 +213,9 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_pa
         command("configure-goal", "--goal-id", goal, "--quota-compute", "0", "--execute")
         refused_plan = tmp_path / "unsettled-exit-plan.json"
         before_refusal = todos()
-        command("authority-archive", "plan-migration", "--goal-id", goal,
-                "--provider", "file", "--plan", str(refused_plan), expected_code=1)
+        refusal = command("authority-archive", "plan-migration", "--goal-id", goal,
+                          "--provider", "file", "--plan", str(refused_plan), expected_code=1)
+        assert "settled task leases" in refusal["reason"]
         assert not refused_plan.exists() and todos() == before_refusal
         command("task-lease", "release", "--goal-id", goal, "--todo-id", todo,
                 "--owner", agent, "--idempotency-key", "trial-work",
@@ -239,7 +240,13 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_pa
         assert returned["authority_read"]["source_authority"] == "file_v0"
         assert returned["authority_read"]["legacy_fallback_used"] is False
         assert returned["todos"] == rows
-        assert command(*guard_args)["normal_delivery_allowed"] is False
+        # Restore the reviewed prior quota after readback, so a paused lane
+        # cannot conceal a lost settlement behind quota_skip.
+        command("configure-goal", "--goal-id", goal, "--quota-compute", "1", "--execute")
+        after_exit = command(*guard_args)
+        assert after_exit["effective_action"] == "heartbeat_settled_skip"
+        assert after_exit["heartbeat_receipt"]["settlement_identity"] == identity
+        assert after_exit["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
         runs = [json.loads(line) for line in
                 (runtime / "goals" / goal / "runs/index.jsonl").read_text().splitlines()]
         assert sum(row.get("classification") == "quota_slot_spent" for row in runs) == 1
