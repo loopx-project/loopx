@@ -30,6 +30,7 @@ from loopx.extensions.lark.document_comment_provider import (
     LarkCliDocumentCommentProvider,
     LarkDocumentCommentProviderError,
     LarkDocumentCommentTarget,
+    _epoch_rfc3339,
 )
 
 
@@ -467,6 +468,10 @@ def test_lark_provider_rejects_boolean_comment_timestamp(tmp_path: Path) -> None
         assert error.code == "comment_timestamp_invalid"
     else:
         raise AssertionError("boolean timestamps must fail closed")
+
+
+def test_lark_document_comment_timestamp_accepts_microsecond_epoch():
+    assert _epoch_rfc3339("1700000000123456") == "2023-11-14T22:13:20.123456Z"
 
 
 def test_lark_document_comment_callsite_runs_read_effect_reply_readback_ack(
