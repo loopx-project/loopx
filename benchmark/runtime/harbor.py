@@ -16,7 +16,7 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
-from .codex_offline import CodexOffline
+from .codex_offline import CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 
 
@@ -192,7 +192,6 @@ class BenchmarkCodex(CodexOffline):
         await super().install(environment)
 
         loopx_src = Path(os.environ["LOOPX_SRC_DIR"]).resolve()
-        portable_python = Path(os.environ["LOOPX_PORTABLE_PYTHON"]).resolve()
         node_root = Path(os.environ["LOOPX_NODE_DIR"]).resolve()
         await self.exec_as_root(
             environment,
@@ -206,7 +205,7 @@ class BenchmarkCodex(CodexOffline):
             timeout_sec=180,
         )
         actual_commit = await self._stage_source(environment, loopx_src)
-        await environment.upload_dir(portable_python, _PYTHON)
+        await stage_portable_python(environment, _PYTHON)
         if self.execution.uses_loopx:
             await environment.upload_dir(node_root, _NODE)
         await self.exec_as_root(
