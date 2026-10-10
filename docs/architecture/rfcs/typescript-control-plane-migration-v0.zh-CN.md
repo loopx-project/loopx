@@ -46,6 +46,13 @@ Goal 保持已记录的选择。见[配置及关闭契约](../../reference/local
 这是源码候选，不认证安装采用、发布默认、完整共享 Goal 意图或 D2/D3；不重建
 创建／默认值 owner。
 
+canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
+`todos/mutation_api.py`；历史导入改为惰性，未迁移 writer 隔离在
+`todos/legacy_mutation.py`。安装态 File/SQLite 检查可物理移除整个 writer，验证
+生命周期及结算恢复。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
+handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
+各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
