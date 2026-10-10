@@ -120,7 +120,7 @@ def test_model_receives_authorized_task_choices_after_manager_context_compaction
     assert "execution_binding_id" not in _turn_prompt(turn["message"], context_summary=json.dumps(unavailable))
 
 
-def test_handoff_response_preserves_receipt_and_separate_execution_status(flow):
+def test_handoff_response_preserves_answer_and_separate_execution_status(flow):
     root, registry, (_, session, turn, request, _, _), started = flow
     response = execution.handoff_response(root, registry, session=session, turn=turn,
         response={"context_handoff": request, "message": "Unverified model completion claim.",
@@ -129,10 +129,68 @@ def test_handoff_response_preserves_receipt_and_separate_execution_status(flow):
     assert response["context_handoff_receipt"]["status"] == "delivered"
     assert response["context_execution"]["status"] == "prepared"
     assert "尚未确认完成" in response["message"]
-    assert request["brief"]["purpose"] in response["message"]
-    assert "Unverified model completion claim" not in response["message"]
+    assert response["message"].startswith("Unverified model completion claim.\n\n")
+    assert request["brief"]["purpose"] not in response["message"]
+    # Preserving prose does not turn a model claim into execution evidence.
+    assert response["context_execution"]["status"] != "accepted"
     assert response["proposals"] == [] and response["gate"] is None
     assert len(started) == 1
+
+
+@pytest.mark.parametrize("message", [None, "", " \n\t"])
+def test_empty_handoff_answer_retains_compact_brief_preview(flow, message):
+    root, registry, (_, session, turn, request, _, _), _ = flow
+    response = execution.handoff_response(root, registry, session=session, turn=turn,
+        response={"context_handoff": request, "message": message},
+        source_authorized=lambda: True, execution_allowed=lambda: True)
+    assert response["message"].startswith("**已转交给 `worker`。**")
+    assert request["brief"]["purpose"] in response["message"]
+
+
+@pytest.mark.parametrize("refusal", ["revoke", "delivery", "stop"])
+def test_handoff_refusal_preserves_answer_without_inventing_execution(flow, monkeypatch, refusal):
+    root, registry, (_, session, turn, request, _, _), started = flow
+    original = normalize_agent_response({"context_handoff": request,
+        "message": f"结论：保留现有数据。\n\n- 已核对 {root / 'private' / 'source.txt'}。\n- 恢复仍须独立验收。"},
+        protected_paths=[root])
+    answer = original["message"]
+    assert str(root) not in answer
+    if refusal == "delivery":
+        from loopx.capabilities import manager_context
+        def unavailable(*args, **kwargs):
+            raise OSError("delivery unavailable")
+        monkeypatch.setattr(manager_context, "deliver", unavailable)
+    response = execution.handoff_response(root, registry, session=session, turn=turn,
+        response=original,
+        source_authorized=lambda: refusal != "revoke",
+        execution_allowed=lambda: refusal != "stop")
+    assert response["message"].startswith(answer + "\n\n")
+    assert response["message"].count(answer) == 1
+    assert not started
+    if refusal == "stop":
+        assert response["context_handoff_receipt"]["status"] == "delivered"
+        assert response["context_execution"]["submitted"] is False
+        assert "本次未提交受控执行" in response["message"]
+    else:
+        assert "尚未转交" in response["message"]
+        assert "context_handoff_receipt" not in response
+
+
+def test_replayed_handoff_keeps_one_answer_and_one_original_operation(flow):
+    root, registry, (_, session, turn, request, _, _), started = flow
+    answer = "**检查结果**\n\n```text\nretain\n```\n\n原约束仍适用。"
+    original = {"context_handoff": request, "message": answer}
+    results = [execution.handoff_response(root, registry, session=session, turn=turn,
+        response=original, source_authorized=lambda: True, execution_allowed=lambda: True)
+        for _ in range(2)]
+    assert original["message"] == answer
+    assert len(started) == 1
+    assert results[0]["context_execution"]["operation_id"] == results[1]["context_execution"]["operation_id"]
+    assert results[1]["context_execution"]["replayed"]
+    for result in results:
+        assert result["message"].startswith(answer + "\n\n")
+        assert result["message"].count(answer) == 1
+        assert request["brief"]["context"] not in result["message"]
 
 
 def test_handoff_scope_revocation_stops_before_inbox_delivery(flow, monkeypatch):

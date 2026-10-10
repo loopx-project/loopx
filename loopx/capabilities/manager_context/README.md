@@ -560,7 +560,10 @@ content. Updating it in a release must not reject an otherwise identical saved
 request. Replay retains the original entry bytes, guidance, assessment and
 return history; message, brief and recipient identity conflicts still fail.
 
-The default shared Chat handoff acknowledgment is a short user-facing preview:
+The shared Chat handoff acknowledgment preserves the current audience-processed
+answer, including its Markdown, and appends receipt-backed delivery and execution
+status. It does not repeat the full brief or historical context after a substantive
+answer. A missing or blank answer uses the short user-facing preview:
 the exact recipient Agent, purpose, a bulleted result checklist (up to three
 items), execution boundaries (up to two items), and the return requirement.
 Each item has a visible text bound; omitted list items are counted. Selection

@@ -71,6 +71,7 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
     before = registry.read_bytes(), (repo / "ACTIVE_GOAL_STATE.md").read_bytes()
     store = ChatSessionStore(root)
     controller = ChatRuntimeController(store=store, codex_bin="codex", registry_path=registry)
+    answer = "**Source comparison**\n\nThe periods differ.\n\n- Keep the correction.\n- Do not infer growth."
 
     class ModelFixture:
         upstream_thread_id = "fixture-project-model"
@@ -79,7 +80,8 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
         def start_turn(self, message, sink):
             assert "OTHER_PROJECT_PRIVATE" not in message
             assert '"scope": "owner_goal"' in message and '"agent_id": "coordinator"' in message
-            return {"schema_version": "loopx_chat_agent_response_v0", "message": "Forwarding the correction", "proposals": [], "gate": None,
+            sink("answer.delta", {"text": answer})
+            return {"schema_version": "loopx_chat_agent_response_v0", "message": answer, "proposals": [], "gate": None,
                     "context_handoff": {"goal_id": "research", "agent_id": "coordinator"}}
 
     monkeypatch.setattr(controller, "capabilities", lambda: [
@@ -100,6 +102,12 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
             message="Ask coordinator to check the corrected source with reviewer.", work_dir=repo, objective="Research delivery")
         done = controller.wait_for_turn(session_id=session["session_id"], turn_id=turn["turn_id"], timeout_sec=20)
         assert done["status"] == "completed", done
+        assert done["response"]["message"].startswith(answer + "\n\n")
+        assert done["response"]["message"].count(answer) == 1
+        streamed = [event["payload"]["text"] for event in store.events_after(session["session_id"], turn["turn_id"], None)
+                    if event["kind"] == "answer.delta"]
+        assert "".join(streamed) == answer
+        assert ChatSessionStore(root).load_turn(session["session_id"], turn["turn_id"])["response"] == done["response"]
         receipt = done["response"]["context_handoff_receipt"]
         request_id = receipt["request_id"]
         assert request_id in json.dumps(cli("coordinator", "read"))
