@@ -275,6 +275,32 @@ def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, status):
     assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID) == original
 
 
+def test_canonically_stopped_goal_does_not_admit_periodic_report_window(tmp_path):
+    from datetime import datetime
+    from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.capabilities.periodic_report.pending_intent import _active_delivery_subscription
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["activation"] = {
+        "schema_version": "loopx_goal_activation_v1", "state": "stopped"
+    }
+    registry.write_text(json.dumps(config))
+
+    kwargs = dict(registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {}, **kwargs, agent_id=AGENT_ID,
+        now=datetime.fromisoformat("2026-09-11T10:00:00+00:00"),
+    )
+
+    assert (
+        dispatch["invoked_count"],
+        read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID),
+        _active_delivery_subscription(**kwargs),
+    ) == (0, None, None)
+
+
 def test_calendar_does_not_preempt_existing_stage_work(tmp_path):
     from datetime import datetime
     from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
