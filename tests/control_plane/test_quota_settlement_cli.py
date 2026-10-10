@@ -168,7 +168,7 @@ def _run_cli(
         [
             sys.executable,
             "-m",
-            "loopx.cli",
+            "loopx.entrypoint",
             "--registry",
             str(registry_path),
             "--runtime-root",
@@ -199,7 +199,7 @@ def _run_generated_cli(
     if "--registry" not in argv:
         argv[1:1] = ["--registry", str(registry_path)]
     result = subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *argv[1:]],
+        [sys.executable, "-m", "loopx.entrypoint", *argv[1:]],
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
@@ -2806,11 +2806,14 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-cli-successor",
         "--scan-path",
         str(project),
     )
     assert fresh_guard_rc == 0, fresh_guard
     assert fresh_guard["selected_todo"]["todo_id"] == successor_id
+    assert fresh_guard["heartbeat_receipt"]["turn_instance_id"] == "turn-settlement-cli-successor"
 
     spend_args = (
         "quota",
@@ -2895,24 +2898,9 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     ) is None
     assert _spend_run_count(runtime) == 1
 
-    fresh_turn_rc, fresh_turn = _run_cli(
-        registry_path,
-        runtime,
-        "quota",
-        "should-run",
-        "--codex-app",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--turn-instance-id",
-        "turn-settlement-cli-2",
-        "--scan-path",
-        str(project),
-    )
-    assert fresh_turn_rc == 0, fresh_turn
-    assert fresh_turn["selected_todo"]["todo_id"] == successor_id
-    fresh_ack_args = fresh_turn["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
+    # Use the admitted successor Turn's hint. Another new Turn would compete
+    # with its outstanding claim instead of testing receipt freshness.
+    fresh_ack_args = fresh_guard["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
     fresh_ack_rc, fresh_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
     assert fresh_ack_rc == 0, fresh_ack
     assert fresh_ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"

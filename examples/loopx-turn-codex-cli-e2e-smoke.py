@@ -8,7 +8,6 @@ import contextlib
 import io
 import json
 import shutil
-import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -22,6 +21,7 @@ from loopx.cli import main as cli_main  # noqa: E402
 from loopx.control_plane.turn_driver import (  # noqa: E402
     load_loopx_turn_plan_from_journal,
 )
+from tests.control_plane.host_process_fixture import write_python_host_fixture  # noqa: E402
 
 
 GOAL_ID = "loopx-turn-real-cli-e2e"
@@ -124,7 +124,8 @@ def _write_fixture(root: Path, *, turn_count: int) -> tuple[Path, Path, Path, Pa
 
 def _write_fake_codex(root: Path) -> Path:
     executable = root / "fake-codex"
-    executable.write_text(
+    executable = write_python_host_fixture(
+        executable,
         f"""#!/usr/bin/env python3
 import json
 import pathlib
@@ -162,9 +163,7 @@ output_path.write_text(json.dumps({{
     "summary": f"The isolated public marker reached step {{turn_number}}.",
 }}), encoding="utf-8")
 """,
-        encoding="utf-8",
     )
-    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
     return executable
 
 

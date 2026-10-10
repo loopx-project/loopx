@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import time
 import stat
@@ -34,7 +35,10 @@ from loopx.control_plane.turn_driver.executor import BuiltInHostError
 from loopx.control_plane.turn_driver.subagent_execution_topology import (
     OPAQUE_REF_PATTERN,
 )
-from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
+from tests.control_plane.host_process_fixture import (
+    COUNTER_PROCESS_SOURCE,
+    write_python_host_fixture,
+)
 
 
 FAILURE_ENVELOPE_FIXTURES = (
@@ -109,6 +113,14 @@ def _request(
             "completed_phases": ["host_execute", "typed_result"],
         },
     }
+
+
+def _session_files(runtime_root: Path) -> list[Path]:
+    # Session authority is a SHA-256 filename; lock diagnostics are not sessions.
+    return [
+        path for path in runtime_root.glob("goals/*/turn-sessions/*.json")
+        if re.fullmatch(r"[0-9a-f]{64}\.json", path.name)
+    ]
 
 
 def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
@@ -195,14 +207,13 @@ output_path.write_text(json.dumps({
     "summary": "One public fixture advanced."
 }), encoding="utf-8")
 """
-    executable.write_text(
+    executable = write_python_host_fixture(
+        executable,
         source.replace(
             "__COUNTER_PROCESS_SOURCE__",
             repr(COUNTER_PROCESS_SOURCE),
         ),
-        encoding="utf-8",
     )
-    executable.chmod(0o755)
     return executable, log_path
 
 
@@ -504,9 +515,10 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         "host",
         "session_id",
     }
-    session_paths = list(runtime_root.glob("goals/*/turn-sessions/*.json"))
+    session_paths = _session_files(runtime_root)
     assert len(session_paths) == 1
-    assert stat.S_IMODE(session_paths[0].stat().st_mode) == 0o600
+    if os.name != "nt":  # POSIX mode bits do not express Windows ACLs.
+        assert stat.S_IMODE(session_paths[0].stat().st_mode) == 0o600
     persisted = session_paths[0].read_text(encoding="utf-8")
     assert "raw_trajectory" not in persisted
     assert "private_material" not in persisted
@@ -533,7 +545,7 @@ def test_codex_session_scope_across_todos(tmp_path, monkeypatch, scope):
     assert ("resume" in calls[1]) is (scope == "agent")
     if scope == "agent":
         assert "session-fixture-0001" in calls[1]
-    assert len(list(runtime_root.glob("goals/*/turn-sessions/*.json"))) == (1 if scope == "agent" else 2)
+    assert len(_session_files(runtime_root)) == (1 if scope == "agent" else 2)
 
 
 def test_agent_resume_rejects_changed_profile_before_launch(tmp_path, monkeypatch):
@@ -580,7 +592,7 @@ def test_approved_agent_write_resume_preserves_native_session(tmp_path, monkeypa
     assert len(calls) == 3
     assert all("resume" in call and "session-fixture-0001" in call for call in calls[1:])
     assert all('sandbox_mode="workspace-write"' in call for call in calls[1:])
-    assert len(list((tmp_path / "runtime").glob("goals/*/turn-sessions/*.json"))) == 1
+    assert len(_session_files(tmp_path / "runtime")) == 1
 
 
 def test_source_session_storage_observation_does_not_authorize_write_resume(tmp_path, monkeypatch):
@@ -613,7 +625,7 @@ def test_source_session_storage_observation_does_not_authorize_write_resume(tmp_
                    codex_bin=str(executable), registry_path=admission.registry_path,
                    goal_admission=admission)
     run_codex_cli_host(request, sandbox="read-only", **options)
-    binding = next((tmp_path / "runtime").glob("goals/*/turn-sessions/*.json"))
+    binding = _session_files(tmp_path / "runtime")[0]
     original_binding = binding.read_bytes()
     original_registry = admission.registry_path.read_bytes()
     request["session"]["action"] = "resume"
@@ -643,7 +655,7 @@ def test_malformed_expiry_refuses_write_resume_without_binding_or_host_effects(
     options = dict(runtime_root=tmp_path / "runtime", project=project,
                    codex_bin=str(executable), registry_path=registry)
     run_codex_cli_host(request, sandbox="read-only", **options)
-    binding = next((tmp_path / "runtime").glob("goals/*/turn-sessions/*.json"))
+    binding = _session_files(tmp_path / "runtime")[0]
     original_binding = binding.read_bytes()
     payload = json.loads(registry.read_text())
     entry = payload["goals"][0]["coordination"]["checkpointed_boundary_authority"][0]
@@ -665,7 +677,7 @@ def test_malformed_expiry_refuses_write_resume_without_binding_or_host_effects(
     assert len(calls) == 2
     assert "resume" in calls[1] and "session-fixture-0001" in calls[1]
     assert json.loads(binding.read_text())["session_id"] == "session-fixture-0001"
-    assert len(list((tmp_path / "runtime").glob("goals/*/turn-sessions/*.json"))) == 1
+    assert len(_session_files(tmp_path / "runtime")) == 1
 
 
 @pytest.mark.parametrize("case", ["missing", "expired", "inactive", "file", "sibling", "parent",
@@ -980,7 +992,7 @@ def test_codex_cli_host_ignores_legacy_session_eligibility(
         codex_bin=str(executable),
         timeout_seconds=5,
     )
-    session_path = next(runtime_root.glob("goals/*/turn-sessions/*.json"))
+    session_path = _session_files(runtime_root)[0]
     legacy = json.loads(session_path.read_text(encoding="utf-8"))
     legacy["schema_version"] = "loopx_codex_cli_session_v0"
     session_path.write_text(json.dumps(legacy), encoding="utf-8")
