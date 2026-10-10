@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.capabilities.native_chat.codex_context import codex_home, disable_mcp_servers, process_environment, public_source_reader, shared_chatgpt_transport
+from loopx.capabilities.native_chat.codex_context import codex_home, disable_mcp_servers, process_environment, public_source_reader, public_source_read_context, shared_chatgpt_transport
 
 
 def test_default_host_preserves_environment_and_native_store(tmp_path, monkeypatch):
@@ -65,6 +65,20 @@ def test_public_reader_off_does_not_change_ordinary_host_config(monkeypatch):
     monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "off")
     config = {"features": {"apps": True}, "mcp_servers": {"private": {"enabled": True}}}
     assert public_source_reader(config, config) == config
+
+
+def test_public_source_context_requires_actual_admission_not_environment(monkeypatch):
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "on")
+    assert public_source_read_context({}) == ""
+    assert public_source_read_context({"mcp_servers": {
+        "loopx_public_source_read": {"enabled": False}}}) == ""
+    assert public_source_read_context({"mcp_servers": {
+        "loopx_public_source_read": {"enabled": True, "enabled_tools": ["other_tool"]}}}) == ""
+    admitted = public_source_reader({}, {})
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "off")
+    assert "read_public_url" in public_source_read_context(admitted)
+    disabled = public_source_reader(admitted, disable_mcp_servers(admitted, {}))
+    assert public_source_read_context(disabled) == ""
 
 
 def test_shared_chatgpt_transport_preserves_explicit_provider_and_core_policy():

@@ -343,8 +343,10 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
     toolchain, _ = _system_toolchain_fixture(monkeypatch, **tool_options)
     safe_toolchain = not tool_options
     profile = "loopx_workspace_only_" + ("write" if grant == "workspace_write" else "read")
+    previous_reader = {"loopx_public_source_read": {"enabled": True}} if resume and not public_reader else {}
     process = _FakeAppServerProcess(config_response={"config": {
-        "features": {"apps": True}, "mcp_servers": {"managed_fixture": {"command": "private-command"}}}},
+        "features": {"apps": True}, "mcp_servers": {
+            "managed_fixture": {"command": "private-command"}, **previous_reader}}},
         thread_response={"thread": {"id": "thread-loopx-chat"},
         "activePermissionProfile": {"id": profile}, "runtimeWorkspaceRoots": [str(tmp_path)]})
     real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
@@ -394,7 +396,8 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
                 "read_public_url": {"approval_mode": "approve"},
                 "read_public_image": {"approval_mode": "approve"}}
         assert servers == {
-            "managed_fixture": {"enabled": False}, "caller_fixture": {"enabled": False}}
+            "managed_fixture": {"enabled": False}, "caller_fixture": {"enabled": False},
+            **{name: {"enabled": False} for name in previous_reader}}
         env = launched[0]
         assert "PRIVATE_FIXTURE_TOKEN" not in env
         assert Path(env["CODEX_HOME"]).parent == Path(env["HOME"])
@@ -418,6 +421,68 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
             {"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
         session.send("Continue.")
         assert sent[0][1]["permissions"] == profile and "sandboxPolicy" not in sent[0][1]
+        prompt = sent[0][1]["input"][0]["text"]
+        assert ("mcp__loopx_public_source_read__read_public_url" in prompt) is public_reader
+        assert ("mcp__loopx_public_source_read__read_public_image" in prompt) is public_reader
+        if public_reader:
+            assert "requested version's URL" in prompt and "truncation and read coverage" in prompt
+        else:
+            assert prompt == chat_agent._turn_prompt("Continue.", context_summary=session.context_summary,
+                runtime_profile=session.runtime_profile, project_work=grant == "workspace_write")
+        assert sent[0][1]["threadId"] == session.thread_id == "thread-loopx-chat"
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("fault", ["invalid_setting", "missing_dependency", "name_conflict"])
+def test_public_reader_rejection_never_dispatches_or_replaces_a_thread(monkeypatch, tmp_path, resume, fault):
+    from loopx.capabilities.native_chat import codex_context
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    _system_toolchain_fixture(monkeypatch)
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "invalid" if fault == "invalid_setting" else "on")
+    if fault == "missing_dependency":
+        find_spec = codex_context.importlib.util.find_spec
+        monkeypatch.setattr(codex_context.importlib.util, "find_spec",
+            lambda module: None if module == "mcp" else find_spec(module))
+    config = {"mcp_servers": {"loopx_public_source_read": {"enabled": False}}} if fault == "name_conflict" else {}
+    process = _FakeAppServerProcess(config_response={"config": config})
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    context = ChatProjectContexts([tmp_path], filesystem_scope="workspace_only").available()[0]
+    with pytest.raises(chat_agent.CodexChatAgentError, match={
+        "invalid_setting": "must be on or off", "missing_dependency": "Install loopx", "name_conflict": "conflicts",
+    }[fault]):
+        chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path, goal_id=None,
+            objective="project", project_context=context, codex_home=tmp_path / "account-codex",
+            resume_thread_id="thread-loopx-chat" if resume else None,
+            model="synthetic-model", reasoning_effort="high")
+    methods = [json.loads(line).get("method") for line in process.stdin.getvalue().splitlines()]
+    assert "config/read" in methods
+    assert not set(methods) & {"thread/start", "thread/resume", "turn/start"}
+    assert process.returncode == 0
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_host_default_project_does_not_advertise_operator_workspace_reader(monkeypatch, tmp_path, resume):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "on")
+    process = _FakeAppServerProcess()
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    context = ChatProjectContexts([tmp_path], filesystem_scope="host_default").available()[0]
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path, goal_id=None,
+        objective="project", project_context=context, resume_thread_id="thread-loopx-chat" if resume else None,
+        model="synthetic-model", reasoning_effort="high")
+    try:
+        turns = []
+        monkeypatch.setattr(session, "_request", lambda method, params, **kw:
+            turns.append(params) or {"turn": {"id": "owned-turn"}})
+        monkeypatch.setattr(session, "_next_event", lambda **kw:
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+        session.send("Read the public documentation.")
+        assert "loopx_public_source_read" not in turns[0]["input"][0]["text"]
+        assert session.permissions_profile is None
     finally:
         session.close()
 
@@ -901,10 +966,13 @@ def test_ordinary_turn_cannot_adopt_a_commentary_envelope(monkeypatch, tmp_path)
     assert response["proposals"] == []
 
 
+@pytest.mark.parametrize("public_reader", [False, True])
 def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(
     monkeypatch,
     tmp_path,
+    public_reader,
 ):
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "on" if public_reader else "off")
     process = _FakeAppServerProcess()
     monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
     monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
@@ -939,6 +1007,7 @@ def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(
         prompt = turns[0][1]["input"][0]["text"]
         assert "effective runtime profile is trusted_owner" in prompt
         assert "Do not edit files" not in prompt
+        assert "loopx_public_source_read" not in prompt
     finally:
         session.close()
 
