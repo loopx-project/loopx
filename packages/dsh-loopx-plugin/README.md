@@ -77,9 +77,10 @@ cd packages/dsh-loopx-plugin
 
 Start DSH on loopback (port `0` asks the OS for a free port) and open the
 printed URL. The plugin finishes its idempotent LoopX CLI and skill bootstrap
-before DSH publishes the Web URL. Its typed `loopxBootstrap` service gates the
-Web server and runtime rows until startup has either succeeded or failed
-safely:
+before DSH publishes the Web URL through its native Loader readiness boundary.
+The source candidate gates only LoopX's Host and Driver on `loopxBootstrap`,
+so disabling or uninstalling it keeps the shared Web server and runtime alive.
+The published beta.6 limitation is described under automatic initialization:
 
 ```bash
 dsh --profile web --port 0
@@ -122,7 +123,10 @@ pnpm smoke:docker
 The runtime smoke creates an isolated temporary DSH profile. Its real web
 process proves profile composition, automatic initialization before readiness,
 immediate skill-catalog visibility, boot-manifest discovery, bundle serving,
-Client materialization, and the loopback Connection fence. Separately, a
+Client materialization, and the loopback Connection fence. A
+live-disable probe withdraws the bootstrap provider and all package rows while
+checking that DSH stays available and LoopX's route retires; a fresh process
+also boots with the whole package disabled. Separately, a
 packed supported-DSH Context, Connection, and WebServer with a live Host Session fixture
 cover same-turn binding discovery, lease-time source reconciliation,
 status-only updates, pending-watch cancellation, successful actions, and
@@ -144,16 +148,19 @@ never opens a browser or configures a model provider.
 
 ## Maintainer release and marketplace handoff
 
-A DSH plugin release needs an immutable prebuilt GitHub asset, a qualified
-marketplace install channel, and an update pull request against the upstream
+A DSH plugin release needs an immutable prebuilt GitHub asset and a qualified
+install channel in each marketplace named in its closeout. The
 [`awesome-dsh-plugin`](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
-marketplace. Marketplace maintainers retain merge authority; publishing a
-LoopX release does not grant authority over that catalog. Released DSH Hub
-[v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14) supports
-pinned GitHub release packages, so this route does not require publishing the
-LoopX plugin on npm. Its installed-state matcher still needs
-[Hub PR #98](https://github.com/dshplugin/dsh-plugin-hub/pull/98) to be merged
-and released. Qualification must read the online catalog back, select the
+directory and [DSH Plugin Hub](https://github.com/dshplugin/dsh-plugin-hub)
+have distinct published catalogs. Current Hub releases read
+`https://api.dsh-plugin.org/plugins.en.json` and `plugins.zh.json`; updating
+the awesome directory does not update those consumers. Marketplace maintainers
+retain authority over their own catalogs.
+
+Pinned GitHub release installation does not require publishing LoopX on npm.
+Release-URL installed-state matching shipped in
+[Hub 1.5.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.5.0).
+Qualification must read the actual marketplace's catalog back, select the
 pinned package, install it, recognize the installed row, update it and remove
 it successfully. The optional npm channel retains its separate account and
 trusted-publisher requirements.
@@ -200,15 +207,19 @@ For every DSH plugin release:
    The workflow requires a merged tag, consumes its GitHub asset without
    rebuilding, and verifies npm bytes and discovery. It neither creates a
    GitHub release nor replaces npm account ownership or the release guide gate.
-5. In a clean fork branch of `awesome-dsh-plugin`, update only
+5. For the awesome directory, in a clean fork branch of `awesome-dsh-plugin`, update only
    `data/plugins/loopx-project__loopx--packages-dsh-loopx-plugin.yml` to the new
    immutable asset URL. Confirm the URL resolves, then run
    `node scripts/generate-readme.mjs --check` and `git diff --check`.
-6. Open an upstream marketplace pull request and link it from the release
-   closeout. Do not describe the release as marketplace-published until that
-   pull request is merged by the upstream maintainers and the installed
-   marketplace resolves the released package. A catalog listing alone does
-   not prove that its installer consumes the pinned release command.
+6. Open the upstream directory pull request and link it from the release
+   closeout. Separately verify the installed Hub's catalog source at the
+   released Hub revision. Read both language feeds and the website's install
+   command; for the LoopX row, check the `ic` and `igc` targets against the
+   immutable release URL. Route stale Hub metadata to its existing
+   [data-correction issue channel](https://github.com/dshplugin/dsh-plugin-hub/issues).
+   Keep that marketplace's adoption open until its actual consumer resolves
+   and installs the released package. A merged directory PR, another catalog's
+   listing, or an upgraded Hub cannot establish that postcondition.
 
 ## Shadow observer (default off)
 
@@ -290,12 +301,18 @@ does not change LoopX core state by itself.
 
 When DSH loads the plugin, the init row runs the same typed initialization
 routine and publishes the `loopxBootstrap` readiness service only after it
-settles. The plugin's profile patch makes DSH's Web server and runtime depend
-on that service, so the printed URL is a real bootstrap boundary. A safe
-failure is logged without raw subprocess output or local paths, releases the
-Web rows instead of stopping DSH, and leaves `/loopx-init` registered for an
-explicit retry. Automatic startup does not create Agent followups or model
-calls.
+settles. DSH's native Loader wait keeps the printed URL behind initialization;
+the service is a dependency only of LoopX's Host and Driver. A safe failure is
+logged without raw subprocess output or local paths and leaves `/loopx-init`
+registered for an explicit retry. Disabling the package leaves LoopX's
+rows unavailable while DSH remains usable. Removing the package's
+rows releases its routes without stopping the shared Web server or runtime.
+Automatic startup does not create Agent followups or model calls.
+
+The host-isolation repair in this source is pending a new plugin release.
+Published beta.6 still adds the shared Web dependency and can disconnect DSH
+during hot uninstall, including with Hub 1.6.4. For that published package,
+close DSH, remove it with the native plugin CLI, then restart DSH.
 
 The repair command has no arguments. Extra input returns a usage error before any
 model work or CLI probe. A valid invocation queues a bounded start followup on

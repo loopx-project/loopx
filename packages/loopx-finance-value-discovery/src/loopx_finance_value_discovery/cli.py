@@ -174,13 +174,21 @@ def _direct_parser() -> argparse.ArgumentParser:
     sub.add_parser("list-packs", help="List bundled industry metric packs.")
     lark_parser = sub.add_parser(
         "render-lark-card",
-        help="Render research conclusions and evidence from the canonical dashboard view; no send.",
+        help="Render a research input or exact published review reference; no send.",
     )
-    lark_parser.add_argument(
+    lark_source = lark_parser.add_mutually_exclusive_group(required=True)
+    lark_source.add_argument(
         "--input-json",
-        required=True,
         help=f"Path to a {FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION} object.",
     )
+    lark_source.add_argument(
+        "--published-state-file",
+        help="Extension state file owning the published research; reads only.",
+    )
+    lark_parser.add_argument("--goal-id")
+    lark_parser.add_argument("--extension-revision")
+    lark_parser.add_argument("--payload-sha256")
+    lark_parser.add_argument("--surface-id")
     guard_parser = sub.add_parser(
         "evaluate-position", help="Assess private position protection and exit readback; no writes.",
     )
@@ -274,15 +282,30 @@ def run(argv: Sequence[str] | None = None) -> int:
         elif args.command == "list-packs":
             packet = list_finance_metric_packs()
         elif args.command == "render-lark-card":
-            from .dashboard import build_finance_research_dashboard_packet
-            from .lark_projection import build_decision_research_lark_card
+            if args.published_state_file:
+                from .lark_projection import build_published_decision_research_lark_card
 
-            dashboard = build_finance_research_dashboard_packet(
-                _load_json(args.input_json)
-            )
-            packet = build_decision_research_lark_card(
-                dashboard["presentation_projection"]["view"]
-            )
+                if not all((args.goal_id, args.extension_revision, args.payload_sha256)):
+                    raise ValueError("published card requires --goal-id, --extension-revision and --payload-sha256 from the exact publication")
+                packet = build_published_decision_research_lark_card(
+                    state_file=args.published_state_file,
+                    goal_id=args.goal_id,
+                    extension_revision=args.extension_revision,
+                    payload_sha256=args.payload_sha256,
+                    surface_id=args.surface_id or "investment-research",
+                )
+            else:
+                from .dashboard import build_finance_research_dashboard_packet
+                from .lark_projection import build_decision_research_lark_card
+
+                if any((args.goal_id, args.extension_revision, args.payload_sha256, args.surface_id)):
+                    raise ValueError("publication reference flags require --published-state-file")
+                dashboard = build_finance_research_dashboard_packet(
+                    _load_json(args.input_json)
+                )
+                packet = build_decision_research_lark_card(
+                    dashboard["presentation_projection"]["view"]
+                )
         else:
             raise ValueError(
                 "use --doctor, reduce, evaluate, replay, attribute-beta, "

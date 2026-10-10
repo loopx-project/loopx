@@ -216,6 +216,47 @@ soak evidence from #4224 by source and changed boundary before deciding which
 parts need rerunning; an unrelated commit does not erase elapsed time. The
 current public record does not establish a completed applicable soak result.
 
+The non-model Host checkpoint at `c2b17b3e1` qualifies a narrower entry boundary:
+an independently installed wheel and rebuilt packaged App on macOS arm64,
+CPython 3.12.15, Node 24.21.0 / embedded SQLite 3.53.4, and Codex CLI
+0.162.0-alpha.2. Initial and repeated wheel builds contain the same 1,561
+product Python/TypeScript files as source; no retired source file survives.
+Installed CLI creation selects SQLite/`hard_lease`. Native `turn plan` retains
+the exact selected Todo and canonical revision across Effect-process reopen,
+without Host invocation, writes, scheduler ACK or quota spending. The packaged
+App exposes the available Codex endpoint and unavailable alternative endpoints;
+the actual Codex adapter initializes and reads the existing login without a
+model Turn. These facts qualify inspection/startup, not successful model work.
+
+Original empty-session resume is **not qualified**: installed-adapter attempts
+include both success and `no rollout found` refusal after process exit. A
+separate native probe also rejects full Turn-list reading as unsupported in this
+Host version. Keep these observations distinct from SQLite recovery and from
+the earlier packaged App current-write-preserving exit. The next qualification
+step must establish the original LoopX Session/operation's behavior across this
+pre-first-Turn interruption before claiming its recovery. Do not repair the
+evidence by copying history, changing credentials or silently replacing the
+Session. Real model completion, natural cohort operation, other runtime profiles,
+Lark and frozen D2 failures/missing axes remain separate. Reuse the
+[trial operation sheet](../../../../reference/sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用)
+and the existing R5/T4 task; startup alone does not enroll participants or approve
+a release default.
+
+`c2b17b3e1` 的非模型 Host checkpoint 仅验收更窄的入口：独立安装包与重建 App，
+macOS arm64、CPython 3.12.15、Node 24.21.0 / SQLite 3.53.4、Codex CLI
+0.162.0-alpha.2。初次及重复构建的 1,561 个产品 Python/TypeScript 文件与源码
+相符，无已退役源码残留。安装 CLI 新建选 SQLite/`hard_lease`；原生只读
+`turn plan` 在 Effect 进程重开后保留选定 Todo 与 canonical revision，不启动
+Host、写状态、ACK 或扣额度。打包 App 显示可用 Codex 与不可用其他 endpoint；
+真实 Codex adapter 可初始化并读已有登录，未执行模型 Turn。
+
+空 Session 的原身份恢复尚未合格：安装 adapter 在进程退出后的尝试既有成功，
+也有 `no rollout found` 拒绝；独立原生探针还读回该版本不支持完整 Turn 列表。
+这些结果不能混作 SQLite 恢复失败，也不能由此前 App 保留新写入的退出覆盖。
+下一步须证明首轮前中断时原 LoopX Session/操作的恢复行为；不复制历史、改凭据
+或悄悄另建 Session 来通过。真实模型完成、自然试用、其他 runtime、Lark 与冻结
+D2 的失败/未测继续分开，复用既有 R5/T4 Todo；启动成功不代表入组或发布默认。
+
 ### One reusable validation matrix
 
 Record candidate and independent control revisions, actual runtime, complete
