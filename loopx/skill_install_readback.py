@@ -294,8 +294,9 @@ def _git_value(root: Path, *args: str) -> str | None:
             check=False,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            timeout=30,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
