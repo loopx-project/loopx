@@ -4,6 +4,7 @@ import type { AgentContextProvider } from "../agent_context.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 const DEFAULTS: JsonObject = { mode: "off", discovery_budget_minutes: 5, max_trials: 1 };
 const FIELDS = Object.keys(DEFAULTS);

@@ -63,6 +63,23 @@ old source entry's absence of disclosure.
 help/version 不启动观测；上述环境变量及既有 disabled 设置继续关闭观测。
 这是有意消除入口漂移，不宣称与旧源入口“不展示告知”的行为逐字等价。
 
+The bootstrap also pins the process's own `stdin`/`stdout`/`stderr` to UTF-8,
+matching the codec LoopX already pins for text-mode file and subprocess I/O. On
+a host whose locale is not UTF-8 (for example `cp936` on a zh-CN Windows
+console) redirected CLI output now carries UTF-8 instead of locale bytes, and a
+non-ASCII argument, title or the status alert marker no longer raises
+`UnicodeEncodeError`. A real console already reports UTF-8 and is left untouched.
+Input stays strict: a malformed request is still rejected exactly like the
+`--metadata-json <file>` route, so only the codec changes, not the strictness
+of input decoding.
+
+Bootstrap 现将进程自身的 `stdin`/`stdout`/`stderr` 固定为 UTF-8，与 LoopX 已对
+文本文件与子进程 I/O 固定的编码一致。在非 UTF-8 宿主（例如 zh-CN Windows 控制台
+的 `cp936`）上，重定向的 CLI 输出改为 UTF-8 而非本地编码字节；非 ASCII 参数、
+标题或 status 告警标记不再触发 `UnicodeEncodeError`。真实控制台本身即报告
+UTF-8，不做改动。输入解码保持严格：非法请求内容仍与 `--metadata-json <file>`
+入口一样被拒绝，本变更只改编码，不改变输入解码的严格性。
+
 The affected journey is source CLI invocation, including managed/canary callers
 that execute that module. Frontend and Lark do not gain a new control, schema or
 configuration authority. They consume the same existing command projections and

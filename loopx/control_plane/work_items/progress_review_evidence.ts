@@ -3,6 +3,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 export function progressReviewCriterionBasis(params: JsonObject): JsonObject {
   function requireThat(condition: unknown, message: string): asserts condition {
     if (!condition) throw new EffectRuntimeRequestError(message);
@@ -47,15 +48,15 @@ export function progressReviewEvidenceScope(params: JsonObject): JsonObject {
     && scope.files.every(ref => typeof ref === "string" && ref.length > 0 && ref.length <= 1024
       && !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").includes("..")));
   fail(binding.origin === "operator_study" || binding.origin === "goal_acceptance");
-  fail(typeof binding.criteria_sha256 === "string" && /^[a-f0-9]{64}$/.test(binding.criteria_sha256));
+  fail(typeof binding.criteria_sha256 === "string" && BARE_SHA256_PATTERN.test(binding.criteria_sha256));
   const normalized: JsonObject = {origin: binding.origin, criteria_sha256: binding.criteria_sha256};
   if (binding.origin === "goal_acceptance") {
     fail(typeof binding.goal_id === "string" && binding.goal_id.length > 0 && binding.goal_id.length <= 200
       && typeof binding.agent_id === "string" && binding.agent_id.length > 0 && binding.agent_id.length <= 200
       && typeof binding.todo_id === "string" && binding.todo_id.length > 0 && binding.todo_id.length <= 200
-      && typeof binding.contract_digest === "string" && /^[a-f0-9]{64}$/.test(binding.contract_digest)
+      && typeof binding.contract_digest === "string" && BARE_SHA256_PATTERN.test(binding.contract_digest)
       && Number.isInteger(binding.contract_revision) && Number(binding.contract_revision) >= 1
-      && typeof binding.todo_semantic_digest === "string" && /^[a-f0-9]{64}$/.test(binding.todo_semantic_digest)
+      && typeof binding.todo_semantic_digest === "string" && BARE_SHA256_PATTERN.test(binding.todo_semantic_digest)
       && Array.isArray(binding.criterion_ids) && binding.criterion_ids.length > 0 && binding.criterion_ids.length <= 128
       && binding.criterion_ids.every(id => typeof id === "string" && id.length > 0 && id.length <= 200));
     const run = requireJsonObject(params.run, "criterion-bound run identity");
