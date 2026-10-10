@@ -87,6 +87,15 @@ selected canonical descriptions. Private registry/runtime references are not
 sent to the model or persisted in public receipt scope. Without this block the
 basis is explicitly an operator study, not canonical acceptance.
 
+Independent installations negotiate this method boundary. A core without
+`progress_review.criterion_basis` still runs manual studies using the legacy
+basis/receipt shape, without criterion scope metadata. This fallback applies
+only to the typed `unsupported_method` rejection and only without
+`acceptance_scope`; other failures remain errors. Canonical scope requires a
+core implementing the criterion and evidence-scope methods. If either is
+unavailable, upgrade the core before using that scope; it never becomes a
+manual study automatically.
+
 The binding pins Goal/Agent/Todo identity, contract revision/digest, task semantics
 and selected criteria. Capture rejects another task or agent before model dispatch;
 core receipt decoding applies the same identity rule. Select a new matching basis
@@ -94,6 +103,9 @@ when changing tasks.
 A change invalidates in-flight assessment; a fresh observation needs a new basis
 revision/baseline through the existing initialization path. Core readback also
 withdraws a newly scoped receipt when its canonical binding is no longer current.
+For an instantiated Goal, readback uses its exact GoalRef. Recreating the Goal
+retires the old acceptance, so an unchanged task ID cannot keep its old
+observation current. The retained historical receipt is not rewritten.
 The Goal's `assist` revision pin stays manual. Declared file net changes do not
 cover every intermediate decision or omitted dependency, and binding does not
 certify model correctness or grant mutation authority.

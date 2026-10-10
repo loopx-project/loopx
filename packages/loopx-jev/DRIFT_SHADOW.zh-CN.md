@@ -47,11 +47,19 @@
 用选中的规范描述替换模型 acceptance 列表。私有 registry/runtime 引用不发送给模型，
 也不进入公开回执范围。没有该块时，basis 明确属于 operator study，不是规范验收。
 
+独立安装按方法能力区分兼容边界。核心缺少 `progress_review.criterion_basis` 时，
+手工研究仍使用原 basis／回执格式，不生成 criterion scope 元数据。只在没有
+`acceptance_scope` 且收到类型化 `unsupported_method` 拒绝时保留这条路径；其他失败
+继续报错。规范 scope 要求核心实现 criterion 和 evidence-scope 方法，缺少任一方法
+须先升级核心；不会自动改成手工研究。
+
 binding 固定 Goal/Agent/Todo 身份、contract 修订／摘要、任务语义及所选 criterion。
 采集在模型派发前拒绝错配任务或 Agent，核心回执解码使用同一规则；切换任务须选用
 匹配的新依据。变更使在途评估失效；
 新的观察沿既有初始化入口重建 basis revision／baseline。核心读回也会在新格式回执的
 规范 binding 不再当前时撤回信号。Goal 的 `assist` revision pin 仍是手动的。
+已实例化 Goal 的读回使用精确 GoalRef；重建会退休旧验收，同一任务 ID 不能使旧观察
+继续有效。保留的历史回执不被改写。
 声明文件净变化不覆盖每条中间判断或遗漏依赖；绑定不证明模型正确，也不授予修改权限。
 
 ## 操作方法

@@ -255,7 +255,7 @@ PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 
 | --- | --- | --- |
 | 声明来源链不可用时，阻止新的依赖使用 | `Delegations._read_current/start`、`delegation_results.require_dependencies/adoption_evidence`、`delegation.ts` | 遵循对齐 §3.8：source → A → B 中 A input 失效，即使 A output 不变也须拒绝当前依赖使用；验证真实 read/start/adopt/settlement 和打包证据读回，保留历史完成。 |
 | 独立检查失败进入原任务可操作的恢复旅程 | `executor._task_validation_stage`、`ValidatedTurnReceipt`、canonical `turn_loop_controller_contract_v0.json`、`turn_journal.ts` | 传递已资格化失败范围与 repair/replan 细节；完成有界修复或只运行 verifier 的重试、当前验证与原效果结算。Host 声明不能冒充可信验证。 |
-| shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；任务关联变化后撤回旧判断。手工研究和旧回执保持不同证据强度；显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
+| shadow 说明条款及观察范围 | progress-review receipt/context、`progress_review_evidence.ts`、canonical acceptance inspect | 可选择任务当前规范 criterion；精确 GoalRef 保持实例身份，任务变化或实例重建撤回旧判断。独立旧核心只保留手工研究的旧格式；规范 scope 不降级。显示独立维度、净文件变化覆盖、缺失及存储未知。默认 off 和 assist 既有触发规则保持不变。 |
 
 第二项中，`_task_validation_stage` 已保存独立结果并阻断结算；`ValidatedTurnReceipt`
 未携带该验证的 `recovery_kind`，canonical controller 有意将 legacy
