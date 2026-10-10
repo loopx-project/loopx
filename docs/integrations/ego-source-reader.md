@@ -51,6 +51,16 @@ To restrict or roll back that origin scope, set
 the idle host. An empty value, `all`, subdomain wildcards or a list mixing `*`
 with origins is invalid and does not expand the scope.
 
+Ordinary workspace Chat guides the Agent to inspect actual pixels when a
+requested answer depends on a figure, screenshot or chart. Captions, OCR and SVG
+source alone do not complete that visual read. If a reader fails, the Agent should
+discover a permitted alternative and check its rendering for missing labels,
+orientation and arrows before describing it. This is Agent guidance, not a
+machine-enforced completeness check or authority to install tools, access a
+private browser, expand a workspace grant or take control from the user. The
+optional reader still requires explicit host setup; ordinary Chat does not enable
+it automatically, and workspace-only hosts do not inherit personal MCP servers.
+
 Use a supported LoopX installation containing this module. Restart an idle host
 through its existing service path and resume the original Session. Do not change
 its sandbox, approval policy, workspace grants or authentication to make the

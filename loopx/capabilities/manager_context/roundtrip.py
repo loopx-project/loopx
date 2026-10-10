@@ -1438,7 +1438,7 @@ class ReturnService:
             target=self.run, daemon=True, name="loopx-manager-returns"
         )
 
-    def start(self):
+    def start(self) -> None:
         self.thread.start()
 
     def run(self):
@@ -1455,6 +1455,7 @@ class ReturnService:
                 )
             self.stop.wait(3)
 
-    def close(self):
+    def close(self) -> None:
         self.stop.set()
-        self.thread.join(timeout=3)
+        if self.thread.ident is not None:
+            self.thread.join(timeout=3)

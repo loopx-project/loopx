@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ...bootstrap import build_goal_entry
 from ...control_plane.runtime.time import now_local_iso
 from ...paths import (
     registered_goal_state_file,
@@ -188,6 +187,8 @@ def register_project_goal(
         ),
         "external_locator_bindings": _unique(external_locator_bindings),
     }
+    from ...bootstrap import build_goal_entry
+
     goal_record = build_goal_entry(
         project=knowledge_root,
         goal_id=goal_id,

@@ -721,40 +721,53 @@ def _task_step_read_fence_migration(
     ]
 
 
-def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+def _authoring_input_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[Metric, int], list[str]]:
+    """Bound only the observed addition; an already upgraded base gets none."""
+    surface = str(base["row_id"]).partition("/")[2].partition("/")[0]
+    before = base.get("authoring_inputs") or {}
+    after = candidate.get("authoring_inputs") or {}
+    limits: dict[Metric, int] = {}
+    reason = ""
+    if (surface in {"start_goal_guided", "start_goal_guided_command_pack_detail"}
+            and before.get("complete_todo_readback") is False
+            and after.get("complete_todo_readback") is True):
+        # Same fixture: JSON +948 chars/+894 compact/+6 lines; Markdown
+        # +436 chars/+2 lines. Preserve full-body and authority guidance.
+        limits = (
+            {"chars": 1_000, "utf8_bytes": 1_000, "lines": 8, "compact_payload_chars": 960}
+            if base.get("format") == "json" else
+            {"chars": 480, "utf8_bytes": 480, "lines": 3, "compact_payload_chars": 0}
+        )
+        reason = "complete Todo readback step added"
+    elif (surface in {"quota_should_run", "loopx_turn_plan"}
+            and base.get("format") == "json"
+            and before.get("vision_cli_authoring") is False
+            and after.get("vision_cli_authoring") is True):
+        # Default required-replan quota gains the full authoring input:
+        # +3,049 chars/+1,807 compact/+94 lines. Turn already had the schema
+        # and gains only +237 chars of first-write/recovery guidance.
+        limits = (
+            {"chars": 3_200, "utf8_bytes": 3_200, "lines": 96, "compact_payload_chars": 1_920}
+            if surface == "quota_should_run" else
+            {"chars": 256, "utf8_bytes": 256, "lines": 0, "compact_payload_chars": 256}
+        )
+        reason = "Vision CLI authoring input added"
+    return limits, [reason + "; bounded one-time growth"] if limits else []
+
+
+def _compare_row_growth(
+    base: dict[str, Any], candidate: dict[str, Any], *,
+    migration: _SchemaMigrationState,
+    command_route_allowances: dict[Metric, int],
+) -> tuple[dict[str, int | None], dict[str, int | None], list[str], list[str]]:
+    """Compare output cost independently of contract and semantic coverage."""
     row_id = str(base["row_id"])
-    failures: list[str] = []
-    review_signals: list[str] = []
     policy = str(base.get("qualification_policy") or "")
     output_format = str(base.get("format") or "")
-    if candidate.get("qualification_policy") != policy:
-        failures.append("qualification_policy changed")
-    if candidate.get("format") != output_format:
-        failures.append("format changed")
-
-    base_output_contract = base.get("output_contract_version")
-    candidate_output_contract = candidate.get("output_contract_version")
-    heartbeat_agent_input_migration = bool(
-        row_id.startswith("surface/heartbeat_prompt_thin/")
-        and output_format == "json"
-        and base_output_contract is None
-        and candidate_output_contract == HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION
-    )
-    if (
-        candidate_output_contract != base_output_contract
-        and not heartbeat_agent_input_migration
-    ):
-        failures.append("output_contract_version changed")
-
-    migration = _schema_migration_state(
-        base,
-        candidate,
-        output_format=output_format,
-    )
-    added_command_routes, command_route_allowances = (
-        _command_route_growth_allowances(base, candidate)
-    )
-
+    failures: list[str] = []
+    review_signals: list[str] = []
     projection_allowance, projection_failures, projection_signals = _projection_envelope_migration(
         base, candidate, output_format=output_format,
     )
@@ -762,6 +775,8 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     review_signals.extend(projection_signals)
     fence_allowance, fence_signals = _task_step_read_fence_migration(base, candidate)
     review_signals.extend(fence_signals)
+    authoring_allowance, authoring_signals = _authoring_input_migration(base, candidate)
+    review_signals.extend(authoring_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -802,6 +817,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             _decision_evidence_migration_allowance(base, candidate, metric),
             projection_allowance.get(metric, 0),
             fence_allowance.get(metric, 0),
+            authoring_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK
@@ -845,6 +861,50 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         allowances[metric] = allowance
         if delta > allowance:
             failures.append(f"{metric} grew by {delta}; allowance is {allowance}")
+
+    return deltas, allowances, failures, review_signals
+
+
+def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    row_id = str(base["row_id"])
+    failures: list[str] = []
+    review_signals: list[str] = []
+    policy = str(base.get("qualification_policy") or "")
+    output_format = str(base.get("format") or "")
+    if candidate.get("qualification_policy") != policy:
+        failures.append("qualification_policy changed")
+    if candidate.get("format") != output_format:
+        failures.append("format changed")
+
+    base_output_contract = base.get("output_contract_version")
+    candidate_output_contract = candidate.get("output_contract_version")
+    heartbeat_agent_input_migration = bool(
+        row_id.startswith("surface/heartbeat_prompt_thin/")
+        and output_format == "json"
+        and base_output_contract is None
+        and candidate_output_contract == HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION
+    )
+    if (
+        candidate_output_contract != base_output_contract
+        and not heartbeat_agent_input_migration
+    ):
+        failures.append("output_contract_version changed")
+
+    migration = _schema_migration_state(
+        base,
+        candidate,
+        output_format=output_format,
+    )
+    added_command_routes, command_route_allowances = (
+        _command_route_growth_allowances(base, candidate)
+    )
+
+    deltas, allowances, growth_failures, growth_signals = _compare_row_growth(
+        base, candidate, migration=migration,
+        command_route_allowances=command_route_allowances,
+    )
+    failures.extend(growth_failures)
+    review_signals.extend(growth_signals)
 
     if output_format == "json":
         missing = _removed(base, candidate, "semantic_json_keys")
