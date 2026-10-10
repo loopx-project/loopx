@@ -29,14 +29,21 @@ def git(
     *args: str,
     check: bool = True,
     input_bytes: bytes | None = None,
+    timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[bytes]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=False,
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RepositoryChangeWindowError(
+            f"git command timed out after {timeout}s: {' '.join(args)}"
+        ) from None
     if check and result.returncode != 0:
         detail = (
             result.stderr.decode("utf-8", errors="replace").strip()
