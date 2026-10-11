@@ -12,6 +12,7 @@ from benchmark.runtime.codex import DEFAULT_REPLAN_AFTER_TURNS
 
 @pytest.mark.parametrize("help_text,option,count,expected", [
     ("--execution-replan-after-turns {1,2,3,4,5,6}", "--execution-replan-after-turns", 6, True),
+    ("--execution-replan-after-turns {1,2,3,4,5,6}", "--execution-replan-after-turns", 3, True),
     ("--execution-replan-after-turns {1,2,3,4,5}", "--execution-replan-after-turns", 6, False),
     ("--execution-replan-after-todos {1,2,3,4,5}", "--execution-replan-after-todos", 3, True),
     ("--execution-replan-after-todos {1,2,3,4,5}", "--execution-replan-after-todos", 6, False),
