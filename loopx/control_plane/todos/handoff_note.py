@@ -1,202 +1,150 @@
+"""Transport/materialization for the shared TS handoff read model.
+
+Common Todo metadata codecs stay with their existing owner. Python's historical
+str(tuple) digest is wire identity encoding; moving it would change legacy IDs.
+No fallback decision kernel runs when the typed owner is unavailable.
+"""
 from __future__ import annotations
 
 import hashlib
-import re
+import json
 from typing import Any
 
 from .contract import (
-    normalize_todo_action_kind,
-    normalize_todo_blocks_agent,
-    normalize_todo_claimed_by,
-    normalize_todo_decision_scope,
-    normalize_todo_excluded_agents,
-    normalize_todo_id,
-    normalize_todo_id_list,
-    normalize_todo_required_decision_scopes,
-    normalize_todo_resume_when,
+    normalize_todo_action_kind, normalize_todo_claimed_by, normalize_todo_decision_scope,
+    normalize_todo_excluded_agents, normalize_todo_id, normalize_todo_id_list,
+    normalize_todo_required_decision_scopes, normalize_todo_resume_when,
 )
 
 TODO_HANDOFF_NOTE_SCHEMA_VERSION = "handoff_note_v0"
 TODO_CONTINUATION_HINT_MAX_CHARS = 280
-_INLINE_CREDENTIAL_PATTERN = re.compile(
-    r"(?i)(?:\bbearer\s+\S+|\bauthorization\s*:|"
-    r"\b(?:ak|sk|api[_-]?key|access[_-]?key(?:[_-]?id)?|secret(?:[_-]?key)?|"
-    r"token|password)\b\s*[:=]\s*\S+)"
-)
+_TEXT_FIELDS = ("continuation_hint", "suggested_next_action", "note", "reason", "summary",
+                "intent", "blocked_on", "evidence", "title", "text", "task_class", "goal_id",
+                "source", "latest_event_kind")
 
 
-def _compact_text(value: Any, *, limit: int = 220) -> str | None:
-    text = " ".join(str(value or "").strip().split())
-    if not text or _INLINE_CREDENTIAL_PATTERN.search(text):
-        return None
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "..."
+def _refs(value: Any) -> dict[str, Any]:
+    values = [str(raw or "") for raw in value] if isinstance(value, (list, tuple, set)) else []
+    return {**({"truthy": True} if value else {}), **({"values": values} if values else {})}
 
 
-def _raw_handoff(item: dict[str, Any]) -> dict[str, Any]:
-    handoff = item.get("handoff") or item.get("handoff_note")
-    return handoff if isinstance(handoff, dict) else {}
-
-
-def _handoff_id(item: dict[str, Any]) -> str:
+def handoff_context_source(item: dict[str, Any], *, goal_id: str | None = None,
+                           source: str | None = None) -> dict[str, Any]:
+    """Encode language-native scalar facts; selection/compaction belongs to TS."""
+    nested: dict[str, Any] = {}
+    nested_meta: dict[str, Any] = {}
+    for name in ("handoff", "handoff_note"):
+        value = item.get(name)
+        row = value if isinstance(value, dict) else {}
+        if value:
+            nested[name] = {"truthy": True, "fields":
+                {key: str(val or "") for key, val in row.items()} if isinstance(value, dict) else None}
+        nested_meta[name] = {
+            "from_agent": normalize_todo_claimed_by(row.get("from_agent") or item.get("agent_id")),
+            "to_agent": normalize_todo_claimed_by(row.get("to_agent")),
+            "evidence_refs": _refs(row.get("evidence_refs")),
+        }
     todo_id = normalize_todo_id(item.get("todo_id"))
-    if todo_id:
-        return f"handoff_{todo_id.removeprefix('todo_')}"
-    digest = hashlib.sha1(
-        str(
-            (
-                item.get("goal_id"),
-                item.get("role"),
-                item.get("index"),
-                item.get("text") or item.get("title"),
-            )
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-    return f"handoff_{digest}"
+    legacy_id = None if todo_id else "handoff_" + hashlib.sha1(str((
+        item.get("goal_id"), item.get("role"), item.get("index"), item.get("text") or item.get("title"),
+    )).encode("utf-8")).hexdigest()[:12]
+    result = {**nested, "nested_metadata": nested_meta,
+        "texts": {key: str(item[key]) for key in _TEXT_FIELDS if item.get(key)},
+        "metadata": {"todo_id": todo_id,
+            "claimed_by": normalize_todo_claimed_by(item.get("claimed_by")),
+            "excluded_agents": normalize_todo_excluded_agents(item.get("excluded_agents")),
+            "successor_todo_ids": normalize_todo_id_list(item.get("successor_todo_ids")),
+            "unblocks_todo_id": normalize_todo_id(item.get("unblocks_todo_id")),
+            "superseded_by": normalize_todo_id(item.get("superseded_by")),
+            "action_kind": normalize_todo_action_kind(item.get("action_kind")),
+            "resume_when": normalize_todo_resume_when(item.get("resume_when")),
+            "required_decision_scopes": normalize_todo_required_decision_scopes(item.get("required_decision_scopes")),
+            "decision_scope": normalize_todo_decision_scope(item.get("decision_scope"))},
+        "evidence_refs": _refs(item.get("evidence_refs")),
+        "has_evidence": bool(item.get("evidence")), "has_note": bool(item.get("note")),
+        "goal_id": str(goal_id or ""), "source": str(source or ""), "legacy_id": legacy_id}
+
+    # Omitted empty scalar/list facts have the codec's explicit empty default.
+    # Nested text keys are kept, including "", because presence changes priority.
+    for name, row in nested_meta.items():
+        nested_meta[name] = {key: value for key, value in row.items() if value}
+    result["metadata"] = {key: value for key, value in result["metadata"].items() if value}
+    result["nested_metadata"] = {key: value for key, value in nested_meta.items() if value}
+    return {key: value for key, value in result.items() if value}
 
 
-def _first_text(item: dict[str, Any], *keys: str, limit: int = 220) -> str | None:
-    handoff = _raw_handoff(item)
-    for key in keys:
-        value = handoff.get(key) if key in handoff else item.get(key)
-        text = _compact_text(value, limit=limit)
-        if text:
-            return text
-    return None
+def validate_handoff_context(value: Any, count: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) != count or any(
+        not isinstance(row, dict) or not isinstance(row.get("continuation_hint"), (str, type(None)))
+        or not (row.get("note") is None or isinstance(row.get("note"), dict)
+                and row["note"].get("schema_version") == TODO_HANDOFF_NOTE_SCHEMA_VERSION)
+        for row in value
+    ):
+        raise ValueError("invalid typed Todo handoff context")
+    return value
+
+
+def project_handoff_context(sources: list[dict[str, Any]], *,
+                            followups: list[dict[str, Any] | None] | None = None) -> list[dict[str, Any]]:
+    from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
+
+    if followups is not None and len(followups) != len(sources):
+        raise ValueError("handoff followup cardinality mismatch")
+    results: list[dict[str, Any]] = []
+    # This lens is row-independent: byte-bounded transport batches preserve
+    # every source and ordering. It never chunks dependency/closure decisions.
+    start, size = 0, 0
+    for index in range(len(sources) + 1):
+        row_size = 0 if index == len(sources) else len(json.dumps(sources[index], separators=(",", ":")).encode()) + 2
+        if followups is not None and index < len(sources):
+            row_size += len(json.dumps(followups[index], separators=(",", ":")).encode()) + 2
+        if index > start and (index == len(sources) or size + row_size > MAX_REQUEST_BYTES - 4096):
+            try:
+                result = effect_runtime_result("todo.context.page", {"handoff_sources": sources[start:index],
+                    **({"handoff_followups": followups[start:index]} if followups is not None else {})})
+            except EffectRuntimeRejected as error:
+                raise ValueError(str(error)) from error
+            results.extend(validate_handoff_context(result.get("handoff_context") if isinstance(result, dict) else None, index - start))
+            start, size = index, 0
+        if row_size > MAX_REQUEST_BYTES - 4096:
+            # Historical source text can exceed one ordinary frame. Reuse the
+            # existing private snapshot transport; do not truncate before the
+            # typed credential exclusion or add a Python fallback decision.
+            try:
+                result = effect_runtime_result("todo.context.page", {"handoff_sources": sources[index:index + 1],
+                    **({"handoff_followups": followups[index:index + 1]} if followups is not None else {})},
+                    large_local_snapshot=True)
+            except EffectRuntimeRejected as error:
+                raise ValueError(str(error)) from error
+            results.extend(validate_handoff_context(result.get("handoff_context") if isinstance(result, dict) else None, 1))
+            start, size = index + 1, 0
+            continue
+        size += row_size
+    return results
 
 
 def compact_todo_continuation_hint(item: dict[str, Any]) -> str | None:
-    """Project the current bounded continuation without copying raw evidence."""
-
-    return _first_text(
-        item,
-        "continuation_hint",
-        "suggested_next_action",
-        "note",
-        "reason",
-        limit=TODO_CONTINUATION_HINT_MAX_CHARS,
-    )
+    return project_handoff_context([handoff_context_source(item)])[0]["continuation_hint"]
 
 
-def _evidence_refs(item: dict[str, Any], *, todo_id: str | None) -> list[str]:
-    refs: list[str] = []
-    handoff = _raw_handoff(item)
-    raw_refs = handoff.get("evidence_refs") or item.get("evidence_refs")
-    if isinstance(raw_refs, (list, tuple, set)):
-        for raw in raw_refs:
-            ref = _compact_text(raw, limit=180)
-            if ref and ref not in refs:
-                refs.append(ref)
-
-    if item.get("evidence") and todo_id:
-        refs.append(f"todo:{todo_id}:evidence")
-    if item.get("note") and todo_id:
-        refs.append(f"todo:{todo_id}:note")
-    latest_event_kind = _compact_text(item.get("latest_event_kind"), limit=80)
-    if latest_event_kind and todo_id:
-        refs.append(f"rollout_event:{latest_event_kind}:{todo_id}")
-    return refs[:6]
-
-
-def _unresolved_decisions(item: dict[str, Any]) -> list[dict[str, str]]:
-    decisions = list(
-        normalize_todo_required_decision_scopes(item.get("required_decision_scopes"))
-    )
-    single = normalize_todo_decision_scope(item.get("decision_scope"))
-    if single:
-        identity = (single.get("kind"), single.get("granularity"), single.get("scope_key"))
-        if not any(
-            (item.get("kind"), item.get("granularity"), item.get("scope_key")) == identity
-            for item in decisions
-        ):
-            decisions.append(single)
-    return decisions
-
-
-def build_todo_handoff_note(
-    item: dict[str, Any],
-    *,
-    goal_id: str | None = None,
-    source: str | None = None,
-) -> dict[str, Any] | None:
-    """Project an existing todo/history/evidence row into a typed handoff note.
-
-    The note is a read model: it does not create a dispatcher queue, comment
-    stream, approval state, or runtime task separate from the source todo.
-    """
-
+def build_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None,
+                            source: str | None = None) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
-    handoff = _raw_handoff(item)
-    todo_id = normalize_todo_id(item.get("todo_id"))
-    claimed_by = normalize_todo_claimed_by(item.get("claimed_by"))
-    excluded_agents = normalize_todo_excluded_agents(item.get("excluded_agents"))
-    from_agent = normalize_todo_claimed_by(
-        handoff.get("from_agent") or item.get("agent_id")
-    )
-    explicit_to_agent = normalize_todo_blocks_agent(handoff.get("to_agent"))
-    successor_todo_ids = normalize_todo_id_list(item.get("successor_todo_ids"))
-    unblocks_todo_id = normalize_todo_id(item.get("unblocks_todo_id"))
-    superseded_by = normalize_todo_id(item.get("superseded_by"))
-    has_handoff_signal = bool(
-        handoff
-        or excluded_agents
-        or successor_todo_ids
-        or unblocks_todo_id
-        or superseded_by
-    )
-    if not has_handoff_signal:
-        return None
-    to_agent = explicit_to_agent or claimed_by
-
-    intent = (
-        _first_text(item, "intent", limit=80)
-        or normalize_todo_action_kind(item.get("action_kind"))
-        or _compact_text(item.get("task_class"), limit=80)
-        or "continue"
-    )
-    blocked_on = (
-        _first_text(item, "blocked_on", limit=180)
-        or normalize_todo_resume_when(item.get("resume_when"))
-        or (f"todo:{unblocks_todo_id}" if unblocks_todo_id else None)
-        or (f"todo:{superseded_by}" if superseded_by else None)
-    )
-    payload: dict[str, Any] = {
-        "schema_version": TODO_HANDOFF_NOTE_SCHEMA_VERSION,
-        "handoff_id": _handoff_id(item),
-        "todo_id": todo_id,
-        "goal_id": _compact_text(goal_id or item.get("goal_id"), limit=180),
-        "from_agent": from_agent,
-        "to_agent": to_agent,
-        "intent": intent,
-        "summary": _first_text(item, "summary", "note", "reason", "evidence", "title", "text", limit=280),
-        "evidence_refs": _evidence_refs(item, todo_id=todo_id),
-        "unresolved_decisions": _unresolved_decisions(item),
-        "blocked_on": blocked_on,
-        "suggested_next_action": _first_text(item, "suggested_next_action", "title", "text", limit=260),
-        "source": _compact_text(source or item.get("source"), limit=120),
-    }
-    if successor_todo_ids:
-        payload["successor_todo_ids"] = successor_todo_ids
-    if unblocks_todo_id:
-        payload["unblocks_todo_id"] = unblocks_todo_id
-    if excluded_agents:
-        payload["excluded_agents"] = excluded_agents
-    return {
-        key: value
-        for key, value in payload.items()
-        if value not in (None, "", [], {})
-    }
+    return project_handoff_context([handoff_context_source(item, goal_id=goal_id, source=source)])[0]["note"]
 
 
-def attach_todo_handoff_note(
-    item: dict[str, Any],
-    *,
-    goal_id: str | None = None,
-    source: str | None = None,
-) -> dict[str, Any]:
+def attach_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None,
+                             source: str | None = None) -> dict[str, Any]:
     note = build_todo_handoff_note(item, goal_id=goal_id, source=source)
     if note:
         item["handoff_note"] = note
     return item
+
+
+def attach_todo_handoff_notes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    results = project_handoff_context([handoff_context_source(item) for item in items])
+    for item, result in zip(items, results, strict=True):
+        if result["note"]:
+            item["handoff_note"] = result["note"]
+    return items

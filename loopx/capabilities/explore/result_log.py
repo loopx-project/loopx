@@ -155,7 +155,8 @@ def _persisted_text(value: Any, *, field: str) -> str:
     return text
 
 
-def _safe_public_ref(value: Any, *, field: str) -> str:
+def validate_explore_public_ref(value: Any, *, field: str) -> str:
+    """Canonicalize a reference using the Explore reader/writer privacy boundary."""
     text = _compact_text(value, limit=REF_LIMIT, field=field)
     if not text:
         raise ValueError(f"{field} is empty")
@@ -174,7 +175,7 @@ def _safe_public_ref(value: Any, *, field: str) -> str:
 def _safe_public_refs(values: Sequence[Any] | None, *, field: str, max_items: int) -> list[str]:
     refs: list[str] = []
     for index, value in enumerate(values or []):
-        refs.append(_safe_public_ref(value, field=f"{field}[{index}]"))
+        refs.append(validate_explore_public_ref(value, field=f"{field}[{index}]"))
     return refs[:max_items]
 
 
@@ -409,7 +410,7 @@ def _base_event(
     if agent_id:
         event["agent_id"] = _compact_text(agent_id, limit=80, field="agent_id")
     if run_id:
-        event["run_id"] = _safe_public_ref(run_id, field="run_id")
+        event["run_id"] = validate_explore_public_ref(run_id, field="run_id")
     refs = _safe_public_refs(evidence_refs, field="evidence_refs", max_items=MAX_EVIDENCE_REFS)
     if refs:
         event["evidence_refs"] = refs

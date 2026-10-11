@@ -4,7 +4,7 @@ import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {atomicWriteJson, withFileMutationLock} from "../effect_runtime_io.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireNonEmptyString, requireInteger, requireStringLiteral} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireInteger, requireStringLiteral} from "../runtime_decode.ts";
 import {schedulerStatePath} from "../scheduler/state_store.ts";
 
 const LEGACY_SCHEMA = "automation_cadence_store_v1";
@@ -20,6 +20,12 @@ type StartState = "reserved" | "started";
 type Start = Scope & {started_at_ms: number; trigger_at_ms: number; request_id: string;
   manual_reason: string | null; state: StartState};
 type Store = {schema_version: typeof SCHEMA; goal_id: string; revision: number; rules: Rule[]; starts: Start[]};
+export type AutomationCadenceEligibility =
+  | {state: "unconfigured"; reason: "unconfigured"; eligible_now: null; next_eligible_at_ms: null}
+  | {state: "eligible"; reason: "owner_minimum_interval"; eligible_now: true; next_eligible_at_ms: number | null}
+  | {state: "waiting"; reason: "minimum_interval_wait"; eligible_now: false; next_eligible_at_ms: number}
+  | {state: "unavailable"; reason: "agent_scope_required" | "runtime_root_unavailable" | "owner_read_failed";
+    eligible_now: null; next_eligible_at_ms: null};
 const fail = (message: string): never => {throw new EffectRuntimeRequestError(message, "automation_cadence_invalid");};
 /** Stale configuration intent is a typed conflict, never a rejected request. */
 const conflict = (message: string): never => {
@@ -91,6 +97,43 @@ async function load(path: string, goal: string): Promise<Store> {
 function applicable(r: Rule, s: Scope): boolean {
   return r.agent_id === null || (r.agent_id === s.agent_id && (r.automation_id === null || r.automation_id === s.automation_id));
 }
+export function requireAutomationCadenceEligibility(value: unknown): AutomationCadenceEligibility {
+  const row = requireJsonObject(value, "automation cadence eligibility");
+  const state = requireStringLiteral(row.state,
+    ["unconfigured", "eligible", "waiting", "unavailable"] as const, "automation cadence eligibility state");
+  if (state === "unconfigured") {
+    requireStringLiteral(row.reason, ["unconfigured"] as const, "automation cadence eligibility reason");
+    if (row.eligible_now !== null || row.next_eligible_at_ms !== null) {
+      fail("unconfigured cadence eligibility must not claim a lane decision");
+    }
+    return {state, reason: "unconfigured", eligible_now: null, next_eligible_at_ms: null};
+  }
+  if (state === "eligible") {
+    requireStringLiteral(row.reason, ["owner_minimum_interval"] as const, "automation cadence eligibility reason");
+    if (requireBoolean(row.eligible_now, "automation cadence eligible now") !== true) {
+      fail("eligible cadence eligibility must be eligible now");
+    }
+    const next = row.next_eligible_at_ms === null ? null : integer(
+      row.next_eligible_at_ms, "automation cadence next eligible at ms");
+    return {state, reason: "owner_minimum_interval", eligible_now: true, next_eligible_at_ms: next};
+  }
+  if (state === "waiting") {
+    requireStringLiteral(row.reason, ["minimum_interval_wait"] as const, "automation cadence eligibility reason");
+    if (requireBoolean(row.eligible_now, "automation cadence eligible now") !== false) {
+      fail("waiting cadence eligibility cannot be eligible now");
+    }
+    if (row.next_eligible_at_ms === null) fail("waiting cadence eligibility requires next eligible at ms");
+    return {state, reason: "minimum_interval_wait", eligible_now: false,
+      next_eligible_at_ms: integer(row.next_eligible_at_ms, "automation cadence next eligible at ms")};
+  }
+  const reason = requireStringLiteral(row.reason,
+    ["agent_scope_required", "runtime_root_unavailable", "owner_read_failed"] as const,
+    "automation cadence unavailable reason");
+  if (row.eligible_now !== null || row.next_eligible_at_ms !== null) {
+    fail("unavailable cadence eligibility must not claim a lane decision");
+  }
+  return {state, reason, eligible_now: null, next_eligible_at_ms: null};
+}
 function projection(store: Store, s: Scope, nowMs = Date.now()): JsonObject {
   const rules = store.rules.filter(r => applicable(r, s));
   const floor = Math.max(0, ...rules.map(r => r.min_interval_minutes));
@@ -100,12 +143,20 @@ function projection(store: Store, s: Scope, nowMs = Date.now()): JsonObject {
     return start ? [start.started_at_ms + rule.min_interval_minutes * 60_000] : [];
   }) : [];
   const next = due.length ? Math.max(...due) : null;
+  const eligibility: AutomationCadenceEligibility = floor === 0
+    ? {state: "unconfigured", reason: "unconfigured", eligible_now: null, next_eligible_at_ms: null}
+    : !s.agent_id
+    ? {state: "unavailable", reason: "agent_scope_required", eligible_now: null, next_eligible_at_ms: null}
+    : next !== null && nowMs < next
+    ? {state: "waiting", reason: "minimum_interval_wait", eligible_now: false, next_eligible_at_ms: next}
+    : {state: "eligible", reason: "owner_minimum_interval", eligible_now: true, next_eligible_at_ms: next};
   return {
     schema_version: RESULT, ok: true, enabled: floor > 0, goal_id: store.goal_id, ...s,
     configuration_revision: store.revision, min_interval_minutes: floor,
     sources: rules,
     reason: floor === 0 ? "unconfigured" : "owner_minimum_interval",
     next_eligible_at_ms: next, eligible_now: next === null || nowMs >= next,
+    eligibility,
     enforcement: floor === 0 ? "scheduler_recommendation" : "managed_turn_atomic_admission_and_schedule_recommendation",
     pre_model_admission: floor === 0 ? "not_qualified" : "managed_turn_only",
   };

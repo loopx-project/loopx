@@ -22,6 +22,21 @@ from loopx.state_backup import build_state_backup_plan, execute_state_backup_pla
 REPO = Path(__file__).resolve().parents[2]
 
 
+def canonical_todos(runtime, receiver, env, cwd):
+    child = subprocess.run([sys.executable, "-c",
+        "import loopx,json,sys; print(loopx.__file__,file=sys.stderr); "
+        "from loopx.control_plane.effect_runtime import effect_runtime_result; "
+        "print(json.dumps(effect_runtime_result('coordination.local_authority.todo_list',json.load(sys.stdin))))"],
+        input=json.dumps({"schema_version": "loopx_local_coordination_todo_list_request_v0",
+            "runtime_root": str(runtime), "goal_id": "cold", "role": None, "status": None,
+            "todo_id": None, "agent_id": None, "limit": None, "include_leases": True}),
+        cwd=cwd, env=env, capture_output=True, text=True, check=True, timeout=60)
+    assert str(receiver / "loopx/__init__.py") in child.stderr
+    result = json.loads(child.stdout)
+    assert result["status"] == "loaded", result
+    return result
+
+
 def workspace(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project", tmp_path / "runtime"
@@ -135,7 +150,8 @@ def test_cold_cli_import_and_source_free_original_recovery(
     cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     if not old_producers_present:
         for path in ("todos.py", "bootstrap.py", "control_plane/coordination/runtime_shadow_writer_adapter.py",
-                     "control_plane/coordination/local_authority_shadow_outbox.py"):
+                     "control_plane/coordination/local_authority_shadow_outbox.py",
+                     "control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py"):
             (receiver / "loopx" / path).unlink()
     original = state.read_bytes()
     prepared = cli("prepare-import", "--backup-manifest", backup["manifest_path"],
@@ -154,14 +170,7 @@ def test_cold_cli_import_and_source_free_original_recovery(
     assert applied["execution_authority_granted"] is False
     assert state.read_bytes() == original
     # Read the real native owner independently through the receiver package.
-    child = subprocess.run([sys.executable, "-c",
-        "import json,sys; from loopx.control_plane.effect_runtime import effect_runtime_result; "
-        "print(json.dumps(effect_runtime_result('coordination.local_authority.todo_list',json.load(sys.stdin))))"],
-        input=json.dumps({"schema_version": "loopx_local_coordination_todo_list_request_v0",
-            "runtime_root": str(runtime), "goal_id": "cold", "role": None, "status": None,
-            "todo_id": None, "agent_id": None, "limit": None}),
-        cwd=tmp_path, env=env, capture_output=True, text=True, check=True, timeout=60)
-    result = json.loads(child.stdout)
+    result = canonical_todos(runtime, receiver, env, tmp_path)
     assert result["source_authority"] == f"{provider}_v0"
     assert {row["todo_id"] for row in result["todos"]} == {"todo_current", "todo_archived"}
     assert next(row for row in result["todos"] if row["todo_id"] == "todo_current")["text"] == body
@@ -170,6 +179,102 @@ def test_cold_cli_import_and_source_free_original_recovery(
     recovered = cli("recover-import", "--plan-sha256", digest, "--execute")["cold_import"]
     assert recovered["status"] == "replayed", recovered
     assert recovered["cursor"] == "1"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("old_writer_present", [True, False])
+def test_cold_import_recovery_preserves_later_canonical_writes(
+    tmp_path, monkeypatch, provider, old_writer_present,
+):
+    cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    if not old_writer_present:
+        for path in ("control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py"):
+            (receiver / "loopx" / path).unlink()
+    prepared = cli("prepare-import", "--backup-manifest", backup["manifest_path"],
+        "--provider", provider, "--target-handoff-mode", "hard_lease")["cold_import"]
+    digest = prepared["plan_sha256"]
+    imported = cli("apply-import", "--plan-sha256", digest,
+        "--writers-stopped", "--execute")["cold_import"]
+    assert imported["status"] == "applied"
+    registry = tmp_path / "project/.loopx/registry.json"
+
+    def run(*args, succeeds=True):
+        child = subprocess.run([sys.executable, "-c",
+            "import loopx,runpy,sys; print(loopx.__file__,file=sys.stderr); runpy.run_module('loopx.cli',run_name='__main__')",
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *args],
+            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+        assert str(receiver / "loopx/__init__.py") in child.stderr
+        assert "Traceback" not in child.stderr, child.stderr
+        assert (child.returncode == 0) is succeeds, child.stdout + child.stderr
+        return json.loads(child.stdout)
+
+    def listing():
+        return run("todo", "list", "--goal-id", "cold")
+
+    before = listing()
+    update = ["todo", "update", "--goal-id", "cold", "--todo-id", "todo_current",
+        "--agent-id", "agent-a", "--note", "Work retained after migration",
+        "--update-operation-id", "later-update",
+        "--update-expected-provider-revision", before["authority_read"]["provider_revision"]]
+    # Importing source history grants no lease to mutate the imported work.
+    denied = run(*update, succeeds=False)
+    assert denied["error_code"] == "handoff_mode_requires_lease"
+    assert listing()["todos"] == before["todos"]
+    acquired = run("task-lease", "acquire", "--goal-id", "cold", "--todo-id", "todo_current",
+        "--owner", "agent-a", "--idempotency-key", "later-delivery", "--expected-version", "0",
+        "--ttl-seconds", "3600", "--write-scope", "tests/**")
+    assert acquired["acquired"] is True
+    # Lease acquisition advances authority; keep the update CAS current.
+    update[-1] = listing()["authority_read"]["provider_revision"]
+    proof = ["--task-lease-idempotency-key", "later-delivery",
+        "--task-lease-expected-version", str(acquired["lease"]["version"])]
+    assert run(*update, *proof)["ok"] is True
+    add = ["todo", "add", "--goal-id", "cold", "--role", "agent",
+        "--text", "New work after migration", "--operation-id", "later-create"]
+    created = run(*add)
+    assert created["ok"] is True
+    after = listing()
+    complete_after = canonical_todos(runtime, receiver, env, tmp_path)
+    records = {row["todo_id"]: row for row in complete_after["todos"]}
+    assert set(records) == {"todo_current", "todo_archived", created["todo_id"]}
+    assert records["todo_current"]["text"] == body
+    assert records["todo_current"]["note"] == "Work retained after migration"
+    assert records["todo_archived"]["evidence"] == "original"
+    assert records[created["todo_id"]]["text"] == "New work after migration"
+    assert len(complete_after["leases"]) == 1
+    assert complete_after["leases"][0]["todo_id"] == "todo_current"
+    assert complete_after["leases"][0]["owner"] == "agent-a"
+    state.unlink()
+    recovered = cli("recover-import", "--plan-sha256", digest, "--execute")["cold_import"]
+    # This is the original import receipt, not the current provider revision.
+    assert recovered["status"] == "replayed" and recovered["cursor"] == imported["cursor"]
+    current = listing()
+    assert current["todos"] == after["todos"]
+    assert canonical_todos(runtime, receiver, env, tmp_path) == complete_after
+    assert current["authority_read"]["provider_revision"] == after["authority_read"]["provider_revision"]
+    assert run(*add)["todo_id"] == created["todo_id"]
+    assert run(*update, *proof)["ok"] is True
+    assert listing()["todos"] == after["todos"]
+    assert canonical_todos(runtime, receiver, env, tmp_path) == complete_after
+
+    # Replaying the committed Todo update may repair its display projection.
+    # Lose that projection again before testing provider unavailability.
+    state.unlink(missing_ok=True)
+    backend = runtime / "authority" / f"{provider}-v0"
+    offline = backend.with_name(backend.name + "-offline")
+    backend.rename(offline)
+    try:
+        refused = cli("recover-import", "--plan-sha256", digest, "--execute", success=False)["cold_import"]
+        assert refused["ok"] is False and refused["status"] == "failed"
+        assert refused["executed"] is False and refused["legacy_fallback_used"] is False
+        assert not backend.exists() and not state.exists()
+    finally:
+        offline.rename(backend)
+    assert cli("recover-import", "--plan-sha256", digest, "--execute")["cold_import"]["status"] == "replayed"
+    current = listing()
+    assert current["todos"] == after["todos"]
+    assert canonical_todos(runtime, receiver, env, tmp_path) == complete_after
+    assert current["authority_read"]["provider_revision"] == after["authority_read"]["provider_revision"]
 
 
 @pytest.mark.parametrize("artifact", ["archive_path", "manifest_path"])

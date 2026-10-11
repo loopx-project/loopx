@@ -55,10 +55,44 @@ Canonical Todo entrypoint separation (T4): all five mutation facades now share
 `todos/mutation_api.py`; historic imports are lazy and the unpromoted writer is
 isolated in `todos/legacy_mutation.py`. The installed File/SQLite oracle can
 remove the whole writer module while exercising lifecycle and settlement
-recovery. This prepares last-caller deletion without claiming code retirement:
+recovery. The cold-import oracle now composes reviewed import, fresh leased
+updates/new writes and original-operation recovery with that writer absent;
+source-display loss and provider outage cannot replace the current authority
+or erase later writes. The original import cursor remains historical while the
+current provider revision is preserved. This prepares last-caller deletion
+without claiming code retirement:
 bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
+The retained import-compatible field writer now composes resume normalization
+and contradictory-clear rejection in its existing typed field plan. Keep blank
+Python input omission and locked IO; retire the duplicate normalization crossing,
+not the still-supported writer or migration reader.
+
+The remaining legacy writer and bootstrap capture adapter now avoids loading
+rollout history and constructing a Todo projector when runtime shadow is off
+and there is no active durable binding. It still resolves the source identity;
+an active binding continues to require durable preparation even after config
+is disabled. This removes optional capture work from ordinary legacy writes,
+without changing their output, history retention or outbox recovery. Python
+retains this Host IO adapter until its last supported source writer is replaced;
+this is neither whole-writer retirement nor default-provider qualification.
+
+Handoff/continuation display decisions now belong to the existing TypeScript Todo
+context owner. Summary reuses its normalized identity/claim/exclusion/class
+facts in one batch; the index keeps source compaction before labelling and audit
+merging in one native batch. Planning and quota collectors project whole chosen
+sets. Oversized display context uses byte-bounded read-lens batches while
+counts, dependency decisions and closure retain their full-source owner. A
+single oversized historical record reuses the existing private snapshot transport:
+credential checks see its full text before display truncation. The
+Python facade keeps shared metadata codecs and historical tuple/SHA-1 identity
+encoding, with no Python decision fallback. Retain nested-empty precedence,
+Unicode whitespace/codepoint limits and credential rejection before truncation;
+these are compatibility obligations. File/SQLite CLI and normal-wheel recovery
+must preserve exact source and provider revision when Markdown display is absent
+or the selected provider is unavailable. This read-model retirement does not
+retire the supported mutation/Host callers or certify a released SQLite default.
 
 Public add now composes scope, supported wait and bounded Monitor metadata in
 one typed creation-scope request. The legacy add writer consumes that same
@@ -187,6 +221,14 @@ revision and resolves private declarations only after admission/replay. Python's
 separate terminal review selection and eager declaration sequencing are removed.
 This closes a T1/T2/L2 terminal caller family, not the remaining leased metadata,
 executor fences or T4 retirement. [Semantics, crossings and rollback](../../reference/canonical-terminal-review.md).
+
+Canonical completion now resolves linked-successor role/status in that same
+transaction head. Python forwards the declared IDs and registry intent without
+copying the full Todo collection or joining an earlier snapshot into the policy.
+Existing receipt replay returns its original policy even after linked work
+changes. This retires the canonical Python join; the unpromoted writer's actual
+source reads, private validation adapter and historical receipt contracts remain.
+No crossing or provider/default change is added. [Source and recovery boundary](../../reference/canonical-terminal-review.md#linked-work-source).
 
 The canonical supersede CLI/facade now forwards existing-successor links to that
 same terminal owner. One commit links already declared replacement work, retires
@@ -1402,6 +1444,13 @@ Python writer retirement remain separate exits.
 - Keep permanent Markdown rendering, validated import/export and external
   effect adapters. Every retained bridge names its live caller and exit
   condition. No full TS CLI, daemon or remote service is required.
+- Canonical handoff-mode show/set uses the shared runtime-root resolver and
+  loads compatibility source locks and Todo capture producers only after
+  canonical routing declines. Source-removal CLI validation covers real
+  File/SQLite preview, mutation, original-operation replay after a later mode
+  change, and provider outage without a Markdown fallback. Unpromoted writers,
+  lease capture recovery and the legacy migration window remain separate
+  retirement obligations; this closes the canonical setter's import dependency.
 
 **Validation and stop rules for every card**
 

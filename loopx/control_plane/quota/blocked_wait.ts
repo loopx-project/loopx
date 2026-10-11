@@ -11,6 +11,7 @@ import {
 
 export const BLOCKED_WAIT_REQUEST_SCHEMA = "loopx_quota_blocked_wait_request_v0";
 const CAUSAL_WAIT_SCHEMA = "quota_blocked_causal_wait_v0";
+export const MONITOR_UNAVAILABLE_SCHEMA = "quota_monitor_unavailable_v0";
 
 function reject(message: string): never {
   throw new EffectRuntimeRequestError(`typed blocked no-spend closeout ${message}`);
@@ -79,6 +80,21 @@ function retainedTodo(todo: JsonObject): JsonObject {
     .map((field) => [field, todo[field]]));
 }
 
+/** An unavailable attempt is not an observation or a retry clock. The
+ * surrounding settlement owner verifies the exact guard, typed blocker and
+ * evidence before committing this frozen, canonical Monitor scope. */
+export function isMonitorUnavailableWait(value: unknown, todoId: string | null): boolean {
+  const wait = jsonObject(value);
+  const monitor = jsonObject(wait?.monitor_todo);
+  return !!wait && wait.schema_version === MONITOR_UNAVAILABLE_SCHEMA &&
+    wait.source === "turn_settlement" && wait.observation_available === false &&
+    !!todoId && wait.todo_id === todoId && monitor?.todo_id === todoId &&
+    monitor.role === "agent" && monitor.task_class === "continuous_monitor" &&
+    monitor.status === "open" &&
+    (monitor.archive_state == null || monitor.archive_state === "active") &&
+    timestamp(wait.observed_at) !== null;
+}
+
 /** Preflight belongs to the same TS settlement owner as durable readback.
  * Python only transports the complete current Todo facts and observation clock. */
 export function prepareBlockedWait(value: unknown): JsonObject {
@@ -89,10 +105,25 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   const todos = request.todos.map((value) => requireJsonObject(value, "blocked wait Todo"));
   const matches = todos.filter((todo) => todo.todo_id === request.todo_id);
   const todo = matches[0];
-  if (matches.length !== 1 || !todo || !["open", "deferred"].includes(String(todo.status)) ||
-      todo.task_class !== "advancement_task") reject("requires the same unfinished advancement Todo");
+  if (matches.length !== 1 || !todo || !["open", "deferred"].includes(String(todo.status))) {
+    reject("requires the same unfinished Todo");
+  }
   const observed = timestamp(request.observed_at);
   if (observed === null) reject("has an invalid timestamp");
+  if (todo.task_class === "continuous_monitor") {
+    if (todo.role !== "agent" || todo.status !== "open" ||
+        (todo.archive_state != null && todo.archive_state !== "active") ||
+        request.allow_turn_settlement_retry !== true) {
+      reject("requires an admitted open Monitor attempt on canonical authority");
+    }
+    const fields = ["claimed_by", "last_checked_at", "next_due_at", "result_hash",
+      "material_change", "material_change_generation", "cadence", "expires_at", "watch_only"];
+    return {schema_version: MONITOR_UNAVAILABLE_SCHEMA, source: "turn_settlement",
+      todo_id: request.todo_id, observed_at: request.observed_at, observation_available: false,
+      monitor_todo: {...retainedTodo(todo), ...Object.fromEntries(
+        fields.filter(field => todo[field] !== undefined).map(field => [field, todo[field]]))}};
+  }
+  if (todo.task_class !== "advancement_task") reject("requires the same unfinished advancement Todo");
   const resume = todo.resume_when;
   const condition = jsonObject(todo.resume_condition);
   if (typeof resume === "string" && /^(?:monitor_changed|todo_done):/.test(resume)) {

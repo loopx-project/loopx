@@ -628,6 +628,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-cadence-readback strong { font-size: var(--text-title); line-height: var(--leading-title); font-variant-numeric: tabular-nums; }
 .personal-cadence-readback strong span { font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 500; }
 .personal-cadence-readback p { margin: 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-cadence-eligibility { display: grid; gap: 4px; margin-top: 9px; padding-top: 12px; border-top: 1px solid var(--pw-line); }
+.personal-cadence-eligibility > span { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-cadence-eligibility > strong { font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-cadence-eligibility[data-state="eligible"] > strong { color: var(--pw-green); }
+.personal-cadence-eligibility[data-state="waiting"] > strong { color: #8a4b08; }
+.personal-cadence-eligibility time { overflow-wrap: anywhere; color: var(--pw-text); font-variant-numeric: tabular-nums; }
 .personal-cadence-boundary { display: flex; align-items: flex-start; gap: 9px; margin: 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-cadence-boundary svg { flex: 0 0 auto; margin-top: 1px; }
 .personal-cadence-change { display: grid; gap: 4px; margin: 0; font-size: var(--text-body); line-height: var(--leading-body); font-variant-numeric: tabular-nums; }

@@ -71,7 +71,7 @@ class Provider:
             path = args[args.index("GET") + 1]
             assert path.startswith("/open-apis/im/v1/messages/")
             message = dict(self.messages[path.rsplit("/", 1)[-1]])
-            if message.get("msg_type") == "text" and "content" in message:
+            if message.get("msg_type") == "text" and "content" in message and "body" not in message:
                 message["body"] = {"content": json.dumps({"text": message.pop("content")})}
             data = {"code": 0, "data": {"items": [message]}}
         elif "+messages-mget" in args:
@@ -239,7 +239,8 @@ def test_group_model_handoff_cannot_read_or_dispatch_to_a_private_goal(ordinary,
         runtime.close()
 
 
-def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary):  # noqa: F811
+@pytest.mark.parametrize("mentioned_stop", [False, True])
+def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary, mentioned_stop):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:
         roots = [provider.topic(f"running-{i}", "wait for interrupt") for i in range(2)]
@@ -261,12 +262,63 @@ def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary):  
         assert any(root == roots[0]["message_id"] and "Public progress" in text for _, root, text in provider.topic_writes)
         assert all("private reasoning" not in text for _, _, text in provider.topic_writes)
         stop = provider.topic("stop-first-topic", "/stop", root=roots[0]["message_id"])
+        if mentioned_stop:
+            stop["content"] = "@Renamed assistant  /stop"
+            provider.messages[stop["message_id"]].update(content=stop["content"],
+                body={"content": json.dumps({"text": "@_user_1  /stop"})},
+                mentions=[{"key": "@_user_1", "name": "Renamed assistant", "id": "ou_notes_app_bot"}])
         assert transport.admit("notes-app", stop)["status"] == "command_recorded"
         assert runtime.wait_for_turn(session_id=rows[0]["session_id"], turn_id=rows[0]["turn_id"], timeout_sec=10)["status"] == "interrupted"
         assert store.load_turn(rows[1]["session_id"], rows[1]["turn_id"])["status"] == "running"
         finish_group_turn(runtime, transport, message=queued["content"])
         assert any("+messages-edit" in call for call in provider.calls)
         assert all(root in {row["message_id"] for row in roots} for _, root, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["/status", "/help", "/new"])
+def test_group_mentioned_controls_bypass_model_turns(ordinary, command):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("control-topic", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = finish_group_turn(runtime, transport, message=root["content"])
+        turns = store.root / "sessions" / row["session_id"] / "turns"
+        before = sorted(turns.glob("*.json"))
+        event = provider.topic("mentioned-control", "@Renamed assistant " + command, root=root["message_id"])
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": "@_user_1 " + command})},
+            mentions=[{"key": "@_user_1", "name": "Renamed assistant", "id": {"app_id": "cli_notes_app"}}])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert sorted(turns.glob("*.json")) == before
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("raw_text,identity,key", [
+    ("@_user_1 /stop", "ou_steward_app_bot", "@_user_1"),
+    ("@notes-app /stop", "ou_notes_app_bot", "@_user_1"),
+    ("Explain @_user_1 /stop", "ou_notes_app_bot", "@_user_1"),
+    ("`@_user_1 /stop`", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1 /stop after this", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1/stop", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1 /stop", "ou_notes_app_bot", ""),
+])
+def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identity, key):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("ordinary-topic", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=root["content"])
+        rendered = raw_text.replace("@_user_1", "@notes-app")
+        event = provider.topic("ordinary-mention", rendered, root=root["message_id"])
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": raw_text})},
+            mentions=[{"key": key, "name": "notes-app", "id": identity}])
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = finish_group_turn(runtime, transport, message=rendered)
+        assert row["message"] == rendered
     finally:
         runtime.close()
 
@@ -650,6 +702,103 @@ def test_group_identity_requires_verified_bot_and_private_identity_requires_veri
     provider.bot_ready = False
     with pytest.raises(ValueError, match="App identity"):
         observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
+
+
+def test_group_outbound_source_verification_reads_fresh_envelopes_without_display_projection(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("outbound-root", "/status")
+        event = provider.topic("outbound-follow", "/status", root=root["message_id"])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        provider.calls.clear()
+        assert transport._source_verified(record)
+        assert not any("+messages-mget" in args for args in provider.calls)
+        assert {args[args.index("GET") + 1] for args in provider.calls if "GET" in args} == {
+            f"/open-apis/im/v1/messages/{root['message_id']}",
+            f"/open-apis/im/v1/messages/{event['message_id']}",
+        }
+        # Every outbound attempt must re-read the root: no cross-attempt cache.
+        provider.messages[root["message_id"]]["mentions"] = []
+        assert not transport._source_verified(record)
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("overlap-root", "Explain the project")
+        event = provider.topic("overlap-follow", "@notes-app Explain config", root=root["message_id"])
+        provider.messages[event["message_id"]]["body"] = {
+            "content": json.dumps({"text": "@_user_1 Explain config"})}
+        started = threading.Barrier(2)
+
+        def overlap(args, cwd=None, timeout=None):
+            if ("+messages-mget" in args or
+                    ("GET" in args and args[args.index("GET") + 1].endswith(event["message_id"]))):
+                started.wait(timeout=2)
+            return provider(args, cwd, timeout)
+
+        transport.runner = overlap
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        assert row["message"] == event["content"]
+        assert row["source"]["topic_ref"] == lark_private_source(
+            provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("drift", [
+    "sender", "chat", "type", "root", "parent", "thread", "mention",
+    "root_sender", "root_parent", "root_chat", "app", "bot", "revoke",
+])
+def test_group_outbound_envelopes_fail_closed_on_source_or_grant_drift(ordinary, drift):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("fence-root", "/status")
+        event = provider.topic("fence-follow", "/status", root=root["message_id"])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        record = json.loads(next(transport.root.glob("*.json")).read_text())
+        provider.calls.clear()
+        message, original = provider.messages[event["message_id"]], provider.messages[root["message_id"]]
+        if drift == "sender":
+            message["sender"] = {"id": "ou_other", "sender_type": "user"}
+        elif drift == "chat":
+            message["chat_id"] = "oc_other"
+        elif drift == "type":
+            message["msg_type"] = "image"
+        elif drift == "root":
+            message["root_id"] = "om_other"
+        elif drift == "parent":
+            message["parent_id"] = "om_other"
+        elif drift == "thread":
+            message["thread_id"] = "omt_other"
+        elif drift == "mention":
+            original["mentions"] = []
+        elif drift == "root_sender":
+            original["sender"]["sender_type"] = "app"
+        elif drift == "root_parent":
+            original["parent_id"] = "om_other"
+        elif drift == "root_chat":
+            original["chat_id"] = "oc_other"
+        elif drift == "app":
+            provider.profile_apps["notes-app"] = "cli_other"
+        elif drift == "bot":
+            provider.bot_ready = False
+        else:
+            transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        transport.reconcile()
+        assert not provider.writes
+        assert not transport.core.read_request(record["request_ref"]).get("delivery_verified")
+        if drift in {"sender", "chat", "type", "root", "parent", "thread"}:
+            assert not any("GET" in args and args[args.index("GET") + 1].endswith(root["message_id"])
+                           for args in provider.calls)
+    finally:
+        runtime.close()
 
 
 def test_legacy_group_principal_and_native_home_are_not_migrated_during_observation(ordinary):  # noqa: F811

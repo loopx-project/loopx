@@ -230,6 +230,106 @@ def cli(registry: Path, *args: str) -> dict:
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize("configured", [None, False])
+@pytest.mark.parametrize("operation", ["add", "bootstrap"])
+def test_disabled_capture_skips_shadow_inputs_on_real_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool | None, operation: str,
+) -> None:
+    from loopx import bootstrap, rollout_event_log
+    from loopx.control_plane.coordination import local_authority_shadow_adapter as projection
+    from loopx.control_plane.coordination import runtime_shadow_writer_adapter as writer
+
+    registry, state, root = fixture(tmp_path)
+    if configured is not None:
+        value = json.loads(registry.read_text())
+        value["goals"][0]["coordination"]["runtime_shadow"] = {
+            "enabled": configured,
+            "schema_version": "loopx_coordination_runtime_shadow_config_v0",
+            "provider": "file_v0",
+        }
+        registry.write_text(json.dumps(value))
+    begin = writer.begin_todo_runtime_shadow_capture
+    load = rollout_event_log.load_rollout_events
+    project = projection.todo_partition_projector
+    observed: list[str] = []
+
+    def read_events(*args, **kwargs):
+        observed.append("events")
+        return load(*args, **kwargs)
+
+    def build_projector(*args, **kwargs):
+        observed.append("projector")
+        return project(*args, **kwargs)
+
+    def observe_capture(**kwargs):
+        observed.append("begin")
+        # Observe only capture IO; other writer readers retain their real inputs.
+        with monkeypatch.context() as capture_observer:
+            capture_observer.setattr(rollout_event_log, "load_rollout_events", read_events)
+            capture_observer.setattr(projection, "todo_partition_projector", build_projector)
+            return begin(**kwargs)
+
+    monkeypatch.setattr(writer, "begin_todo_runtime_shadow_capture", observe_capture)
+    before = state.read_bytes()
+    if operation == "add":
+        result = add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+            text="Keep disabled capture inert.", task_class="advancement_task", agent_id="agent-a")
+        assert result["added"] is True
+        assert "Keep disabled capture inert." in state.read_text()
+        assert result["coordination_runtime_shadow"]["outcome"] == "no_transaction"
+        assert result["coordination_runtime_shadow"]["reason_code"] == "shadow_disabled"
+    else:
+        result = bootstrap.bootstrap_project(project=tmp_path, registry_path=registry,
+            runtime_root=root, goal_id=GOAL, objective="Keep the legacy source complete.",
+            domain="test", role="primary", parent_goal_id=None, state_file=state,
+            goal_doc=None, adapter_kind="generic_project_goal_v0", adapter_status="connected",
+            next_probe=None, spawn_allowed=False, max_children=0, allowed_domains=[],
+            write_scope=[], force=False, preserve_todos=False, dry_run=False, sync_global=False)
+        assert result["ok"] is True
+        assert "## User Todo" in state.read_text()
+    assert state.read_bytes() != before
+    assert observed == ["begin"]
+    assert not (root / "authority-shadow").exists()
+
+
+@pytest.mark.parametrize("projector_fails", [False, True])
+def test_active_binding_keeps_capture_after_configuration_is_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projector_fails: bool,
+) -> None:
+    from loopx.control_plane.coordination import local_authority_shadow_adapter as projection
+    from loopx.control_plane.coordination.shadow_management import ShadowManagementError
+
+    registry, state, root = fixture(tmp_path)
+    value = json.loads(registry.read_text())
+    value["goals"][0]["coordination"]["runtime_shadow"] = {
+        "enabled": True, "schema_version": "loopx_coordination_runtime_shadow_config_v0", "provider": "file_v0",
+    }
+    registry.write_text(json.dumps(value))
+    cli(registry, "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")
+    value["goals"][0]["coordination"]["runtime_shadow"]["enabled"] = False
+    registry.write_text(json.dumps(value))
+    before = state.read_bytes()
+    if projector_fails:
+        def unavailable(*args, **kwargs):
+            raise OSError("projection input unavailable")
+        monkeypatch.setattr(projection, "todo_partition_projector", unavailable)
+        with pytest.raises(ShadowManagementError) as error:
+            add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+                text="Preserve the active lineage.", task_class="advancement_task", agent_id="agent-a")
+        assert error.value.reason_code == "shadow_capture_prepare_failed"
+        assert state.read_bytes() == before
+        assert not list((root / "authority-shadow" / "outbox" / GOAL / "todos").glob("*.committed.json"))
+    else:
+        result = add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+            text="Preserve the active lineage.", task_class="advancement_task", agent_id="agent-a")
+        assert result["added"] is True
+        assert result["coordination_runtime_shadow"]["outcome"] == "delivered"
+        assert "Preserve the active lineage." in state.read_text()
+        digest = hashlib.sha256(GOAL.encode()).hexdigest()[:16]
+        candidate = json.loads((root / "authority-shadow" / "file-v0" / f"authority-store-{digest}.json").read_text())
+        assert candidate["cursor"] == "2"
+
+
 def test_real_cli_handoff_and_todo_add_have_one_receipt_each(tmp_path: Path) -> None:
     registry, state, root = fixture(tmp_path)
     value = json.loads(registry.read_text())

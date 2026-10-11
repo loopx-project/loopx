@@ -12,6 +12,7 @@ from typing import Any
 
 from ..quota.decision_summary import compact_quota_decision
 from ..effect_runtime import effect_runtime_result
+from ..quota.effective_action import EffectiveAction
 from ..runtime.time import now_utc, utc_isoformat
 from ..todos.frontier_deadline import build_frontier_recheck_plan
 from .arbitration import (
@@ -1166,6 +1167,82 @@ def _monitor_bounded_wait_profile(
     }
 
 
+def _automatic_cadence_wait_eligibility(
+    payload: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Return the validated owner wait projected by quota, not an arbitrary wait."""
+
+    if (
+        payload.get("decision") != "wait"
+        or payload.get("effective_action") != EffectiveAction.BLOCKED_WAIT.value
+    ):
+        return None
+    readback = payload.get("automation_cadence_readback")
+    if not isinstance(readback, Mapping):
+        return None
+    eligibility = readback.get("eligibility")
+    if not isinstance(eligibility, Mapping):
+        return None
+    next_at = eligibility.get("next_eligible_at_ms")
+    if (
+        eligibility.get("state") != "waiting"
+        or eligibility.get("reason") != "minimum_interval_wait"
+        or eligibility.get("eligible_now") is not False
+        or isinstance(next_at, bool)
+        or not isinstance(next_at, int)
+        or next_at < 0
+    ):
+        return None
+    return eligibility
+
+
+def _build_automatic_cadence_wait_hint(
+    *,
+    execution_context: SchedulerExecutionContextResolution,
+    arbitration: SchedulerArbitration,
+    eligibility: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep the current App timer untouched while atomic admission owns readiness."""
+
+    spend_policy = (
+        "no quota spend while automatic execution waits for the owner minimum interval"
+    )
+    return apply_scheduler_execution_context(
+        {
+            "schema_version": SCHEDULER_HINT_SCHEMA_VERSION,
+            "source": "quota.should-run",
+            "action": "backoff_until_state_change",
+            "cadence_class": "quiet_wait",
+            "reason_code": arbitration.reason_code,
+            "reason": "automatic execution minimum interval has not elapsed",
+            "spend_policy": spend_policy,
+            "app_automation": {
+                "apply": "none",
+                "host_action": "none",
+                "host_action_required": False,
+                "ack_required": False,
+                "next_eligible_at_ms": eligibility["next_eligible_at_ms"],
+                "no_spend_for_cadence_change": True,
+            },
+            "unchanged_poll": {
+                "local_scheduler": "continue",
+                "codex_cli_tui": "continue",
+                CODEX_APP_SSH_GOAL_RUNTIME_KEY: "continue",
+                "claude_code_loop": "continue",
+                "final_quota_replan_check_enabled": False,
+                "spend_policy": spend_policy,
+            },
+            "unchanged_identity_keys": list(
+                _scheduler_identity_keys(
+                    cadence_class="quiet_wait",
+                    execution_context=execution_context,
+                )
+            ),
+        },
+        execution_context,
+    )
+
+
 def build_scheduler_hint(
     payload: dict[str, Any],
     *,
@@ -1319,6 +1396,18 @@ def build_scheduler_hint(
         payload,
         agent_scope_frontier_actions=agent_scope_action_set,
     )
+    automatic_cadence_wait = _automatic_cadence_wait_eligibility(payload)
+    if (
+        automatic_cadence_wait is not None
+        and execution_context.context is not None
+        and execution_context.context.app_automation_applicable
+        and arbitration.disposition == SchedulerDisposition.QUIET_WAIT
+    ):
+        return _build_automatic_cadence_wait_hint(
+            execution_context=execution_context,
+            arbitration=arbitration,
+            eligibility=automatic_cadence_wait,
+        )
 
     if arbitration.disposition == SchedulerDisposition.TERMINAL_STOP:
         return _build_scheduler_stop_hint(

@@ -125,6 +125,18 @@ project/state 路由和租约证明保留在对应命令支持的参数中。命
 继续使用 explicit operation identity 和已有共享投影；无需新增前端设置、视觉控件
 或 Lark 传输。
 
+## 后继来源
+
+Canonical completion 的 `--successor-todo-id` 声明关联；terminal 事务从当前 provider
+head 读取其 role/status，按声明顺序报告第一个 open Agent 后继。调用者旧策略快照
+不能加入未声明的关联或覆盖这些事实。缺失/self-link 拒绝和 lease 准入仍先于效果。
+已完成或 User 后继可保留历史关系，但不计作 open Agent 工作。
+
+原操作重放返回最初接受的 completion policy，包括旧版本产生的 receipt，不按今天
+的 head 重写；当前 Todo 读回另行显示后续变化。未晋升 Markdown writer 保留真实
+source 兼容路径，本批不强制迁移或退役该 writer。代码回滚同时恢复此前 adapter 和
+事务即可，不需要持久化格式迁移。
+
 ## 原 Turn 的替代退役与已有后继
 
 `todo supersede --turn-instance-id <原 Turn>` 现在接受普通完成已有的精确

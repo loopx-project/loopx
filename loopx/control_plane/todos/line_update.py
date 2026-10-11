@@ -23,7 +23,6 @@ from .contract import (
     normalize_todo_id,
     normalize_todo_id_list,
     parse_todo_metadata_line,
-    require_supported_todo_resume_when,
 )
 from .completion_state import (
     TodoCompletionContinuation,
@@ -251,11 +250,11 @@ def apply_todo_update_to_lines(
     claim_only: bool = False,
     updated_at: str,
 ) -> dict[str, Any]:
-    normalized_resume_when = resume_when if public_context is not None else require_supported_todo_resume_when(resume_when)
-    if normalized_resume_when and clear_resume_when:
-        raise ValueError(
-            "todo update accepts either resume_when or clear_resume_when, not both"
-        )
+    # Blank Python compatibility values mean omission. The whole typed field
+    # owner already normalizes and validates a supplied condition, including
+    # contradictory clear intent; do not preflight it through a second RPC.
+    if public_context is None and resume_when is not None and not str(resume_when).strip():
+        resume_when = None
     normalized_todo_id = normalize_todo_id(todo_id)
     if not normalized_todo_id:
         raise ValueError(
@@ -310,7 +309,7 @@ def apply_todo_update_to_lines(
             "completion_continuation": completion_continuation,
             "completion_recovery": completion_recovery,
             "completion_metadata_updates_override": completion_metadata_updates_override,
-            "resume_when": normalized_resume_when,
+            "resume_when": resume_when,
             "resume_monitor_generation": resume_monitor_generation,
             "clear_resume_when": clear_resume_when,
             "no_followup": no_followup,

@@ -11,6 +11,7 @@ from ..coordination.local_authority import (
 )
 
 from .succession_warning import public_todo_summary
+from .resume_condition import TodoResumeRolloutEvents
 from ...agent_registry import registered_agent_ids_for_goal
 from ..work_items.recommendation_source_io import (
     load_recommendation_source_goal, recommendation_source_context,
@@ -122,6 +123,8 @@ def active_state_todo_fields(
             rollout_event_log_path(runtime_root, goal_id),
             limit=max_todo_index_rollout_events_per_goal,
         )
+    if runtime_root is not None and goal_id:
+        events = TodoResumeRolloutEvents(events, runtime_root=runtime_root, goal_id=goal_id)
     if canonical is not None:
         fields = canonical_todo_summary_fields(
             canonical["todos"],

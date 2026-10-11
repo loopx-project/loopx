@@ -7,6 +7,57 @@ or an explicit `no_followup=true`. This read policy lives in
 its decisions. It belongs to the existing Todo control plane, uses the selected
 AuthorityStore, and adds no capability or extension provider.
 
+## PR dependency observation / PR 依赖观察
+
+`pr_merged:owner/repo#42` identifies a dependency; absence of a merge event
+does not prove that GitHub is still pending. Delivery-history supervision no
+longer exempts that unobserved wait. Causal blocked closeout continues to require
+a registered `monitor_changed` or `todo_done` target with current readback.
+
+The existing `heartbeat-prequota --goal-id GOAL --agent-id AGENT` observes exact
+unfinished PR dependencies from the complete Todo head, including deferred work.
+It polls at most four distinct repository-qualified dependencies per invocation,
+with a durable 30-minute cadence for successful and failed attempts. A missing
+repository binding is reported for repair; it never guesses from PR numbers.
+An exact merged observation appends the existing native `pr_merge` fact so the
+original condition becomes satisfied. Resume readback uses the same complete
+retained Goal log as observation, before any recent-event display limit. The
+typed resume owner keeps one original merge proof per exact dependency; more
+than 500 unrelated events or 256 other dependencies cannot evict that proof.
+List, status, quota and archived reads keep their bounded presentation, and
+restarts need neither repeated remote reads nor rewritten merge timestamps.
+Queue disappearance, closed-without-merge
+and provider failures cannot satisfy it. This observation changes no Todo status,
+requirements, claims, leases or Goal acceptance. Deferred ready work still needs
+its normal lifecycle transition.
+
+Generated heartbeat prompts include prequota only when the host declares
+`--available-capability external_evidence_poll`; filesystem/shell declarations
+alone do not opt in. Omitting that declaration keeps external observation off.
+Explicit prequota invocation authorizes compact metadata reads and local
+observation writeback, never merge, review, remote mutation or quota spend.
+Read back with `todo list --goal-id GOAL --todo-id TODO --format json`.
+These same typed dependency facts are the boundary to reuse in TurnEnvelope;
+this heartbeat adoption does not claim that every Turn host already polls them.
+
+`pr_merged:owner/repo#42` 只标识依赖；缺少合并事件不证明 GitHub 仍在等待。
+历史交付监督不再豁免这种未观察等待，因果阻塞结算仍要求已注册的
+`monitor_changed` 或 `todo_done` 目标及当前回读。
+原生 `heartbeat-prequota --goal-id GOAL --agent-id AGENT` 从完整 Todo 源选择
+精确的未完成 PR 依赖（含 deferred），每次最多核验四个不同仓库限定的依赖。
+成功和失败均保留 30 分钟核验节奏，重启后仍有效。仓库缺失需要修复，不能按编号猜测。
+真实合并观察写入既有 `pr_merge`，原条件自然满足。回读与观察共用完整保留的 Goal
+日志，在最近事件展示裁剪前由 TS resume owner 保留每项精确依赖的原始合并证明；
+超过 500 条无关事件或 256 项其他依赖不能挤走它。list、status、quota 与归档读取
+仍保留原展示边界，重启不需要重复远端读取或改写合并时间。离开 open 列表、关闭未合并或
+provider 失败不能解除等待。观察不修改 Todo 状态、要求、认领、lease 或 Goal 验收；
+已满足条件的 deferred Todo 仍走正常生命周期转换。
+生成的 heartbeat 仅在声明 `--available-capability external_evidence_poll` 时加入
+prequota；只声明 filesystem/shell 不会启用。省略该声明即关闭外部观察。
+显式调用仅授权紧凑元数据读取和本地观察记账，不授权合并、review、远端写入或额度支出。
+通过 `todo list --goal-id GOAL --todo-id TODO --format json` 回读。
+TurnEnvelope 应复用同一类型化依赖事实；本批未证明所有 Turn host 已接入自动核验。
+
 ## Relationship evidence
 
 The policy evaluates the complete available Todo graph before role, status,
@@ -121,6 +172,47 @@ rejects the new request instead of silently losing classification or edges. Exis
 historical capture/promotion receipts are not rewritten or upgraded in place.
 Requalify capture on this runtime before a future promotion.
 
+Todo mutation adapters take the existing archive limit and headroom from
+`completed_archive`, avoiding a reverse import of the status collector. Both
+canonical transport and the retained unpromoted writer keep the command's
+default of ten completed records; status compatibility exports remain intact.
+
+Handoff display is another live compatibility boundary. Status/index, summary
+and selected-work consumers still use the Python handoff adapter; its stable
+identity, nested-field precedence, bounded source references and credential
+rejection must survive retirement. Credential assignments are rejected before
+display truncation; ordinary discussion of token budgets remains readable.
+Canonical exact-Todo reads return the source record, while status adds derived
+handoff context. Neither context grants execution authority or proves completion.
+The [handoff characterization tests](../../tests/control_plane/test_todo_handoff_retirement_contract.py)
+exercise these distinctions and real File/SQLite CLI readback with legacy
+mutation modules absent. They enable a later whole-consumer typed migration;
+the same fixture also takes a normally built wheel, installs it into an isolated target and
+runs its installed console entrypoint against both real providers, with the old
+writer modules and four shadow capture producers physically removed. Module,
+distribution and packaged TypeScript provenance are checked before those CLI
+journeys. Creation recovery preserves later writes and the original provider;
+provider loss refuses admission, while leased settlement and monitor retries
+retain their original receipts without repeating effects. This is a disposable
+retirement oracle, not adoption on an active Goal, old-backup import/restore
+qualification or final writer retirement. Preserve the existing adapter until
+that migration replaces its real
+callers, rather than adding a projection RPC for every displayed Todo.
+
+Ordinary pytest runs keep the source arm. To require the installed retirement
+arm, first prepare the qualified Chat bundle and build the wheel through the
+normal distribution build, then supply that artifact explicitly. A supplied
+missing/invalid wheel fails the run; it is never converted to a source-only pass.
+
+```bash
+LOOPX_TODO_RETIREMENT_WHEEL=path/to/built.whl uv run --extra test python -m pytest tests/control_plane/test_canonical_todo_writer_isolation.py tests/control_plane/test_todo_handoff_retirement_contract.py -q
+```
+
+This variable selects test coverage only; it grants no production access or
+feature authority. No setting is installed or persisted. Omit the variable to
+run the ordinary source arm. Installed test results qualify only the supplied
+artifact and removed paths.
+
 Use existing read commands; no activation or new option is needed:
 
 ```bash
@@ -163,3 +255,24 @@ old read policies can again misclassify these cases.
 本阶段关闭一组 T3/L5 读语义及其 L7 捕获依赖，不代表 D1 投影投递、D2 耐久性、
 D3 整 Goal 切换完成，也不修改默认 provider。PostgreSQL 使用相同规则，服务部署与
 资格仍独立。复杂 fixture 和只读快照演练不是长期 soak 或生产晋升许可。
+
+handoff 展示仍有真实 Python 调用方，退役时必须保留稳定身份、嵌套字段优先级、
+有界源引用及截断前的凭据拒绝；普通 token budget 讨论仍可展示。canonical 精确
+Todo 读取返回源记录，status 才加入派生交接上下文，两者都不授予执行权限或证明
+完成。上述测试覆盖旧 mutation 模块缺席时的真实 File/SQLite CLI 读回，只为后续
+整组消费者迁入 TS 建立兼容基线。同一 fixture 还将正常构建的 wheel 安装到隔离目录，
+用其实际 console 入口在两种真实 provider 上运行；旧 writer 模块与四个 shadow
+capture producer 物理移除，先核对模块、distribution 和打包 TS 来源。创建重试
+保留后来写入与原 provider，provider 缺失拒绝准入，lease 结算和 monitor 重试
+保持原回执且不重复效果。这是一次性隔离退役验收，不是活跃 Goal 的安装采用、
+旧备份导入恢复或最终 writer 退役。替代真实调用方前保留既有适配器，不为每个
+展示 Todo 新增一次投影 RPC。
+
+普通 pytest 保留源码验证。完成 Chat bundle 的正常构建并生成 wheel 后，用上文
+`LOOPX_TODO_RETIREMENT_WHEEL` 指定产物，才运行安装态退役验证；指定的 wheel
+缺失或无效会失败，不降级为源码通过。此变量只选择测试覆盖，无生产或功能授权，
+不持久化配置；省略变量恢复源码验证。结论仅覆盖指定产物与实际移除路径。
+
+Todo mutation 适配器直接复用 `completed_archive` 的既有阈值与余量，消除对 status
+collector 的反向导入；canonical transport 与保留的旧 writer 仍默认保留十个完成
+记录，status 的兼容导出不变。

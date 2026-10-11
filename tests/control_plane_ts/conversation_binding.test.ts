@@ -334,18 +334,42 @@ test("an exact registered attached Session needs its own App grant and workspace
 test("attached status names the registered recipient and stop cannot pretend host push support", () => {
   const target = {target_ref: "f".repeat(24), host_ref: "a".repeat(24), session_id: "original", goal_id: "sample-goal",
     goal_instance_id: null, agent_id: "notes-worker", executor_endpoint_id: "codex"};
+  const cadence = {goal_id: target.goal_id, agent_id: target.agent_id, automation_id: null,
+    configuration_revision: 4, min_interval_minutes: 60,
+    eligibility: {state: "waiting", reason: "minimum_interval_wait", eligible_now: false,
+      next_eligible_at_ms: 1791637200000}};
   const context = resolveBoundConversation({current: planConversationBinding(request).state,
     binding_id: row.binding_id, source_ref: "e".repeat(24), sender_ref: row.operator_ref,
     private_human_message: true, observation, available_projects: [project]}).context;
   const session = {...target, session_mode: "attached_host", status: "busy", active_turn_id: "original-turn"};
   const input = {binding: {...row, agent_targets: [target]}, context, current_session: session, agent_target: target,
     queued_count: 2, active_turn: {session_id: "original", turn_id: "original-turn", status: "running"},
+    automation_cadence: cadence,
     observed_at: "2026-01-01T10:00:00Z", request: {request_ref: "e".repeat(24), command: "status"}};
   const snapshot = planBoundConversationRequest(input).status_snapshot as Record<string, unknown>;
   assert.equal(snapshot.recipient_agent_id, "notes-worker");
   assert.equal(snapshot.queued_count, 2);
+  assert.deepEqual(snapshot.automation_cadence, cadence);
   for (const command of ["stop", "new"]) assert.equal(planBoundConversationRequest({...input,
     request: {...input.request, command}}).response_code, "attached_control_unavailable");
+  assert.throws(() => planBoundConversationRequest({...input, automation_cadence: undefined}), /exact selected Agent status/);
+  for (const automation_cadence of [
+    {...cadence, goal_id: "another-goal"},
+    {...cadence, agent_id: "another-agent"},
+    {...cadence, automation_id: "timer"},
+    {...cadence, eligibility: {...cadence.eligibility, next_eligible_at_ms: null}},
+    {...cadence, eligibility: {state: "unavailable", reason: "owner_read_failed",
+      eligible_now: null, next_eligible_at_ms: null}},
+  ]) {
+    assert.throws(() => planBoundConversationRequest({...input, automation_cadence}));
+  }
+  const unavailable = {...cadence, configuration_revision: null, min_interval_minutes: null,
+    eligibility: {state: "unavailable", reason: "owner_read_failed", eligible_now: null, next_eligible_at_ms: null}};
+  const unavailableSnapshot = planBoundConversationRequest({...input, automation_cadence: unavailable})
+    .status_snapshot as Record<string, unknown>;
+  assert.deepEqual(unavailableSnapshot.automation_cadence, unavailable);
+  assert.throws(() => planBoundConversationRequest({...input, request: {...input.request, command: "help"}}),
+    /exact selected Agent status/);
 });
 
 

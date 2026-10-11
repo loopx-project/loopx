@@ -502,6 +502,11 @@ function recoveryObligation(
       ? `Recover prior unsettled host Turn for ${bindingId}; re-enter its original ` +
         "guard, inspect existing effects, then resume and settle verified work under " +
         "that identity before rerunning the current Turn; do not invent an external wait"
+      : repair === "monitor_poll"
+      ? `Recover prior unsettled host Turn for ${bindingId}; record a verified ` +
+        "original observation with monitor-poll, or use the original identity for " +
+        "typed blocked writeback if observation is unavailable; never invent a " +
+        "result hash. Then rerun the current Turn and continue eligible work"
       : `Recover prior unsettled host Turn for ${bindingId}; use a typed ` +
         "lifecycle observation, then rerun quota and continue eligible work",
     repair,

@@ -1,10 +1,13 @@
 import type { SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
-import { isCausalBlockedWait } from "./blocked_wait.ts";
+import { isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 
-/** A blocked Turn needs a bounded retry or a verified canonical causal wait. */
+/** Historical entry point for blocked no-spend qualification: an advancement
+ * retry/causal wait or a canonical Monitor unavailable attempt. The latter
+ * creates no retry clock and cannot be projected as an advancement wait. */
 export function isBoundedBlockedRetry(value: unknown, todoId: string | null): boolean {
   if (isCausalBlockedWait(value, todoId)) return true;
+  if (isMonitorUnavailableWait(value, todoId)) return true;
   const retry = jsonObject(value);
   if (!retry || retry.schema_version !== "quota_blocked_retry_v0" ||
       (retry.source !== "todo" && retry.source !== "turn_settlement") ||
@@ -96,12 +99,14 @@ export interface ReceiptBoundMonitorSettlementState {
   material_change: boolean;
   durable_writeback_present: boolean;
   quota_spend_present: boolean;
+  /** Exact typed unavailable writeback, verified by the settlement owner. */
+  unavailable_attempt_present?: boolean;
 }
 
 export function receiptBoundMonitorPhase(
   state: ReceiptBoundMonitorSettlementState,
 ): ReceiptBoundMonitorPhase {
-  if (!state.poll_present) return "poll_due";
+  if (!state.poll_present && !state.unavailable_attempt_present) return "poll_due";
   // The committed monitor-poll is the durable no-spend closeout for this
   // monitor Turn. A material observation may atomically release an independent
   // successor, but it never upgrades the observe-only monitor into an

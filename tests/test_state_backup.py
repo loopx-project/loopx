@@ -110,6 +110,31 @@ def test_duplicate_targets_reuse_snapshot_and_preserve_ordinary_files(tmp_path):
     assert (Path(payload["manifest_path"]).stat().st_mode & 0o777) == 0o600
 
 
+def test_backup_does_not_walk_or_archive_junction_targets(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    state = project / ".loopx"
+    redirected = state / "redirect"
+    redirected.mkdir(parents=True)
+    outside_secret = redirected / "secret.txt"
+    outside_secret.write_text("outside backup scope")
+
+    def is_junction(path: Path) -> bool:
+        return path == redirected
+
+    monkeypatch.setattr(Path, "is_junction", is_junction, raising=False)
+
+    plan = backup_plan(tmp_path)
+    state_target = next(
+        item for item in plan["included"] if item["archive_path"] == "project/.loopx"
+    )
+    assert state_target["stats"]["files"] == 0
+    assert state_target["stats"]["symlinks"] == 1
+
+    payload = execute_state_backup_plan(plan)
+    with tarfile.open(payload["archive_path"]) as archive:
+        assert "project/.loopx/redirect/secret.txt" not in archive.getnames()
+
+
 def test_invalid_sqlite_fails_without_replacing_previous_backup(tmp_path):
     runtime = tmp_path / "runtime"
     runtime.mkdir()

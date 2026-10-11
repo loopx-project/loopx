@@ -73,9 +73,11 @@ SURFACE_BUDGETS = {
         # provider-neutral app_automation packet becomes canonical.
         # Full Goal/selected-work read commands add necessary source continuity.
         # One Agent-channel carrier avoids duplicating them in the CLI channel.
+        # M3 adds one validated cadence readback envelope to the quota packet:
+        # 357 -> 368 nested keys and 51 -> 52 top-level keys.
         "max_json_chars": 15_500,
-        "max_nested_keys": 360,
-        "max_top_level_keys": 52,
+        "max_nested_keys": 376,
+        "max_top_level_keys": 54,
     },
     "dashboard_status_json": {
         "owner": "operator dashboard",

@@ -47,6 +47,31 @@ failure; do not shorten the floor or activate an alternate scheduler. A daily
 wall-clock schedule and 1440 elapsed minutes can differ around timezone/DST
 changes; this policy uses elapsed minutes and projects a minute-based RRULE.
 
+## Inspect the minimum-interval condition
+
+The human CLI read prints the configuration revision, contributing source
+revisions, minimum-interval state and exact UTC threshold time. The Chat
+Dashboard exposes the same facts under **Settings → Automatic execution
+interval**. Both consume the quota owner's typed readback; neither calculates
+the condition from a local clock. An `eligible` state means only that the
+minimum interval has elapsed. It does not assert session health, quota,
+permissions, work availability or launch readiness.
+
+For Lark, select an explicitly authorized attached Agent with `/agents` and its
+exact `/agent` command, then send `/status`. That status uses the Agent-wide
+scope because a Lark target has no automation identity. It shows the effective
+minimum and exact UTC next-eligible time. A project conversation with no
+selected Agent does not read or expose Goal cadence. An unavailable or invalid
+owner read is reported as unavailable, never as eligible. Redelivery uses the
+persisted status snapshot and does not read the owner again.
+
+`quota should-run` always attaches the same readback for the selected Goal and
+Agent. A waiting interval changes the decision to a quiet wait only for an
+otherwise runnable hosted App automation. Generic CLI inspection and stronger
+pause, health, gate, recovery, repair or settlement states keep their existing
+decision. The scheduler emits no timer mutation, host action or notification
+for this wait.
+
 ## Disable or roll back
 
 Lowering or disabling a scope needs an explicit owner decision and the latest
@@ -64,11 +89,12 @@ reset backoff history to bypass an interval. No policy is enabled by default.
 
 ## What this version verifies
 
-CLI configuration/readback, inherited constraints, version conflicts and
-recommendation/reset parity are covered by real temporary-file tests. No
-frontend/Lark editor is added: this first delivery is explicitly the existing
-App automation plus CLI configuration path. Settings projection is tracked in
-[RFC M3](../architecture/rfcs/automatic-execution-admission-v0.md).
+CLI configuration/readback, inherited constraints, version conflicts,
+recommendation/reset parity, hosted-App quota waiting, Dashboard readback and
+selected-Agent Lark status are covered by focused owner, API, rendering and
+replay tests. The packaged Dashboard scenario verifies Chinese desktop/mobile
+and English desktop settings readback. These surfaces do not add another policy
+store or modify an App timer.
 
 The App-bundled runtime supports prompt hooks in an isolated test, but actual
 App automatic-trigger coverage, hook trust/failure handling and reliable manual

@@ -1410,7 +1410,15 @@ export async function executeCoordinationTodoTerminalLifecycle(
         dry_run: input.dry_run,
         validation_receipt: implicitMonitorNoChange ? null : terminalUpgradeReceipt !== null
           ? terminalUpgradeReceipt.validation_receipt : input.validation_receipt,
-        completion_policy_request: input.completion_policy_request,
+        // Link ids are caller intent; role/status are facts owned by this head.
+        // Receipt recovery above preserves the originally accepted policy.
+        completion_policy_request: input.completion_policy_request === null ? null : {
+          ...input.completion_policy_request,
+          linked_successors: input.linked_successor_todo_ids.map(todoId => {
+            const successor = projection.todos.get(todoId)!; // Admitted before effects above.
+            return {todo_id: todoId, role: successor.role, status: successor.status};
+          }),
+        },
       });
     } catch (error) {
       return terminalFailure(

@@ -860,6 +860,7 @@ def fetch_github_pr_lifecycle_payload(
     reference: Mapping[str, Any],
     *,
     timeout_seconds: int = 10,
+    compact: bool = False,
 ) -> dict[str, Any]:
     repo = str(reference.get("repo") or "")
     number = reference.get("number")
@@ -877,7 +878,7 @@ def fetch_github_pr_lifecycle_payload(
             repo_slug,
             "--json",
             ",".join(
-                [
+                ["state", "url", "mergedAt", "closedAt"] if compact else [
                     "baseRefName",
                     "closingIssuesReferences",
                     "closedAt",

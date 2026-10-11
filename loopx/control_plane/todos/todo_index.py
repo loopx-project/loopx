@@ -6,8 +6,8 @@ from typing import Any, Protocol
 
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from .contract import normalize_todo_id, normalize_todo_status, todo_done_for_status
-from .handoff_note import attach_todo_handoff_note
-from .todo_summary import compact_todo_item
+from .handoff_note import handoff_context_source, project_handoff_context
+from .todo_summary import _compact_todo_item_record
 
 TODO_INDEX_SCHEMA_VERSION = "todo_index_v0"
 TODO_INDEX_ITEM_SCHEMA_VERSION = "todo_index_item_v0"
@@ -66,7 +66,7 @@ def _indexed_status_todo(
     text = public_safe_compact_text(todo.get("title") or todo.get("text"), limit=320)
     if not text:
         return None
-    item = compact_todo_item(todo)
+    item = dict(todo)
     item.update(
         {
             "schema_version": TODO_INDEX_ITEM_SCHEMA_VERSION,
@@ -77,7 +77,6 @@ def _indexed_status_todo(
             "title": public_safe_compact_text(todo.get("title"), limit=320) or text,
         }
     )
-    attach_todo_handoff_note(item, goal_id=goal_id, source=source)
     return item
 
 
@@ -141,7 +140,6 @@ def _indexed_rollout_todo_event(
     handoff = event.get("handoff") or details.get("handoff")
     if isinstance(handoff, dict):
         item["handoff"] = handoff
-    attach_todo_handoff_note(item, goal_id=goal_id, source="rollout_event_log")
     return item
 
 
@@ -162,33 +160,31 @@ def build_todo_index(
         if isinstance(item, dict) and item.get("goal_id")
         and item.get("todo_source") == "unavailable"
     }
-    current_count = 0
-    for item in queue.get("items") or []:
-        if not isinstance(item, dict):
+    status_sources: list[tuple[str, str, dict[str, Any]]] = []
+    for entry in queue.get("items") or []:
+        if not isinstance(entry, dict):
             continue
-        goal_id = str(item.get("goal_id") or "")
+        goal_id = str(entry.get("goal_id") or "")
         if not goal_id or goal_id in unavailable_goal_ids:
             continue
         for role in ("user", "agent"):
-            todos = item.get(f"{role}_todos")
-            if not isinstance(todos, dict):
-                continue
-            for todo in todos.get("items") or []:
-                if not isinstance(todo, dict):
-                    continue
-                indexed_item = _indexed_status_todo(
-                    goal_id=goal_id,
-                    role=role,
-                    todo=todo,
-                    source="attention_queue",
-                    public_safe_compact_text=public_safe_compact_text,
-                )
-                if indexed_item is None:
-                    continue
-                indexed[_todo_index_key(goal_id, indexed_item)] = indexed_item
-                current_count += 1
+            todos = entry.get(f"{role}_todos")
+            if isinstance(todos, dict):
+                status_sources.extend((goal_id, role, todo) for todo in todos.get("items") or []
+                                      if isinstance(todo, dict))
+    compacts = [_compact_todo_item_record(todo) for _, _, todo in status_sources]
+    status_rows, context_sources, followups = [], [], []
+    for (goal_id, role, _), compact in zip(status_sources, compacts, strict=True):
+        row = _indexed_status_todo(goal_id=goal_id, role=role, todo=compact,
+            source="attention_queue", public_safe_compact_text=public_safe_compact_text)
+        if row is not None:
+            status_rows.append(row)
+            context_sources.append(handoff_context_source(compact))
+            followups.append(handoff_context_source(row))
+    current_count = len(status_rows)
 
     rollout_event_count = 0
+    event_rows = []
     goal_ids = [
         str(goal.get("id") or "")
         for goal in history.get("goals") or []
@@ -218,36 +214,46 @@ def build_todo_index(
             )
             if event_item is None:
                 continue
-            key = _todo_index_key(goal_id, event_item)
-            existing = indexed.get(key)
-            if existing:
-                existing["event_count"] = int(existing.get("event_count") or 0) + 1
-                kinds = list(existing.get("event_kinds") or [])
-                latest_kind = event_item.get("latest_event_kind")
-                if latest_kind and latest_kind not in kinds:
-                    kinds.append(latest_kind)
-                existing["event_kinds"] = kinds
-                existing["latest_event_kind"] = latest_kind
-                existing["latest_event_at"] = event_item.get("latest_event_at")
-                existing["latest_event_status"] = event_item.get("latest_event_status")
-                # Audit receipts describe historical operations. They cannot
-                # replace the current authority's status or mint a claimant.
-                if existing.get("source") == "rollout_event_log":
-                    if event_item.get("status"):
-                        existing["status"] = event_item.get("status")
-                        existing["done"] = bool(event_item.get("done"))
-                    if event_item.get("agent_id"):
-                        existing["agent_id"] = event_item.get("agent_id")
-                # The audit sentence describes the newest event for every row
-                # kind; only event-only rows also carry `title_source`, and the
-                # text of an attention-queue row stays authoritative because
-                # it is never overwritten here.
-                existing["latest_event_summary"] = (
-                    event_item.get("latest_event_summary")
-                    or existing.get("latest_event_summary")
-                )
-                continue
-            indexed[key] = event_item
+            event_rows.append(event_item)
+    contexts = project_handoff_context([
+        *context_sources, *(handoff_context_source(row) for row in event_rows)],
+        followups=[*followups, *([None] * len(event_rows))])
+    for row, context in zip([*status_rows, *event_rows], contexts, strict=True):
+        if context["note"]:
+            row["handoff_note"] = context["note"]
+    for row in status_rows:
+        indexed[_todo_index_key(row["goal_id"], row)] = row
+    for event_item in event_rows:
+        key = _todo_index_key(event_item["goal_id"], event_item)
+        existing = indexed.get(key)
+        if existing:
+            existing["event_count"] = int(existing.get("event_count") or 0) + 1
+            kinds = list(existing.get("event_kinds") or [])
+            latest_kind = event_item.get("latest_event_kind")
+            if latest_kind and latest_kind not in kinds:
+                kinds.append(latest_kind)
+            existing["event_kinds"] = kinds
+            existing["latest_event_kind"] = latest_kind
+            existing["latest_event_at"] = event_item.get("latest_event_at")
+            existing["latest_event_status"] = event_item.get("latest_event_status")
+            # Audit receipts describe historical operations. They cannot
+            # replace the current authority's status or mint a claimant.
+            if existing.get("source") == "rollout_event_log":
+                if event_item.get("status"):
+                    existing["status"] = event_item.get("status")
+                    existing["done"] = bool(event_item.get("done"))
+                if event_item.get("agent_id"):
+                    existing["agent_id"] = event_item.get("agent_id")
+            # The audit sentence describes the newest event for every row
+            # kind; only event-only rows also carry `title_source`, and the
+            # text of an attention-queue row stays authoritative because
+            # it is never overwritten here.
+            existing["latest_event_summary"] = (
+                event_item.get("latest_event_summary")
+                or existing.get("latest_event_summary")
+            )
+            continue
+        indexed[key] = event_item
 
     items = sorted(
         indexed.values(),

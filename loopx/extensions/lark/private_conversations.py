@@ -10,6 +10,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
-from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
+from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args, lark_provider_mention_identities
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
@@ -97,7 +98,8 @@ class LarkPrivateConversations:
             return None
         return _message(payload, message_id)
 
-    def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None) -> Mapping[str, Any] | None:
+    def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None,
+                        render_content: bool = True) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
 
         A p2p source read proves the destination without requiring group-member
@@ -111,16 +113,34 @@ class LarkPrivateConversations:
             native = _read_json(native_path) if native_path.exists() else {}
             if native.get("agent_target"):
                 self.bindings.resolve_agent_target(selected, native["agent_target"])
-            result = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"],
-                tail=["im", "+messages-mget", "--message-ids", event["message_id"],
-                      "--as", "bot", "--no-reactions", "--format", "json"]))
-            message = _message(json_payload(result), event["message_id"])
+            def rendered() -> Mapping[str, Any]:
+                return call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"],
+                    tail=["im", "+messages-mget", "--message-ids", event["message_id"],
+                          "--as", "bot", "--no-reactions", "--format", "json"]))
+
+            group = selected["binding"].get("audience") == "group"
+            if group:
+                # Both projections read this exact message under the same App.
+                # The root is read only after canonical ancestry checks below.
+                # Outbound provenance needs no display rendering. Admission
+                # retains that projection unchanged for text and media inputs.
+                if render_content:
+                    with ThreadPoolExecutor(max_workers=2) as reads:
+                        current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
+                        display = reads.submit(rendered)
+                        canonical, result = current.result(), display.result()
+                    message = _message(json_payload(result), event["message_id"])
+                else:
+                    canonical = self._group_source_message(record["profile"], event["message_id"])
+                    result, message = {"returncode": 0 if canonical else 1}, canonical
+            else:
+                result = rendered()
+                message = _message(json_payload(result), event["message_id"])
             sender = message.get("sender") if isinstance(message, Mapping) else None
             if (result.get("returncode") == 0 and message is not None
                     and message.get("chat_id") == event["chat_id"] and isinstance(sender, Mapping)
                     and sender.get("id") == event["sender_id"] and sender.get("sender_type") == "user"):
-                if selected["binding"].get("audience") == "group":
-                    canonical = self._group_source_message(record["profile"], event["message_id"])
+                if group:
                     canonical_sender = canonical.get("sender") if isinstance(canonical, Mapping) else None
                     if (canonical is None or canonical.get("chat_id") != event["chat_id"]
                             or not isinstance(canonical_sender, Mapping)
@@ -131,7 +151,9 @@ class LarkPrivateConversations:
                         return None
                     # Keep the existing text/media rendering, but only the
                     # lossless envelope supplies identity, ancestry and @.
-                    message = {**canonical, "content": message.get("content")}
+                    if not render_content and canonical.get("msg_type", canonical.get("message_type")) != event.get("message_type"):
+                        return None
+                    message = {**canonical, **({"content": message.get("content")} if render_content else {})}
                     # Provider readback, never event text, fixes the topic root.
                     root = str(message.get("root_id") or message["message_id"])
                     # The compact event projection emits null for absent
@@ -146,10 +168,8 @@ class LarkPrivateConversations:
                             or parent != event_parent
                             or (event_thread and event_thread != str(message.get("thread_id") or ""))):
                         return None
-                    if root == event["message_id"]:
-                        original: Mapping[str, Any] | None = message
-                    else:
-                        original = self._group_source_message(record["profile"], root)
+                    original = (message if root == event["message_id"] else
+                                self._group_source_message(record["profile"], root))
                     from .event_inbox import lark_event_mentions_bot
                     observation = self.bindings.observe(record["profile"])
                     if (not original or original.get("chat_id") != event["chat_id"]
@@ -161,13 +181,40 @@ class LarkPrivateConversations:
                                                            bot_open_id=observation["bot_open_id"],
                                                            allow_text_fallback=False)):
                         return None
+                    if message.get("msg_type", message.get("message_type")) == "text":
+                        message["_command_input"] = self._group_text_command_input(message, observation)
                 return message
         except (KeyError, ValueError, OSError):
             pass
         return None
 
     def _source_verified(self, record: dict[str, Any]) -> bool:
-        return self._source_message(record) is not None
+        return self._source_message(record, render_content=False) is not None
+
+    @staticmethod
+    def _group_text_command_input(message: Mapping[str, Any], observation: Mapping[str, Any]) -> str | None:
+        # Display readback replaces native mention keys with names. Parse only
+        # the lossless provider text, so names and quoted mentions cannot grant
+        # a control operation. Model input keeps its original rendered text.
+        try:
+            text = json.loads(message["body"]["content"])["text"]
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(text, str):
+            return None
+        text = text.strip()
+        mentions = message.get("mentions")
+        if not isinstance(mentions, list):
+            return text
+        leading = [mention for mention in mentions if isinstance(mention, Mapping)
+                   and isinstance(mention.get("key"), str) and mention["key"]
+                   and text.startswith(mention["key"])
+                   and text[len(mention["key"]):len(mention["key"]) + 1].isspace()]
+        if len(leading) == 1:
+            identities = {observation["bot_app_id"], observation["bot_open_id"]} - {""}
+            if lark_provider_mention_identities(leading[0]).intersection(identities):
+                return text[len(leading[0]["key"]):].strip()
+        return text
 
     def _inbox(self, record: dict[str, Any]) -> Path:
         observation = self.bindings.observe(record["profile"])
@@ -264,6 +311,8 @@ class LarkPrivateConversations:
                     _atomic_write_json(path, record)
                 text, attachments = record.get("message", ""), record.get("attachments", [])
             command_input = private_message_caption(record["source_content"]) if attachments else text.strip()
+            if binding.get("audience") == "group" and message_type == "text":
+                command_input = source_message.get("_command_input") or command_input
             command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(command_input)
             if command_input == "/agents":
                 command = "agents"

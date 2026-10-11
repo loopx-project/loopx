@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ...capabilities.semantic_preference.contract import REQUEST_SCHEMA, RESPONSE_SCHEMA
+from ...entrypoint import pin_utf8_stdio
 from .project_peer import ProjectPeerScope, resolve_project_peer_scope
 
 
@@ -297,6 +298,7 @@ def handle_openviking_provider(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    pin_utf8_stdio()
     try:
         return run()
     except Exception as exc:  # Provider stderr is reduced by the outer hook.
