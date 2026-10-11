@@ -2552,11 +2552,6 @@ SQLite 证明与 provider-neutral 归档恢复共用持有私有状态的 TS 重
 | C／L8：整 Goal 演练与分组迁移 | L2–L7 后汇合一个精确 revision／profile；drain capture、fence 旧 writer、回读 canonical 与投影、演练 fenced export／rollback。 | D3 包绑定 lineage、cursor、source digest、命令覆盖和 profile；已有 Goal 分组迁移需明确批准，不能按命令拆 authority 或复活旧 Markdown。 |
 | D／L9：新 Goal 默认与有界退役 | 单独 default-change PR 让新建／onboarding 选择合格本地 profile，配齐 settings／readback、installer 和打包客户端；最后 caller 与迁移窗口退出才删除旧业务 writer。 | L8 整体产品／回滚资格；区分新 Goal 默认和已有 Goal 迁移。发布兼容／停用说明，保留显式 provider、永久 renderer 和合法 import/export。T4 可在默认启用后继续收尾。 |
 
-**L9 发布启用检查点。** 1.4 发布候选在 D2/D3 默认资格未齐时恢复 1.3.1 的未配置创建
-路径和关闭的新建设置默认；显式 File/SQLite canonical 创建及两种执行策略保留。
-删除命名空间只关闭未来 canonical 新建，不改变已有 authority、原操作、回执与 fence。
-之前默认候选的打包交互证据不替代长期／平台／恢复资格，本调整不退役旧 writer 或备份 reader。
-
 **2026-09-24 基线核对。** 保留 claim 的 #4870、reviewed cutover #4888、shadow drain
 规划 #4920 已合并，快照分页 #4922、SQLite runtime 准入 #4960 与刷新显示恢复 #4961 也已
 合并，后续应验收组合 head，而不是继续沿用旧的 PR hold；SQLite 读取证明优化 #4931 当时仍在

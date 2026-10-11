@@ -113,14 +113,13 @@ Before changing release defaults, the existing owners must close these gaps:
    including installed runtime admission, settings/readback and packaged entry
    points. Keep explicit provider selection and reviewed backup/rollback.
 
-The L9 SQLite-default implementation remains a future activation target. The
-1.4 release candidate preserves the 1.3.1 unconfigured creation path until the
-separate default-qualification gates close. Explicit v1 canonical creation,
-provider/policy selection and v0 compatibility remain available; removing the
-namespace disables future canonical creation without retargeting existing Goals.
-Settings and CLI share the same configuration owner. See [new-Goal creation
+The L9 implementation candidate now resolves an absent `goal_storage` namespace
+to canonical SQLite/hard-lease creation through the existing configuration and
+TS initialization owners. Explicit v0 selectors, v1 opt-out and existing Goals
+keep their recorded route. Settings preserves v0 opt-out during guided/JSON
+conversion; removing a setting restores the new default. See [new-Goal creation
 and compatibility](local-authority-provider-selection.md#new-goal-authority-machine-setting).
-This release preparation does not certify D2 or activate a SQLite default.
+This candidate does not certify the gates above or activate an installed release.
 
 Both current local providers require Node >=22.22.3. SQLite uses built-in
 `node:sqlite`: it adds no database service or external SQLite package. Its

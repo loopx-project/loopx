@@ -3336,16 +3336,17 @@ new implementation work; changing languages or moving a helper is not an exit.
 | C / L8: Whole-Goal rehearsal and cohort migration | Integrate one exact revision/profile after L2–L7; drain capture, fence old writers, verify canonical readback and projection, then rehearse fenced export/rollback. | D3 evidence packet binds lineage, cursor, source digest, command coverage and profile. Existing Goal migration requires explicit cohort approval; no per-command split authority or stale Markdown revival. |
 | D / L9: New-Goal default and bounded retirement | A dedicated default-change PR makes new-Goal creation/onboarding choose the qualified local profile, including settings/readback, installer and packaged clients. Retire old business writers only as their final callers and migration window close. | L8's integrated product/rollback qualification; distinguish new Goal default from existing Goal migration. Publish compatibility/disable guidance, keep explicit provider choice, permanent rendering and validated import/export. T4 can continue after the default ships. |
 
-**L9 release activation checkpoint.** The earlier SQLite/hard-lease default
-candidate demonstrated shared configuration and typed initialization, including
-v0 opt-out and frozen existing routes. The 1.4 release candidate restores the
-1.3.1 unconfigured creation path and creation-off editor defaults while D2/D3
-release-default evidence remains incomplete. Explicit File/SQLite canonical
-creation and either supported execution policy remain available. Namespace
-removal disables future canonical creation and preserves existing authority,
-original operations, receipts and fences. Candidate interaction evidence does
-not replace sustained/platform qualification or integrated recovery. No old
-writer or historical backup reader is retired by this release adjustment.
+**L9 creation-default candidate.** Unconfigured new-Goal CLI/App creation now
+uses the same registered SQLite/hard-lease configuration and existing TS
+initialization owner. Explicit v0 selectors and v1 creation-off remain supported;
+the guided editor preserves v0 opt-out when upgrading its envelope. Existing
+Goals, frozen operations, provider receipts and migration fences retain their
+own route. Namespace removal restores the new default, so disable guidance
+uses an explicit creation-off setting. Candidate implementation and packaged
+interaction evidence remain distinct from L8/D3 integrated recovery, D2
+sustained/platform qualification and release-default activation; none of those
+gates is replaced by this checkpoint. No old writer or historical backup reader
+is retired by this change.
 
 **L9 App recovery checkpoint.** Post-commit creation must retain the original
 operation/workspace, initial Todo identities and accepted Session/Turn when
