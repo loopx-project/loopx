@@ -119,7 +119,6 @@ interface TodoItem extends JsonObject {
   status?: string;
   task_class?: string;
   resume_when?: string;
-  resume_ready?: boolean;
   resume_monitor_generation?: number;
   material_change_generation?: number;
 }
@@ -168,7 +167,6 @@ function todoItem(value: unknown, label: string): TodoItem {
   // normalized it. Lower-casing the entire token makes offset timestamps
   // fail strict parsing on the read path.
   if (resumeWhen !== undefined) item.resume_when = resumeWhen;
-  if (typeof raw.resume_ready === "boolean") item.resume_ready = raw.resume_ready;
   const resumeGeneration = nonNegativeInteger(
     raw.resume_monitor_generation,
     `${label}.resume_monitor_generation`,
@@ -832,7 +830,14 @@ function externalWaitSuccessors(
         "external_wait_successor_not_open_advancement",
       );
     }
-    if (successor.resume_when && successor.resume_ready !== true) {
+    // Readiness is a projection, never an authoring fact. Reuse the same
+    // predicate/diagnosis over this locked source snapshot. External provider
+    // or clock evidence is unavailable here and cannot be replaced by a flag.
+    const spec = parseResumeWhen(successor.resume_when);
+    const diagnosis = spec ? diagnoseTodoResumeCondition(
+      conditionFor(successor, spec, byId, [], null, null), successor.todo_id,
+    ) : null;
+    if (successor.resume_when && diagnosis?.state !== "satisfied") {
       throw new EffectRuntimeRequestError(
         "external-wait successor must be runnable, not resume-gated",
         "external_wait_successor_resume_gated",
