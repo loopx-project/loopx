@@ -1885,6 +1885,8 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         0
     ]
     assert "--delivery-boundary in_flight_continuation" in first_writeback
+    writeback_step = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
+    assert "vision_authoring" not in writeback_step
 
     refresh_rc, refresh = _run_cli(
         registry_path,

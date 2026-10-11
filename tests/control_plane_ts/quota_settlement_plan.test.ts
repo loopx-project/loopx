@@ -85,17 +85,19 @@ test("incomplete command facts or ambiguous identity fail closed", () => {
 });
 
 
-test("ordinary and in-flight CLI expose one authoring owner without duplicate MCP guidance", () => {
+test("material CLI and MCP retain authoring while in-flight CLI omits material closeout guidance", () => {
   for (const delivery_boundary of [undefined, "in_flight_continuation"]) {
     const wire = settlementPlanPayload(turnScopedCliSettlementPlan({...input, delivery_boundary}));
     const steps = wire.ordered_steps as Record<string, unknown>[];
-    assert.equal(steps.filter(step => step.vision_authoring).length, 1);
-    assert.deepEqual(steps[1].vision_authoring, visionAuthoringContract());
+    const material = delivery_boundary === undefined;
+    assert.equal(steps.filter(step => step.vision_authoring).length, material ? 1 : 0);
+    assert.deepEqual(steps[1].vision_authoring, material ? visionAuthoringContract() : undefined);
     const mcp = projectMcpInteraction({ok: true, normal_delivery_allowed: true,
       selected_todo: {todo_id: "todo"}, interaction_contract: {cli_channel: {settlement_plan: wire}}});
     const contract = mcp.interaction_contract as Record<string, Record<string, unknown>>;
     assert.equal(contract.cli_channel.settlement_plan, undefined);
-    assert.deepEqual(contract.mcp_channel.vision_authoring, steps[1].vision_authoring);
+    // MCP complete_task is material completion even when the CLI can continue in-flight.
+    assert.deepEqual(contract.mcp_channel.vision_authoring, visionAuthoringContract());
     assert.match(visionAuthoringContract().authoring_hint as string, /original committed Turn writeback/);
   }
 });

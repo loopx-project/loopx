@@ -60,8 +60,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "An already committed Monitor poll needs neither refresh nor spend.",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
+      // In-flight continuation uses its projected flags without a material vision packet.
       // Autonomous replan already carries this owner in its writeback contract.
-      ...(identity.binding_kind === "todo" ? {vision_authoring: visionAuthoringContract()} : {}),
+      ...(identity.binding_kind === "todo" && !inFlight ? {vision_authoring: visionAuthoringContract()} : {}),
     },
     {
       kind: "quota_spend", owner: "agent",

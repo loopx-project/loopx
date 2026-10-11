@@ -408,6 +408,15 @@ receipts retain their checkpoint semantics:
 }
 ```
 
+CLI in-flight settlement omits the material-closeout Vision authoring schema.
+Use the projected continuation command and its original boundary/identity flags;
+this does not waive validation, writeback or debit rules. Material CLI closeout
+and MCP `complete_task` retain their evidence-linked Vision authoring contract.
+
+CLI 进行中结算不附带实质收尾的 Vision 编写结构。沿用投影命令及原边界、身份
+参数，仍须验证、写回与原 debit；实质 CLI 收尾和 MCP `complete_task` 保留
+证据关联的 Vision 编写契约。
+
 One explicit exception exists for in-flight delivery. When quota admits an
 open advancement Todo for normal delivery, its settlement guidance may add the
 boundary below. After a resulting `delivery_outcome=outcome_progress`, the next
