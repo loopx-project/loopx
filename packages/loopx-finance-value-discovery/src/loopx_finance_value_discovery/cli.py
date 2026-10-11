@@ -56,6 +56,11 @@ from .cumulative_flow import (
     assess_flow_difference,
 )
 
+from .stock_change import (
+    FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION,
+    assess_stock_change,
+)
+
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
 
 
@@ -106,6 +111,11 @@ def _direct_parser() -> argparse.ArgumentParser:
         help="Derive a tail flow from compatible cumulative/prefix declarations.",
     )
     flow_parser.add_argument("--input-json", required=True)
+    stock_parser = sub.add_parser(
+        "assess-stock-change",
+        help="Compare ordered stock instants; never derive a cash flow.",
+    )
+    stock_parser.add_argument("--input-json", required=True)
     cash_parser = sub.add_parser(
         "assess-cash",
         help="Reconcile six source-column signed cash amounts and retain unknowns.",
@@ -216,6 +226,8 @@ def run(argv: Sequence[str] | None = None) -> int:
             schema_version = payload.get("schema_version")
             if schema_version == FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION:
                 packet = assess_cash_reconciliation(payload)
+            elif schema_version == FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION:
+                packet = assess_stock_change(payload)
             elif schema_version == FINANCE_FLOW_DIFFERENCE_INPUT_SCHEMA_VERSION:
                 packet = assess_flow_difference(payload)
             elif schema_version in {
@@ -256,6 +268,8 @@ def run(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "assess-period":
             packet = assess_period_comparison(_load_json(args.input_json))
+        elif args.command == "assess-stock-change":
+            packet = assess_stock_change(_load_json(args.input_json))
         elif args.command == "assess-period-difference":
             packet = assess_flow_difference(_load_json(args.input_json))
         elif args.command == "assess-cash":
@@ -326,7 +340,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "replay-beta, evaluate-pack, replay-pack, list-packs, "
                 "render-lark-card, build-operation-request, or "
                 "evaluate-contract-liquidity, evaluate-position, assess-period, "
-                "assess-period-difference, or assess-cash"
+                "assess-period-difference, assess-stock-change, or assess-cash"
             )
     except Exception as exc:
         # Position inputs are private; malformed values never enter diagnostics.

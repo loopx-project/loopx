@@ -585,3 +585,65 @@ authentication, lifecycle/PIT, financial admission and trading remain false.
 Existing period and cash operations are unchanged; old providers reject this
 new schema. App/Lark interaction, source-consumer adoption and financial utility
 are independent remaining qualifications.
+
+# Stock instant change (extension 0.8.12)
+
+`finance_stock_change_input_v1` explicitly compares stocks. The root contains
+exactly `schema_version`, `later`, `earlier`, and `compatibility`. Each operand
+contains `source_digest`, original nullable `context`, nullable `point`, the
+existing nullable eight-field `statement_basis`, `aggregation_kind`, and
+`accuracy`. The shared temporal vocabulary is unchanged; only `stock` qualifies.
+
+A point has exactly `context_source_digest`, `evidence_ref`, `role`, and
+`instant`. References/digests retain the existing period owner's bounds.
+`instant` is null or an explicit dateTime; the economic role is an exact token.
+The original context must encode an instant with a known timezone, and its
+normalized boundary must equal the declared point. XBRL date-only end-of-day
+conversion and offsets reuse `assess_period_encoding`; column labels cannot
+supply absent original context or timezone. The earlier point must be strictly
+before the later one; equal or reversed instants refuse a qualified change.
+These are balance instants, not new first-public or observation clocks.
+
+Subjects, declared metrics and currency/scale units must match. Distinct column
+scopes can belong to one source/filing/version. Other source/version joins need
+explicit `compatibility` with exactly `evidence_ref`, `later`, and `earlier`;
+each pin contains the exact current `source_digest`, `filing_ref`, `version_ref`,
+and `scope_ref`. This reuses the cumulative-flow version-compatibility owner.
+Neither matching names nor matching numbers proves scope comparability or
+completeness. A producer owns those meanings, withdrawals and conflicts.
+
+The v1 requires producer-declared exact accuracy for both amounts. Finite or
+missing precision remains visible and holds the qualified change. There is no
+implicit rounding policy, token-quantity unit conversion or inferred cash
+identity. Unknown unit does not become USD, and a composite metric does not
+become pure cash. Different metrics/subjects/units and nonstocks suppress even
+the diagnostic candidate.
+
+`finance_stock_change_assessment_v1` retains original operands, point and
+accuracy assessments, current compatibility pins, canonical input digest and
+sorted reasons. `candidate_lexical_difference` is diagnostic bounded Decimal
+subtraction when the declared stock identities and amounts are known.
+`stock_change` and `change_window` are emitted only when
+`change_evidence_eligible` is true. A window records two instants, not a duration
+flow. `cash_flow_derived` and `causes_of_change_assessed` are always false:
+stock change cannot establish acquisitions, financing, spending or its causes.
+Source authentication, lifecycle/PIT, financial admission and trading also
+remain false. Upstream source admission remains independent.
+
+```sh
+loopx-finance-value-discovery assess-stock-change \
+  --input-json packages/loopx-finance-value-discovery/examples/stock-change-v1.json
+```
+
+The same schema selects this operation on the installed provider's stdin
+runtime. Missing evidence is a successful assessment with a held result;
+malformed closed shapes use the existing error packet/nonzero exit. Optional
+provider lifecycle remains unchanged. Disable through `loopx extension disable
+loopx-finance-value-discovery --execute`; rollback uses the prior provider and
+its original input versions. Old providers reject the new schema, while old
+cash, duration comparison v1/v2, and flow difference v1 inputs keep their
+original behavior and replay clocks. No new catalog or Core authority exists.
+
+This stage delivers CLI/runtime computation. Its App/Lark interaction and the
+source provider's production consumer are still companion qualifications;
+installation and this calculation do not establish financial utility.

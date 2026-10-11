@@ -13,19 +13,18 @@ from decimal import localcontext
 from enum import StrEnum
 from typing import Any
 
-from .cash_reconciliation import _encoded, _fields, _number, _text
+from .cash_reconciliation import _encoded, _fields, _number
 from .numeric_accuracy import NumericAccuracyState
 from .period_semantics import (
     FINANCE_PERIOD_COMPARISON_INPUT_SCHEMA_VERSION,
     assess_period_comparison,
 )
 from .replay import canonical_sha256
-from .statement_basis import _basis
+from .statement_basis import _basis, _version_compatibility
 
 FINANCE_FLOW_DIFFERENCE_INPUT_SCHEMA_VERSION = "finance_flow_difference_input_v1"
 FINANCE_FLOW_DIFFERENCE_SCHEMA_VERSION = "finance_flow_difference_assessment_v1"
 _PERIOD_FIELDS = {"source_digest", "context", "economic_period"}
-_PIN_FIELDS = {"source_digest", "filing_ref", "version_ref", "scope_ref"}
 
 
 class TemporalAggregationKind(StrEnum):
@@ -36,49 +35,6 @@ class TemporalAggregationKind(StrEnum):
     AVERAGE = "average"
     RATIO = "ratio"
 
-
-def _compatibility(
-    declaration: Any,
-    operands: Mapping[str, Any],
-    bases: Mapping[str, Any],
-    reasons: set[str],
-) -> None:
-    if declaration is None:
-        # Distinct period columns may share one filing/version. Scope is retained
-        # in lineage; it is not expected to be the same column on both sides.
-        total, prefix = bases["total"], bases["prefix"]
-        if (
-            total is None
-            or prefix is None
-            or any(
-                total[field] is None or total[field] != prefix[field]
-                for field in ("filing_ref", "version_ref")
-            )
-            or operands["total"]["source_digest"] != operands["prefix"]["source_digest"]
-        ):
-            reasons.add("source_version_compatibility_missing")
-        return
-    declaration = _fields(
-        declaration, {"evidence_ref", "total", "prefix"}, "flow compatibility"
-    )
-    if declaration["evidence_ref"] is None:
-        reasons.add("compatibility_evidence_missing")
-    else:
-        _text(declaration["evidence_ref"], "compatibility evidence_ref")
-    for side in ("total", "prefix"):
-        pin = _fields(declaration[side], _PIN_FIELDS, "flow compatibility pin")
-        for field in _PIN_FIELDS:
-            if pin[field] is None:
-                reasons.add(f"{side}_compatibility_{field}_missing")
-            else:
-                _text(pin[field], field)
-            expected = (
-                operands[side][field]
-                if field == "source_digest"
-                else (bases[side][field] if bases[side] is not None else None)
-            )
-            if expected is None or pin[field] != expected:
-                reasons.add(f"{side}_compatibility_{field}_mismatch")
 
 
 def assess_flow_difference(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -149,7 +105,7 @@ def assess_flow_difference(payload: Mapping[str, Any]) -> dict[str, Any]:
             ):
                 reasons.add(f"flow_{field}_mismatch")
                 identity_matches = False
-    _compatibility(payload["compatibility"], operands, bases, reasons)
+    _version_compatibility(payload["compatibility"], operands, bases, reasons)
 
     tail = None
     left, right = period["operands"]["left"], period["operands"]["right"]

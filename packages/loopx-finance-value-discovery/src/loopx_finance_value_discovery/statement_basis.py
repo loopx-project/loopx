@@ -54,6 +54,54 @@ def _basis(value: Any, side: str, reasons: set[str]) -> Mapping[str, Any] | None
     return basis
 
 
+
+def _version_compatibility(
+    declaration: Any,
+    operands: Mapping[str, Any],
+    bases: Mapping[str, Any],
+    reasons: set[str],
+    *,
+    sides: tuple[str, str] = ("total", "prefix"),
+) -> None:
+    if declaration is None:
+        # Distinct period columns may share one filing/version. Scope is retained
+        # in lineage; it is not expected to be the same column on both sides.
+        left, right = sides
+        total, prefix = bases[left], bases[right]
+        if (
+            total is None
+            or prefix is None
+            or any(
+                total[field] is None or total[field] != prefix[field]
+                for field in ("filing_ref", "version_ref")
+            )
+            or operands[left]["source_digest"] != operands[right]["source_digest"]
+        ):
+            reasons.add("source_version_compatibility_missing")
+        return
+    declaration = _fields(
+        declaration, {"evidence_ref", *sides}, "source compatibility"
+    )
+    if declaration["evidence_ref"] is None:
+        reasons.add("compatibility_evidence_missing")
+    else:
+        _text(declaration["evidence_ref"], "compatibility evidence_ref")
+    for side in sides:
+        pin = _fields(declaration[side], _PIN_FIELDS, "source compatibility pin")
+        for field in _PIN_FIELDS:
+            if pin[field] is None:
+                reasons.add(f"{side}_compatibility_{field}_missing")
+            else:
+                _text(pin[field], field)
+            expected = (
+                operands[side][field]
+                if field == "source_digest"
+                else (bases[side][field] if bases[side] is not None else None)
+            )
+            if expected is None or pin[field] != expected:
+                reasons.add(f"{side}_compatibility_{field}_mismatch")
+
+
 def _component_refs(value: Any, name: str) -> list[str]:
     if not isinstance(value, list) or not 1 <= len(value) <= 32:
         raise ValueError(f"{name} requires 1..32 unique component references")
