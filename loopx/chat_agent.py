@@ -449,6 +449,7 @@ def _turn_prompt(
     execution_mode: bool = False,
     runtime_profile: str = "restricted",
     project_work: bool = False,
+    public_source_read_context: str = "",
 ) -> str:
     direct_work = runtime_profile == "trusted_owner" and not execution_mode and not project_work
     try:
@@ -518,6 +519,7 @@ def _turn_prompt(
         + "with an autonomous project task. "
         + planning_limits
         + trusted_manager_limits
+        + public_source_read_context
         + (
             "For explanation-only repository questions, batch independent initial reads of applicable project instructions with focused searches of current documentation and the owning code. "
             "When the project root and search terms are already supplied, avoid a separate working-directory check or broad file inventory. Use an output budget that retains complete applicable instructions, then fetch only relevant documentation and source sections. "
@@ -643,6 +645,7 @@ class CodexChatAgentSession:
     _command_items: dict[str, set[str]] = field(default_factory=dict, repr=False)
     _command_items_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _host_model_auth: Any = field(default=None, repr=False)
+    _public_source_read_context: str = field(default="", repr=False)
 
     @classmethod
     def start(
@@ -946,6 +949,8 @@ class CodexChatAgentSession:
                 raise session._runtime_error(
                     "Codex app-server resumed an unexpected thread."
                 )
+            if permissions_profile:
+                session._public_source_read_context = codex_context.public_source_read_context(host_config or {})
             # Chat keeps its Goal binding in LoopX's local Session state and supplies
             # that public-safe context in each Turn prompt. Codex Goal mode is reserved
             # for autonomous execution; enabling it here causes conversational messages
@@ -1369,6 +1374,7 @@ class CodexChatAgentSession:
                     execution_mode=self.execution_mode,
                     runtime_profile=self.runtime_profile,
                     project_work=self.project_context is not None and self.sandbox == "workspace-write",
+                    public_source_read_context=self._public_source_read_context,
                 ),
             }
         ]

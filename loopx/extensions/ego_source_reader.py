@@ -171,8 +171,9 @@ class _OwnedSpace:
         space, self.space = self.space, None
         # Only this process's created space, and only while still agent-owned.
         # Never claim/take over a space after the user or another owner stops it.
-        script = (f"const t=await taskSpace({space});"
-                  "if(t.ownership==='agent')await t.finish({keep:[]});")
+        script = (f"const live=(await listTaskSpaces()).find(s=>s.id==={space});"
+                  "if(live?.ownership==='agent'){"
+                  f"const t=await taskSpace({space});await t.finish({{keep:[]}});}}")
         try:
             _run(self.executable, script)
         except (OSError, UnicodeError, subprocess.TimeoutExpired):

@@ -99,7 +99,9 @@ human handoff. A source's actual login or verification requirement remains a
 separate boundary; follow the installed Ego skill and continue independent work.
 
 On normal MCP shutdown or SIGTERM, it finishes only its own created,
-still-agent-owned space. SIGTERM cleanup can complete while the stdio server
+still-agent-owned space, checking live control rather than the handle's creation
+snapshot before resolving it. Missing spaces, unreadable state and user control
+leave the browser untouched. SIGTERM cleanup can complete while the stdio server
 still waits for its host to close stdin; callers should also close the pipe when
 stopping the process. Configured numeric spaces are never finished by the
 adapter. Shutdown failures may require operator cleanup; a killed process cannot

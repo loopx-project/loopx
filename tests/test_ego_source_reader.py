@@ -369,6 +369,41 @@ def test_shutdown_only_finishes_its_created_space_once(configured, monkeypatch, 
         assert not calls
 
 
+@pytest.mark.parametrize("ownership", [
+    "agent", "user", "agentDelegatedToUser", "inactive", "unassigned",
+    "unknown", "missing", "unreadable",
+])
+def test_shutdown_uses_live_control_not_creation_snapshot(configured, monkeypatch, ownership):
+    owned = reader._OwnedSpace()
+    owned.space = 19
+    owned.executable = str(configured)
+    observations = []
+
+    def run(_executable, script, **_kwargs):
+        # The handle retains the creation-time agent snapshot even when live
+        # control has changed. Resolve/finish calls are the guarded effects.
+        harness = (
+            "const calls=[];"
+            "async function listTaskSpaces(){"
+            f"const state={json.dumps(ownership)};"
+            "if(state==='unreadable')throw Error('connection lost');"
+            "return state==='missing'?[]:[{id:19,ownership:state}];}"
+            "async function taskSpace(){calls.push('resolve');return {"
+            "ownership:'agent',async finish(){calls.push('finish');}};}"
+            "try{" + script + "}catch(e){}"
+            "console.log(JSON.stringify(calls));"
+        )
+        result = subprocess.run(["node", "-e", harness], capture_output=True,
+                                text=True, check=True, timeout=10)
+        observations.append(json.loads(result.stdout))
+        return result
+
+    monkeypatch.setattr(reader, "_run", run)
+    owned.close()
+    owned.close()
+    assert observations == [["resolve", "finish"] if ownership == "agent" else []]
+
+
 def test_creation_and_read_share_one_timeout_budget(configured, monkeypatch):
     auto_config(monkeypatch)
     clock = iter([0, 5, 29])
@@ -419,7 +454,7 @@ def test_stdio_hosts_create_isolated_spaces_and_clean_up_on_eof(configured, monk
         assert len(scripts) == 4
         assert sum('taskSpace("LoopX public-source reader ' in s for s in scripts) == 1
         assert all(f"taskSpace({pid})" in s for s in scripts[1:])
-        assert scripts[-1].endswith("if(t.ownership==='agent')await t.finish({keep:[]});")
+        assert "listTaskSpaces()" in scripts[-1] and "finish({keep:[]})" in scripts[-1]
 
 
 @pytest.mark.parametrize("value", [
