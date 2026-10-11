@@ -112,6 +112,15 @@ export function resolveLaneRecommendation(value: unknown): JsonObject {
   if (!actor || !agents.includes(actor)) {
     return reject("next_action_actor_unregistered", "Next Action requires a registered --agent-id");
   }
+  // The current selector may legitimately choose B after receipt-bound A
+  // starts waiting or completes. A's writeback cannot create B's step receipt,
+  // even with a fresh B basis. Ordinary writes have no settlement binding.
+  const settlement = settlementIdentity(request.settlement_identity);
+  if (settlement && (settlement.goal_id !== goalId || settlement.agent_id !== actor ||
+      settlement.todo_id !== selected?.todo_id)) {
+    return reject("next_action_task_unavailable",
+      "Next Action does not match the original Turn's Goal, agent and Todo; finish the original Turn writeback without --next-action, then select the next Todo through a fresh guard");
+  }
   if (expected && expected !== basis) {
     return reject("next_action_basis_conflict", "Next Action task or lane read basis changed; reread status and rejudge before retrying");
   }
@@ -119,7 +128,7 @@ export function resolveLaneRecommendation(value: unknown): JsonObject {
     return reject("next_action_task_unavailable", "No selected eligible advancement Todo for this agent; update or select work through the existing Todo route");
   }
   const resolution: JsonObject = {
-    ...recommendation(text, "agent_lane_step", "agent_lane", "not_applicable", selected),
+    ...recommendation(text, "agent_lane_step", "agent_lane", settlement ? "exact" : "not_applicable", selected),
     goal_id: goalId, agent_id: actor, todo_basis: taskBasis, source_revision: sourceRevision,
     read_basis: basis, step_revision: digest([basis, text]),
   };

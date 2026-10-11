@@ -169,6 +169,40 @@ def finish_group_turn(runtime, transport, *, message):
     return row
 
 
+def test_lark_transport_recovery_returns_on_original_admission_without_model_replay(ordinary, monkeypatch):  # noqa: F811
+    from test_chat_turn_steering import install_transport_failure
+
+    install_transport_failure(ordinary[-2])
+    store, runtime, provider, transport = connect(ordinary)
+    monkeypatch.setattr(runtime.closed, "wait", lambda _: False)
+    event = provider.event("notes-app", "recover-original", "transport recovery")
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        record = next(row for row in transport.core.pending() if row["message"] == event["content"])
+        sid, tid = record["session_id"], record["turn_id"]
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        provider.verify_replies = False
+        transport.reconcile()
+        sent = list(provider.writes)
+        assert ("notes-app", "Runtime response.") in sent
+        provider.verify_replies = True
+        assert transport.admit("notes-app", {**event, "event_id": "redelivery"})["status"] == "durably_accepted"
+        # Lost/unconfirmed provider readback must retry delivery, never model IO.
+        transport.reconcile()
+        assert provider.writes == sent
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        starts = [row["params"] for row in packets if row["method"] == "turn/start"]
+        assert len(starts) == 2 and starts[0] == starts[1]
+        assert len(store.list_sessions()) == 1
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "user"] == [event["content"]]
+        assert all(profile == "notes-app" for profile, _ in provider.writes)
+        reply = next(row for row in provider.messages.values()
+                     if "Runtime response." in row.get("body", {}).get("content", ""))
+        assert reply["chat_id"] == event["chat_id"]
+    finally:
+        runtime.close()
+
+
 def test_group_topics_share_members_but_isolate_topics_apps_and_native_host(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:
@@ -919,6 +953,80 @@ def test_model_capacity_failure_keeps_session_and_original_delivery(ordinary, pr
         assert runtime.wait_for_turn(session_id=sid, turn_id=following["turn_id"], timeout_sec=10)["status"] == "completed"
         assert store.load_session(sid)["upstream_thread_id"] == thread
         assert len(store.list_sessions()) == 1 and store.load_session(sid)["goal_id"] is None
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+@pytest.mark.parametrize("info,code", [
+    ("other", "host_gate"),
+    ({"responseStreamDisconnected": {"httpStatusCode": None}}, "upstream_transport_failure"),
+    ("cyberPolicy", "cyber_policy"),
+])
+def test_disconnect_failure_returns_original_retry_evidence_without_manual_status_or_replay(
+    ordinary, profile, info, code,  # noqa: F811
+):
+    store, runtime, provider, transport = connect(ordinary)
+    capture, fake = ordinary[-3:-1]
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+                                     f'"codexErrorInfo": {info!r}')
+    marker = '            turn_status[active_turn] = "failed"'
+    source = source.replace(marker, marker + '\n'
+        '            for _ in range(5):\n'
+        '                print(json.dumps({"method": "error", "params": {"threadId": "durable-thread", '
+        '"turnId": active_turn, "willRetry": True, "error": {"codexErrorInfo": '
+        '{"responseStreamDisconnected": {"httpStatusCode": None}}, "message": "private retry detail"}}}), flush=True)')
+    fake.write_text(source)
+    try:
+        event = provider.event(profile, "disconnect", "typed terminal failure")
+        assert transport.admit(profile, event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        sid, tid = row["session_id"], row["turn_id"]
+        turn = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert turn["status"] == "failed" and turn["response"] is None
+        assert turn["error_code"] == code
+        events = store.events_after(sid, tid, None)
+        assert sum(bool(r.get("payload", {}).get("retry")) for r in events) == 5
+        thread = store.load_session(sid)["upstream_thread_id"]
+        provider.verify_replies = False
+        assert transport.reconcile() == 0
+        terminal = provider.writes[-1][1]
+        label = {"host_gate": "响应流曾中断", "upstream_transport_failure": "响应连接失败",
+                 "cyber_policy": "安全策略拦截"}[code]
+        assert label in terminal and "原会话已保留" in terminal
+        assert "/status" not in terminal and "已过期" not in terminal
+        assert "private" not in terminal and "Partial answer" not in terminal
+        if code != "host_gate":
+            assert "响应流曾中断" not in terminal
+        # The failed delivery resumes its frozen intent after a transport
+        # restart. It cannot turn a retry observation into a new model call.
+        before = list(provider.writes)
+        provider.verify_replies = True
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                                             runner=provider, cli_bin="lark-cli")
+        assert restarted.reconcile() == 1 and restarted.reconcile() == 0
+        assert provider.writes == before
+        assert store.load_turn(sid, tid)["error_code"] == code
+        requests = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+        # Retry history belongs to a Turn, not the entire Session. A later
+        # unclassified failure cannot inherit this disconnect explanation.
+        fake.write_text(source.replace('            for _ in range(5):', '            for _ in range(0):')
+                        .replace(f'"codexErrorInfo": {info!r}', '"codexErrorInfo": "other"'))
+        runtime.close()
+        from loopx.chat_runtime import ChatRuntimeController
+        resumed = ChatRuntimeController(store=store, codex_bin=str(fake), project_contexts=ordinary[2])
+        runtime = resumed
+        following = LarkPrivateConversations(controller=resumed, runtime_root=store.root.parent,
+                                             runner=provider, cli_bin="lark-cli")
+        following.admit(profile, provider.event(profile, "new-failure", "typed terminal failure"))
+        next_row = next(r for r in following.core.pending() if r.get("turn_id") != tid)
+        assert next_row["session_id"] == sid
+        assert resumed.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=10)["error_code"] == "host_gate"
+        following.reconcile()
+        assert "响应流曾中断" not in provider.writes[-1][1]
+        assert store.load_session(sid)["upstream_thread_id"] == thread
     finally:
         runtime.close()
 

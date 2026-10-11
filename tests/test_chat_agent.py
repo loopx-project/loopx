@@ -114,6 +114,77 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     return session, state
 
 
+@pytest.mark.parametrize("fault", [
+    None, "other", "cyberPolicy", "unauthorized", "usageLimitExceeded", "rateLimitExceeded",
+    "http401", "http429", "bad-status", "commandExecution", "fileChange", "dynamicToolCall",
+    "mcpToolCall", "webSearch", "collabAgentToolCall", "futureItem", "delivery", "correction",
+    "wrong-turn", "missing-data", "cursor-cycle", "new-turn", "late-tool", "changed-error",
+    "native-error-before-terminal", "pending-terminal", "interrupted", "completed",
+])
+def test_transport_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="recovery-thread", work_dir=tmp_path,
+        response_timeout_sec=.2)
+    calls = []
+    reads = 0
+
+    def write(packet):
+        nonlocal reads
+        method, params = packet["method"], packet["params"]
+        calls.append((method, params))
+        assert params["threadId"] == "recovery-thread"
+        if method == "thread/turns/list":
+            reads += 1
+            info = {"responseStreamDisconnected": {"httpStatusCode": None}}
+            if fault in {"other", "cyberPolicy", "unauthorized", "usageLimitExceeded", "rateLimitExceeded"}:
+                info = fault
+            if fault in {"http401", "http429", "bad-status"}:
+                info = {"responseStreamDisconnected": {"httpStatusCode": {
+                    "http401": 401, "http429": 429, "bad-status": True,
+                }[fault]}}
+            if fault == "changed-error" and reads > 1:
+                info = "other"
+            result = {"data": [{"id": "failed-turn", "status": "failed", "error": {
+                "codexErrorInfo": info, "message": "private fixture detail",
+            }}]}
+            if fault == "new-turn":
+                result["data"].insert(0, {"id": "new-turn", "status": "inProgress"})
+            if fault == "pending-terminal" or (fault == "native-error-before-terminal" and reads == 1):
+                result["data"][0].update(status="interrupted", error=None, completedAt=None)
+            if fault in {"interrupted", "completed"}:
+                result["data"][0].update(status=fault, error=None, completedAt=1)
+        else:
+            assert method == "thread/items/list"
+            item = {"id": "request", "type": "userMessage"}
+            if params.get("cursor"):
+                item = {"id": "answer", "type": "agentMessage", "delivery": None}
+                if fault == "late-tool":
+                    item["type"] = "commandExecution"
+                if fault == "correction":
+                    item["type"] = "userMessage"
+            elif fault in {"commandExecution", "fileChange", "dynamicToolCall", "mcpToolCall",
+                           "webSearch", "collabAgentToolCall", "futureItem"}:
+                item["type"] = fault
+            if fault == "delivery":
+                item.update(type="agentMessage", delivery={"status": "delivered"})
+            result = {"data": [{"turnId": "wrong" if fault == "wrong-turn" else "failed-turn", "item": item}],
+                "nextCursor": "second" if not params.get("cursor") or fault == "cursor-cycle" else None}
+            if fault == "missing-data":
+                result.pop("data")
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = session.transport_retry_readback("failed-turn")
+    if fault in {None, "native-error-before-terminal"}:
+        assert proof == {"thread_id": "recovery-thread", "turn_id": "failed-turn", "item_count": 2,
+                         "codex_error_info": {"responseStreamDisconnected": {"httpStatusCode": None}}}
+        assert reads == (3 if fault else 2) and len(calls) == reads + 2
+        assert "private fixture" not in json.dumps(proof)
+    else:
+        assert proof is None
+    assert all(method in {"thread/turns/list", "thread/items/list"} for method, _ in calls)
+
+
 def test_stop_cancels_completed_and_late_command_items_but_preserves_older_terminal(tmp_path, monkeypatch):
     session, state = _stop_server(tmp_path, monkeypatch)
     session.interrupt("current-turn")
@@ -1227,6 +1298,13 @@ def test_project_resume_config_read_failure_does_not_resume_or_replace(monkeypat
         ("serverOverloaded", "server_overloaded"),
         ("contextWindowExceeded", "context_window_exceeded"),
         ("unauthorized", "unauthorized"),
+        ({"httpConnectionFailed": {}}, "upstream_transport_failure"),
+        ({"responseStreamConnectionFailed": {"httpStatusCode": 503}}, "upstream_transport_failure"),
+        ({"responseStreamDisconnected": {"httpStatusCode": None}}, "upstream_transport_failure"),
+        ({"responseTooManyFailedAttempts": {}}, "upstream_transport_failure"),
+        ({"responseStreamDisconnected": None}, "host_gate"),
+        ({"responseStreamDisconnected": {}, "httpConnectionFailed": {}}, "host_gate"),
+        ({"activeTurnNotSteerable": {"turnKind": "review"}}, "host_gate"),
         ("futureVariant", "host_gate"),
         ({"unknown": "cyberPolicy"}, "host_gate"),
         (None, "host_gate"),

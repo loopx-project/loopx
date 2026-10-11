@@ -32,6 +32,7 @@ class CodexChatAgentError(RuntimeError):
         super().__init__(message)
         self.gate = gate
         self.error_code = error_code
+        self.native_error_info: dict[str, Any] | str | None = None
 
 
 class CodexChatTimeoutError(CodexChatAgentError):
@@ -254,6 +255,11 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
         "unauthorized": ("unauthorized", "Codex 上游身份验证失败，本轮未完成。"),
     }
     selected = known.get(info) if isinstance(info, str) else None
+    # Reuse the v2 envelope validator. A prior retry is not the terminal
+    # classification; only an explicit terminal transport variant selects this.
+    safe_info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+    if isinstance(safe_info, dict) and "activeTurnNotSteerable" not in safe_info:
+        selected = ("upstream_transport_failure", "Codex 上游响应连接失败，本轮未完成。")
     if selected is None:
         return CodexChatAgentError(
             fallback,
@@ -262,7 +268,7 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             ),
         )
     code, summary = selected
-    policy = info in {"cyberPolicy", "misalignmentPolicyViolation"}
+    policy = isinstance(info, str) and info in {"cyberPolicy", "misalignmentPolicyViolation"}
     return CodexChatAgentError(
         summary,
         error_code=code,
@@ -274,6 +280,8 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 if policy
                 else "请先核对已有结果，再决定是否稍后重试；本次请求不会自动重放。"
                 if code == "server_overloaded"
+                else "保留原会话并核对已有结果；连接错误不证明本轮没有产生副作用，不自动重放。"
+                if code == "upstream_transport_failure"
                 else "请处理对应的上游限制后再继续。"
             ),
         },
@@ -1340,6 +1348,84 @@ class CodexChatAgentSession:
                 raise self._runtime_error("Codex returned an invalid control inventory cursor.")
             seen_cursors.add(cursor)
 
+    def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
+        """Read native terminal/effect facts; notification history is insufficient.
+
+        Only a failed, latest Turn with a typed connection error and a complete
+        text-only inventory is eligible. Unknown items, tools (including reads),
+        delivery, additional user input and unreadable inventories stop recovery.
+        This is adapter IO evidence, never permission to reopen a Core Turn.
+        """
+        deadline = time.monotonic() + min(self.response_timeout_sec, 5.0)
+
+        def failed_turn(*, await_terminal: bool = False) -> dict[str, Any] | None:
+            while True:
+                turns = list(self._control_items("thread/turns/list", {
+                    "sortDirection": "desc", "itemsView": "summary",
+                }, deadline))
+                ids = [row.get("id") for row in turns]
+                if (not ids or any(not isinstance(value, str) or not value for value in ids)
+                        or len(set(ids)) != len(ids) or ids[0] != turn_id
+                        or any(row.get("status") not in {"completed", "interrupted", "failed"}
+                               for row in turns[1:])):
+                    return None
+                if turns[0].get("status") == "failed":
+                    break
+                # The native error notification can precede its persisted
+                # failed Turn. A provisional interrupted snapshot has no
+                # completion timestamp or error yet. Wait within the same
+                # readback deadline; never dispatch from this interim state.
+                if (not await_terminal or turns[0].get("status") not in {"inProgress", "interrupted"}
+                        or turns[0].get("completedAt") is not None or turns[0].get("error") is not None):
+                    return None
+                self._control_wait(deadline)
+            error = turns[0].get("error")
+            info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+            if not isinstance(info, dict) or len(info) != 1:
+                return None
+            variant, detail = next(iter(info.items()))
+            if not isinstance(detail, dict) or "httpStatusCode" not in detail:
+                return None
+            status = detail["httpStatusCode"]
+            if status is not None and not (type(status) is int and 500 <= status <= 599):
+                return None
+            return {"codex_error_info": {variant: {"httpStatusCode": status}}}
+
+        try:
+            terminal = failed_turn(await_terminal=True)
+            if terminal is None:
+                return None
+            with self._command_items_lock:
+                if self._command_items.get(turn_id):
+                    return None
+            items = list(self._control_items("thread/items/list", {"turnId": turn_id}, deadline))
+            item_ids: set[str] = set()
+            user_count = 0
+            for entry in items:
+                item = entry.get("item")
+                if entry.get("turnId") != turn_id or not isinstance(item, dict):
+                    return None
+                item_id = item.get("id")
+                if not isinstance(item_id, str) or not item_id or item_id in item_ids:
+                    return None
+                item_ids.add(item_id)
+                if item.get("type") not in {"userMessage", "agentMessage", "reasoning", "plan"}:
+                    return None
+                if item.get("type") == "userMessage":
+                    user_count += 1
+                if item.get("type") == "agentMessage" and (
+                    item.get("delivery") is not None or item.get("questions")
+                ):
+                    return None
+            # An accepted user item binds the complete inventory to this native
+            # request. A second user item can be a correction; never drop it.
+            if user_count != 1 or failed_turn() != terminal:
+                return None
+            return {"thread_id": self.thread_id, "turn_id": turn_id,
+                    "item_count": len(items), **terminal}
+        except (CodexChatAgentError, OSError, TypeError, ValueError):
+            return None
+
     def _control_wait(self, deadline: float) -> None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -1541,10 +1627,12 @@ class CodexChatAgentSession:
                     str(turn.get("status") or "") if isinstance(turn, dict) else ""
                 )
                 if turn_status == "failed":
-                    raise _terminal_turn_error(
+                    error = _terminal_turn_error(
                         turn.get("error"),
                         "Codex app-server reported a terminal turn failure.",
                     )
+                    error.native_error_info = _retry_error_details(turn.get("error")).get("retry", {}).get("codex_error_info")
+                    raise error
                 if turn_status == "interrupted":
                     raise CodexChatAgentError(
                         "Codex app-server reported an interrupted turn.",
@@ -1567,10 +1655,12 @@ class CodexChatAgentSession:
                             },
                         )
                     continue
-                raise _terminal_turn_error(
+                error = _terminal_turn_error(
                     params.get("error") if isinstance(params, dict) else None,
                     "Codex app-server reported a turn error.",
                 )
+                error.native_error_info = _retry_error_details(params.get("error")).get("retry", {}).get("codex_error_info") if isinstance(params, dict) else None
+                raise error
         visible_tail = display_filter.finish()
         if visible_tail and on_event:
             visible_delta_count += 1

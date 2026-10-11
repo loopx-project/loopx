@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from loopx.chat_manager import manager_skill_text
 
 
@@ -69,6 +71,28 @@ def test_the_owner_visible_failure_does_not_guess_why_the_host_failed() -> None:
         error_code = "some_future_code"
 
     assert manager_failure_reply(_Unknown("x"))[0] == "processing_failed"
+
+
+@pytest.mark.parametrize("info", [
+    None, "responseStreamDisconnected", {"responseStreamDisconnected": None},
+    {"responseStreamDisconnected": {}, "futureVariant": {}}, {"futureVariant": {}},
+])
+def test_failure_reply_does_not_guess_from_unknown_retry_shapes(info) -> None:
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    code, text = manager_failure_reply({"error_code": "host_gate"}, retry_info=info)
+    assert code == "host_gate" and "响应流曾中断" not in text
+    assert "/status" not in text and "已过期" not in text
+
+
+def test_retry_history_never_overrides_terminal_policy_or_expiry() -> None:
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    retry = {"responseStreamDisconnected": {"message": "private fixture"}}
+    for code, label in [("cyber_policy", "安全策略"), ("session_queue_expired", "排队请求已过期")]:
+        actual_code, text = manager_failure_reply({"error_code": code}, retry_info=retry)
+        assert actual_code == code and label in text
+        assert "响应流曾中断" not in text and "private" not in text
 
 
 def test_manager_guidance_ships_the_machine_readable_preview_contract() -> None:

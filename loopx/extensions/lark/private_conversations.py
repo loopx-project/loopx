@@ -683,13 +683,19 @@ class LarkPrivateConversations:
                         self._progress(path, record, inbox=inbox)
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
-                    if turn["status"] == "failed" and turn.get("error_code") == "server_overloaded":
-                        response = manager_failure_reply(turn)[1] + " 原会话已保留。"
+                    if turn["status"] == "failed":
+                        retry_info = None
+                        if turn.get("error_code") == "host_gate":
+                            events = self.core.controller.store.events_after(record["session_id"], record["turn_id"], None)
+                            retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
+                                for event in reversed(events) if event.get("kind") == "agent.phase"
+                                and event.get("payload", {}).get("method") == "error"), None)
+                        response = manager_failure_reply(turn, retry_info=retry_info)[1] + " 原会话已保留。"
                     else:
                         response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (
                             "本次执行已停止。" if turn["status"] == "interrupted" else
                             "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
-                            "本次执行失败或已过期，原会话已保留；请发送 /status 后再决定是否重试。")
+                            "本次未能完成，原会话已保留。")
                 else:
                     if record["status"] != "rejected":
                         self._feedback(path, record, inbox=inbox)

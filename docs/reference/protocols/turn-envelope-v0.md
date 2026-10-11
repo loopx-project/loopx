@@ -322,6 +322,23 @@ ineligible/rejected choice still replays the receipt without mutation; a
 first-call rejection reports
 `heartbeat_receipt.status=not_committed` and writes no receipt event.
 
+A receipt-bound `refresh-state --next-action` must refine that original Turn's
+Goal, Agent and Todo. If waiting or completion makes the current selector choose
+another Todo, the existing typed recommendation owner rejects the step before
+appending a run; even the other Todo's fresh read basis cannot retarget the
+original writeback. Finish the original writeback without `--next-action`, then
+select subsequent work through a fresh guard. A matching bound step records
+`settlement_alignment=exact`; ordinary unbound steps retain `not_applicable`.
+This changes the previous acceptance of a mismatched task-step write, without
+clearing dependencies, altering Todo authority or granting another Turn.
+
+中文：绑定回执的 `refresh-state --next-action` 必须属于原 Turn 的 Goal、Agent
+和 Todo。原任务等待或完成后，即使当前选择器已选中另一个 Todo，且提供其最新
+read basis，同一 TS recommendation owner 仍在追加 run 前拒绝跨任务步骤。
+先去掉 `--next-action` 完成原写回，再通过 fresh guard 选择后续工作。匹配步骤保留
+`settlement_alignment=exact`，无 Turn 绑定的普通步骤仍为 `not_applicable`。
+本项修复此前错误接受的跨任务写入，不清依赖、不改变 Todo 权威或授予新 Turn。
+
 For an eligible explicit choice deferred solely by runnable autonomous replan,
 the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
 that choice, the CLI now executes one same-Turn guard reentry and returns its
