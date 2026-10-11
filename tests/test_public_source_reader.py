@@ -65,8 +65,10 @@ def test_trickled_framing_cannot_consume_the_next_address_budget(monkeypatch, fr
         assert attempts == ["8.8.8.8", "1.1.1.1"]
         assert time.monotonic() - started < .9
     finally:
-        for peer in peers: peer.close()
-        for server in servers: server.join(2)
+        for peer in peers:
+            peer.close()
+        for server in servers:
+            server.join(2)
 
 
 @pytest.mark.parametrize("failure", ["headers", "body", "incomplete"])
@@ -200,7 +202,8 @@ def test_connect_time_consumes_tls_budget_and_expired_socket_is_closed(monkeypat
     class TLS:
         def wrap_socket(self, *args, **kwargs): pytest.fail("expired attempt must not start TLS")
     connection._context = TLS()
-    with pytest.raises(TimeoutError): connection.connect()
+    with pytest.raises(TimeoutError):
+        connection.connect()
     assert timeouts == [] and closed == [True]
 
 
