@@ -1041,6 +1041,13 @@ acceptance 和 vision。展示限制不能变成结算限制。在 legacy、File
   File/SQLite CLI 验证覆盖预览、写入、后续模式变化后的原操作回放及 provider
   故障时禁止 Markdown 回退。本批闭合 canonical setter 的 import 依赖；未晋升
   writer、lease capture 恢复及旧源迁移窗口仍保留独立退役验收。
+- 旧源 task-lease facts 直接复用 `todos/list_readback.py`，移除对历史 mutation
+  facade 的依赖。领取及生命周期决策仍由 TypeScript 拥有；Markdown IO、source
+  capture 与公开兼容 export 仍有实际 caller。CLI 分发反例移除 facade 并禁用
+  editable install finder，防止从 checkout 偷读已删除模块。源码与安装 wheel
+  覆盖 capture 关闭／开启、三种 handoff 模式、回放、owner/version 拒绝、转交、
+  释放及保留历史。本批闭合 reader 到 writer facade 的依赖；完整 writer 删除
+  仍须验收剩余 caller 与迁移窗口。
 
 **每张执行卡的验证与停止规则**
 
