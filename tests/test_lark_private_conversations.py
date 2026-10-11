@@ -169,6 +169,40 @@ def finish_group_turn(runtime, transport, *, message):
     return row
 
 
+def test_lark_transport_recovery_returns_on_original_admission_without_model_replay(ordinary, monkeypatch):  # noqa: F811
+    from test_chat_turn_steering import install_transport_failure
+
+    install_transport_failure(ordinary[-2])
+    store, runtime, provider, transport = connect(ordinary)
+    monkeypatch.setattr(runtime.closed, "wait", lambda _: False)
+    event = provider.event("notes-app", "recover-original", "transport recovery")
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        record = next(row for row in transport.core.pending() if row["message"] == event["content"])
+        sid, tid = record["session_id"], record["turn_id"]
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        provider.verify_replies = False
+        transport.reconcile()
+        sent = list(provider.writes)
+        assert ("notes-app", "Runtime response.") in sent
+        provider.verify_replies = True
+        assert transport.admit("notes-app", {**event, "event_id": "redelivery"})["status"] == "durably_accepted"
+        # Lost/unconfirmed provider readback must retry delivery, never model IO.
+        transport.reconcile()
+        assert provider.writes == sent
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        starts = [row["params"] for row in packets if row["method"] == "turn/start"]
+        assert len(starts) == 2 and starts[0] == starts[1]
+        assert len(store.list_sessions()) == 1
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "user"] == [event["content"]]
+        assert all(profile == "notes-app" for profile, _ in provider.writes)
+        reply = next(row for row in provider.messages.values()
+                     if "Runtime response." in row.get("body", {}).get("content", ""))
+        assert reply["chat_id"] == event["chat_id"]
+    finally:
+        runtime.close()
+
+
 def test_group_topics_share_members_but_isolate_topics_apps_and_native_host(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:
