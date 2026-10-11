@@ -432,13 +432,21 @@ test("receipt retries precede later full-source caches without losing hidden ear
     todo_id: "retry", observed_at: "2026-10-01T00:00:00Z", due_at: due,
     resume_when: `resume_at:${due}`, goal_id: "goal-a", agent_id: "agent-a", turn_instance_id: "turn-old"};
   const row = {todo_id: "retry", status: "open", task_class: "advancement_task", claimed_by: "agent-a",
-    resume_ready: false, resume_when: retry.resume_when, next_due_at: due, blocked_retry: retry};
+    resume_ready: false, resume_when: retry.resume_when, next_due_at: due, blocked_retry: retry,
+    resume_condition: {kind: "resume_at", satisfied: false}};
   const cache = {schema_version: "todo_frontier_deadline_v0", identity: "hidden-monitor",
     source: "continuous_monitor", next_due_at: "2026-10-01T00:25:00Z", candidate_count: 25};
   const before = structuredClone({cache, row});
   assert.deepEqual(planningDeadline([], [], {frontier_deadline: cache}, [row, row]).frontier_deadline,
     {schema_version: "todo_frontier_deadline_v0", identity: "retry", source: "turn_settlement",
       next_due_at: "2026-10-01T00:05:00+00:00", blocked_retry: retry, candidate_count: 26});
+  const later = Array.from({length: 8}, (_, index) => {
+    const id = `later-${index}`, due = "2026-10-01T00:20:00Z", resume = `resume_at:${due}`;
+    return {...row, todo_id: id, next_due_at: due, resume_when: resume,
+      blocked_retry: {...retry, todo_id: id, due_at: due, resume_when: resume}};
+  });
+  assert.equal((planningDeadline([], [], {frontier_deadline: cache}, [...later, row])
+    .frontier_deadline as JsonObject).identity, "retry");
   const earlier = {...cache, next_due_at: "2026-10-01T00:01:00Z", extension: {retained: true}};
   assert.deepEqual(planningDeadline([], [], {frontier_deadline: earlier}, [row]).frontier_deadline, earlier);
   const replaced = {...cache, identity: "retry", source: "turn_settlement", candidate_count: 1};

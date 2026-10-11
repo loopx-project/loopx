@@ -19,7 +19,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "due_monitor", "independent", "no_retry"])
+@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "notice_independent", "due_monitor", "independent", "no_retry"])
 def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, scenario: str,
 ) -> None:
@@ -42,10 +42,10 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
             "- [ ] Validate an independent result.\n"
             f"  <!-- loopx:todo todo_id=todo_retry_independent status=open claimed_by={cli.AGENT_ID} "
             "task_class=advancement_task action_kind=validate -->\n"
-            if scenario == "independent" else ""
+            if scenario in {"independent", "notice_independent"} else ""
         ))
 
-    if scenario == "notice_waiting":
+    if scenario in {"notice_waiting", "notice_independent"}:
         state.write_text(state.read_text() +
             "\n## User Todo\n\n- [ ] Review an independent draft.\n"
             f"  <!-- loopx:todo todo_id=todo_retry_notice status=open bound_agent={cli.AGENT_ID} "
@@ -102,7 +102,7 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
             assert pending["due_at"] == retry["due_at"]
         else:
             assert guard["effective_action"] == "normal_run"
-            if scenario == "independent":
+            if scenario in {"independent", "notice_independent"}:
                 assert guard["selected_todo"]["todo_id"] == "todo_retry_independent"
         guards.append(guard)
     assert guards[0]["heartbeat_receipt"]["event_id"] == guards[1]["heartbeat_receipt"]["event_id"]

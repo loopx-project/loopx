@@ -333,7 +333,7 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: st
   let selected: JsonObject | null = currentProjection;
   let earliest: bigint | null = currentProjection ? projectedTime : null;
   let addedRetryCount = 0;
-  for (const lane of frontierLanes) {
+  for (const lane of currentProjection ? ["resume_blocked_items"] : frontierLanes) {
     const items = summary[lane];
     if (!Array.isArray(items)) continue;
     for (const raw of items) {
@@ -408,10 +408,17 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const handoff = hasSourceContract ? handoffGateLanes(request.handoff_items, agent, limit) : {};
   const route = hasSourceContract ? routeContinuationLanes(request.route_items, agent, limit) : {};
   const lanes = requireJsonObject(selected.lanes, "selection lanes");
+  const resumeBlocked = requireJsonObject(resume.resume_blocked_lanes, "resume blocked lanes");
   const frontier = now === null ? null : projectTodoFrontierDeadline({
     ...requireJsonObject(selected.claim_visibility, "claim visibility"),
     ...requireJsonObject(resume.deferred_lanes, "deferred lanes"),
-    ...requireJsonObject(resume.resume_blocked_lanes, "resume blocked lanes"), ...handoff,
+    ...resumeBlocked, ...handoff,
+    // Retain the display lane and union the existing full-source successor
+    // waits before choosing a deadline; visibility limits are not clock limits.
+    resume_blocked_items: [
+      ...(Array.isArray(resumeBlocked.resume_blocked_items) ? resumeBlocked.resume_blocked_items : []),
+      ...(resume.blocked_successor_items as JsonObject[]),
+    ],
     frontier_deadline: request.frontier_deadline ?? null,
     monitor_open_items: lanes.monitor_items,
     gate_open_items: lanes.gate_items,

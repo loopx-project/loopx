@@ -136,6 +136,14 @@ def test_real_user_gate_survives_retry_clock(monkeypatch):
     assert hint["pending_retry"]["due_at"] == DUE
 
 
+def test_real_source_gate_is_not_reclassified_by_cached_retry(monkeypatch):
+    result = packet(monkeypatch, user_class="user_gate", cached_monitor=True)
+    assert result["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert result["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert not result["interaction_contract"]["user_channel"].get("non_gating_notice")
+    assert result["scheduler_hint"]["cadence_class"] == "human_gate"
+
+
 def test_owner_floor_clamps_retry_recheck(monkeypatch):
     result = packet(monkeypatch, floor=6)
     assert result["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 6
