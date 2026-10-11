@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import product
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -70,6 +71,15 @@ def test_explicit_scan_file_keeps_unsupported_suffix(tmp_path: Path) -> None:
         ("local_private_path", "/" + "Users/alice/Documents/example.md"),
         ("local_private_path", "/" + "Users/alice/code-reading/example.md"),
         ("local_private_path", "/ext" + "_data/example.md"),
+        ("local_private_path", "\\" + "Users\\alice\\Documents\\example.md"),
+        ("local_private_path", "\\" + "Users\\alice\\code-reading\\example.md"),
+        ("local_private_path", "\\ext" + "_data\\example.md"),
+        # Either separator at each junction: a Windows host mixes them when
+        # it appends a POSIX-style segment to a native home directory, and a
+        # serialized document double-escapes each backslash.
+        ("local_private_path", "\\" + "Users/alice/Documents/example.md"),
+        ("local_private_path", "/Users" + "\\alice\\Documents\\example.md"),
+        ("local_private_path", "C:" + "\\\\" + "Users" + "\\\\" + "alice" + "\\\\" + "Documents" + "\\\\" + "example.md"),
         ("internal_task_id", "ticket t-" + "20260828123456-example"),
         ("private_ip", "host 10" + ".1.2.3"),
         ("private_ip", "host 172" + ".31.2.3"),
@@ -84,6 +94,22 @@ def test_every_authoritative_leak_pattern_has_a_matching_prefilter(
 
     assert rule.pattern.search(line)
     assert rule.is_candidate(contract._prefilter_fold(line))
+
+
+def test_prefilter_is_a_necessary_condition_for_every_separator_spelling() -> None:
+    # The prefilter may be looser than the pattern but never stricter: every
+    # root spelling the authoritative pattern classifies, whatever separator
+    # or escape run the host or serializer chose, must remain a candidate.
+    rule = contract.LEAK_RULES["local_private_path"]
+    separators = ("/", "\\", "//", "\\\\")
+    for outer, inner in product(separators, repeat=2):
+        line = f"C:{outer}Users{inner}alice{inner}Documents{inner}report.md"
+        assert rule.pattern.search(line), line
+        assert rule.is_candidate(contract._prefilter_fold(line)), line
+    for separator in separators:
+        line = f"Mounted at {separator}ext_data{separator}report.md"
+        assert rule.pattern.search(line), line
+        assert rule.is_candidate(contract._prefilter_fold(line)), line
 
 
 @pytest.mark.parametrize(
@@ -225,3 +251,33 @@ def test_prefilter_literals_are_substrings_not_regex_syntax(
     (tmp_path / "sample.md").write_text("\n".join(lines), encoding="utf-8")
     assert contract.scan_public_boundary([tmp_path])["ok"] is True
     assert pattern.lines == ["actual a|b", "actual 10."]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "See C:" + "\\" + "Users\\alice\\Documents\\report.md",
+        "See C:" + "\\" + "Users\\alice\\code-reading\\report.md",
+        "Mounted at " + "\\ext" + "_data\\report.md",
+        "See C:" + "\\" + "Users/alice/Documents/report.md",
+        'json: {"path": "C:' + "\\\\" + 'Users\\\\alice\\\\Documents\\\\report.md"}',
+    ],
+)
+def test_native_windows_private_paths_are_blocked(line: str, tmp_path: Path) -> None:
+    # The same private path class must be blocked when a Windows host spells it
+    # with the native separator, not only in its POSIX form.
+    (tmp_path / "sample.md").write_text(line + "\n", encoding="utf-8")
+
+    payload = contract.scan_public_boundary([tmp_path])
+
+    assert payload["ok"] is False
+    assert payload["hits"] == ["sample.md:1: local_private_path"]
+
+
+def test_windows_paths_outside_the_private_roots_stay_public(tmp_path: Path) -> None:
+    # Accepting the Windows separator must not widen the private roots the rule
+    # names, so an unrelated profile subdirectory stays public.
+    line = "Cache at C:" + "\\" + "Users\\alice\\AppData\\Local\\Temp\\report.md"
+    (tmp_path / "sample.md").write_text(line + "\n", encoding="utf-8")
+
+    assert contract.scan_public_boundary([tmp_path])["ok"] is True

@@ -314,13 +314,14 @@ loopx extension run <extension-id> --input-json <path-or-> [--execute]
 
 The active manifest fixes the executable, arguments, protocol, permissions,
 timeout, and revision. The caller supplies one JSON object over stdin and the
-provider must return one JSON object over stdout. LoopX does not accept an
-arbitrary executable path or argument passthrough. `run` never installs a
-missing extension, and it rejects extensions with `[[provides]]`,
-`[[implements]]`, or any declared permission; those providers are invoked
-through their capability or domain command. Extension lifecycle management is
-shared, but direct execution is reserved for zero-permission, runtime-only
-standalone extensions.
+provider must return one JSON object over stdout; both payloads are UTF-8 bytes,
+so a provider must pin its own stdio instead of falling back to the host locale
+codec. LoopX does not accept an arbitrary executable path or argument
+passthrough. `run` never installs a missing extension, and it rejects extensions
+with `[[provides]]`, `[[implements]]`, or any declared permission; those
+providers are invoked through their capability or domain command. Extension
+lifecycle management is shared, but direct execution is reserved for
+zero-permission, runtime-only standalone extensions.
 Direct provider binaries are implementation and debugging surfaces; they are
 not the supported management API.
 
