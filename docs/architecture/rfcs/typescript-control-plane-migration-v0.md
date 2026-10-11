@@ -68,12 +68,6 @@ checks keep their prior diagnostic order, and canonical provider transactions
 still recheck registry/claim/lease/CAS authority. This retires duplicate add
 composition, not the supported Markdown writer or bootstrap/Host/history IO.
 
-公开 Todo 创建现在以一次 typed creation-scope 调用组合 scope、受支持的等待条件和
-有界 Monitor metadata。旧 add writer 复用同次准备结果，独立 Markdown codec 与后继
-创建仍自行校验；priority 和 validation declaration 保留原错误顺序，canonical 事务
-仍复核 registry、claim、lease 和 CAS。本批只退出重复创建编排，不删除仍有调用方的
-Markdown writer、bootstrap、Host IO 或历史恢复路径；发布默认与整项退役验收保持独立。
-
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.

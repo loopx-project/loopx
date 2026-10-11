@@ -53,6 +53,12 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
 
+公开 Todo 创建现在以一次 typed creation-scope 调用组合 scope、受支持的等待条件和
+有界 Monitor metadata。旧 add writer 复用同次准备结果，独立 Markdown codec 与后继
+创建仍自行校验；priority 和 validation declaration 保留原错误顺序，canonical 事务
+仍复核 registry、claim、lease 和 CAS。本批只退出重复创建编排，不删除仍有调用方的
+Markdown writer、bootstrap、Host IO 或历史恢复路径；发布默认与整项退役验收保持独立。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
