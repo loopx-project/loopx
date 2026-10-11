@@ -27,6 +27,14 @@ EXPECTED_SEPARATE = {"langchain-version-migration", "nbody-accel-iterative"}
 EXPECTED_AGENT = "benchmark.runtime.harbor:BenchmarkCodex"
 
 
+def cli_supports_replan_count(help_text: str, option: str, count: int) -> bool:
+    """Check the resolved cadence against the current CLI's advertised choices."""
+    choices = re.search(rf"(?<![\w-]){re.escape(option)}\s+\{{([0-9, ]+)\}}", help_text)
+    return choices is not None and count in {
+        int(value.strip()) for value in choices[1].split(",")
+    }
+
+
 def command(argv: list[str], timeout: int = 30) -> tuple[int, str]:
     try:
         result = subprocess.run(
@@ -222,7 +230,7 @@ def main() -> int:
                 field, option, count = candidate._replan_configuration()
                 check(
                     "resolved replan cadence CLI",
-                    rc == 0 and f"{option} {{1,2,3,4,5}}" in help_text,
+                    rc == 0 and cli_supports_replan_count(help_text, option, count),
                     f"{field}={count}",
                 )
                 replan_receipt = candidate._replan_receipt()
