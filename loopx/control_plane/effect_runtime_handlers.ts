@@ -462,6 +462,7 @@ export function createEffectRuntimeHandlers(
     ["capabilities.issue_fix.monitor_reconciliation.plan", lazyHandler(() => import("./capabilities/issue_fix_monitor_reconciliation.ts"), ({planIssueFixMonitorReconciliation}) => planIssueFixMonitorReconciliation)],
     ["capabilities.change_quality.validation_gate", lazyHandler(() => import("./capabilities/change_quality_validation.ts"), ({qualifyChangeQualityValidation}) => qualifyChangeQualityValidation)],
     ["capabilities.pr_review.approval_closeout.plan", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({planPrReviewApprovalCloseout}) => planPrReviewApprovalCloseout)],
+    ["capabilities.pr_review.conclusion.select", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({selectPrReviewConclusion}) => selectPrReviewConclusion)],
     ["capabilities.pr_review.configuration", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({prReviewConfiguration}) => prReviewConfiguration)],
     ["capabilities.pr_review.order", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({orderPrReviewQueue}) => orderPrReviewQueue)],
     ["coordination.local_authority_shadow.record", lazyHandler(() => import("./coordination/local_authority_shadow.ts"), ({recordLocalAuthorityShadow}) => recordLocalAuthorityShadow)],

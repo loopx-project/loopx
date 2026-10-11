@@ -48,6 +48,7 @@ from .effect_program import (
     ReceiptBoundTerminalPhase,
 )
 from .should_run_packet import (
+    _attach_automation_cadence_readback,
     _build_quota_should_run_payload,
     _execution_obligation,
     _QuotaDecisionRoute,
@@ -253,6 +254,22 @@ def build_quota_paused_should_run_payload(
     )
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
+    effective_agent_id = (
+        str(agent_identity.get("agent_id") or "").strip()
+        if isinstance(agent_identity, Mapping)
+        else ""
+    ) or requested_agent_id
+    _attach_automation_cadence_readback(
+        payload,
+        goal_id=safe_goal_id,
+        agent_id=effective_agent_id,
+        automation_id=codex_app_automation_id,
+        runtime_root=(
+            runtime_root
+            or status_payload.get("runtime_root")
+        ),
+        resolved_scheduler_context=resolved_scheduler_context,
+    )
     payload["automation_liveness"] = build_automation_liveness(payload)
     payload["interaction_contract"] = build_interaction_contract(
         payload,
@@ -384,7 +401,7 @@ def build_quota_should_run(
             goal_ref=goal_ref,
         )
     if health_item:
-        return {
+        payload = {
             "ok": False,
             "mode": "should-run",
             "goal_id": safe_goal_id,
@@ -401,6 +418,15 @@ def build_quota_should_run(
             "recommended_action": health_item.get("recommended_action"),
             "plan_summary": plan.get("summary"),
         }
+        _attach_automation_cadence_readback(
+            payload,
+            goal_id=safe_goal_id,
+            agent_id=agent_id,
+            automation_id=codex_app_automation_id,
+            runtime_root=runtime_root or status_payload.get("runtime_root"),
+            resolved_scheduler_context=resolved_scheduler_context,
+        )
+        return payload
     return {
         "ok": False,
         "mode": "should-run",

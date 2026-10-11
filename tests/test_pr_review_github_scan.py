@@ -1691,6 +1691,83 @@ def test_latest_review_and_author_owned_fallback_are_enforced(monkeypatch) -> No
     )
 
 
+def test_other_reviewers_brief_approval_preserves_full_exact_head_conclusion() -> None:
+    row = _queue_pr(32, author="community", ready_at="2026-08-18T07:00:00Z",
+                    updated_at="2026-08-18T11:00:00Z")
+    head = row["headRefOid"]
+    row["reviews"] = [
+        {"author": {"login": "maintainer"}, "body": _full_review_body(head),
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T09:00:00Z"},
+        {"author": {"login": "reporter"}, "body": "Native platform reproduction passes.",
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T10:00:00Z"},
+    ]
+    item = pr_review_module.build_pr_review_packet(pull_requests=[row],
+        repository="owner/repo", limit=10, source="fixture", reviewer_login="maintainer",
+        wait_for_ci=False)["pull_requests"][0]
+    assert item["review_conclusion"]["valid"] is True
+    assert item["review_conclusion"]["reviewer"] == "maintainer"
+    assert item["review_action_kind"] == "qualify_pull_request_merge_readiness"
+
+
+@pytest.mark.parametrize("superseding", ["DISMISSED", "CHANGES_REQUESTED", "APPROVED"])
+def test_same_reviewers_new_opinion_cannot_resurrect_approval(superseding) -> None:
+    head = "a" * 40
+    reviews = [
+        {"author": {"login": "maintainer"}, "body": _full_review_body(head),
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T09:00:00Z"},
+        {"author": {"login": "MAINTAINER"}, "body": "New formal opinion.",
+         "commit": {"oid": head}, "state": superseding,
+         "submittedAt": "2026-08-18T10:00:00Z"},
+        {"author": {"login": "observer"}, "body": "Supplemental note.",
+         "commit": {"oid": head}, "state": "COMMENTED",
+         "submittedAt": "2026-08-18T11:00:00Z"},
+    ]
+    result = pr_review_module._review_conclusion(
+        {"headRefOid": head, "author": {"login": "community"}, "reviews": reviews},
+        reviewer_login="maintainer")
+    assert result["valid"] is False
+    assert result["state"] == superseding
+
+
+def test_unformatted_current_head_blocker_survives_other_approval() -> None:
+    head = "a" * 40
+    reviews = [
+        {"author": {"login": "dissent"}, "body": "Please fix the reproduced failure.",
+         "commit": {"oid": head}, "state": "CHANGES_REQUESTED",
+         "submittedAt": "2026-08-18T09:00:00Z"},
+        {"author": {"login": "maintainer"}, "body": _full_review_body(head),
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T10:00:00Z"},
+    ]
+    result = pr_review_module._review_conclusion(
+        {"headRefOid": head, "author": {"login": "community"}, "reviews": reviews},
+        reviewer_login="maintainer")
+    assert result["valid"] is False
+    assert result["state"] == "CHANGES_REQUESTED"
+    assert result["reviewer"] == "dissent"
+
+
+@pytest.mark.parametrize("head", ["a" * 40, "b" * 40])
+def test_pending_review_cannot_retire_opinion_or_transfer_it_to_new_head(head) -> None:
+    approved_head = "a" * 40
+    result = pr_review_module._review_conclusion({"headRefOid": head,
+        "author": {"login": "community"}, "reviews": [
+            {"author": {"login": "maintainer"}, "body": _full_review_body(approved_head),
+             "commit": {"oid": approved_head}, "state": "APPROVED",
+             "submittedAt": "2026-08-18T09:00:00Z"},
+            {"author": {"login": "maintainer"}, "body": "Pending draft.",
+             "commit": {"oid": head}, "state": "PENDING",
+             "submittedAt": "2026-08-18T10:00:00Z"},
+        ]}, reviewer_login="maintainer")
+    assert result["valid"] is (head == approved_head)
+    assert result["state"] == "APPROVED"
+    if head != approved_head:
+        assert "review_not_bound_to_current_head" in result["invalid_reasons"]
+
+
 def test_actionable_sequence_excludes_valid_merged_exact_head(monkeypatch) -> None:
     monkeypatch.setattr(pr_review_module, "_now_iso", lambda: "2026-08-18T12:00:00Z")
     reviewed = _queue_pr(

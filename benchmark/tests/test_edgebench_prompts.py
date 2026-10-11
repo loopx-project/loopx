@@ -1,6 +1,5 @@
 from pathlib import Path
 from types import SimpleNamespace
-import shlex
 import subprocess
 
 import pytest
@@ -120,6 +119,8 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
         assert agents.read_text().startswith("Task-owned instructions: preserve the interface.\n")
         assert agents.read_text().endswith(instructions)
         assert prompt.startswith(instructions)
+        assert "`sforge-submit --result ID --details`" in agents.read_text()
+        assert "`sforge-submit --help`" in prompt
         assert (tmp_path / "workspace-AGENTS.md").read_text() == agents.read_text()
         worker.instructions_installed = False  # Safe readback retry does not duplicate the block.
         worker._install_workspace_instructions()
@@ -185,6 +186,20 @@ def test_native_candidate_prompt_describes_actual_feedback_and_preserves_objecti
     assert ("every 600 seconds" in wrapper) is (interval > 0)
     assert ("Periodic automatic evaluation is disabled" in wrapper) is (interval == 0)
     assert "not a score-only filter" in wrapper
+
+
+def test_native_recovery_distinguishes_existing_result_from_new_submission():
+    policy = native_task_instructions(["candidate.py"],
+        submission_cooldown=3600, eval_interval=0, internet=False,
+        selection="score_first", score_direction="maximize")
+    for clause in ["`sforge-submit --help`", "clients that advertise `--result ID`",
+                   "`sforge-submit --result ID --details`", "read or poll",
+                   "does not create a new evaluation or consume another submission",
+                   "does not restart the cooldown", "If the ID was not received",
+                   "inspect `--list` first", "do not guess an ID or blindly resubmit",
+                   "token-visible history", "missing session or result",
+                   "unresolved feedback"]:
+        assert clause in policy
 
 
 @pytest.mark.parametrize("existing", ["absent", "partial", "symlink", "directory"])

@@ -35,6 +35,7 @@ from ..explore.result_log import (
     build_explore_result_projection,
     explore_result_log_path,
     load_explore_result_events,
+    validate_explore_public_ref,
 )
 from .outcome_projection import build_issue_fix_outcome_collection_from_domain_state
 
@@ -188,7 +189,12 @@ def _text(value: Any, *, limit: int = 900) -> str:
     return compact if len(compact) <= limit else compact[: limit - 1].rstrip() + "..."
 
 
-def _refs(*values: Any) -> list[str]:
+def _refs(*values: Any, source_ref: str) -> list[str]:
+    """Project refs without moving private source evidence into the public log.
+
+    A source pointer resolves to the original local record, not a public artifact.
+    Validate it through the same owner as ordinary refs; never relax the writer.
+    """
     refs: list[str] = []
     for value in values:
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
@@ -197,8 +203,14 @@ def _refs(*values: Any) -> list[str]:
             candidates = [value]
         for candidate in candidates:
             text = str(candidate or "").strip()
-            if text and text not in refs:
-                refs.append(text)
+            if not text:
+                continue
+            try:
+                ref = validate_explore_public_ref(text, field="evidence_refs")
+            except ValueError:
+                ref = validate_explore_public_ref(source_ref, field="source_ref")
+            if ref not in refs:
+                refs.append(ref)
     return refs[:16]
 
 
@@ -425,7 +437,8 @@ def _candidate_events(
         if pr_number:
             title += f" -> PR #{pr_number}"
         next_action = _text(outcome.get("next_action"), limit=500)
-        evidence = _refs(issue.get("url"), pull_request.get("url"))
+        source_ref = f"evidence:issue-fix:{node_id}"
+        evidence = _refs(issue.get("url"), pull_request.get("url"), source_ref=source_ref)
         candidates.append(
             _node_event(
                 goal_id=goal_id,
@@ -504,6 +517,7 @@ def _candidate_events(
                     evidence,
                     reproduction.get("evidence_refs"),
                     validation.get("evidence_refs"),
+                    source_ref=source_ref,
                 ),
                 tags=["issue-fix", "lifecycle", stage],
                 agent_id=agent_id,
@@ -523,8 +537,17 @@ def _candidate_events(
         if not capabilities:
             capabilities = ["issue_fix_capability"]
         status = str(event.get("status") or "found").strip().lower()
-        evidence = _refs(details.get("evidence"), event.get("artifact_refs"))
         node_ids = _capability_node_ids(todo, capabilities)
+        source_ref = (
+            f"evidence:rollout:{event['event_id']}"
+            if event.get("event_id")
+            else f"evidence:capability:{node_ids[0]}"
+        )
+        evidence = _refs(
+            details.get("evidence"),
+            event.get("artifact_refs"),
+            source_ref=source_ref,
+        )
         for index, node_id in enumerate(node_ids):
             capability = capabilities[min(index, len(capabilities) - 1)]
             capability_state[node_id] = (status, capability, evidence, todo_id or None)
@@ -550,7 +573,7 @@ def _candidate_events(
                 (
                     "found",
                     capabilities[min(index, len(capabilities) - 1)] if capabilities else node_id,
-                    _refs(todo.get("evidence")),
+                    _refs(todo.get("evidence"), source_ref=f"evidence:todo:{todo['todo_id']}"),
                     str(todo.get("todo_id") or "") or None,
                 ),
             )

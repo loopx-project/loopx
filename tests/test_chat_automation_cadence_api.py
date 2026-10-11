@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -12,7 +13,10 @@ import pytest
 
 from loopx import chat_automation_cadence_api
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-from loopx.control_plane.effect_runtime import EffectRuntimeConflict
+from loopx.control_plane.effect_runtime import (
+    EffectRuntimeConflict,
+    effect_runtime_result,
+)
 
 
 def _exchange(
@@ -52,6 +56,12 @@ def test_chat_cadence_preview_apply_inheritance_and_stale_rejection(
         assert initial["min_interval_minutes"] == 0
         assert initial["sources"] == []
         assert initial["pre_model_admission"] == "not_qualified"
+        assert initial["eligibility"] == {
+            "state": "unconfigured",
+            "reason": "unconfigured",
+            "eligible_now": None,
+            "next_eligible_at_ms": None,
+        }
 
         change = {
             "goal_id": "goal-one",
@@ -113,8 +123,43 @@ def test_chat_cadence_preview_apply_inheritance_and_stale_rejection(
         status, inherited = _exchange(port, "GET", f"{path}?{query}")
         assert status == 200 and inherited["min_interval_minutes"] == 60
         assert inherited["sources"] == [
-            {"agent_id": None, "automation_id": None, "min_interval_minutes": 60}
+            {
+                "agent_id": None,
+                "automation_id": None,
+                "min_interval_minutes": 60,
+                "revision": 1,
+            }
         ]
+        assert inherited["eligibility"] == {
+            "state": "eligible",
+            "reason": "owner_minimum_interval",
+            "eligible_now": True,
+            "next_eligible_at_ms": None,
+        }
+        now_ms = int(time.time() * 1_000)
+        admitted = effect_runtime_result(
+            "quota.automation_cadence.admit",
+            {
+                "runtime_root": str(server.runtime_root),
+                "goal_id": "goal-one",
+                "agent_id": "agent-a",
+                "automation_id": "daily",
+                "request_id": "api-fixture-start",
+                "now_ms": now_ms,
+                "trigger_at_ms": now_ms,
+            },
+            retry_safe=False,
+        )
+        assert admitted["admitted"] is True
+        status, waiting = _exchange(port, "GET", f"{path}?{query}")
+        assert status == 200
+        assert waiting["eligibility"] == {
+            "state": "waiting",
+            "reason": "minimum_interval_wait",
+            "eligible_now": False,
+            "next_eligible_at_ms": now_ms + 60 * 60 * 1_000,
+        }
+        assert "owner_reference" not in json.dumps(waiting)
 
         lower = {
             **change,
@@ -207,3 +252,79 @@ def test_chat_cadence_conflict_status_ignores_message_wording(
         server.server_close()
     assert status == 409
     assert payload["error_code"] == "automation_cadence_conflict"
+
+
+def test_invalid_owner_readback_is_never_reported_as_a_client_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps({"schema_version": "0.1", "goals": [{"id": "goal-one"}]})
+    )
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path = registry
+    server.runtime_root = tmp_path / "runtime"
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    path = "/api/chat/automation-cadence"
+
+    def malformed(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "schema_version": "automation_cadence_result_v1",
+            "ok": True,
+            "goal_id": "goal-one",
+            "agent_id": None,
+            "automation_id": None,
+            "configuration_revision": 0,
+            "min_interval_minutes": 60,
+            "eligibility": {
+                "state": "waiting",
+                "reason": "minimum_interval_wait",
+                "eligible_now": False,
+                "next_eligible_at_ms": None,
+            },
+            "enabled": True,
+            "enforcement": "managed_turn_atomic_admission_and_schedule_recommendation",
+            "pre_model_admission": "managed_turn_only",
+            "sources": [],
+        }
+
+    monkeypatch.setattr(chat_automation_cadence_api, "effect_runtime_result", malformed)
+    change = {
+        "goal_id": "goal-one",
+        "agent_id": None,
+        "automation_id": None,
+        "min_interval_minutes": 60,
+        "expected_revision": 0,
+        "owner_reference": "Owner requested hourly automatic runs",
+        "approve_reduction": False,
+    }
+    preview_revision = chat_automation_cadence_api._request(
+        change,
+        execute=False,
+        runtime_root=str(server.runtime_root),
+    )["preview_revision"]
+    try:
+        read_status, read_payload = _exchange(
+            port, "GET", f"{path}?goal_id=goal-one"
+        )
+        write_status, write_payload = _exchange(
+            port,
+            "POST",
+            f"{path}/apply",
+            {**change, "preview_revision": preview_revision},
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert read_status == 500
+    assert read_payload["error_code"] == "automation_cadence_read_failed"
+    assert write_status == 500
+    assert write_payload["error_code"] == "automation_cadence_write_unknown"
+    assert "next_eligible_at_ms" not in json.dumps(
+        [read_payload, write_payload]
+    )

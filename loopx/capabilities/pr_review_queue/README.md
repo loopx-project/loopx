@@ -799,7 +799,21 @@ state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)` or
 `Request changes conclusion (author-owned PR; GitHub blocks formal self-review)`.
 The compact result is versioned as `pull_request_review_conclusion_v0` and
-reports a typed verdict and invalid-reason codes.
+reports a typed verdict and invalid-reason codes. Queue selection and approval
+closeout share the typed owner for each reviewer's latest submitted opinion.
+A brief approval by another reviewer cannot hide a complete exact-head approval.
+A reviewer's newer formal opinion retires their own previous opinion, including
+when it is dismissed or lacks the required body. Current-head requests for
+changes remain visible even without that format, and ordinary comments or
+pending reviews cannot restore a retired approval. A changed head still requires
+fresh evidence. This corrects default queue/readiness classification; it neither
+relaxes body qualification nor grants dismissal or merge authority.
+
+队列与 closeout 复用同一 TypeScript 历史选择规则：另一评审者的简短批准不会
+遮住完整的精确 head 批准；同一评审者的新正式意见会替换自己的旧意见，撤回或
+格式不完整也不会复活旧批准。当前 head 的阻塞意见保留，普通评论及待提交评审
+不改变已有正式意见，head 变化仍需新证据。本修复改变默认队列和 readiness
+分类，不放宽正文校验，也不授予撤回评审或合并权限。
 
 After a published exact-head `APPROVE` is read back, the capability-owned
 `review_execution_contract.approval_closeout` requires effective-review

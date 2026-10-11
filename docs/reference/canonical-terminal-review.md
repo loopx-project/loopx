@@ -161,6 +161,22 @@ not configuration. Reviewed Chat actions continue to use their explicit operatio
 identity and existing shared projection; no new frontend setting, visual control
 or Lark transport is introduced.
 
+## Linked work source
+
+For canonical completion, `--successor-todo-id` declares links. The terminal
+transaction reads their role/status from its current provider head and reports
+the first open agent link in the declared order. Caller-supplied policy snapshots
+cannot add undeclared links or override those facts. Existing missing/self-link
+rejections and lease admission still run before effects. A completed or User link
+may remain a historical relation without being reported as open agent work.
+
+Original-operation replay returns the originally accepted completion policy,
+including receipts written by earlier releases, without rewriting it against
+today's head. Current Todo reads show subsequent changes independently. The
+unpromoted Markdown writer retains its source-backed compatibility path; this
+change does not require migration or retire that writer. Rollback restores the
+earlier adapter and transaction together; no stored format migration is needed.
+
 ## Retiring an original Turn with an existing successor
 
 `todo supersede --turn-instance-id <original-turn>` now accepts the same exact

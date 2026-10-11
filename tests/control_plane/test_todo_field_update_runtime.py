@@ -216,6 +216,54 @@ def test_rejected_plan_does_not_partially_change_text_or_checkbox():
     assert lines == before
 
 
+@pytest.mark.parametrize(
+    "resume, clear, expected, error",
+    [
+        (None, False, "todo_done:todo_old", None),
+        ("", False, "todo_done:todo_old", None),
+        ("\u001c\t \u2003", False, "todo_done:todo_old", None),
+        ("\u2003TODO_DONE:todo_dependency\u2003", False, "todo_done:todo_dependency", None),
+        ("resume_at:2026-09-01T08:00:00+08:00", False, "resume_at:2026-09-01T00:00:00Z", None),
+        ("", True, None, None),
+        ("todo_done:todo_dependency", True, None, "either resume_when"),
+        ("unknown:todo_dependency", False, None, "supported"),
+        ("resume_at:2026-09-01T08:00:00", False, None, "supported"),
+    ],
+)
+def test_compatibility_field_update_preserves_resume_authoring(resume, clear, expected, error):
+    lines = _lines("resume_when=todo_done:todo_old")
+    before = deepcopy(lines)
+    kwargs = dict(todo_id="todo_field_test", updated_at=AT,
+                  resume_when=resume, clear_resume_when=clear)
+    if error:
+        with pytest.raises(ValueError, match=error):
+            apply_todo_update_to_lines(lines, text="Do not commit", **kwargs)
+        assert lines == before
+    else:
+        result = apply_todo_update_to_lines(lines, **kwargs)
+        assert result["resume_when"] == expected
+
+
+def test_compatibility_resume_update_uses_the_whole_field_owner(monkeypatch):
+    from loopx.control_plane.todos import line_update, resume_condition
+
+    actual = line_update.effect_runtime_result
+    calls = []
+
+    def traced(method, params):
+        calls.append(method)
+        return actual(method, params)
+
+    for module in (line_update, resume_condition):
+        monkeypatch.setattr(module, "effect_runtime_result", traced)
+    result = apply_todo_update_to_lines(
+        _lines(), todo_id="todo_field_test", updated_at=AT,
+        resume_when="TODO_DONE:todo_dependency",
+    )
+    assert result["resume_when"] == "todo_done:todo_dependency"
+    assert calls == ["todo.field_update.plan"]
+
+
 @pytest.mark.parametrize("exclusions", [[], ["!!!"]])
 def test_removed_policy_repair_requires_a_valid_exclusion(exclusions):
     lines = _lines("continuation_policy=primary_review")

@@ -494,6 +494,7 @@
         "loopx/control_plane/quota/settlement_precedence.py::settled_replay_fields",
         "loopx/control_plane/quota/should_run.py::build_quota_paused_should_run_payload",
         "loopx/control_plane/quota/should_run_packet.py::_apply_agent_monitor_only_precedence",
+        "loopx/control_plane/quota/should_run_packet.py::_apply_automatic_cadence_wait_precedence",
         "loopx/control_plane/quota/should_run_packet.py::_resolve_quota_should_run_route",
         "loopx/control_plane/quota/stall_repair.py::build_quota_stall_self_repair_hint",
         "loopx/control_plane/quota/stall_repair.py::build_runtime_capability_user_gate_repair_hint",

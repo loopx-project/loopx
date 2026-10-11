@@ -12,6 +12,9 @@ from .control_plane.effect_runtime import (
     EffectRuntimeRejected,
     effect_runtime_result,
 )
+from .control_plane.quota.automation_cadence_readback import (
+    automation_cadence_readback,
+)
 
 
 CHAT_AUTOMATION_CADENCE_PATH = "/api/chat/automation-cadence"
@@ -25,6 +28,10 @@ class SupersededCadencePreview(Exception):
     Typed on purpose: the HTTP status and error code must come from the failure
     kind, never from whether the message happens to contain a keyword.
     """
+
+
+class InvalidAutomationCadenceOwnerResult(RuntimeError):
+    """The owner returned data that cannot be exposed as verified readback."""
 
 
 def _cadence_failure_status(exc: Exception) -> tuple[int, str]:
@@ -61,28 +68,43 @@ def _scope(body: dict[str, Any]) -> tuple[str, str | None, str | None]:
     )
 
 
-def _public(result: dict[str, Any]) -> dict[str, Any]:
+def _public(
+    result: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    automation_id: str | None,
+) -> dict[str, Any]:
     """Policy provenance stays local; the browser receives only scoped values."""
-    return {
-        "ok": True,
-        "schema_version": "chat_automation_cadence_v0",
-        "goal_id": result["goal_id"],
-        "agent_id": result.get("agent_id"),
-        "automation_id": result.get("automation_id"),
-        "configuration_revision": result["configuration_revision"],
-        "min_interval_minutes": result["min_interval_minutes"],
-        "enabled": result["enabled"],
-        "enforcement": result["enforcement"],
-        "pre_model_admission": result["pre_model_admission"],
-        "sources": [
-            {
-                "agent_id": rule["agent_id"],
-                "automation_id": rule["automation_id"],
-                "min_interval_minutes": rule["min_interval_minutes"],
-            }
-            for rule in result["sources"]
-        ],
-    }
+
+    try:
+        readback = automation_cadence_readback(
+            result,
+            expected_goal_id=goal_id,
+            expected_agent_id=agent_id,
+            expected_automation_id=automation_id,
+        )
+        return {
+            "ok": True,
+            "schema_version": "chat_automation_cadence_v0",
+            **readback,
+            "enabled": result["enabled"],
+            "enforcement": result["enforcement"],
+            "pre_model_admission": result["pre_model_admission"],
+            "sources": [
+                {
+                    "agent_id": rule["agent_id"],
+                    "automation_id": rule["automation_id"],
+                    "min_interval_minutes": rule["min_interval_minutes"],
+                    "revision": rule["revision"],
+                }
+                for rule in result["sources"]
+            ],
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InvalidAutomationCadenceOwnerResult(
+            "automation cadence owner returned invalid readback"
+        ) from exc
 
 
 def _request(
@@ -171,7 +193,14 @@ class AutomationCadenceRequestMixin:
                 },
                 retry_safe=True,
             )
-            self._send_json(_public(result))
+            self._send_json(
+                _public(
+                    result,
+                    goal_id=goal_id,
+                    agent_id=agent_id,
+                    automation_id=automation_id,
+                )
+            )
         except (EffectRuntimeRejected, TypeError, ValueError) as exc:
             self._send_error(
                 str(exc), status=400, error_code="invalid_automation_cadence_request"
@@ -194,7 +223,12 @@ class AutomationCadenceRequestMixin:
             result = effect_runtime_result(
                 "quota.automation_cadence.manage", request, retry_safe=False
             )
-            payload = _public(result)
+            payload = _public(
+                result,
+                goal_id=request["goal_id"],
+                agent_id=request["agent_id"],
+                automation_id=request["automation_id"],
+            )
             payload.update(
                 {"preview_revision": preview_revision, "written": result["written"]}
             )
@@ -211,7 +245,12 @@ class AutomationCadenceRequestMixin:
                         },
                         retry_safe=True,
                     )
-                    payload = _public(readback)
+                    payload = _public(
+                        readback,
+                        goal_id=request["goal_id"],
+                        agent_id=request["agent_id"],
+                        automation_id=request["automation_id"],
+                    )
                     payload.update(
                         {
                             "written": True,
@@ -229,6 +268,21 @@ class AutomationCadenceRequestMixin:
                 except Exception:  # noqa: BLE001 - preserve the known write fact.
                     payload.update({"written": True, "readback_verified": False})
             self._send_json(payload)
+        except InvalidAutomationCadenceOwnerResult:
+            self._send_error(
+                (
+                    "Automatic execution change could not be verified. "
+                    "Refresh policy before retrying."
+                    if execute
+                    else "Automatic execution policy could not be read."
+                ),
+                status=500,
+                error_code=(
+                    "automation_cadence_write_unknown"
+                    if execute
+                    else "automation_cadence_read_failed"
+                ),
+            )
         except (
             EffectRuntimeConflict,
             EffectRuntimeRejected,

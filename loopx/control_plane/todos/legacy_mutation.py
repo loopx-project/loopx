@@ -13,7 +13,6 @@ from ...agent_registry import (
     require_registered_agent_id,
 )
 from ...state_refresh import now_local
-from ...status import MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
 from .contract import (
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
@@ -58,7 +57,11 @@ from .active_state_editing import (
     todo_blocks,
 )
 from .addition import matching_todo_block, require_replan_successor_rebinding
-from .completed_archive import archive_completed_todo_lines
+from .completed_archive import (
+    DEFAULT_COMPLETED_TODO_ARCHIVE_HEADROOM,
+    DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
+    archive_completed_todo_lines,
+)
 from .completion_policy import (
     completion_policy_from_transaction,
 )
@@ -113,7 +116,7 @@ from ..work_items.task_lease import (
 
 
 ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = max(
-    0, MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - 2
+    0, DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - DEFAULT_COMPLETED_TODO_ARCHIVE_HEADROOM
 )
 
 
