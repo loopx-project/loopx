@@ -67,64 +67,97 @@ def public_addresses(host: str) -> list[str]:
 
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
-    def __init__(self, host: str, addresses: list[str], timeout: float):
+    def __init__(self, host: str, address: str, timeout: float):
         super().__init__(host, timeout=timeout, context=ssl.create_default_context())
-        self.addresses = addresses
+        self.address = address
+        self.deadline = time.monotonic() + timeout
 
     def connect(self) -> None:
         # Do not resolve the hostname again after preflight (DNS rebinding).
-        for address in self.addresses:
-            raw = None
-            try:
-                raw = socket.create_connection((address, 443), min(self.timeout, 5))
-                self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
-                return
-            except OSError:
-                if raw is not None:
-                    raw.close()
-        raise OSError("public source connection failed")
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("source timeout")
+        raw = socket.create_connection((self.address, 443), min(remaining, 5))
+        try:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("source timeout")
+            raw.settimeout(min(remaining, 10))
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("source timeout")
+            self.sock.settimeout(min(remaining, 10))
+        except BaseException:
+            self.close()
+            raw.close()
+            raise
 
 
 def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
     url = public_url(value)
     for _ in range(6):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("source timeout")
         u = urlsplit(url)
         addresses = public_addresses(u.hostname or "")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("source timeout")
-        connection = _PinnedHTTPS(u.hostname or "", addresses, min(remaining, 10))
-        try:
-            path = urlunsplit(("", "", u.path, u.query, ""))
-            # Fixed headers only. http.client has no cookie jar, credential
-            # lookup, ambient proxy or redirect handler.
-            connection.request("GET", path, headers={"Accept-Encoding": "identity",
-                "User-Agent": "LoopX-Public-Source/1.0"})
-            response = connection.getresponse()
-            if response.status in (301, 302, 303, 307, 308):
-                location = response.getheader("Location")
-                if not location:
-                    raise ValueError("missing redirect destination")
-                url = public_url(urljoin(url, location))
-                continue
-            if response.status != 200 or response.getheader("Content-Encoding", "identity") != "identity":
-                raise ValueError("public source unavailable")
-            body = bytearray()
-            while len(body) <= MAX_BYTES:
-                remaining = deadline - time.monotonic()
+        for index, address in enumerate(addresses):
+            now = time.monotonic()
+            remaining = deadline - now
+            if remaining <= 0:
+                raise TimeoutError("source timeout")
+            # Reserve a fair share for other checked addresses. Recovery covers
+            # the entire GET, including a stall after TCP/TLS already succeeded.
+            budget = remaining / (len(addresses) - index)
+            attempt_deadline = now + budget
+            connection = _PinnedHTTPS(u.hostname or "", address, budget)
+            response = None
+            try:
+                path = urlunsplit(("", "", u.path, u.query, ""))
+                # Fixed headers only; no cookies, credentials or ambient proxy.
+                connection.request("GET", path, headers={"Accept-Encoding": "identity",
+                    "User-Agent": "LoopX-Public-Source/1.0"})
+                # Keep the transport: getresponse detaches it for Connection: close.
+                transport = connection.sock
+                remaining = attempt_deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("source timeout")
-                if connection.sock is not None:
-                    connection.sock.settimeout(min(remaining, 10))
-                chunk = response.read1(min(65536, MAX_BYTES + 1 - len(body)))
-                if not chunk:
+                if transport is not None:
+                    transport.settimeout(min(remaining, 10))
+                response = connection.getresponse()
+                if response.status in (301, 302, 303, 307, 308):
+                    location = response.getheader("Location")
+                    if not location:
+                        raise ValueError("missing redirect destination")
+                    url = public_url(urljoin(url, location))
                     break
-                body.extend(chunk)
-            if len(body) > MAX_BYTES:
-                raise ValueError("public source too large")
-            return url, response.getheader("Content-Type", "").split(";")[0].lower(), bytes(body)
-        finally:
-            connection.close()
+                if response.status != 200 or response.getheader("Content-Encoding", "identity") != "identity":
+                    raise ValueError("public source unavailable")
+                body = bytearray()
+                while not response.isclosed() and len(body) <= MAX_BYTES:
+                    remaining = attempt_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("source timeout")
+                    if transport is not None:
+                        transport.settimeout(min(remaining, 10))
+                    chunk = response.read1(min(65536, MAX_BYTES + 1 - len(body)))
+                    if not chunk:
+                        break
+                    body.extend(chunk)
+                if len(body) > MAX_BYTES:
+                    raise ValueError("public source too large")
+                if response.length not in (None, 0):
+                    raise http.client.IncompleteRead(bytes(body), response.length)
+                return url, response.getheader("Content-Type", "").split(";")[0].lower(), bytes(body)
+            except ssl.SSLError:
+                raise  # Certificate and TLS policy failures are not address recovery.
+            except (OSError, http.client.IncompleteRead):
+                if index == len(addresses) - 1:
+                    raise
+            finally:
+                if response is not None:
+                    response.close()
+                connection.close()
     raise ValueError("too many source redirects")
 
 

@@ -2,6 +2,7 @@
 import io
 import ipaddress
 import socket
+import ssl
 import time
 from pathlib import Path
 
@@ -10,6 +11,87 @@ from PIL import Image
 
 from loopx.extensions import public_source_reader as reader
 from loopx.capabilities.native_chat import codex_context
+
+
+@pytest.mark.parametrize("failure", ["headers", "body", "incomplete"])
+def test_failed_response_retries_checked_address_without_partial_content(monkeypatch, failure):
+    addresses = ["8.8.8.8", "1.1.1.1"]
+    resolutions, connections = [], []
+    def resolve(host):
+        resolutions.append(host)
+        return addresses
+    monkeypatch.setattr(reader, "public_addresses", resolve)
+    class Sock:
+        def settimeout(self, value): pass
+        def makefile(self, *args):
+            return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                             b"Content-Length: 8\r\nConnection: close\r\n\r\ncomplete")
+    class Connection:
+        def __init__(self, host, address, timeout):
+            # Also reproduces the previous connection's first-address choice.
+            self.address = address[0] if isinstance(address, list) else address
+            self.sock = Sock()
+            self.closed = False
+            connections.append(self)
+        def request(self, *args, **kwargs): pass
+        def getresponse(self):
+            if self.address == addresses[0] and failure == "headers":
+                raise TimeoutError("response headers stalled")
+            response = reader.http.client.HTTPResponse(self.sock)
+            response.begin()
+            self.sock = None  # HTTPConnection detaches Connection: close responses.
+            if self.address == addresses[0]:
+                if failure == "body":
+                    chunks = iter([b"part"])
+                    def stalled(*args):
+                        chunk = next(chunks, None)
+                        if chunk is None:
+                            raise TimeoutError("body stalled after partial response")
+                        return chunk
+                    response.read1 = stalled
+                else:
+                    response.fp = io.BytesIO(b"short")
+            return response
+        def close(self): self.closed = True
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    assert reader.fetch("https://example.org/source", deadline=time.monotonic() + 10) == (
+        "https://example.org/source", "text/plain", b"complete")
+    assert resolutions == ["example.org"]
+    assert [c.address for c in connections] == addresses
+    assert all(c.closed for c in connections)
+
+
+def test_address_attempts_share_deadline_and_reserve_time_for_remaining_addresses(monkeypatch):
+    clock = [100.0]
+    attempts = []
+    monkeypatch.setattr(reader.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(reader, "public_addresses", lambda host: ["8.8.8.8", "1.1.1.1"])
+    class Connection:
+        def __init__(self, host, address, timeout):
+            attempts.append(timeout)
+        def request(self, *args, **kwargs):
+            clock[0] += attempts[-1]
+            raise TimeoutError("attempt exhausted its budget")
+        def close(self): pass
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    with pytest.raises(TimeoutError):
+        reader.fetch("https://example.org/", deadline=110.0)
+    assert attempts == [5.0, 5.0] and clock[0] == 110.0
+
+
+@pytest.mark.parametrize("failure", [ssl.SSLCertVerificationError("untrusted certificate"),
+                                    ValueError("public source unavailable")])
+def test_address_recovery_does_not_retry_security_or_http_policy_rejection(monkeypatch, failure):
+    attempts, closed = [], []
+    monkeypatch.setattr(reader, "public_addresses", lambda host: ["8.8.8.8", "1.1.1.1"])
+    class Connection:
+        def __init__(self, host, address, timeout): attempts.append(address)
+        def request(self, *args, **kwargs): raise failure
+        def close(self): closed.append(True)
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    with pytest.raises(type(failure)):
+        reader.fetch("https://example.org/", deadline=time.monotonic() + 10)
+    assert len(attempts) == len(closed) == 1
 
 
 # Synthetic RFC1918 range fixtures are expressed as integers; these are not operator addresses.
@@ -32,17 +114,73 @@ def test_dns_private_and_mixed_results_rejected(monkeypatch, values):
 
 
 def test_checked_address_is_the_connected_address_and_tls_hostname_stays_original(monkeypatch):
-    raw = object()
+    class Raw:
+        def settimeout(self, value): assert 0 < value <= 2
+    raw = Raw()
     observed = []
     monkeypatch.setattr(socket, "create_connection", lambda target, timeout: observed.append(target) or raw)
-    connection = reader._PinnedHTTPS("example.org", ["8.8.8.8"], 2)
+    connection = reader._PinnedHTTPS("example.org", "8.8.8.8", 2)
     class TLS:
         def wrap_socket(self, sock, *, server_hostname):
             assert sock is raw and server_hostname == "example.org"
-            return "tls-socket"
+            return raw
     connection._context = TLS()
     connection.connect()
-    assert observed == [("8.8.8.8", 443)] and connection.sock == "tls-socket"
+    assert observed == [("8.8.8.8", 443)] and connection.sock is raw
+
+
+def test_connect_time_consumes_tls_budget_and_expired_socket_is_closed(monkeypatch):
+    clock, timeouts, closed = [100.0], [], []
+    monkeypatch.setattr(reader.time, "monotonic", lambda: clock[0])
+    class Raw:
+        def settimeout(self, value): timeouts.append(value)
+        def close(self): closed.append(True)
+    def connect(target, timeout):
+        assert target == ("8.8.8.8", 443) and timeout == 2.0
+        clock[0] += 2.0
+        return Raw()
+    monkeypatch.setattr(socket, "create_connection", connect)
+    connection = reader._PinnedHTTPS("example.org", "8.8.8.8", 2.0)
+    class TLS:
+        def wrap_socket(self, *args, **kwargs): pytest.fail("expired attempt must not start TLS")
+    connection._context = TLS()
+    with pytest.raises(TimeoutError): connection.connect()
+    assert timeouts == [] and closed == [True]
+
+
+@pytest.mark.parametrize("status", [200, 403])
+def test_public_redirect_rechecks_destination_and_http_rejection_stops(monkeypatch, status):
+    resolutions, requests, closed = [], [], []
+    def resolve(host):
+        resolutions.append(host)
+        return ["8.8.8.8", "1.1.1.1"]
+    monkeypatch.setattr(reader, "public_addresses", resolve)
+    class Response:
+        length = 0
+        def __init__(self, host):
+            self.status = 302 if host == "example.org" else status
+        def getheader(self, name, default=None):
+            return {"Location": "https://other.example/final", "Content-Type": "text/plain"}.get(name, default)
+        def isclosed(self): return True
+        def close(self): closed.append("response")
+    class Connection:
+        sock = None
+        def __init__(self, host, address, timeout): self.host = host
+        def request(self, method, path, *, headers): requests.append((self.host, path, headers))
+        def getresponse(self): return Response(self.host)
+        def close(self): closed.append("connection")
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    if status == 200:
+        assert reader.fetch("https://example.org/start", deadline=time.monotonic() + 10) == (
+            "https://other.example/final", "text/plain", b"")
+    else:
+        with pytest.raises(ValueError, match="public source unavailable"):
+            reader.fetch("https://example.org/start", deadline=time.monotonic() + 10)
+    assert resolutions == ["example.org", "other.example"]
+    assert [(host, path) for host, path, _ in requests] == [
+        ("example.org", "/start"), ("other.example", "/final")]
+    assert all(set(headers) == {"Accept-Encoding", "User-Agent"} for _, _, headers in requests)
+    assert closed == ["response", "connection", "response", "connection"]
 
 
 def test_redirect_cannot_reach_private_network_and_cookies_are_not_reused(monkeypatch):
@@ -50,9 +188,11 @@ def test_redirect_cannot_reach_private_network_and_cookies_are_not_reused(monkey
     monkeypatch.setattr(reader, "public_addresses", lambda host: ["8.8.8.8"])
     class Response:
         status = 302
+        def close(self): pass
         def getheader(self, name, default=None):
             return {"Location": "https://127.0.0.1/private", "Set-Cookie": "private=fixture"}.get(name, default)
     class Connection:
+        sock = None
         def __init__(self, *a): pass
         def request(self, method, path, *, headers): calls.append((method, path, headers))
         def getresponse(self): return Response()
