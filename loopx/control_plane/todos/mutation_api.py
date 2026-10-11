@@ -12,12 +12,10 @@ from typing import Any
 from ...agent_registry import registered_agent_ids_from_registry
 from ...state_refresh import now_local
 from .contract import (
-    TODO_STATUS_DEFERRED,
     TODO_STATUS_OPEN,
     normalize_todo_id,
     normalize_todo_status,
     require_todo_excluded_agents,
-    require_supported_todo_resume_when,
 )
 from .active_state_editing import TODO_SECTION_HEADINGS
 from .addition import require_replan_successor_scope
@@ -25,7 +23,7 @@ from . import completion_validation as completion_validation_module
 from .completion_validation_projection import completion_validation_declaration
 from . import monitor_metadata as todo_monitor_metadata
 from .text import plan_todo_priority
-from .authoring_scope import plan_todo_authoring_scope
+from .authoring_scope import plan_todo_creation_scope
 from ..coordination.local_authority import (
     claim_canonical_todo_if_promoted,
     local_authority_is_promoted,
@@ -131,8 +129,12 @@ def add_goal_todo(
         if excluded_agents is not None
         else None
     )
-    authoring_scope = plan_todo_authoring_scope(
-        command="create", role=role, goal_id=goal_id, registered_agents=registered_agents,
+    updated_at = now_local()
+    authoring_scope = plan_todo_creation_scope(
+        role=role, goal_id=goal_id, registered_agents=registered_agents,
+        unblocks_todo_id=normalize_todo_id(unblocks_todo_id),
+        unblocks_todo_id_declared=bool(unblocks_todo_id),
+        monitor_metadata=monitor_metadata, generated_at=updated_at,
         intent={
             "task_class": task_class, "status": status, "actor_agent_id": agent_id,
             "claimed_by": claimed_by, "bound_agent": bound_agent, "goal_bound": goal_bound,
@@ -149,18 +151,9 @@ def add_goal_todo(
     effective_blocks_agent = authoring_scope["blocks_agent"]
     effective_bound_agent = authoring_scope["bound_agent"]
     effective_goal_bound = authoring_scope["goal_bound"]
-    normalized_unblocks_todo_id = normalize_todo_id(unblocks_todo_id) if unblocks_todo_id else None
-    if unblocks_todo_id and not normalized_unblocks_todo_id:
-        raise ValueError("unblocks_todo_id must use the public token shape todo_<letters-digits-underscore-hyphen>")
-    normalized_resume_when = require_supported_todo_resume_when(resume_when)
-    if normalized_status == TODO_STATUS_DEFERRED and not normalized_resume_when:
-        raise ValueError("deferred todo add requires --resume-when with a supported condition")
-    updated_at = now_local()
-    normalized_monitor_metadata = todo_monitor_metadata.require_monitor_metadata_scope(
-        monitor_metadata=monitor_metadata, role=role, task_class=task_class,
-        generated_at=updated_at, resume_when=normalized_resume_when,
-        enforce_boundedness=True,
-    )
+    normalized_unblocks_todo_id = authoring_scope["unblocks_todo_id"]
+    normalized_resume_when = authoring_scope["normalized_resume_when"]
+    normalized_monitor_metadata = authoring_scope["monitor_metadata"]
     canonical_create = create_canonical_todo_if_promoted(
         operation_id=operation_id,
         expected_provider_revision=expected_provider_revision,
@@ -230,6 +223,7 @@ def add_goal_todo(
         "shadow_runtime_root": shadow_runtime_root,
         "todo_text": todo_text,
         "updated_at": updated_at,
+        "validation_argv": validation_argv,
     })
 
 

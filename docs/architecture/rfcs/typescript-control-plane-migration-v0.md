@@ -60,6 +60,14 @@ bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
 
+Public add now composes scope, supported wait and bounded Monitor metadata in
+one typed creation-scope request. The legacy add writer consumes that same
+fresh draft rather than re-planning it; standalone line codecs and successor
+creation retain their own admission. Priority and validation-declaration
+checks keep their prior diagnostic order, and canonical provider transactions
+still recheck registry/claim/lease/CAS authority. This retires duplicate add
+composition, not the supported Markdown writer or bootstrap/Host/history IO.
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
