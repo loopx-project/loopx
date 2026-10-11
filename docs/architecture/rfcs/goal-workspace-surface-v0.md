@@ -176,7 +176,7 @@ screen.*
 | --- | --- | --- | --- |
 | 1 | **Masthead**: breadcrumb (Workspace / Goals / Goal), title, team line (Agent label or count, repository), Stop/Resume, settings | Always, on every Goal view; compacts on scroll | Identity and the one consequential control stay one glance away |
 | 2 | **Vitals strip**: at most six cells; each cell is a button that focuses its region | Always | Answers moving / waiting on me / how far / what cost in one line |
-| 3 | **Delta line**: "Since you looked at 09:12: 2 done · 1 new decision · +$3.10" | Only for a material delta | The return moment the product promises |
+| 3 | **Delta line**: "Since you looked at 09:12: 2 done · 1 new decision" | Only for a material delta; cost omitted until its owner qualifies the interval | The return moment the product promises |
 | 4 | **Direction**: objective, acceptance criteria with verification state | Always; criteria only with a contract | What "done" means and how close it is |
 | 5 | **Needs you**: decision cards with recommendation, consequence and actions | Only when non-empty | Decisions are the owner's actual work |
 | 6 | **Now**: lens switch (By owner / Board / Map) and Add task | Open work exists | Who is doing what, who is blocked |
@@ -187,6 +187,8 @@ screen.*
 Chat remains a direct destination. "Discuss" on a decision or row opens Goal
 Chat with that subject attached through the existing composer; it does not
 create a second conversation store.
+
+All three studies show work and decision changes without since-last-look spend. The $18.40 vital remains a coverage-marked 7-day total. Work 5/10 excludes the separately listed user decision; these counts have different scopes.
 
 ### 5.3 Vital semantics
 
@@ -278,12 +280,24 @@ rather than being copied.
 ### 5.7 Since you looked
 
 - Per (status source, Goal), the browser stores a last-seen digest in local
-  storage: typed counts, decision ids, a bounded set of done Todo ids, the usage
-  window values and the observation time. It stores no titles or content and
-  makes no server write.
+  storage: typed counts, decision ids, a bounded set of done Todo ids and the
+  observation time. It stores no titles, content or cost ledger and makes no
+  server write.
 - On open, the reducer compares the current digest with that marker: newly
-  done, new decisions, newly blocked, results returned and a cost delta. The
-  cost delta appears only when both digests use the same window.
+  done, new decisions, newly blocked and results returned. The current usage
+  projection cannot establish spend since that marker, so this line omits cost.
+- Matching rolling-window labels do not identify the same covered interval.
+  If $100 expires from a 7-day window while $5 enters it, totals change from
+  $100 to $5: their -$95 difference is neither the new $5 spend nor zero spend.
+  Never subtract rolling totals or clamp that difference to zero to report
+  since-last-look spend. The scoped/windowed Cost vital remains unchanged.
+- Cost may enter this line only after the usage owner supplies spend for the
+  exact interval between observations, or a monotonic cumulative counter with
+  a stable source, scope, currency and counter generation, plus coverage and
+  retention that make that interval valid (D7). Missing data, changed scope or
+  coverage, or an owner unable to qualify the interval suppress cost without
+  suppressing other known changes. The browser does not create another usage
+  authority; an unavailable cost is never zero.
 - The line appears only when a delta is material. The marker advances when the
   owner selects "Mark seen" or leaves the Goal after the line was shown.
 - The line is not a notification channel and does not touch the attention queue.
@@ -413,7 +427,7 @@ the local delta marker can be deleted at any time without effect.
 | V2 Count agreement | One snapshot rendered in strip, chips, ribbon, Now, rail and Board; mutation case misclassifies one Todo | Totals equal; the mutation fails the test | Bounded projections disclose truncation |
 | V3 Responsibility | Multiple owners, unassigned work, out-of-order timestamps | Correct groups and order; nothing dropped | — |
 | V4 Stop journey (GQ08) | Packaged UI with the real Chat server on a disposable Goal | Preview → confirm → readback stopped; "Turn finishing" while observed; Resume; stale fingerprint refused; double click has one effect | Host heartbeat removal is the host's evidence |
-| V5 Return journey (GQ09) | Two snapshots with synthetic progress; unchanged pair; window change | Material delta shown and dismissable; none when unchanged; cost delta omitted on window change | Not a notification guarantee |
+| V5 Return journey (GQ09) | Two snapshots with synthetic progress; a no-change pair; same-label window with $100 expiring and $5 entering; changed window/scope/coverage and unavailable data | Known work/decision changes appear and can be dismissed; no change stays absent; cost stays absent until the usage owner qualifies the exact interval or a compatible monotonic counter; window differences never report new spend | Not a notification or spend-coverage guarantee; current usage projection cannot qualify interval spend |
 | V6 States and access | Populated, quiet, blocked, stopped, loading, unavailable, partial, long titles; en and zh-CN; 1440/1024/390px; keyboard; reduced motion; dark contrast | All regions readable; AA contrast; full keyboard path; no motion under reduced motion | — |
 | V7 Decide in place | Gate decision and Add task through existing actions, including a failed apply | Recorded readback; failure keeps the draft | — |
 | V8 Target declaration (M3) | Preview, confirm, CAS conflict, readback; Agent-role invocation | Owner path succeeds; conflict shows the newer revision; Agent role cannot configure | Executable checks out of scope |
@@ -442,19 +456,24 @@ second upgrade.
 | M3 Direction and return | Since-you-looked delta; target declaration through the acceptance owner | M2; D3 decided by its owner | V5, V8 | Hide declaration; delete marker |
 | M4 Live and expressive | W2 live state on rows and map from the execution observation owner; event motion; keyboard map and palette; dark inverse | M2; W2 observation available | V6 (motion, dark); live-team W2 acceptance | Disable motion/theme |
 
-**Checkpoint 2026-10-11 (M1 proposed in [#6191](https://github.com/loopx-project/loopx/pull/6191)).**
-Passed: V1 through reducer fixtures written from Section 5.3 plus a mutation
-check, and the packaged browser on synthetic status; V2 for strip and Board
-(one shared work predicate); V4 Stop, finishing readback and Resume in the
-packaged UI against the real Chat action service and registry authority on a
-disposable Goal, including an owner-refused apply that writes nothing and
-keeps the Goal open; V6 for en and zh-CN, 1440/1024/390px, vital focus targets
-and reduced-motion styles; V9 (no action request before Stop). Untested: the V1
-comparison with `loopx status --format json`, a stale-fingerprint refusal (a
-concurrent identical stop is idempotent in the owner), double-click
-suppression, dark contrast (M4). Deferred: masthead compaction on scroll and
-usage "partial" (D4). M1 ships as the default without a view toggle after the
-first-screen approval.
+**Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), not merged).**
+Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks
+and the packaged page on synthetic status; V2 strip and Board sharing the work
+predicate; V4 Stop, finishing readback and Resume against isolated real Chat
+action service and registry authority, plus rejection when the target disappears
+after confirmation without recreating it or showing false success; V6 English/
+Chinese, 1440/1024/390px, reduced motion, repeated shortcuts, Esc and focus return;
+V9 no action requests before Stop. The packaged candidate includes read-only
+Direction and an in-place decision rail; complete M2–M4 remain undelivered.
+The owner approved the first-screen preview. This candidate changes default
+Overview without a view switch. The PR remains draft: required full Python
+validation has unresolved failure signals, and passing selected risk checks
+does not clear exact-source qualification.
+Untested: V1 against `loopx status --format json`, stale-fingerprint rejection
+(the missing-target negative does not substitute for it), double-click
+suppression, 200% zoom, dark contrast, installed App and real-model acceptance.
+Deferred: scroll compaction, usage partial coverage (D4) and return spend (D7).
+The M1 subset does not establish GQ08/GQ09 or live-team L1 completion.
 
 This track runs beside R2/R3, like the W-track. It makes their outcomes legible
 and does not pre-empt R1/R2 P0 repairs. It advances no L1, V4 or G1 gate. CLI
@@ -470,6 +489,7 @@ and Lark adoption of the digest are separate qualifications.
 | D4 | Usage coverage signal | Usage RFC owner | Sample counts only; explicit measured versus observed runtimes | An explicit field before "partial" means more than sampling | M1 "partial" beyond sampling |
 | D5 | Dark theme default | Presentation owner | Opt-in; follow system preference | Opt-in until AA review on real data | M4 |
 | D6 | Goal objective in status | Goal registry / Vision owner | Contract objective or progress summary only; an additive projected objective from the Goal's recorded creation or Vision text | The additive field, public-safe and length-bounded | A brief for Goals without a contract |
+| D7 | Since-last-look spend | Usage RFC owner | Omit cost; owner-qualified interval aggregate or compatible monotonic counter | Omit cost until source/scope/currency/generation, interval coverage and retention are qualified; no rolling-total subtraction | Any cost in the M3 delta line |
 
 ## Appendix A: Execution ledger
 
