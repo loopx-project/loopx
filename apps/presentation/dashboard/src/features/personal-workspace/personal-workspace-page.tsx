@@ -2247,7 +2247,7 @@ export function PersonalWorkspacePage({
             <div className={composerCollapsed ? "personal-composer-folded" : undefined}>
             {composerCollapsed && selectedGoal ? <>
               <button className="personal-composer-pill" data-testid="overview-composer-pill" type="button"
-                onClick={() => { setOverviewComposerOpen(true); window.requestAnimationFrame(() => composerRef.current?.focus()); }}>
+                onClick={() => setOverviewComposerOpen(true)}>
                 <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPlaceholder", { goal: selectedGoal.title })}</span>
               </button>
             </> : null}
@@ -2302,6 +2302,7 @@ export function PersonalWorkspacePage({
                 onPaste={handleComposerPaste}
                 placeholder={sending ? (locale === "zh-CN" ? "可以先写下后续问题…" : "Draft your next message…") : selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : workspaceTitle ? t("workspace.placeholder", { workspace: workspaceTitle }) : t("composer.managerPlaceholder")}
                 ref={composerRef}
+                autoFocus={overviewComposerOpen && selectedGoalTab === "overview"}
                 rows={1}
                 value={composer}
               />

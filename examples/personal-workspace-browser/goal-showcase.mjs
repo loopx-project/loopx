@@ -79,10 +79,14 @@ export const goalShowcaseScenario = {
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
       await costCell.locator(".goal-vital-value").filter({hasText: "$25.40"}).waitFor();
 
+      // Focus belongs to the committed input, even before another frame runs.
+      await page.clock.install();
+      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
       await page.getByTestId("overview-composer-pill").click();
       const composer = page.getByRole("textbox", { name: /发送消息|Send message/ });
       await composer.waitFor();
       assert.ok(await composer.evaluate((node) => node === document.activeElement), "Opening the folded composer focuses it");
+      await page.clock.resume();
       await page.locator(".personal-goal-tabs button", { hasText: "任务" }).click();
       await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
       await page.getByTestId("overview-composer-pill").waitFor();
