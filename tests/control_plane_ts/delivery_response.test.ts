@@ -25,7 +25,7 @@ test("wait proof consumes the real resume evaluator for all five condition kinds
     ["monitor_changed:todo_dependency", [], [], false],
     ["capacity_available:network", [], [], true],
     ["capacity_available:network", [], null, false],
-    ["pr_merged:example/project#1", [], [], true],
+    ["pr_merged:example/project#1", [], [], false],
     ["pr_merged:#1", [], [], false],
     ["resume_at:2026-09-15T00:00:00Z", [], [], true],
   ] as const) {
@@ -56,7 +56,7 @@ test("wait proof consumes the real resume evaluator for all five condition kinds
   }
 });
 
-test("known non-monitor completion classes and repository-bound PR waits remain supported", () => {
+test("known completion targets qualify waits; an unobserved PR binding cannot hide stalled delivery", () => {
   for (const task_class of ["advancement_task", "user_gate", "user_action", "blocker"]) {
     assert.equal(projectDeliveryResponse({ ...input, todo: { ...waiting,
       resume_condition: { ...waiting.resume_condition, target_task_class: task_class } } }).reason, "canonical_todo_wait");
@@ -65,7 +65,7 @@ test("known non-monitor completion classes and repository-bound PR waits remain 
   const evaluated = evaluateTodoResumeConditions({ schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
     items: [todo], source_items: [], rollout_events: [], available_capabilities: [] });
   const condition = (evaluated.conditions as JsonObject[])[0].condition;
-  assert.equal(projectDeliveryResponse({ ...input, todo: { ...todo, resume_condition: condition } }).reason, "canonical_todo_wait");
+  assert.equal(projectDeliveryResponse({ ...input, todo: { ...todo, resume_condition: condition } }).reason, "history_supervision");
   assert.equal(projectDeliveryResponse({ ...input, todo: { ...todo, task_repository: "git:github.com/example/other",
     resume_condition: condition } }).reason, "history_supervision");
 });

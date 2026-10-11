@@ -7,6 +7,57 @@ or an explicit `no_followup=true`. This read policy lives in
 its decisions. It belongs to the existing Todo control plane, uses the selected
 AuthorityStore, and adds no capability or extension provider.
 
+## PR dependency observation / PR 依赖观察
+
+`pr_merged:owner/repo#42` identifies a dependency; absence of a merge event
+does not prove that GitHub is still pending. Delivery-history supervision no
+longer exempts that unobserved wait. Causal blocked closeout continues to require
+a registered `monitor_changed` or `todo_done` target with current readback.
+
+The existing `heartbeat-prequota --goal-id GOAL --agent-id AGENT` observes exact
+unfinished PR dependencies from the complete Todo head, including deferred work.
+It polls at most four distinct repository-qualified dependencies per invocation,
+with a durable 30-minute cadence for successful and failed attempts. A missing
+repository binding is reported for repair; it never guesses from PR numbers.
+An exact merged observation appends the existing native `pr_merge` fact so the
+original condition becomes satisfied. Resume readback uses the same complete
+retained Goal log as observation, before any recent-event display limit. The
+typed resume owner keeps one original merge proof per exact dependency; more
+than 500 unrelated events or 256 other dependencies cannot evict that proof.
+List, status, quota and archived reads keep their bounded presentation, and
+restarts need neither repeated remote reads nor rewritten merge timestamps.
+Queue disappearance, closed-without-merge
+and provider failures cannot satisfy it. This observation changes no Todo status,
+requirements, claims, leases or Goal acceptance. Deferred ready work still needs
+its normal lifecycle transition.
+
+Generated heartbeat prompts include prequota only when the host declares
+`--available-capability external_evidence_poll`; filesystem/shell declarations
+alone do not opt in. Omitting that declaration keeps external observation off.
+Explicit prequota invocation authorizes compact metadata reads and local
+observation writeback, never merge, review, remote mutation or quota spend.
+Read back with `todo list --goal-id GOAL --todo-id TODO --format json`.
+These same typed dependency facts are the boundary to reuse in TurnEnvelope;
+this heartbeat adoption does not claim that every Turn host already polls them.
+
+`pr_merged:owner/repo#42` 只标识依赖；缺少合并事件不证明 GitHub 仍在等待。
+历史交付监督不再豁免这种未观察等待，因果阻塞结算仍要求已注册的
+`monitor_changed` 或 `todo_done` 目标及当前回读。
+原生 `heartbeat-prequota --goal-id GOAL --agent-id AGENT` 从完整 Todo 源选择
+精确的未完成 PR 依赖（含 deferred），每次最多核验四个不同仓库限定的依赖。
+成功和失败均保留 30 分钟核验节奏，重启后仍有效。仓库缺失需要修复，不能按编号猜测。
+真实合并观察写入既有 `pr_merge`，原条件自然满足。回读与观察共用完整保留的 Goal
+日志，在最近事件展示裁剪前由 TS resume owner 保留每项精确依赖的原始合并证明；
+超过 500 条无关事件或 256 项其他依赖不能挤走它。list、status、quota 与归档读取
+仍保留原展示边界，重启不需要重复远端读取或改写合并时间。离开 open 列表、关闭未合并或
+provider 失败不能解除等待。观察不修改 Todo 状态、要求、认领、lease 或 Goal 验收；
+已满足条件的 deferred Todo 仍走正常生命周期转换。
+生成的 heartbeat 仅在声明 `--available-capability external_evidence_poll` 时加入
+prequota；只声明 filesystem/shell 不会启用。省略该声明即关闭外部观察。
+显式调用仅授权紧凑元数据读取和本地观察记账，不授权合并、review、远端写入或额度支出。
+通过 `todo list --goal-id GOAL --todo-id TODO --format json` 回读。
+TurnEnvelope 应复用同一类型化依赖事实；本批未证明所有 Turn host 已接入自动核验。
+
 ## Relationship evidence
 
 The policy evaluates the complete available Todo graph before role, status,

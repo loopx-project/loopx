@@ -636,6 +636,18 @@ admission, fresh task derivation and frontend/Lark qualification remain open.
 中文：异常读回区分本次调用未知副作用与原 Turn 的持久观察/待核对效果，只完成
 R2 的一个恢复切片；调用方准入、新任务生成与前端/Lark 验收仍未闭环。
 
+[PR #6163](https://github.com/loopx-project/loopx/pull/6163) proposes the
+S2/S7/S10 PR dependency observation slice in the existing opt-in heartbeat
+prequota path, independent of open review-queue membership. The Todo typed owner
+selects exact unfinished waits and durable polling cadence from complete
+retained facts. Resume readback shares that source before display compaction,
+retaining the original merge proof through history growth and restart without
+clearing requirements or changing claims, leases or status. Real File/SQLite
+CLI growth/restart and repository/failure negatives qualify this bounded slice;
+installed host adoption and TurnEnvelope polling remain distinct. It does not
+close legacy retirement or sustained authority qualification. See
+[Todo readback](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察).
+
 [PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
 S2/S10 read-preview cost slice. Summary and succession validation share the
 existing TS owner request; empty succession skips transport. Read models are
@@ -670,6 +682,15 @@ admission remain separate open acceptances; this PR does not retire Python
 planning or establish a machine default.
 
 中文：
+[#6163](https://github.com/loopx-project/loopx/pull/6163) 拟交付 S2/S7/S10
+PR 依赖观察切片：既有 opt-in heartbeat prequota 不依赖 open review 队列成员，
+Todo 类型化 owner 从完整保留的事实选择精确未完成等待及持久核验节奏。恢复回读
+在展示裁剪前复用同一源，历史增长和重启保留原合并证明，不清要求、不改认领、
+lease 或状态。真实 File/SQLite CLI 的增长／重启及仓库／失败负例只验收本批；
+安装态 host 采用、TurnEnvelope 核验分别跟踪，不关闭 legacy 退役或 authority
+持续运行资格。参见
+[Todo 回读](../../reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察)。
+
 [#5283](https://github.com/loopx-project/loopx/pull/5283) 是拟交付的 S2/S10
 只读预检成本切片：摘要与继承验证共用既有 TS owner 请求，空继承行跳过传输；
 读模型与写适配器分离，未选中的报告、Lark、扩展及 Host 路由延迟加载。兼容导出
