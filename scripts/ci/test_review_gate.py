@@ -1,6 +1,11 @@
 """An intentionally exempt job must be skipped; all required jobs must pass."""
 from __future__ import annotations
 import copy
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
 import unittest
 from review_gate import CHECK_OUTPUT, JOB_OUTPUT, requires_core_tests, verify, verify_checks
 
@@ -87,6 +92,85 @@ class GateTests(unittest.TestCase):
                 outputs["backend_tests"] = "false" if outputs["backend_tests"] == "true" else "true"
                 with self.assertRaisesRegex(ValueError, "contradictory"):
                     verifier(value)
+
+
+class PythonShardAdmissionTests(unittest.TestCase):
+    """Check the shipped workflow's admission scope and executable gate."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (Path(__file__).resolve().parents[2]
+                        / ".github/workflows/python-tests.yml").read_text()
+
+    def job(self, name):
+        body = self.workflow.split(f"\n  {name}:\n", 1)[1]
+        return re.split(r"\n  [\w-]+:\n", body, maxsplit=1)[0]
+
+    def script(self, job, step):
+        body = self.job(job).split(f"      - name: {step}\n", 1)[1]
+        body = body.split("        run: |\n", 1)[1]
+        lines = []
+        for line in body.splitlines():
+            if line and not line.startswith("          "):
+                break
+            lines.append(line[10:])
+        return "\n".join(lines)
+
+    def test_required_python_gate_rejects_cancelled_overflow_and_missing_shards(self):
+        script = self.script("pytest", "Require every upstream check")
+        for checks in ("success", "failure", "cancelled", "skipped", ""):
+            for shards in ("success", "failure", "cancelled", "skipped", ""):
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                    env={**os.environ, "CHECKS_RESULT": checks, "SHARDS_RESULT": shards},
+                    capture_output=True,
+                )
+                with self.subTest(checks=checks, shards=shards):
+                    self.assertEqual(result.returncode == 0,
+                                     checks == shards == "success")
+        gate = self.job("pytest")
+        self.assertIn("if: always() && needs.changes.outputs.python_tests == 'true'", gate)
+        self.assertIn("needs: [changes, checks, test-shard]", gate)
+
+    def test_required_python_gate_reads_every_nonempty_coverage_partition(self):
+        script = self.script("pytest", "Combine complete coverage and enforce the existing floor")
+        # Execute the workflow's file guard, before the coverage tool itself.
+        guard = script.split("python -m coverage combine", 1)[0]
+        for absent in (None, 1, 2, 3, 4):
+            for empty in (False, True):
+                with tempfile.TemporaryDirectory() as directory:
+                    for shard in range(1, 5):
+                        path = Path(directory) / f"coverage-shards/python-coverage-{shard}/.coverage"
+                        path.parent.mkdir(parents=True)
+                        if shard != absent or empty:
+                            path.write_bytes(b"" if shard == absent else b"partition")
+                    result = subprocess.run(
+                        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", guard],
+                        cwd=directory, capture_output=True,
+                    )
+                    with self.subTest(absent=absent, empty=empty):
+                        self.assertEqual(result.returncode == 0, absent is None)
+
+    def test_long_shards_share_groups_across_current_heads_without_replacement(self):
+        job = self.job("test-shard")
+        admission = re.search(r"\n    concurrency:\n((?:      [^\n]*\n)+)", job)
+        self.assertIsNotNone(admission, "long shards need cross-run admission")
+        fields = dict(re.findall(r"^      ([\w-]+): (.+)$", admission.group(1), re.MULTILINE))
+        self.assertEqual(fields.get("queue"), "max")
+        self.assertEqual(fields.get("cancel-in-progress"), "false")
+        template = fields["group"]
+        # A ref/run/PR component would silently restore per-run admission.
+        self.assertEqual(re.findall(r"\$\{\{\s*(.*?)\s*\}\}", template), ["matrix.shard"])
+        groups = {re.sub(r"\$\{\{.*?\}\}", str(shard), template).casefold()
+                  for shard in range(1, 5)}
+        self.assertEqual(len(groups), 4)
+        self.assertIn("shard: [1, 2, 3, 4]", job)
+        self.assertIn("fail-fast: false", job)
+        root = self.workflow.split("\njobs:\n", 1)[0]
+        self.assertIn("group: python-tests-${{ github.event_name }}-${{ github.ref }}", root)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}", root)
+        self.assertIn("permissions:\n  contents: read", root)
+        self.assertNotIn("secrets.", job)
 
 
 if __name__ == "__main__":

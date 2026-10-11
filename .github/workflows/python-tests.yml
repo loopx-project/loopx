@@ -423,6 +423,13 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
+    # Share four long-test lanes across current PRs and other workflow runs.
+    # Do not replace another candidate's pending shard or cancel its active head.
+    # Workflow-level concurrency still retires obsolete heads of the same PR.
+    concurrency:
+      group: loopx-python-test-shard-${{ matrix.shard }}
+      queue: max
+      cancel-in-progress: false
     # All four shards were still progressing at 83-94% when the 45m job
     # deadline cancelled run 37916979857. Reserve setup/reporting headroom
     # without changing test-level deadlines, collection or worker count.
