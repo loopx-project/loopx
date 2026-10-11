@@ -328,9 +328,11 @@ function utcIso(micros: bigint): string {
 function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: string | null): JsonObject | null {
   const projected = object(summary.frontier_deadline);
   const projectedTime = timestamp(projected?.next_due_at);
-  if (projected && projectedTime !== null && projectedTime > now) return {...projected};
+  const currentProjection = projected && projectedTime !== null && projectedTime > now ? projected : null;
   const seen = new Set<string>();
-  let selected: JsonObject | null = null, earliest: bigint | null = null;
+  let selected: JsonObject | null = currentProjection;
+  let earliest: bigint | null = currentProjection ? projectedTime : null;
+  let addedRetryCount = 0;
   for (const lane of frontierLanes) {
     const items = summary[lane];
     if (!Array.isArray(items)) continue;
@@ -342,22 +344,31 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: st
       const id = identity(row), key = JSON.stringify([id, String(due)]);
       if (seen.has(key)) continue;
       seen.add(key);
+      const retry = object(row.blocked_retry);
+      const receiptRetry = row.status === "open" && row.task_class === "advancement_task" &&
+        row.resume_ready === false && retry?.source === "turn_settlement" &&
+        typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
+        retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
+        (!row.claimed_by || row.claimed_by === retry.agent_id) &&
+        row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
+        isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
+      if (currentProjection) {
+        // The full-source cache retains deadlines omitted from visible lanes.
+        // Only newly overlaid receipt retries can predate that current cache.
+        if (!receiptRetry || due >= projectedTime!) continue;
+        if (id !== currentProjection.identity) addedRetryCount += 1;
+      }
       if (earliest === null || due < earliest) {
         earliest = due;
-        const retry = object(row.blocked_retry);
-        const receiptRetry = row.status === "open" && row.task_class === "advancement_task" &&
-          row.resume_ready === false && retry?.source === "turn_settlement" &&
-          typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
-          retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
-          (!row.claimed_by || row.claimed_by === retry.agent_id) &&
-          row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
-          isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
         selected = {identity: id, source: receiptRetry ? "turn_settlement" : source(row, lane),
           next_due_at: utcIso(due), ...(receiptRetry ? {blocked_retry: retry} : {})};
       }
     }
   }
-  return selected ? {schema_version: "todo_frontier_deadline_v0", ...selected, candidate_count: seen.size} : null;
+  if (currentProjection && selected === currentProjection) return {...currentProjection};
+  const candidateCount = currentProjection
+    ? Math.max(1, Number(currentProjection.candidate_count) || 0) + addedRetryCount : seen.size;
+  return selected ? {schema_version: "todo_frontier_deadline_v0", ...selected, candidate_count: candidateCount} : null;
 }
 
 /** One quota read boundary composes scope/claim selection, resume, hint
