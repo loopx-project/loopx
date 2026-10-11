@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import time
 import zipfile
 
 import pytest
@@ -91,6 +93,93 @@ def test_failed_build_preserves_existing_delivery(source):
         builder.build(None)
     assert (builder.OUTPUT / MANIFEST).read_bytes() == original
     validate_bundle(builder.OUTPUT)
+    source.update(name="recovered", fail=False)
+    builder.build(None)
+    assert validate_bundle(builder.OUTPUT)["current_assets"] == ["assets/recovered.js"]
+
+
+def test_concurrent_cold_ensure_serializes_shared_build_and_reuses_delivery(tmp_path):
+    """Separate installers share npm state; only one may build a cold checkout."""
+    (tmp_path / "apps/presentation/dashboard").mkdir(parents=True)
+    (tmp_path / "apps/presentation/dashboard/package.json").write_text("{}")
+    backend = tmp_path / "backend.py"
+    backend.write_text(
+        """import os, pathlib, sys, time
+root = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+busy = root / 'backend-busy'
+fd = os.open(busy, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+try:
+    with (root / 'backend-calls').open('a') as calls:
+        calls.write(mode + '\\n')
+    time.sleep(0.2)
+    if mode == 'build':
+        output = pathlib.Path(sys.argv[3])
+        (output / 'assets').mkdir(parents=True)
+        (output / 'assets/current.js').write_text('export const ready = true')
+        (output / 'index.html').write_text('<script src="/chat/assets/current.js"></script>')
+        (output / 'manifest.webmanifest').write_text('{}')
+finally:
+    os.close(fd)
+    busy.unlink()
+""",
+        encoding="utf-8",
+    )
+    driver = tmp_path / "driver.py"
+    driver.write_text(
+        """import importlib.util, pathlib, subprocess, sys, time
+spec = importlib.util.spec_from_file_location('builder', sys.argv[1])
+builder = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(builder)
+root = pathlib.Path(sys.argv[2])
+builder.ROOT = root
+builder.OUTPUT = root / 'loopx/web/chat'
+builder.shutil.which = lambda _: sys.executable
+original_run = subprocess.run
+def run(command, **kwargs):
+    if command[0] == 'git':
+        return subprocess.CompletedProcess(command, 0, stdout='a' * 40)
+    mode = 'ci' if command[1] == 'ci' else 'build'
+    output = kwargs.get('env', {}).get('LOOPX_CHAT_OUT_DIR', '')
+    return original_run([sys.executable, str(root / 'backend.py'), str(root), mode, output], check=True)
+builder.subprocess.run = run
+(root / ('ready-' + sys.argv[3])).touch()
+deadline = time.monotonic() + 10
+while not (root / 'start').exists():
+    if time.monotonic() > deadline:
+        raise RuntimeError('test start barrier timed out')
+    time.sleep(0.01)
+builder.ensure()
+""",
+        encoding="utf-8",
+    )
+    processes = [
+        subprocess.Popen(
+            [sys.executable, str(driver), str(spec.origin), str(tmp_path), str(index)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(2)
+    ]
+    try:
+        deadline = time.monotonic() + 10
+        while not all((tmp_path / f"ready-{index}").exists() for index in range(2)):
+            assert time.monotonic() < deadline, "workers did not reach the start barrier"
+            time.sleep(0.01)
+        (tmp_path / "start").touch()
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=20)
+            assert process.returncode == 0, (stdout, stderr)
+        assert (tmp_path / "backend-calls").read_text().splitlines() == ["ci", "build"]
+        assert validate_bundle(tmp_path / "loopx/web/chat", source_root=tmp_path)[
+            "current_assets"
+        ] == ["assets/current.js"]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
 
 
 def test_explicit_installed_predecessor_overrides_local_history(source, tmp_path):

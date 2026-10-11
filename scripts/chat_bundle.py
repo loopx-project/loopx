@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import AbstractContextManager
 import importlib.util
 import json
 import os
@@ -51,7 +52,19 @@ def previous_assets(previous: Path | None) -> list[str]:
     return assets
 
 
+def _build_lock() -> AbstractContextManager[Path]:
+    from loopx.file_lock import exclusive_file_lock
+
+    return exclusive_file_lock(ROOT / ".local/chat-bundle-build", timeout_seconds=300)
+
+
 def build(previous: Path | None, *, install: bool = False) -> None:
+    # npm ci and delivery publication share checkout-local mutable directories.
+    with _build_lock():
+        _build(previous, install=install)
+
+
+def _build(previous: Path | None, *, install: bool) -> None:
     dashboard = ROOT / "apps/presentation/dashboard"
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if not npm:
@@ -161,10 +174,22 @@ def finish_delivery(
 
 
 def ensure(previous: Path | None = None) -> None:
+    # Keep a qualified, read-only archive usable without creating a lock directory.
+    try:
+        contract.validate_bundle(OUTPUT, source_root=ROOT)
+        if previous is None or previous.resolve() == OUTPUT.resolve():
+            return
+    except RuntimeError:
+        pass
+    with _build_lock():
+        _ensure(previous)
+
+
+def _ensure(previous: Path | None) -> None:
     try:
         manifest = contract.validate_bundle(OUTPUT, source_root=ROOT)
     except RuntimeError:
-        build(previous, install=True)
+        _build(previous, install=True)
         return
     if previous is None or previous.resolve() == OUTPUT.resolve():
         return
