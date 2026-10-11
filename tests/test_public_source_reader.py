@@ -3,6 +3,7 @@ import io
 import ipaddress
 import socket
 import ssl
+import threading
 import time
 from pathlib import Path
 
@@ -11,6 +12,61 @@ from PIL import Image
 
 from loopx.extensions import public_source_reader as reader
 from loopx.capabilities.native_chat import codex_context
+
+
+@pytest.mark.parametrize("framing", ["headers", "chunk"])
+def test_trickled_framing_cannot_consume_the_next_address_budget(monkeypatch, framing):
+    attempts, peers, servers = [], [], []
+    monkeypatch.setattr(reader, "public_addresses", lambda host: ["8.8.8.8", "1.1.1.1"])
+    class Connection:
+        def __init__(self, host, address, timeout):
+            attempts.append(address)
+            self.sock, peer = socket.socketpair()
+            self.transport = self.sock
+            self.sock.settimeout(timeout)
+            peers.append(peer)
+            def serve():
+                try:
+                    with peer:
+                        peer.sendall(b"HTTP/1.1 200 OK\r\n")
+                        if address == "8.8.8.8":
+                            if framing == "chunk":
+                                peer.sendall(b"Content-Type: text/plain\r\nTransfer-Encoding: chunked\r\n"
+                                             b"Connection: close\r\n\r\n8;progress=")
+                            for _ in range(18):
+                                time.sleep(.1)
+                                peer.sendall(b"X-Progress: tick\r\n" if framing == "headers" else b"x")
+                            if framing == "chunk":
+                                peer.sendall(b"\r\ncomplete\r\n0\r\n\r\n")
+                                return
+                        peer.sendall(b"Content-Type: text/plain\r\nContent-Length: 8\r\n"
+                                     b"Connection: close\r\n\r\ncomplete")
+                except OSError:
+                    pass  # The timed-out address is deliberately interrupted.
+            server = threading.Thread(target=serve)
+            servers.append(server)
+            server.start()
+        def request(self, *args, **kwargs): pass
+        def getresponse(self):
+            response = reader.http.client.HTTPResponse(self.sock)
+            try:
+                response.begin()
+            except Exception:
+                response.close()
+                raise
+            self.sock = None  # Exercise the detached Connection: close body too.
+            return response
+        def close(self): self.transport.close()
+    monkeypatch.setattr(reader, "_PinnedHTTPS", Connection)
+    started = time.monotonic()
+    try:
+        assert reader.fetch("https://example.org/source", deadline=started + 1) == (
+            "https://example.org/source", "text/plain", b"complete")
+        assert attempts == ["8.8.8.8", "1.1.1.1"]
+        assert time.monotonic() - started < .9
+    finally:
+        for peer in peers: peer.close()
+        for server in servers: server.join(2)
 
 
 @pytest.mark.parametrize("failure", ["headers", "body", "incomplete"])

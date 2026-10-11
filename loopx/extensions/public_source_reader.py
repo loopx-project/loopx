@@ -68,9 +68,9 @@ def public_addresses(host: str) -> list[str]:
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self, host: str, address: str, timeout: float):
+        self.deadline = time.monotonic() + timeout
         super().__init__(host, timeout=timeout, context=ssl.create_default_context())
         self.address = address
-        self.deadline = time.monotonic() + timeout
 
     def connect(self) -> None:
         # Do not resolve the hostname again after preflight (DNS rebinding).
@@ -112,6 +112,19 @@ def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
             attempt_deadline = now + budget
             connection = _PinnedHTTPS(u.hostname or "", address, budget)
             response = None
+            transport = None
+            def expire() -> None:
+                # An idle socket timeout does not stop trickled header/chunk
+                # framing inside http.client. Interrupt this address at its
+                # absolute deadline, including a detached close response.
+                sock = transport or getattr(connection, "sock", None)
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+            expiry = threading.Timer(max(0, attempt_deadline - time.monotonic()), expire)
+            expiry.start()
             try:
                 path = urlunsplit(("", "", u.path, u.query, ""))
                 # Fixed headers only; no cookies, credentials or ambient proxy.
@@ -125,6 +138,8 @@ def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
                 if transport is not None:
                     transport.settimeout(min(remaining, 10))
                 response = connection.getresponse()
+                if time.monotonic() >= attempt_deadline:
+                    raise TimeoutError("source timeout")
                 if response.status in (301, 302, 303, 307, 308):
                     location = response.getheader("Location")
                     if not location:
@@ -146,6 +161,8 @@ def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
                     body.extend(chunk)
                 if len(body) > MAX_BYTES:
                     raise ValueError("public source too large")
+                if time.monotonic() >= attempt_deadline:
+                    raise TimeoutError("source timeout")
                 if response.length not in (None, 0):
                     raise http.client.IncompleteRead(bytes(body), response.length)
                 return url, response.getheader("Content-Type", "").split(";")[0].lower(), bytes(body)
@@ -155,6 +172,8 @@ def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
                 if index == len(addresses) - 1:
                     raise
             finally:
+                expiry.cancel()
+                expiry.join()  # Never let this callback reach a later address.
                 if response is not None:
                     response.close()
                 connection.close()
