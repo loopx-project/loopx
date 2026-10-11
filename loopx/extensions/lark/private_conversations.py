@@ -20,7 +20,7 @@ from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
-from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
+from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args, lark_provider_mention_identities
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
@@ -161,6 +161,8 @@ class LarkPrivateConversations:
                                                            bot_open_id=observation["bot_open_id"],
                                                            allow_text_fallback=False)):
                         return None
+                    if message.get("msg_type", message.get("message_type")) == "text":
+                        message["_command_input"] = self._group_text_command_input(message, observation)
                 return message
         except (KeyError, ValueError, OSError):
             pass
@@ -168,6 +170,31 @@ class LarkPrivateConversations:
 
     def _source_verified(self, record: dict[str, Any]) -> bool:
         return self._source_message(record) is not None
+
+    @staticmethod
+    def _group_text_command_input(message: Mapping[str, Any], observation: Mapping[str, Any]) -> str | None:
+        # Display readback replaces native mention keys with names. Parse only
+        # the lossless provider text, so names and quoted mentions cannot grant
+        # a control operation. Model input keeps its original rendered text.
+        try:
+            text = json.loads(message["body"]["content"])["text"]
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(text, str):
+            return None
+        text = text.strip()
+        mentions = message.get("mentions")
+        if not isinstance(mentions, list):
+            return text
+        leading = [mention for mention in mentions if isinstance(mention, Mapping)
+                   and isinstance(mention.get("key"), str) and mention["key"]
+                   and text.startswith(mention["key"])
+                   and text[len(mention["key"]):len(mention["key"]) + 1].isspace()]
+        if len(leading) == 1:
+            identities = {observation["bot_app_id"], observation["bot_open_id"]} - {""}
+            if lark_provider_mention_identities(leading[0]).intersection(identities):
+                return text[len(leading[0]["key"]):].strip()
+        return text
 
     def _inbox(self, record: dict[str, Any]) -> Path:
         observation = self.bindings.observe(record["profile"])
@@ -264,6 +291,8 @@ class LarkPrivateConversations:
                     _atomic_write_json(path, record)
                 text, attachments = record.get("message", ""), record.get("attachments", [])
             command_input = private_message_caption(record["source_content"]) if attachments else text.strip()
+            if binding.get("audience") == "group" and message_type == "text":
+                command_input = source_message.get("_command_input") or command_input
             command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(command_input)
             if command_input == "/agents":
                 command = "agents"

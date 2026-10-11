@@ -71,7 +71,7 @@ class Provider:
             path = args[args.index("GET") + 1]
             assert path.startswith("/open-apis/im/v1/messages/")
             message = dict(self.messages[path.rsplit("/", 1)[-1]])
-            if message.get("msg_type") == "text" and "content" in message:
+            if message.get("msg_type") == "text" and "content" in message and "body" not in message:
                 message["body"] = {"content": json.dumps({"text": message.pop("content")})}
             data = {"code": 0, "data": {"items": [message]}}
         elif "+messages-mget" in args:
@@ -239,7 +239,8 @@ def test_group_model_handoff_cannot_read_or_dispatch_to_a_private_goal(ordinary,
         runtime.close()
 
 
-def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary):  # noqa: F811
+@pytest.mark.parametrize("mentioned_stop", [False, True])
+def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary, mentioned_stop):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)
     try:
         roots = [provider.topic(f"running-{i}", "wait for interrupt") for i in range(2)]
@@ -261,12 +262,63 @@ def test_group_progress_queue_and_stop_remain_in_the_original_topic(ordinary):  
         assert any(root == roots[0]["message_id"] and "Public progress" in text for _, root, text in provider.topic_writes)
         assert all("private reasoning" not in text for _, _, text in provider.topic_writes)
         stop = provider.topic("stop-first-topic", "/stop", root=roots[0]["message_id"])
+        if mentioned_stop:
+            stop["content"] = "@Renamed assistant  /stop"
+            provider.messages[stop["message_id"]].update(content=stop["content"],
+                body={"content": json.dumps({"text": "@_user_1  /stop"})},
+                mentions=[{"key": "@_user_1", "name": "Renamed assistant", "id": "ou_notes_app_bot"}])
         assert transport.admit("notes-app", stop)["status"] == "command_recorded"
         assert runtime.wait_for_turn(session_id=rows[0]["session_id"], turn_id=rows[0]["turn_id"], timeout_sec=10)["status"] == "interrupted"
         assert store.load_turn(rows[1]["session_id"], rows[1]["turn_id"])["status"] == "running"
         finish_group_turn(runtime, transport, message=queued["content"])
         assert any("+messages-edit" in call for call in provider.calls)
         assert all(root in {row["message_id"] for row in roots} for _, root, _ in provider.topic_writes)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["/status", "/help", "/new"])
+def test_group_mentioned_controls_bypass_model_turns(ordinary, command):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("control-topic", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = finish_group_turn(runtime, transport, message=root["content"])
+        turns = store.root / "sessions" / row["session_id"] / "turns"
+        before = sorted(turns.glob("*.json"))
+        event = provider.topic("mentioned-control", "@Renamed assistant " + command, root=root["message_id"])
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": "@_user_1 " + command})},
+            mentions=[{"key": "@_user_1", "name": "Renamed assistant", "id": {"app_id": "cli_notes_app"}}])
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert sorted(turns.glob("*.json")) == before
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("raw_text,identity,key", [
+    ("@_user_1 /stop", "ou_steward_app_bot", "@_user_1"),
+    ("@notes-app /stop", "ou_notes_app_bot", "@_user_1"),
+    ("Explain @_user_1 /stop", "ou_notes_app_bot", "@_user_1"),
+    ("`@_user_1 /stop`", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1 /stop after this", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1/stop", "ou_notes_app_bot", "@_user_1"),
+    ("@_user_1 /stop", "ou_notes_app_bot", ""),
+])
+def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identity, key):  # noqa: F811
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("ordinary-topic", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=root["content"])
+        rendered = raw_text.replace("@_user_1", "@notes-app")
+        event = provider.topic("ordinary-mention", rendered, root=root["message_id"])
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": raw_text})},
+            mentions=[{"key": key, "name": "notes-app", "id": identity}])
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = finish_group_turn(runtime, transport, message=rendered)
+        assert row["message"] == rendered
     finally:
         runtime.close()
 
