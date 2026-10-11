@@ -45,7 +45,7 @@ test("work counts exclude monitors, take done from the owner and agree with the 
     { todoId: "m", done: false, status: "open", taskClass: "continuous_monitor" },
     { todoId: "d", done: true, status: "done", taskClass: "advancement_task" },
   ];
-  const digest = compileGoalWorkspaceDigest({ ...base, todos, doneCount: 54 });
+  const digest = compileGoalWorkspaceDigest({ ...base, todos, doneCount: 54, openCount: 4 });
   assert.equal(digest.work.open, 3);
   assert.equal(digest.work.done, 54);
   assert.equal(digest.work.total, 57);
@@ -71,6 +71,22 @@ test("a projected open count above the listed items marks the work count partial
   const truncated = compileGoalWorkspaceDigest({ ...base, todos, openCount: 9 });
   assert.equal(truncated.work.coverage, "partial");
   assert.deepEqual([truncated.work.listedOpen, truncated.work.projectedOpen], [2, 9]);
+});
+
+test("a bounded list without owner totals never becomes complete work coverage", () => {
+  const todos = [{ todoId: "visible", done: false }];
+  const unknown = compileGoalWorkspaceDigest({ ...base, todos });
+  assert.equal(unknown.work.open, 1, "The listed open work remains useful");
+  assert.equal(unknown.work.done, null);
+  assert.equal(unknown.work.total, null);
+  assert.equal(unknown.work.coverage, "unknown", "A missing owner total does not prove the list is exhaustive");
+  const knownDone = compileGoalWorkspaceDigest({ ...base, todos, doneCount: 0 });
+  assert.equal(knownDone.work.done, 0, "A measured zero is retained");
+  assert.equal(knownDone.work.total, null, "A known done count does not establish the missing open total");
+  assert.equal(knownDone.work.coverage, "unknown");
+  const complete = compileGoalWorkspaceDigest({ ...base, todos, doneCount: 0, openCount: 1 });
+  assert.equal(complete.work.coverage, "complete");
+  assert.equal(complete.work.total, 1);
 });
 
 test("running treatment needs an observed, fresh execution and the timeline's running step", () => {

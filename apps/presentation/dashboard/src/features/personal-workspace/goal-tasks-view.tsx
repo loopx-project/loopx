@@ -7,7 +7,7 @@ import type {
   WorkspaceModel,
   WorkspaceTimelineItem,
 } from "./personal-workspace-model";
-import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
+import { localizedAttentionAge, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
 import { CompletedTaskLane } from "./completed-task-lane";
 import { MarkdownText } from "./markdown";
 import { isGoalWorkTodo } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
@@ -256,7 +256,7 @@ export function GoalTasksView({
                 <small>
                   {todo.priority ? <span className={`personal-priority-badge is-${todo.priority.toLowerCase()}`}>{todo.priority}</span> : null}
                   {todo.status === "blocked" ? <span className="personal-priority-badge is-blocked">{t("tasks.blocked")}</span> : null}
-                  {execution ? <span className="personal-task-session-status">{execution.status === "running" || execution.status === "queued" ? t("runs.running") : execution.status === "failed" ? t("tasks.sessionError") : t("common.waiting")}</span> : null}
+                  {execution ? <span className="personal-task-session-status">{localizedSessionStatus(execution.status, t)}</span> : null}
                   {todo.status === "deferred" ? <span className="personal-task-session-status">{t("drawer.taskStatusDeferred")}</span> : !execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
                   <span>{enriched.ownerLabel}</span>
                 </small>

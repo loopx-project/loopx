@@ -388,10 +388,9 @@ function todosFromProjectAssetSummary(
   if (summary?.items && (summary.items.length > 0 || (role === "user" && summary.open !== undefined))) {
     return {
       advancement_done_count: summary.advancement_done_count ?? fallback?.advancement_done_count,
-      done_count: summary.done ?? summary.items.filter((item) => item.done).length,
+      done_count: summary.done ?? fallback?.done_count,
       items: summary.items,
-      open_count: summary.open ?? fallback?.open_count
-        ?? (role === "user" ? undefined : summary.items.filter((item) => !item.done).length),
+      open_count: summary.open ?? fallback?.open_count,
       total_count: summary.total ?? summary.items.length,
     };
   }
@@ -464,7 +463,7 @@ type PersonalGoalItem = {
   agentId: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
-  doneTodoCount: number;
+  doneTodoCount?: number;
   openTodoCount?: number;
   goalId: string;
   latestActivity?: string;
@@ -799,7 +798,7 @@ function mergePersonalAgentTodos(
  * recent-completed lane. Queue items may also include completed Todos.
  */
 function personalAgentTodoFacts(row: GoalDirectoryRow): {
-  doneTodoCount: number;
+  doneTodoCount?: number;
   nextTodoText: string | null;
   recentCompleted: WorkspaceAgentTodo[];
 } {
@@ -811,8 +810,9 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
     ?? assetTodos?.done
     ?? queueTodos?.done_count
     ?? null;
-  const doneFromItems = items.filter((todo) => todo.done && todo.status !== "deferred").length;
-  const doneTodoCount = Math.max(doneFromCount ?? 0, doneFromItems);
+  const doneFromItems = items.filter((todo) => todo.done && todo.status !== "deferred" && todo.task_class !== "continuous_monitor").length;
+  // Items are bounded observations. They cannot supply a missing whole-Goal total.
+  const doneTodoCount = doneFromCount === null ? undefined : Math.max(doneFromCount, doneFromItems);
   const seenTodoIds = new Set(
     items
       .map((todo) => todo.todo_id?.trim())

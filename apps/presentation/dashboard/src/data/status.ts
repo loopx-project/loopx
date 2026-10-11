@@ -116,7 +116,7 @@ export const todoGroupSchema = z.object({
   source_section: z.string().optional().nullable(),
   total_count: z.number().optional().default(0),
   open_count: z.number().optional(),
-  done_count: z.number().optional().default(0),
+  done_count: z.number().optional(),
   advancement_done_count: z.number().optional(),
   items: z.array(todoItemSchema).optional().default([]),
   deferred_items: z.array(todoItemSchema).optional(),
@@ -258,7 +258,7 @@ export const goalChannelNotificationProjectionSchema = z.object({
 export const projectAssetTodoSummarySchema = z.object({
   source_section: z.string().optional().nullable(),
   open: z.number().optional(),
-  done: z.number().optional().default(0),
+  done: z.number().optional(),
   total: z.number().optional().default(0),
   advancement_done_count: z.number().optional(),
   next: z.string().optional().nullable(),

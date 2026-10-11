@@ -166,6 +166,7 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
     t("vitals.workOpen", { count: work.open }),
     work.classes.blocked ? t("vitals.workBlocked", { count: work.classes.blocked }) : null,
     work.done === null ? t("vitals.workDoneUnknown") : null,
+    work.coverage === "unknown" ? t("vitals.workCoverageUnknown") : null,
   ].filter(Boolean).join(" · ");
   const ribbonTotal = ribbonOrder.reduce((sum, name) => sum + work.classes[name], 0);
 
@@ -185,8 +186,11 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
       <Vital label={t("vitals.work")} onClick={() => onFocusRegion("tasks")} valueKey={`${goal.goalId}:${work.done}:${work.total}:${work.open}`}
         sub={work.coverage === "partial" && work.projectedOpen !== null
           ? <span className="goal-vital-partial">{t("vitals.workPartial", { listed: work.listedOpen, projected: work.projectedOpen })}</span> : workSub}
-        extra={ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
-          ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}>
+        extra={<>
+          {work.done === null || work.coverage !== "complete" ? <span className="goal-vital-qualifier">{t("vitals.workTotalUnknown")}</span> : null}
+          {work.total !== null && ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
+            ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}
+        </>}>
         {work.total === null ? work.open : <span>{work.done}<small>/{work.total}</small></span>}
       </Vital>
       <Vital label={t("vitals.needsYou")} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}

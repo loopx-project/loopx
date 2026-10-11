@@ -7,6 +7,7 @@ import { todoItemSchema } from "../src/data/status.ts";
 import { workspaceAgentTodoFromItem } from "../src/features/personal-workspace/personal-workspace-model.ts";
 import { ContextDrawer } from "../src/features/personal-workspace/context-drawer.tsx";
 import { WorkspaceI18nProvider } from "../src/features/personal-workspace/i18n.tsx";
+import { RunRow } from "../src/features/personal-workspace/cards/run-row.tsx";
 
 // A Goal's default executor is not evidence that a Todo has been claimed.
 // Exercise the real consumers, including retained history and stale labels.
@@ -55,6 +56,20 @@ try {
       }});
       assert.ok(drawer.includes(`<dt>${owner}</dt><dd>${expected}</dd>`), "A stale display label cannot invent an absent claim");
       assert.equal(todo.claimedBy, claim, "Rendering never mutates the source claim");
+    }
+    const todo = {todoId: "run-task", text: "Inspect execution", done: false, status: "open"};
+    const goal = {goalId: "run-goal", title: "Execution facts", agentTodos: [todo]};
+    for (const [status, en, zh] of [
+      ["queued", "Scheduled", "已安排"], ["running", "Running", "执行中"],
+      ["waiting", "Waiting", "等待条件"], ["failed", "Needs review", "需检查"],
+      ["interrupted", "Interrupted", "已中断"], ["completed", "Completed", "已完成"],
+    ]) {
+      const run = {todoId: todo.todoId, goalId: goal.goalId, status, title: todo.text, agentLabel: "Worker"};
+      const board = render(GoalTasksView, {goal, items: [{kind: "run", id: "execution", run}], userTodos: [], onSelect() {}});
+      const timeline = render(RunRow, {run, onSelect() {}});
+      const expected = locale === "en" ? en : zh;
+      assert.ok(board.includes(`personal-task-session-status">${expected}</span>`), `Task cards preserve ${status}`);
+      assert.ok(timeline.includes(expected), `Timeline and task cards agree for ${status}`);
     }
   }
 } finally {

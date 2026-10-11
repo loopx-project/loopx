@@ -144,6 +144,7 @@ export function compileGoalWorkspaceDigest(input: GoalWorkspaceDigestInput): Goa
   const listedOpen = input.todos.filter((todo) => !todo.done).length;
   const projectedOpen = typeof input.openCount === "number" && input.openCount >= 0 ? input.openCount : null;
   const truncated = projectedOpen !== null && projectedOpen > listedOpen;
+  const workCoverage: DigestCoverage = projectedOpen === null ? "unknown" : truncated ? "partial" : "complete";
 
   let needsYou: GoalWorkspaceDigest["needsYou"];
   if (input.attention === null) {
@@ -195,9 +196,9 @@ export function compileGoalWorkspaceDigest(input: GoalWorkspaceDigestInput): Goa
     work: {
       open: openWork.length,
       done,
-      total: done === null ? null : done + openWork.length,
+      total: done === null || workCoverage !== "complete" ? null : done + openWork.length,
       classes,
-      coverage: truncated ? "partial" : "complete",
+      coverage: workCoverage,
       listedOpen,
       projectedOpen,
     },

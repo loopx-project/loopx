@@ -192,6 +192,9 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 右上角设置直接打开既有能力配置；返回后保留工作区。切换 Goal 或数据源则重新建立页面上下文。
 
 点击一次 **概览**，即可查看当前进展、需要处理的决定、执行记录和用量。
+工作指标只有在来源提供完成数、且未完成列表覆盖已知时显示“完成 / 总数”。
+缺失或有界数据会保留“总数未知”，显示当前所列未完成项而不绘制完成比例；实际报告的零仍是零。
+任务卡片与时间线区分已安排、执行中、等待、需检查、已中断和已完成；排队不表示已开始执行。
 决定与执行记录直接打开原有详情；「查看任务」「查看成果」前往对应页面。
 低频仓库、连接和运行信息保留在「Goal 信息」中，不再充当查看进展的必经路径。
 
@@ -237,6 +240,10 @@ task filters, loaded history and scroll; a different Goal or source starts a new
 view session. Settings opens the existing capability editor directly.
 
 Overview brings progress, pending decisions, execution and usage into one page.
+The Work vital shows done/total only with a reported completion count and known complete open-work coverage.
+Missing or bounded totals show the listed open work and an explicit unknown-total notice, without a completion ribbon;
+a reported zero remains zero. Task cards and the timeline distinguish scheduled, running, waiting, failed,
+interrupted and completed observations. Scheduled work is not presented as executing.
 Its delivery section reads the bounded current chain and acceptance observations
 on entry or explicit refresh, with search, map/list layouts, source navigation
 and Markdown export. Leaving Overview aborts pending reads. A changed workspace

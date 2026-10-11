@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   parseStatusPayload,
   todoItemSchema,
+  todoGroupSchema,
+  projectAssetTodoSummarySchema,
   todoIndexItemSchema,
   periodicReportIndexItemSchema,
   periodicReportIndexResponseSchema,
@@ -76,6 +78,15 @@ function goal(id: string, activation: "active" | "stopped") {
     unique_runs: 1,
     latest_runs: [],
   };
+}
+
+// A status source may omit totals while still returning a useful bounded list.
+// Preserve that absence before the workspace adapter and typed digest see it.
+for (const [schema, field] of [[todoGroupSchema, "done_count"], [projectAssetTodoSummarySchema, "done"]] as const) {
+  const missing = schema.parse({ items: [] });
+  equal((missing as Record<string, unknown>)[field], undefined, "Missing completion total stays unknown");
+  const measured = schema.parse({ items: [], [field]: 0 });
+  equal((measured as Record<string, unknown>)[field], 0, "Measured zero is retained");
 }
 
 // Native Todo identity is the stable todo_id; a Markdown source index is only
