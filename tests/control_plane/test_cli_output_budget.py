@@ -1196,10 +1196,11 @@ def test_quota_cli_keeps_required_authoring_inline_and_diagnostic_audit_cold(
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    # Same 36-Todo / 12-run command: 41,176 -> 44,225 chars (+7.4%).
-    # Required authoring replaces a second diagnostic read; preserve its rules
-    # and field limits. This fixed allowance does not relax other lane budgets.
-    assert len(default_text) <= 45_000
+    # Same stable 36-Todo / 12-run command: 44,894 -> 45,249 chars. The added
+    # automation-cadence readback exposes the owning eligibility condition;
+    # retain it and inline authoring with 751 chars of measured headroom. This
+    # fixed 46,000-char allowance does not relax other lane/scale budgets.
+    assert len(default_text) <= 46_000
     default_payload = json.loads(default_text)
     detail_payload = json.loads(detail_text)
     compact_audit = default_payload["vision_continuation_audit"]

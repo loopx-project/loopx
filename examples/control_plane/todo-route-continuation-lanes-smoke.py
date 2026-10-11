@@ -11,10 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.control_plane.todos.route_continuation import (  # noqa: E402
-    TODO_ROUTE_CONTINUATION_SELECTION_POLICY,
-    build_todo_route_continuation_lanes,
-)
+from loopx.control_plane.todos.quota_selection import project_quota_planning  # noqa: E402
 
 
 def assert_route_continuation_lanes_filter_current_unclaimed_and_other_agents() -> None:
@@ -79,11 +76,14 @@ def assert_route_continuation_lanes_filter_current_unclaimed_and_other_agents() 
         ],
     }
 
-    lanes = build_todo_route_continuation_lanes(
+    lanes = project_quota_planning(
         summary,
+        all_open_items=[],
+        source_open_count=0,
         agent_identity={"agent_id": "codex-side-bypass"},
-        item_limit=10,
-    )
+        filter_user_gate_blocks_agent=False,
+        available_capabilities=[],
+    )["route_lanes"]
     assert lanes["route_continuation_replan_count"] == 4, lanes
     assert [
         item.get("route_id") or item.get("route_key")
@@ -113,7 +113,8 @@ def assert_route_continuation_lanes_filter_current_unclaimed_and_other_agents() 
     assert current["decision_scope"]["scope_key"] == "route", current
     assert (
         lanes["route_continuation_replan_selection_policy"]
-        == TODO_ROUTE_CONTINUATION_SELECTION_POLICY
+        == "quota may wake the current peer for route continuation replan "
+        "candidates claimed by that agent or unclaimed; other-agent route candidates remain diagnostic visibility"
     ), lanes
 
 

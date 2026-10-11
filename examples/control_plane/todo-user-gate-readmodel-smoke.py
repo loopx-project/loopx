@@ -12,12 +12,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.control_plane.todos.quota_summary import (  # noqa: E402
-    is_user_gate_todo_item,
     summarize_user_todos_for_quota,
 )
 from loopx.control_plane.todos.user_gate import (  # noqa: E402
     build_gate_prompt,
     has_open_user_gate_todo,
+    is_user_gate_todo_item,
     open_todo_count,
     open_user_gate_todo_items,
     should_notify_user_on_open_todo,

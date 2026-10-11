@@ -256,10 +256,6 @@ DECLARED_OPEN_SITES: dict[str, str] = {
     # verdict: direction 2 asks for an explicit, tested short-assignment policy and
     # does not say which way, so this face stays where it is until that is decided.
     "loopx/extensions/presentation.py": "short-assignment verdict undecided",
-    # Beyond the labels this rule also names vendor forms the owner does not
-    # (`ak`/`sk`, `access_key_id`, `secret_key`). Route those to the owner first,
-    # then this site is a plain policy call.
-    "loopx/control_plane/todos/handoff_note.py": "names vendor forms the owner lacks",
     # The public-boundary contract is the publication tier: it refuses a label with
     # no value at all -- a trailing scheme word, an assignment operator with an
     # empty right side -- which is exactly what the owner's publication helper
@@ -318,8 +314,8 @@ def _credential_alternations_outside_the_owner() -> list[str]:
     The criterion is a credential alternation that also reaches for whitespace --
     three or more labels joined by ``|``, plus ``\\s``. A rule with no ``\\s`` is
     matching an environment-variable name or a field name, which is a different
-    question with a different owner; three such rules exist today and are named in
-    the PR body rather than silently excluded.
+    question with a different owner; two such rules remain explicitly declared
+    rather than silently excluded.
     """
 
     offenders: list[str] = []

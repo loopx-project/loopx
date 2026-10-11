@@ -17,10 +17,10 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
 )
 from loopx.status import compact_todo_group  # noqa: E402
 from loopx.control_plane.todos.handoff_gate import (  # noqa: E402
-    build_todo_handoff_gate_lanes,
     build_todo_handoff_gate_states,
     handoff_ready_successor_todo_ids,
 )
+from loopx.control_plane.todos.quota_selection import project_quota_planning  # noqa: E402
 
 
 GOAL_ID = "cleared-blocker-successor-gate-fixture"
@@ -122,11 +122,15 @@ def assert_handoff_gate_lanes_and_ready_successors_are_todo_context_helpers() ->
     summary = agent_todo_summary([review_gate, successor, blocked_gate])
 
     assert handoff_ready_successor_todo_ids(summary) == {"todo_followup_slice"}, summary
-    lanes = build_todo_handoff_gate_lanes(
+    open_items = [item for item in summary["items"] if not item["done"]]
+    lanes = project_quota_planning(
         summary,
+        all_open_items=open_items,
+        source_open_count=len(open_items),
         agent_identity={"agent_id": BLOCKED_AGENT},
-        item_limit=10,
-    )
+        filter_user_gate_blocks_agent=False,
+        available_capabilities=[],
+    )["handoff_lanes"]
     assert lanes["handoff_gate_count"] == 2, lanes
     assert lanes["current_agent_handoff_gate_count"] == 2, lanes
     assert lanes["current_agent_cleared_without_successor_handoff_count"] == 1, lanes
