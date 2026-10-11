@@ -1,7 +1,11 @@
 import { CircleAlert, Clock3, FileSearch, ShieldCheck } from "lucide-react";
 
 import type { PresentationSurface, RunGoal } from "../data/status";
-import type { DecisionResearchView } from "../data/decision-research";
+import {
+  publishedResearchLineage,
+  type DecisionResearchView,
+  type PresentationProjectionEnvelope,
+} from "../data/decision-research";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 
@@ -63,10 +67,26 @@ function TextList({ empty, items }: { empty: string; items: string[] }) {
   );
 }
 
-function ProvenanceCard({ surface }: { surface: PresentationSurface }) {
+function ProvenanceCard({ surface, projection, zh }: {
+  surface: PresentationSurface;
+  projection?: PresentationProjectionEnvelope | null;
+  zh: boolean;
+}) {
   if (surface.state !== "ready" && surface.state !== "review_due") {
     return null;
   }
+  const lineage = publishedResearchLineage(projection);
+  const unknown = zh ? "未知" : "unknown";
+  const references = [
+    [zh ? "原 Goal" : "Original Goal", surface.goal_id],
+    [zh ? "来源编号" : "Source ID", lineage.sourceId],
+    [zh ? "来源版本" : "Source version", lineage.version],
+    [zh ? "替代来源" : "Supersedes", lineage.supersedes === null ? null
+      : lineage.supersedes.length ? lineage.supersedes.join(", ") : zh ? "无" : "none"],
+    [zh ? "扩展 / 展示面" : "Extension / surface", `${surface.extension_id} / ${surface.surface_id}`],
+    [zh ? "展示 schema" : "View schema", surface.view_schema],
+    [zh ? "扩展 revision" : "Extension revision", surface.detail_ref.extension_revision],
+  ];
   return (
     <Card data-testid="decision-research-surface-summary">
       <CardHeader>
@@ -77,8 +97,8 @@ function ProvenanceCard({ surface }: { surface: PresentationSurface }) {
             <Badge variant="neutral">{surface.visibility}</Badge>
           </div>
           <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-300">
-            Rendered from the published projection resolved by content-addressed
-            reference. Core status remains a compact provider-neutral index.
+            {zh ? "已发布研究的原始时间与来源引用；刷新页面不延长复核期限。"
+              : "Original publication times and source reference. Refreshing does not extend the review deadline."}
           </p>
         </div>
         <FileSearch className="h-5 w-5 text-slate-400 dark:text-zinc-500" />
@@ -86,41 +106,44 @@ function ProvenanceCard({ surface }: { surface: PresentationSurface }) {
       <CardContent>
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           <div>
-            <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-zinc-400">
-              View schema
-            </dt>
-            <dd className="mt-1 font-mono text-slate-800 dark:text-zinc-200">
-              {surface.view_schema}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-zinc-400">
-              Generated at
+            <dt className="text-xs font-semibold text-slate-500 dark:text-zinc-400">
+              {zh ? "发布时间" : "Published at"}
             </dt>
             <dd className="mt-1 text-slate-800 dark:text-zinc-200">
               {surface.generated_at}
             </dd>
           </div>
           <div>
-            <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-zinc-400">
-              Extension revision
+            <dt className="text-xs font-semibold text-slate-500 dark:text-zinc-400">
+              {zh ? "原复核期限" : "Original review deadline"}
             </dt>
-            <dd className="mt-1 font-mono text-slate-800 dark:text-zinc-200">
-              {surface.detail_ref.extension_revision}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-zinc-400">
-              Payload SHA-256
-            </dt>
-            <dd
-              className="mt-1 break-all font-mono text-xs text-slate-800 dark:text-zinc-200"
-              data-testid="research-detail-ref-hash"
-            >
-              {surface.detail_ref.payload_sha256}
+            <dd className="mt-1 text-slate-800 dark:text-zinc-200" data-testid="research-review-deadline">
+              {surface.review_due_at ?? unknown}
             </dd>
           </div>
         </dl>
+        <details className="mt-4 text-sm" data-testid="research-reference-details">
+          <summary className="cursor-pointer font-medium">
+            {zh ? "来源与引用详情" : "Source and reference details"}
+          </summary>
+          <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+            {references.map(([label, value]) => <div key={String(label)}>
+              <dt className="text-xs font-semibold text-slate-500 dark:text-zinc-400">{label}</dt>
+              <dd className="mt-1 break-all font-mono text-xs text-slate-800 dark:text-zinc-200">{value ?? unknown}</dd>
+            </div>)}
+            <div>
+              <dt className="text-xs font-semibold text-slate-500 dark:text-zinc-400">
+                Payload SHA-256
+              </dt>
+              <dd
+                className="mt-1 break-all font-mono text-xs text-slate-800 dark:text-zinc-200"
+                data-testid="research-detail-ref-hash"
+              >
+                {surface.detail_ref.payload_sha256}
+              </dd>
+            </div>
+          </dl>
+        </details>
       </CardContent>
     </Card>
   );
@@ -318,12 +341,16 @@ export function DecisionResearchSurface({
   view = null,
   viewError = null,
   viewLoading = false,
+  projection = null,
+  zh = false,
 }: {
   goals: RunGoal[];
   surface: PresentationSurface;
   view?: DecisionResearchView | null;
   viewError?: string | null;
   viewLoading?: boolean;
+  projection?: PresentationProjectionEnvelope | null;
+  zh?: boolean;
 }) {
   if (surface.state === "invalid") {
     return (
@@ -416,7 +443,7 @@ export function DecisionResearchSurface({
               Loading the full research view…
             </p>
           ) : null}
-          <ProvenanceCard surface={surface} />
+          <ProvenanceCard surface={surface} projection={projection} zh={zh} />
         </>
       ) : (
         <>
@@ -837,7 +864,7 @@ export function DecisionResearchSurface({
             </Card>
           </div>
 
-          <ProvenanceCard surface={surface} />
+          <ProvenanceCard surface={surface} projection={projection} zh={zh} />
         </>
       )}
     </div>
