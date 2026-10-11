@@ -596,6 +596,31 @@ Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
 
+Full Python shards share four repository-wide job concurrency groups, one per
+`matrix.shard`, across PR, main, merge-queue and manual runs carrying this
+workflow version. Each group admits one running job and uses `queue: max`
+to retain up to 100 pending jobs instead of replacing another current
+candidate. Workflow-level cancellation still retires an obsolete head of the
+same PR. Queue overflow, cancellation and missing coverage remain failures of
+the required gate; collection, four partitions, two workers, reports and the
+coverage floor stay unchanged. Contributors can wait longer for a shard during
+overlapping full runs. This limits long-shard occupancy to four runners; it
+does not reserve release capacity or prioritize releases over other jobs or
+repositories in the organization's shared hosted pool. Older workflow versions
+do not participate. Roll back by removing this job-level concurrency block,
+retaining workflow-level cancellation and the required gate. See GitHub's
+[concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+全量 Python 分片按 `matrix.shard` 共用四个仓库级 job concurrency 组，适用于
+携带本版 workflow 的 PR、main、merge queue 和手动运行。每组允许一个运行中 job，
+用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
+仍清退同 PR 的旧 head；队列溢出、取消和缺失 coverage 仍不能通过必需检查。
+完整 collection、四分片、双 worker、报告和覆盖率门槛保持不变；重叠的全量运行
+会增加贡献者等待分片的时间。此限制只把长分片占用约束到四台 runner，不预留发布
+容量，也不保证发布优先于组织共享 hosted 池中的其他 job 或仓库。旧版 workflow
+不参与该限制。回退时移除此 job 的 concurrency 块，保留 workflow 级取消和必需
+检查；队列行为遵循上述 GitHub 官方契约。
+
 Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
 --splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to
 run the complete suite locally. 全量本地测试仍省略分片参数即可。
