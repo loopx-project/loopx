@@ -435,14 +435,18 @@ monitor therefore stays quiet during that wait without failing the heartbeat
 receipt or changing the monitor's due time, hash, or material generation.
 The typed deadline owner reconciles a newer, earlier receipt-owned retry with
 an existing full-source deadline cache; hidden earlier monitor deadlines and
-unchanged caches remain intact. A non-blocking `user_action` notice does not
-turn a quiet monitor/retry wait into a human gate. The pending retry is a
+unchanged caches remain intact. When the receipt retry owns the next deadline,
+a non-blocking `user_action` notice does not turn its quiet wait into a human
+gate. Earlier or equal independent monitor clocks retain their existing route;
+this repair does not qualify their notice explanation. The pending retry is a
 recheck deadline, not execution authority: current gates and the configured
 cadence floor still apply at and after due time.
 
 类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
-缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。普通 `user_action`
-通知不会把安静的监控／重试等待变成人工门禁。重试到期仅要求重新检查，不授予
+缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。当 receipt retry
+拥有下一到期时间时，普通 `user_action` 通知不会把该安静等待变成人工门禁。
+更早或同刻的独立监控时钟保留原路由，本修复不代表它们的通知解释已验收。
+重试到期仅要求重新检查，不授予
 执行权限；当前 gate 和已配置的调度周期下限仍然有效。
 
 `quota should-run` also separates long-running observation from work that should
