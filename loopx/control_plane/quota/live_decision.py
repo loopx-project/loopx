@@ -75,11 +75,8 @@ def _apply_retained_action_selection_reentry(
     normalized_retained = normalize_todo_id(retained_todo_id)
     if normalized_retained is None:
         return
-    selected = (
-        payload.get("selected_todo")
-        if isinstance(payload.get("selected_todo"), Mapping)
-        else {}
-    )
+    selected_value = payload.get("selected_todo")
+    selected = selected_value if isinstance(selected_value, Mapping) else {}
     projected_todo_id = normalize_todo_id(selected.get("todo_id"))
     verdict = reconcile_retained_action_selection(
         retained_todo_id=normalized_retained,
@@ -620,7 +617,7 @@ def build_live_quota_should_run_decision(
         agent_id=agent_id,
         observed_at=now_utc_iso(),
     )
-    payload = build_quota_should_run(
+    payload: dict[str, Any] = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
         agent_id=agent_id,
@@ -727,12 +724,18 @@ def build_live_quota_should_run_decision(
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
         and (payload.get("selected_todo") or {}).get("todo_id") != receipt_bound_todo_id
     ):
+        if settlement_readback is not None:
+            attach_settlement_progress(
+                payload, settlement_readback,
+                registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
+            )
         apply_receipt_bound_wait_recovery(
             payload, registry_path=registry_path, runtime_root=runtime_root,
             goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
             turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
             monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
+            settlement_progress=settlement_readback.progress if settlement_readback else None,
         )
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {

@@ -300,6 +300,7 @@ def apply_receipt_bound_wait_recovery(
     available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
     monitor_phase: str | None = None,
+    settlement_progress: dict[str, Any] | None = None,
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ..todos.list_readback import list_goal_todos
@@ -318,6 +319,7 @@ def apply_receipt_bound_wait_recovery(
         "todos": items, "todo_id": todo_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
         "monitor_phase": monitor_phase,
+        "settlement_progress": settlement_progress,
     })
     if verdict.get("status") == "none":
         return False
@@ -415,6 +417,7 @@ def _apply_recovery_projection(
     cli_channel = interaction_contract.get("cli_channel")
     if isinstance(cli_channel, dict):
         cli_channel["spend_policy"] = obligation["spend_policy"]
+        cli_channel["spend_allowed_now"] = obligation.get("spend_allowed_now") is True
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
     return True

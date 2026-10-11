@@ -168,9 +168,10 @@ export function prepareBlockedWait(value: unknown): JsonObject {
 
 export const RECEIPT_BOUND_WAIT_REQUEST_SCHEMA = "loopx_quota_receipt_bound_wait_request_v0";
 
-/** A pending dependency or blocked Monitor changes executable work, never the Turn's binding.
- * This read-only projection cannot settle a Turn. Causal waits need verified
- * refresh-state closeout; an unpolled blocked Monitor needs lifecycle repair. */
+/** A pending dependency changes executable work, never the Turn's receipts.
+ * settlement_progress is the existing settlement owner's exact-Turn readback,
+ * transported by the live guard, not an author-declared progress observation.
+ * This projection grants no work and cannot settle or debit a Turn. */
 export function projectReceiptBoundWait(value: unknown): JsonObject {
   const request = requireJsonObject(value, "receipt-bound wait request");
   if (request.schema_version !== RECEIPT_BOUND_WAIT_REQUEST_SCHEMA ||
@@ -184,6 +185,13 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   if (matches.length !== 1 || !todo || todo.role !== "agent" ||
       todo.archive_state !== "active" || (todo.claimed_by && todo.claimed_by !== request.agent_id)) {
     return {status: "none"};
+  }
+  const progress = jsonObject(request.settlement_progress);
+  if (progress?.schema_version === "quota_settlement_progress_v0" &&
+      progress.next_step === "quota_spend" &&
+      (progress.state === "spend_required" || progress.state === "spend_receipt_required")) {
+    const reason = "The original Turn's durable writeback is verified. Its later dependency wait cannot replace that outcome. Execute only the original settlement spend command; the spend owner revalidates all receipts and acceptance, and a receipt repair cannot debit twice. Leave the Todo wait and successor unchanged.";
+    return boundRecovery(request, "quota_spend", reason);
   }
   if (todo.task_class === "continuous_monitor" && todo.status === "blocked" &&
       request.monitor_phase === "poll_due") {
@@ -204,22 +212,27 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   return boundRecovery(request, "blocked_writeback", reason, wait);
 }
 
-/** Both routes preserve the existing binding and grant only control-plane recovery. */
+/** Recovery routes preserve the existing binding and grant no independent work. */
 function boundRecovery(
-  request: JsonObject, repair: "lifecycle" | "blocked_writeback", reason: string, wait?: JsonObject,
+  request: JsonObject, repair: "lifecycle" | "blocked_writeback" | "quota_spend", reason: string, wait?: JsonObject,
 ): JsonObject {
   const obligation = repair === "blocked_writeback"
-    ? "close_bound_wait_without_spend" : "repair_bound_monitor_lifecycle";
+    ? "close_bound_wait_without_spend" : repair === "quota_spend"
+    ? "settle_bound_turn" : "repair_bound_monitor_lifecycle";
   return {
     status: "recovery_required",
     recovery: {schema_version: "unsettled_host_turn_recovery_v0", scope: "current_turn",
       turn_instance_id: request.turn_instance_id, binding_kind: "todo",
       binding_id: request.todo_id, repair, ...(wait ? {wait} : {})},
     obligation: {lane: "control_plane_recovery",
-      next_lane: repair === "blocked_writeback" ? "advancement_task" : "continuous_monitor",
+      next_lane: repair === "lifecycle" ? "continuous_monitor" : "advancement_task",
       obligation, contract: "repair_bound_turn_closeout",
       contract_obligation: obligation, must_attempt_work: true,
-      delivery_allowed: false, notify: "DONT_NOTIFY", spend_policy: "no spend for blocked closeout",
+      delivery_allowed: false, notify: "DONT_NOTIFY",
+      ...(repair === "quota_spend" ? {spend_allowed_now: true} : {}),
+      spend_policy: repair === "quota_spend"
+        ? "settle the original verified writeback once; no independent work or new writeback"
+        : "no spend for blocked closeout",
       reason_code: repair === "blocked_writeback" ? "receipt_bound_pending_wait" : "unsettled_host_turn",
       reason, recommendation_reason: reason,
       unsettled_reason: reason, recommended_action: reason},

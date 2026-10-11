@@ -26,6 +26,11 @@ def recovery_cli_actions(
     )
     # The repair lane is a typed fact from the recovery transaction; this
     # renderer only turns it into operator commands.
+    if recovery.get("repair") == "quota_spend" and recovery.get("scope") == "current_turn":
+        owed = payload.get("settlement_owed")
+        if not isinstance(owed, Mapping) or not isinstance(owed.get("command"), str):
+            raise RuntimeError("receipt-bound settlement recovery is missing its exact spend command")
+        return [owed["command"]]
     if recovery.get("repair") == "lifecycle" and recovery.get("scope") == "current_turn":
         bound_turn = shlex.quote(str(recovery["turn_instance_id"]))
         return [
