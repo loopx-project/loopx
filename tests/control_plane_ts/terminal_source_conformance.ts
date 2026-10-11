@@ -10,6 +10,7 @@ import {executeCoordinationTodoTerminalLifecycle as execute,
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
+import {projectionFixtureAsSchema} from "./authority_projection_fixture.ts";
 import {productionScaleCoordinationFixture,
   PRODUCTION_SCALE_VALIDATION_DECLARATION as declaration} from "./production_scale_coordination_fixture.ts";
 
@@ -26,6 +27,82 @@ const validation = {schema_version: "issue_fix_validation_command_v0", command_l
 
 export function registerTerminalSourceConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
   for (const schema of ["legacy", "native"] as const) {
+    test(`${provider}: completion resolves linked work from its canonical head (${schema})`, async t => {
+      // Caller snapshots may lag a peer's completion, reopening or role change.
+      // The declared link order, rather than caller-supplied facts or store order,
+      // determines the first currently open agent successor.
+      for (const [role, status, callerRole, callerStatus, expectedLink] of [
+        ["agent", "done", "agent", "open", false],
+        ["agent", "open", "agent", "done", true],
+        ["user", "open", "agent", "open", false],
+        ["agent", "open", "user", "open", true],
+      ] as const) {
+        const {store, contender} = await factory(t);
+        const goal = "terminal-linked-source";
+        const fixture = productionScaleCoordinationFixture(goal, schema);
+        const todos = fixture.projection.todos as JsonObject[];
+        const target = todos.find(todo => todo.todo_id === fixture.completion_todo_id)!;
+        delete target.completion_validation_required;
+        delete target.completion_validation_sha256;
+        const candidates = todos.filter(todo => todo.todo_id !== target.todo_id && todo.role === "agent");
+        const source = role === "user" ? todos.find(todo => todo.role === "user")! : candidates[0];
+        const successor: JsonObject = {...source, role, status, done: status === "done"};
+        const other: JsonObject = {...candidates[1], role: "agent", status: "open", done: false};
+        const projection = projectionFixtureAsSchema({...fixture.projection,
+          todos: todos.map(todo => todo.todo_id === successor.todo_id ? successor
+            : todo.todo_id === other.todo_id ? other : todo)}, schema);
+        await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+          next_projection: projection, events: [], receipts: []});
+        const policy = {schema_version: "loopx_todo_completion_policy_request_v0", goal_id: goal,
+          agent_model: "peer_v1", registered_agents: fixture.registered_agents, claimed_by: "agent-a",
+          next_claimed_by: null, next_agent_todo: null, next_continuation_policy: null,
+          next_excluded_agents: [], self_merged: false, evidence: "Verified linked work",
+          linked_successors: [{todo_id: other.todo_id, role: "agent", status: "open"},
+            {todo_id: successor.todo_id, role: callerRole, status: callerStatus}]};
+        const request: CoordinationTodoTerminalLifecycleInput = {
+          goal_id: goal, todo_id: fixture.completion_todo_id, expected_role: "agent", command: "complete",
+          actor_agent_id: "agent-a", registered_agents: fixture.registered_agents, lifecycle_grants: [],
+          authority_reason: null, decision_outcome: null,
+          operation_identity: {kind: "explicit", operation_id: "complete-linked-work"},
+          lease_idempotency_key: fixture.completion_lease_idempotency_key,
+          lease_expected_version: fixture.completion_lease_expected_version,
+          allow_user_gate_auto_acquire: false, requested_no_followup: false,
+          requested_completion_turn_key: "complete-linked-work", requested_completion_identity_source: null,
+          linked_successor_todo_ids: [String(successor.todo_id)], successor_intents: [],
+          note: "Verified completion", evidence: "Verified linked work", reason: null, clear_claim: false,
+          validation_declaration: null, validation_receipt: null, completion_policy_request: policy,
+          dry_run: false, now: new Date(String(fixture.semantic_cases.terminal_source!.observed_at)),
+        };
+        const before = await loaded(store);
+        const ordered = await execute(store, {...request, dry_run: true,
+          linked_successor_todo_ids: [String(other.todo_id), String(successor.todo_id)]});
+        assert.equal(ordered.status, "planned", JSON.stringify(ordered));
+        assert.equal((ordered.completion_policy as JsonObject).linked_successor_id, other.todo_id);
+        assert.deepEqual(await loaded(store), before);
+        const result = await execute(store, request);
+        assert.equal(result.status, "applied", JSON.stringify(result));
+        assert.equal((result.completion_policy as JsonObject).linked_successor_id,
+          expectedLink ? successor.todo_id : null);
+        const after = await loaded(store);
+        assert.deepEqual((after.head.todos as JsonObject[]).filter(todo => todo.todo_id !== target.todo_id),
+          (projection.todos as JsonObject[]).filter(todo => todo.todo_id !== target.todo_id));
+        const receipt = await store.readReceipt(request.operation_identity.operation_id);
+        // Advance the linked record after completion; historical recovery must
+        // return the original policy without recomputing it from the new head.
+        const changed = {...successor, role: "agent", status: status === "open" ? "done" : "open",
+          done: status === "open"};
+        await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+          operation_id: "later-linked-change", expected_provider_revision: after.provider_revision,
+          projection: after.head, mutations: [{kind: "todo_upsert", todo: changed}]}));
+        const advanced = await loaded(store);
+        const replay = await execute(contender, {...request, completion_policy_request: {...policy,
+          linked_successors: []}}, async () => {throw new Error("Replay must precede fresh source checks");});
+        assert.equal(replay.status, "replayed");
+        assert.deepEqual(replay.completion_policy, result.completion_policy);
+        assert.deepEqual(await loaded(store), advanced);
+        assert.deepEqual(await store.readReceipt(request.operation_identity.operation_id), receipt);
+      }
+    });
     test(`${provider}: supersede links existing work and retires its original lease atomically (${schema})`, async t => {
       const {store, contender} = await factory(t);
       const goal = "terminal-existing-successor";

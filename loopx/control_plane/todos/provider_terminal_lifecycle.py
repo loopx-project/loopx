@@ -26,10 +26,7 @@ from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     effect_runtime_result,
 )
-from .completion_policy import (
-    build_completion_policy_request,
-    linked_successor_from_todo,
-)
+from .completion_policy import build_completion_policy_request
 from .completion_transaction import require_completion_successor_todo_ids
 from .completion_validation import (
     resolve_private_completion_validation_declaration,
@@ -324,10 +321,9 @@ def terminal_canonical_todo_if_promoted(
         ) from exc
     if canonical is None:
         return None
-    todos = [dict(todo) for todo in canonical["todos"]]
     # The canonical transaction owns missing/role/archive lifecycle decisions.
     # Keep only the optional local validation facts needed by the host adapter.
-    target = _todo_by_id(todos, todo_id) or {}
+    target = _todo_by_id(canonical["todos"], todo_id) or {}
     result_descriptor = None
     if completion_result_file is not None:
         try:
@@ -358,11 +354,6 @@ def terminal_canonical_todo_if_promoted(
             next_continuation_policy=next_continuation_policy,
             next_excluded_agents=next_excluded_agents,
         )
-        linked = [
-            linked_successor_from_todo(todo)
-            for linked_id in successor_todo_ids
-            if (todo := _todo_by_id(todos, linked_id)) is not None
-        ]
         completion_policy_request = (
             build_completion_policy_request(
                 registry_path=registry_path,
@@ -375,7 +366,6 @@ def terminal_canonical_todo_if_promoted(
                 next_excluded_agents=next_excluded_agents or [],
                 self_merged=self_merged,
                 evidence=evidence,
-                linked_successors=linked,
             )
             if command == "complete"
             else None

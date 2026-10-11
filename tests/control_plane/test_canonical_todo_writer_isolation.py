@@ -92,6 +92,23 @@ def test_canonical_cli_lifecycle_without_source_todo_writers(tmp_path, provider,
     assert records[replacement]["status"] == "open"
     assert "Original work" in state.read_text()
 
+    followthrough = add("agent", "Finish with declared existing work", "followthrough")
+    completion_args = ("complete", "--goal-id", "goal-a", "--todo-id", followthrough,
+                       "--successor-todo-id", replacement)
+    accepted = cli(*completion_args)
+    assert accepted["completion_policy"]["linked_successor_id"] == replacement
+    cli("complete", "--goal-id", "goal-a", "--todo-id", replacement, "--no-follow-up",
+        "--note", "Existing work independently accepted")
+    before_replay = cli("list", "--goal-id", "goal-a")
+    replay = cli(*completion_args)
+    assert replay["idempotent_replay"] is True
+    assert replay["completion_policy"] == accepted["completion_policy"]
+    assert cli("list", "--goal-id", "goal-a")["authority_read"] == before_replay["authority_read"]
+    last = add("agent", "Link already completed work", "last")
+    terminal_link = cli("complete", "--goal-id", "goal-a", "--todo-id", last,
+                        "--successor-todo-id", replacement)
+    assert terminal_link["completion_policy"]["linked_successor_id"] is None
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_new_goal_and_original_creation_recovery_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
