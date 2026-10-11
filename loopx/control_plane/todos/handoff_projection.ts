@@ -6,10 +6,7 @@ import {compactPythonWhitespace, stripPythonWhitespace} from "../coordination/to
 
 // This is the historical display credential exclusion, not a state classifier.
 // Python's Unicode word boundaries and IGNORECASE include dotted/dotless I.
-const WORD = "[\\p{L}\\p{N}_]";
-const CREDENTIAL = new RegExp(`(?<!${WORD})(?:bearer +[^ ]+|authorization *:|` +
-  `(?:ak|sk|api[_-]?key|access[_-]?key(?:[_-]?id)?|secret(?:[_-]?key)?|token|password)` +
-  `(?!${WORD}) *[:=] *[^ ]+)`, "iu");
+const CREDENTIAL = /(?<![\p{L}\p{N}_])(?:bearer +[^ ]+|authorization *:|(?:ak|sk|api[_-]?key|access[_-]?key(?:[_-]?id)?|secret(?:[_-]?key)?|token|password)(?![\p{L}\p{N}_]) *[:=] *[^ ]+)/iu;
 
 function compact(value: unknown, limit: number): string | null {
   if (typeof value !== "string") throw new EffectRuntimeRequestError("handoff text fact must be a string");
