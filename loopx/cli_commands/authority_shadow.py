@@ -147,17 +147,20 @@ def handle_authority_shadow_command(
     action = str(getattr(args, "authority_shadow_command", None))
     payload: dict[str, object]
     try:
-        from ..control_plane.coordination.local_authority_shadow_adapter import (
-            drain_local_authority_shadow_outbox,
+        from ..control_plane.coordination.local_authority_shadow_readback import (
             local_authority_shadow_status,
         )
-        from ..control_plane.coordination.local_authority_shadow_outbox import OutboxError
+        from ..control_plane.coordination.local_authority_shadow_history import OutboxError
 
         try:
             # The same resolver every writer hook uses, so drain and status address
             # the lineage those hooks wrote.
             runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
             if action == "drain":
+                from ..control_plane.coordination.local_authority_shadow_adapter import (
+                    drain_local_authority_shadow_outbox,
+                )
+
                 if args.max_entries < 1:
                     raise ValueError("--max-entries must be at least 1")
                 result = drain_local_authority_shadow_outbox(

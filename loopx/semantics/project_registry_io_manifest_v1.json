@@ -1118,8 +1118,8 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>.local_authority_shadow_status::codec_read:load_registry#1",
-      "line": 252,
+      "site": "loopx/control_plane/coordination/local_authority_shadow_readback.py::<module>.local_authority_shadow_status::codec_read:load_registry#1",
+      "line": 84,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
