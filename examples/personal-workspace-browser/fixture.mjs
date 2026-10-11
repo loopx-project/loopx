@@ -491,6 +491,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     // Applied User action outcomes, so the needs-you projection reads back like canonical status.
     userActionOutcomes: new Map(),
     hostThreadActivity: {},
+    /** Scenario hook applied to every status payload after the shared fixture rules. */
+    transformStatus: null,
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -762,6 +764,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
       if (goal) goal.host_thread_activity = activity;
     }
+    state.transformStatus?.(fixture);
     fixture.run_history.goals = fixture.run_history.goals.filter(goal => !state.deletedGoalIds.has(goal.id));
     const goalActivationScope = new URL(route.request().url()).searchParams.get("goal_activation");
     const isActiveScope = goalActivationScope === "active";

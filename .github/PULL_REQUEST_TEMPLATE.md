@@ -120,6 +120,7 @@ even when the underlying access was authorized.
 - States and viewports shown:
 - Source data: <!-- choose one: none | synthetic | public_fixture -->
 - Attention review: <!-- Per docs/development/design.md: what earns its place through high-value information, essential interaction, or expressive visual presentation? Name consolidation/removal across the whole viewport, and how failures, uncertainty, and one-step controls remain available. -->
+- Craft review: <!-- Per docs/development/design.md#craft-review, judged on showcase-workspace screenshots: one hero, no grouping-only cards, designed loading/unknown/failure states, motion by token, status glyph family, no new raw hex. -->
 
 ## Type of Change
 

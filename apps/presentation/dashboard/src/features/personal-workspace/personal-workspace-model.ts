@@ -8,6 +8,7 @@ import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
 import type { TodoItem } from "../../data/status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import type { DigestAttentionSummary } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
@@ -168,6 +169,8 @@ export type WorkspaceGoal = {
   boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  /** Open agent Todo count projected beside a possibly bounded item list. */
+  openTodoCount?: number;
   execution?: WorkspaceGoalExecution;
   goalId: string;
   /** Bound host threads as observed from the host's own records. */
@@ -175,6 +178,7 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
   state: WorkspaceGoalState;

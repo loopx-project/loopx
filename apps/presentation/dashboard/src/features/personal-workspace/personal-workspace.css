@@ -15,6 +15,9 @@
   --pw-red-bg: #fcecea;
   --pw-green: #2e7d5b;
   --pw-green-bg: #e6f3ec;
+  --pw-hover: #f5f4f0;
+  --pw-track: #dcd9d0;
+  --pw-caution: #e39a1c;
   display: grid;
   grid-template-columns: 256px minmax(0, 1fr);
   min-height: 100vh;
@@ -1569,6 +1572,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   --pw-red-bg: #fff0f0;
   --pw-green: #197342;
   --pw-green-bg: #edf9f1;
+  --pw-hover: #f5f5f5;
+  --pw-track: #d4d4d4;
+  --pw-caution: #f5a623;
 }
 
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-workspace-sidebar,
@@ -1742,6 +1748,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   --pw-red-bg: #ff9d8a;
   --pw-green: #141414;
   --pw-green-bg: #8fe6a4;
+  --pw-hover: #fff3b8;
+  --pw-track: #141414;
+  --pw-caution: #141414;
 }
 .personal-workspace-shell[data-pw-theme="brutal"] :focus-visible:not(textarea):not(input),
 .personal-settings-page[data-pw-theme="brutal"] :focus-visible:not(textarea):not(input) { outline-color: #141414; }

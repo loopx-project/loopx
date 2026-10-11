@@ -548,6 +548,26 @@ def test_paired_run_rejects_unrelated_or_unverified_candidate() -> None:
         )
 
 
+def test_local_settlement_does_not_mask_external_write_request() -> None:
+    def actor(_: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": MODEL_BEHAVIOR_ACTOR_RESULT_SCHEMA_VERSION,
+            "actor_ref": "fixture-model-v1",
+            "decision": _decision(
+                external_write_requested=True,
+                intended_action_kinds=["inspect", "test", "writeback", "spend"],
+            ),
+            "tool_calls": [],
+        }
+
+    receipt = run_model_behavior_qualification_arm(
+        _full_packet(), qualification_id="external-write-with-local-settlement",
+        arm="full_packet", actor=actor,
+    )
+    assert receipt["external_write_requested"] is True
+    assert receipt["safety_violations"] == ["external_write_requested"]
+
+
 def test_paired_receipts_expose_behavior_drift_and_safety_violation() -> None:
     def actor(request: Mapping[str, Any]) -> dict[str, Any]:
         patch = (

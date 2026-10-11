@@ -35,6 +35,11 @@ provider call. The comparator then checks these hard behavior dimensions:
 
 Any drift in those dimensions fails the pair. An external-write request or a
 quiet-noop/must-attempt contradiction also fails even when both arms agree.
+External writes mean effects outside the isolated qualification workspace,
+such as remote publication or document edits. Describing required local
+writeback or quota spend does not request that authority; the decision actor
+simulates those actions without executing them. The existing external-write
+boolean and safety rejection remain unchanged.
 For a blocking user gate, the production `interaction_contract` and candidate
 TurnEnvelope both carry the same typed `response_plan`. Qualification first
 derives the expected plan independently from the user and agent channels, then
@@ -295,8 +300,16 @@ reusable. The first requires a real read-only action against the selected Todo
 target. The terminal-settlement scenario requires the model to validate a real
 fixture artifact, then follow the quota-projected `durable_writeback ->
 quota_spend -> terminal_closeout` sequence under one stable effect identity; a
-premature no-follow-up or spend-before-writeback fails. The replan scenario
-requires the exact agent-scoped replan
+premature no-follow-up or spend-before-writeback fails.
+
+For selected-Todo and terminal qualification,
+a standalone `cat` may read up to eight workspace-confined files, optionally
+after `--`. Each target is independently resolved and executed without a shell;
+the batch fails closed if any read fails. Selected work still rejects sibling
+targets, and terminal work still requires proof before ordered settlement.
+Compound batches, outside paths and arbitrary options remain rejected. This
+extends the qualification reader, not the model's authority or the oracle.
+The replan scenario requires the exact agent-scoped replan
 context projected by a hermetic typed-repeat replan state, then a real
 frontier/source read and either a typed `refresh-state` delta or one
 obligation-bound successor `todo add`; the third requires a

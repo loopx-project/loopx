@@ -1913,6 +1913,9 @@ export const typedActionsScenario = {
       if (monitorShortcut?.normalized_parameters.target !== "检查当前 Goal 的阻塞、进度与新产出") throw new Error(`定时检查快捷方式未回落到本地化默认检查目标：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeMonitorShortcut) throw new Error("定时检查快捷方式在确认前写入了持久状态");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
+      if (await page.locator(".personal-composer-tools").getAttribute("open") === null) {
+        throw new Error("Closing a configuration draft lost the open shortcut menu across composer folding");
+      }
       await page.getByRole("button", {name: "配置定时检查"}).click();
       const monitorForm = page.getByRole("dialog", {name: "配置定时检查", exact: true});
       const previewsBeforeUnsupportedSchedule = api.actionPreviews.length;

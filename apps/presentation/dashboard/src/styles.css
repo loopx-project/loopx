@@ -36,6 +36,12 @@
   --leading-title: 2rem;
   --leading-display: 2.5rem;
   --leading-prose: 1.7;
+  /* Motion explains a state change; durations follow docs/development/design.md#motion. */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-section: 280ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   font-family: var(--font-sans);
 }
 

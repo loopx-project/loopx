@@ -114,8 +114,9 @@ def _reentry_quota_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
 
 
 @pytest.mark.parametrize("cat_options", ["", "-- "])
+@pytest.mark.parametrize("batch_read", [False, True])
 def test_real_tool_loop_settles_final_todo_after_spend(
-    tmp_path: Path, cat_options: str,
+    tmp_path: Path, cat_options: str, batch_read: bool,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
     transport = ScriptedDoubaoExecTransport(
@@ -126,7 +127,11 @@ def test_real_tool_loop_settles_final_todo_after_spend(
                     "turn-test-001",
                 )
             ),
-            ScriptedExecToolAction(command=f"cat {cat_options}fixture/settlement-proof.json"),
+            ScriptedExecToolAction(command=(
+                f"cat {cat_options}.codex/goals/terminal-settlement-fixture/ACTIVE_GOAL_STATE.md "
+                "fixture/settlement-proof.json"
+                if batch_read else f"cat {cat_options}fixture/settlement-proof.json"
+            )),
             _writeback_action,
             _spend_action,
             _terminal_action,
@@ -184,7 +189,10 @@ def test_real_tool_loop_settles_final_todo_after_spend(
     )
 
 
-def test_tool_loop_rejects_terminal_closeout_before_spend(tmp_path: Path) -> None:
+@pytest.mark.parametrize("batch_read", [False, True])
+def test_tool_loop_rejects_terminal_closeout_before_spend(
+    tmp_path: Path, batch_read: bool,
+) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
     transport = ScriptedDoubaoExecTransport(
         [
@@ -194,7 +202,11 @@ def test_tool_loop_rejects_terminal_closeout_before_spend(tmp_path: Path) -> Non
                     "turn-test-001",
                 )
             ),
-            ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+            ScriptedExecToolAction(command=(
+                "cat -- .codex/goals/terminal-settlement-fixture/ACTIVE_GOAL_STATE.md "
+                "fixture/settlement-proof.json"
+                if batch_read else "cat fixture/settlement-proof.json"
+            )),
             _terminal_action,
         ]
     )
@@ -228,7 +240,10 @@ def test_tool_loop_rejects_terminal_closeout_before_spend(tmp_path: Path) -> Non
     }
 
 
-def test_tool_loop_rejects_spend_before_writeback(tmp_path: Path) -> None:
+@pytest.mark.parametrize("batch_read", [False, True])
+def test_tool_loop_rejects_spend_before_writeback(
+    tmp_path: Path, batch_read: bool,
+) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
     transport = ScriptedDoubaoExecTransport(
         [
@@ -238,7 +253,11 @@ def test_tool_loop_rejects_spend_before_writeback(tmp_path: Path) -> None:
                     "turn-test-001",
                 )
             ),
-            ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+            ScriptedExecToolAction(command=(
+                "cat -- .codex/goals/terminal-settlement-fixture/ACTIVE_GOAL_STATE.md "
+                "fixture/settlement-proof.json"
+                if batch_read else "cat fixture/settlement-proof.json"
+            )),
             _spend_action,
         ]
     )
@@ -254,6 +273,31 @@ def test_tool_loop_rejects_spend_before_writeback(tmp_path: Path) -> None:
     assert receipt["qualification_passed"] is False
     assert receipt["failure_code"] == "quota_spend_before_writeback"
     assert receipt["settlement_receipt_steps"] == []
+
+
+@pytest.mark.parametrize("read_command", [
+    "cat -- fixture/missing.json fixture/settlement-proof.json",
+    "cat -- fixture/settlement-proof.json fixture/missing.json",
+])
+def test_batch_read_failure_cannot_admit_terminal_writeback(
+    tmp_path: Path, read_command: str,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle")
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command.replace(
+            '"${LOOPX_TURN:?}"', "turn-test-001",
+        )),
+        ScriptedExecToolAction(command=read_command),
+        _writeback_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(
+        qualification_id="terminal-batch-read-failure", fixture_root=tmp_path / "actor",
+    )
+    assert receipt["qualification_passed"] is False
+    assert receipt["settlement_receipt_steps"] == []
+    assert len(transport.requests) == 2
 
 
 def test_real_rejection_loop_settles_projected_todos_then_stops(

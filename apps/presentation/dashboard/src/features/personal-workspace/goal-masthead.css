@@ -1,0 +1,85 @@
+.goal-masthead-breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0 0 2px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-masthead-breadcrumb svg { flex: none; color: var(--pw-faint); }
+.goal-masthead-breadcrumb button { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; transition: color var(--motion-fast) var(--ease-standard); }
+.goal-masthead-breadcrumb button:hover { color: var(--pw-text); }
+.goal-masthead-breadcrumb [aria-current] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.goal-lifecycle-control { position: relative; flex: none; }
+.goal-lifecycle-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; font-family: inherit; font-size: var(--text-body); font-weight: 500; line-height: var(--leading-body); white-space: nowrap; transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard); }
+.goal-lifecycle-trigger:hover:not(:disabled) { border-color: var(--pw-line-strong); background: var(--pw-hover); }
+.goal-lifecycle-trigger:disabled { color: var(--pw-muted); cursor: progress; }
+.goal-lifecycle-trigger:focus-visible, .goal-lifecycle-confirm button:focus-visible, .goal-vital:focus-visible, .goal-masthead-breadcrumb button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.goal-lifecycle-confirm { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: min(340px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); box-shadow: 0 12px 32px rgb(0 0 0 / 8%), 0 1px 2px rgb(0 0 0 / 6%); transform-origin: top right; animation: goal-popover-enter var(--motion-base) var(--ease-out); }
+.goal-lifecycle-confirm strong { display: block; color: var(--pw-text); font-size: var(--text-body); font-weight: 600; line-height: var(--leading-body); }
+.goal-lifecycle-confirm p { margin: 6px 0 14px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); white-space: normal; }
+.goal-lifecycle-confirm div { display: flex; justify-content: flex-end; gap: 8px; }
+.goal-lifecycle-confirm button { min-height: 34px; padding: 0 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; font-family: inherit; font-size: var(--text-caption); font-weight: 500; }
+.goal-lifecycle-confirm button.is-primary { border-color: var(--pw-text); background: var(--pw-text); color: var(--pw-card); }
+
+/* A stat row, not a table: values carry the weight, labels recede beneath them. */
+.goal-vitals { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)) auto; column-gap: 8px; border-bottom: 1px solid var(--pw-line); padding: 4px 16px 8px; }
+.goal-vital { position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-width: 0; min-height: 60px; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--pw-text); cursor: pointer; font-family: inherit; text-align: left; transition: background-color var(--motion-fast) var(--ease-standard); }
+.goal-vital:hover { background: var(--pw-hover); }
+.goal-vital-value { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; font-size: var(--text-heading); font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: -0.02em; line-height: var(--leading-heading); text-overflow: ellipsis; white-space: nowrap; }
+.goal-vital-value small { color: var(--pw-faint); font-size: var(--text-body); font-weight: 500; letter-spacing: 0; }
+.goal-vital-meta { display: flex; align-items: baseline; gap: 0; width: 100%; min-width: 0; overflow: hidden; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); white-space: nowrap; }
+.goal-vital-label { flex: none; font-weight: 500; }
+.goal-vital-sub { min-width: 0; overflow: hidden; color: var(--pw-faint); text-overflow: ellipsis; }
+.goal-vital-sub::before { content: "·"; padding: 0 5px; }
+.goal-vital.is-danger .goal-vital-value { color: var(--pw-red); }
+.goal-vital.is-recede .goal-vital-value { color: var(--pw-faint); font-weight: 500; }
+.goal-vital-partial { color: var(--pw-amber); }
+.goal-vital-swap { display: inline-block; min-width: 0; overflow: hidden; text-overflow: ellipsis; animation: goal-value-swap var(--motion-base) var(--ease-out); }
+.goal-vitals-scope { align-self: center; padding-left: 12px; color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-caption); white-space: nowrap; }
+
+/* One glyph per state: filled dot (settled), hollow ring (waiting or stopped), spinning arc (observed live). */
+.goal-vital-dot { --goal-dot: var(--pw-track); position: relative; flex: none; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; background: var(--goal-dot); }
+.goal-vital.is-running .goal-vital-dot { --goal-dot: var(--pw-blue); }
+.goal-vital.is-attention .goal-vital-dot { --goal-dot: var(--pw-caution); }
+.goal-vital.is-danger .goal-vital-dot { --goal-dot: var(--pw-red); }
+.goal-vital.is-waiting .goal-vital-dot, .goal-vital.is-queued .goal-vital-dot { border: 1.5px solid var(--pw-muted); background: transparent; }
+.goal-vital.is-stopped .goal-vital-dot { border: 1.5px solid var(--pw-faint); background: transparent; }
+.goal-vital-dot.is-live { width: 14px; height: 14px; border: 1.5px solid color-mix(in srgb, var(--goal-dot) 28%, transparent); background: transparent; }
+.goal-vital-dot.is-live::before { position: absolute; inset: 2.5px; border-radius: 50%; background: var(--goal-dot); content: ""; }
+.goal-vital-dot.is-live::after { position: absolute; inset: -1.5px; border: 1.5px solid transparent; border-top-color: var(--goal-dot); border-radius: 50%; content: ""; animation: pw-spin 1s linear infinite; }
+
+.goal-work-ribbon { display: flex; gap: 2px; width: 100%; height: 3px; margin-top: 4px; }
+.goal-work-ribbon i { display: block; min-width: 3px; border-radius: 2px; background: var(--pw-track); transition: flex-grow var(--motion-section) var(--ease-out); }
+.goal-work-ribbon .is-done { background: var(--pw-text); }
+.goal-work-ribbon .is-running_observed { background: var(--pw-blue); }
+.goal-work-ribbon .is-waiting_dependency { background: repeating-linear-gradient(90deg, var(--pw-faint) 0 3px, transparent 3px 5px); }
+.goal-work-ribbon .is-blocked { background: var(--pw-amber); }
+.goal-work-ribbon .is-deferred { background: var(--pw-line); }
+
+.goal-vital-skeleton { cursor: default; gap: 8px; }
+.goal-vital-skeleton i { display: block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, var(--pw-line) 0%, var(--pw-hover) 50%, var(--pw-line) 100%) 0 0 / 200% 100%; animation: goal-skeleton 1.4s ease-in-out infinite; }
+.goal-vital-skeleton i:first-child { width: 64%; height: 18px; }
+.goal-vital-skeleton i:last-child { width: 40%; }
+
+@keyframes goal-popover-enter { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+@keyframes goal-value-swap { from { opacity: 0; transform: translateY(3px); } }
+@keyframes goal-skeleton { to { background-position: -200% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .goal-lifecycle-confirm, .goal-vital-swap, .goal-vital-skeleton i, .goal-vital-dot.is-live::after { animation: none; }
+}
+
+@media (max-width: 1199px) {
+  .goal-vitals { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .goal-vitals-scope { display: none; }
+}
+
+@media (max-width: 900px) {
+  .goal-vitals { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 4px 8px 8px; }
+  .goal-vital { min-height: 56px; padding: 6px 10px; }
+}
+
+@media (max-width: 640px) {
+  .goal-masthead-breadcrumb { display: none; }
+  .goal-lifecycle-trigger { width: 36px; padding: 0; justify-content: center; }
+  .goal-lifecycle-trigger span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .goal-vitals { column-gap: 0; padding: 2px 4px 6px; }
+  .goal-vital { min-height: 48px; padding: 6px 8px; }
+  .goal-vital-value { font-size: var(--text-lead); line-height: var(--leading-lead); }
+  .personal-channel:has(.personal-channel-scroll:not([data-active-goal-view="overview"])) .goal-vital-sub { display: none; }
+}

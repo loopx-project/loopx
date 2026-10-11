@@ -13,7 +13,21 @@
 .delivery-review-toolbar > div, .delivery-chain-toolbar > div, .delivery-source-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .delivery-review-toolbar button, .delivery-source-actions button { display: inline-flex; gap: 8px; align-items: center; }
 .delivery-snapshot-time, .delivery-boundary, .delivery-chain-toolbar > span { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.delivery-notice { border: 1px solid var(--pw-line); border-left: 3px solid var(--pw-amber, #a96500); border-radius: 6px; padding: 12px 16px; font-size: var(--text-body); line-height: var(--leading-body); }
+.delivery-notice { border-radius: 6px; padding: 10px 14px; background: var(--pw-hover, var(--pw-card)); color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
+/* A region failure stays visible and announced, sized to one line rather than a banner. */
+.delivery-notice.is-error { display: flex; align-items: center; gap: 8px; padding: 0; background: none; }
+.delivery-notice.is-error svg { flex: none; color: var(--pw-amber, #a96500); }
+.delivery-loading { display: grid; gap: 10px; padding: 4px 0; }
+.delivery-loading i { display: block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, var(--pw-line) 0%, var(--pw-hover, var(--pw-card)) 50%, var(--pw-line) 100%) 0 0 / 200% 100%; animation: delivery-skeleton 1.4s ease-in-out infinite; }
+.delivery-loading i:nth-child(1) { width: 42%; }
+.delivery-loading i:nth-child(2) { width: 68%; }
+.delivery-loading i:nth-child(3) { width: 54%; }
+.goal-overview .delivery-review { padding-top: 24px; border-top: 1px solid var(--pw-line); }
+.goal-overview .delivery-review-toolbar h2 { font-size: var(--text-lead); line-height: var(--leading-lead); }
+.goal-overview .delivery-review-toolbar button { border-color: transparent; background: transparent; color: var(--pw-muted); transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); }
+.goal-overview .delivery-review-toolbar button:hover:not(:disabled) { background: var(--pw-hover, var(--pw-card)); color: var(--pw-text); }
+@keyframes delivery-skeleton { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .delivery-loading i { animation: none; } }
 .delivery-notice dl { display: flex; gap: 8px 24px; flex-wrap: wrap; margin: 12px 0 0; }
 .delivery-notice dl > div { display: flex; gap: 8px; }
 .delivery-notice dd { margin: 0; font-weight: 600; }

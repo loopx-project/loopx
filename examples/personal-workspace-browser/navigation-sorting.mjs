@@ -142,8 +142,9 @@ export const navigationSortingScenario = {
       const overview = page.locator(".goal-overview");
       if (await overview.locator(".goal-overview-attention").count()) throw new Error("A quiet Goal still reserved a full attention card");
       if (await overview.getByRole("button", { name: /查看任务|查看成果/ }).count()) throw new Error("Overview duplicated adjacent tab navigation");
-      const unknownUsage = await overview.locator(".goal-overview-usage dd").allInnerTexts();
-      if (unknownUsage.length !== 3 || unknownUsage.some(value => value !== "未采集")) throw new Error(`Unknown usage became a zero or disappeared: ${unknownUsage}`);
+      const usageVitals = page.getByTestId("goal-vitals").locator(".goal-vital").filter({ has: page.locator(".goal-vital-label", { hasText: /^(Agent 用时|成本)$/ }) });
+      const unknownUsage = await usageVitals.evaluateAll(cells => cells.map(cell => `${cell.querySelector(".goal-vital-value")?.textContent}|${cell.querySelector(".goal-vital-sub")?.textContent}`));
+      if (unknownUsage.length !== 2 || unknownUsage.some(value => value !== "—|未采集")) throw new Error(`Unknown usage became a zero or disappeared: ${unknownUsage}`);
       await overview.getByRole("alert").filter({ hasText: "交付快照读取失败" }).waitFor({ state: "visible" });
       await overview.getByText("验收观测不可用，Goal 是否达成仍未知。", { exact: true }).waitFor({ state: "visible" });
       await goalNav.getByRole("button", { name: "成果", exact: true }).click();

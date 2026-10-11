@@ -353,6 +353,108 @@ Do not mix marketing pills and application squares in the same control group.
 Do not shrink diagrams or code until they become illegible. Reflow or enable
 bounded horizontal scrolling.
 
+## Target Compositions
+
+The rules above say what to avoid. This section says what a finished
+operator surface looks like, so a change can be judged against a composition
+rather than only against a list of prohibitions. Each pattern names the
+mechanism; copy the mechanism, not another product's styling.
+
+### Goal workspace: a document, not a card grid
+
+From top to bottom, one reading column with an optional right rail:
+
+1. **Masthead.** Breadcrumb, title, one context line (agents, repository) and
+   the single consequential control (Stop / Resume). Nothing else competes.
+2. **Vitals.** At most six stats in one row. The value carries the weight
+   (heading size, tabular numerals); the label and its qualifier sit beneath
+   in one caption line. No cell borders: spacing separates stats, one hairline
+   separates the row from the page. Unknown is an em dash with its reason,
+   never zero.
+3. **One hero.** On the Overview, the Goal's objective is set as heading-size
+   prose without a card around it, followed by a segmented criteria meter and
+   a hairline checklist. Everything below the hero recedes: smaller headings,
+   ghost controls, a hairline instead of another bordered panel.
+4. **Owner rail.** What needs the owner sits beside the hero as a hairline
+   list: glyph, the decision in owner language, relative age, an arrow that
+   opens it in place. A quiet Goal shows no empty rail.
+5. **Folded composer.** Reading views fold the composer to one line that
+   expands on request; conversation views keep it open.
+
+The browser scenario `goal-showcase`
+(`examples/personal-workspace-browser/goal-showcase.mjs`) renders this
+composition on the synthetic showcase workspace
+(`examples/personal-workspace-browser/showcase-workspace.mjs`): two agents,
+measured usage, an observed live turn, owner decisions, a partly verified
+contract and a delivery map. Take before/after screenshots from that state,
+not from placeholder fixtures.
+
+The same public synthetic workspace illustrates the composition below. The
+before view is the earlier masthead proposal; the after view uses the packaged
+Goal overview with the document hero, owner rail and folded composer. These
+are composition references, not installed-App or model-acceptance evidence.
+
+| View | Before | Proposed composition |
+| --- | --- | --- |
+| Desktop | ![Earlier desktop composition](assets/goal-workspace/before-desktop.png) | ![Goal overview on desktop](assets/goal-workspace/overview-desktop.png) |
+| Phone | ![Earlier phone composition](assets/goal-workspace/before-phone.png) | ![Goal overview on phone](assets/goal-workspace/overview-phone.png) |
+
+### Status glyphs
+
+One glyph per state across lists, vitals and maps; color is the second signal.
+
+| State | Glyph | Color |
+| --- | --- | --- |
+| Settled / quiet | filled dot | track neutral |
+| Waiting or stopped | hollow ring | muted |
+| Observed live | ring with a core and a rotating arc | state color |
+| Verified | check in circle | green |
+| Failing | cross in circle | red |
+| Not yet verified | dashed circle | faint |
+| Owner decision | hand | caution |
+
+The rotating arc requires an observed active turn (see "Liveness comes from
+observation"). Reduced motion stops the arc; the ring and core still read live.
+
+### States that are designed, not defaulted
+
+- **Loading** holds the final geometry with a quiet skeleton; a region does
+  not collapse to one spinner and then jump.
+- **Region failure** is one announced line (icon, plain cause, how to retry)
+  sized to its content. Reserve banners for a whole-surface failure.
+- **Unknown** stays visible as "—" with its reason; it never becomes zero or
+  disappears.
+
+### Motion vocabulary
+
+Tokens live in the Dashboard root: `--motion-fast` (120ms controls),
+`--motion-base` (200ms state swaps), `--motion-section` (280ms panels),
+`--ease-out` and `--ease-standard`.
+
+- A changed value swaps with a short fade and 3px rise; a view panel enters
+  with opacity and 4px.
+- Values use the short swap transition while their text changes directly to
+  the new observation. Do not interpolate task counts, decisions, time or money:
+  intermediate text would invent a state. Goal and usage-window changes, unknown
+  values and reduced motion retain the same exact observation semantics.
+- New list rows enter with opacity and a 4px rise; row arrows nudge 2px on hover.
+- Infinite motion is reserved for an observed live state or an in-flight read.
+
+### Reference research
+
+References inspected in October 2026: the LobeHub creator walkthrough shows
+composition; the Up.computer video was sampled for expansion and status changes;
+Linear documents its review interaction; Agent Dashboard describes planned
+behavior in a design specification. These are research inputs, not approved
+design sources or evidence that LoopX has shipped the same interaction.
+
+| Reference | Mechanism adopted | Not adopted |
+| --- | --- | --- |
+| LobeHub Goal and task detail ([source](https://github.com/lobehub/lobehub), [public walkthrough](https://x.com/arvin17x/status/2108966992149713125)) | Document layout; value-over-label stat row; objective as body prose; one glyph family with an animated running ring; four grey text levels; inline expansion of a failed row | Dark-first chrome; graph as a default view at high fan-out |
+| Linear Reviews ([official interaction](https://linear.app/docs/diffs), [creator post](https://x.com/artman/status/2107130290053447824)) | Quiet segmented view switch; hairline file list with compact counts; generous reading column beside dense data | Code-review specific structure |
+| Up.computer ([launch video](https://x.com/krl_grn/status/2107478644226396339)) | Status word as a quiet prefix in a list ("Working"); collapsible "worked for" and tool-call steps; composer with model and permission inline | Parallel chat panes as the primary layout |
+| Agent Dashboard design spec ([source](https://github.com/wildware-uk/agent-dashboard/blob/main/docs/superpowers/specs/2026-08-25-agent-dashboard-design.md)) | New items animate in; an "N new" affordance instead of moving the reader; pending decisions pinned above the feed | Name-hashed avatar colors as identity |
+
 ## UI Reproduction Workflow
 
 For feature development, carry one user task through the
@@ -406,3 +508,15 @@ parity is required. Framework migration alone must not alter the UI.
 - [ ] English and Chinese content remain usable.
 - [ ] Screenshots are provided for first-screen or fidelity-sensitive changes.
 - [ ] No private data or local paths enter the UI or screenshots.
+
+### Craft review
+
+Run these against before/after screenshots of the showcase workspace, not a
+placeholder fixture:
+
+- [ ] The viewport has one hero; secondary regions visibly recede.
+- [ ] No bordered card exists only to group; a hairline or spacing would do.
+- [ ] Loading, empty, unknown and failed states are designed and sized to content.
+- [ ] Changed values and entering rows move once, by token; idle content is still.
+- [ ] Glyphs follow the status glyph family; color is never the only signal.
+- [ ] Touched stylesheets use theme tokens, not new raw hex values.

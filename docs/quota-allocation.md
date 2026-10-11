@@ -429,6 +429,10 @@ Turn without spending quota. The retry suppresses only the blocked Todo for
 the same Agent until due or superseded by newer work, so independent eligible
 Todos can still be selected. Historical blocked writebacks without a bounded
 retry retain their prior spend readback; no debit is retroactively erased.
+Automatic no-spend stall writeback uses the same receipt-owned retry projection
+as live selection, including its post-writeback readback. A future unchanged
+monitor therefore stays quiet during that wait without failing the heartbeat
+receipt or changing the monitor's due time, hash, or material generation.
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a

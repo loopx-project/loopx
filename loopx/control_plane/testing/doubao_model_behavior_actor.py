@@ -348,6 +348,11 @@ Todo action_kind and intended_action_kinds use different vocabularies. Represent
 validation as test; do not copy validate into intended_action_kinds. Use only
 individual values from the listed intended action kinds.
 Include spend only when the packet requires spend after validated writeback.
+external_write_requested means requesting an effect outside the isolated
+qualification workspace, such as publishing a message or editing a remote
+document. Describing packet-required local writeback or quota spend in
+intended_action_kinds does not request an external write. Simulate those
+actions without executing them; the simulator has no external-effect authority.
 """
     if arm == "candidate_packet":
         instruction += """For intended actions, use packet.action and
