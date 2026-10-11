@@ -529,6 +529,16 @@ writer module**, line editor and four capture producers from a copy of the
 installed package. It covers original creation replay, update, completion,
 supersede/archive, leased settlement, restart recovery and provider loss.
 Retained Markdown interruption/capture tests guard the compatibility arm.
+The cold-import CLI oracle also removes that whole writer and line editor
+before preparing and applying a reviewed source backup. After import, real
+File/SQLite CLI operations reject an unleased edit, acquire a fresh lease,
+update imported work and create new work. Original import recovery and Todo
+operation replay preserve the current complete records, archived evidence and
+provider revision after the source display is removed. Losing the provider
+refuses recovery without creating a replacement; restoring its original bytes
+recovers both imported and later writes. This composes the migration and writer
+isolation boundaries; the historic facade and still-live capture adapters remain
+in the post-import mutation arm.
 Reverting the code move requires no data conversion or receipt rewriting.
 Whole-writer retirement still needs the declared support cutoff, last callers
 and pending outbox disposition; this separation does not force an upgrade or
@@ -541,6 +551,12 @@ canonical CLI 注册及 provider 操作不加载它；这只是机械隔离，�
 安装包副本物理移除整个 writer、行编辑器及四个 capture producer 后，真实
 File/SQLite CLI 验证生命周期、租约结算、重启与 provider 失效恢复。未迁移
 Markdown 的中断／capture 反例继续保留，代码回滚不转换数据或重写回执。
+冷导入 CLI 检查在审核备份、准备及应用前也移除整个 writer 和行编辑器，随后
+真实 File/SQLite CLI 拒绝无租约编辑、取得新租约、更新导入任务并新增任务。
+删除显示源后，原导入恢复和 Todo 原操作重放保留完整的新旧记录、归档证据及
+当前 provider revision；provider 丢失时明确拒绝，不重建空库，恢复原字节后
+新旧写入仍可读。该旅程组合迁移及 writer 隔离边界；迁移后的 mutation 检查
+仍保留历史 facade 和有真实调用的 capture 适配器。
 bootstrap、handoff、team-plan 和 Monitor 的旧源调用尚须分别退役，最终删除仍须
 支持截止及 outbox 处置；本批不强制升级或更改 provider 默认值。
 

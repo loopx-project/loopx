@@ -49,7 +49,10 @@ Goal 保持已记录的选择。见[配置及关闭契约](../../reference/local
 canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 `todos/mutation_api.py`；历史导入改为惰性，未迁移 writer 隔离在
 `todos/legacy_mutation.py`。安装态 File/SQLite 检查可物理移除整个 writer，验证
-生命周期及结算恢复。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
+生命周期及结算恢复。冷导入检查进一步组合审核导入、新租约下的更新／新增写入、
+原操作恢复，并保持整个 writer 不存在；显示源丢失或 provider 中断不能替换
+当前 authority 或抹去后续写入。原导入 cursor 仍是历史回执，当前 provider
+revision 保持。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
 
