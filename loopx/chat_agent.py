@@ -1351,16 +1351,27 @@ class CodexChatAgentSession:
         """
         deadline = time.monotonic() + min(self.response_timeout_sec, 5.0)
 
-        def failed_turn() -> dict[str, Any] | None:
-            turns = list(self._control_items("thread/turns/list", {
-                "sortDirection": "desc", "itemsView": "summary",
-            }, deadline))
-            ids = [row.get("id") for row in turns]
-            if (not ids or any(not isinstance(value, str) or not value for value in ids)
-                    or len(set(ids)) != len(ids) or ids[0] != turn_id
-                    or any(row.get("status") not in {"completed", "interrupted", "failed"}
-                           for row in turns) or turns[0].get("status") != "failed"):
-                return None
+        def failed_turn(*, await_terminal: bool = False) -> dict[str, Any] | None:
+            while True:
+                turns = list(self._control_items("thread/turns/list", {
+                    "sortDirection": "desc", "itemsView": "summary",
+                }, deadline))
+                ids = [row.get("id") for row in turns]
+                if (not ids or any(not isinstance(value, str) or not value for value in ids)
+                        or len(set(ids)) != len(ids) or ids[0] != turn_id
+                        or any(row.get("status") not in {"completed", "interrupted", "failed"}
+                               for row in turns[1:])):
+                    return None
+                if turns[0].get("status") == "failed":
+                    break
+                # The native error notification can precede its persisted
+                # failed Turn. A provisional interrupted snapshot has no
+                # completion timestamp or error yet. Wait within the same
+                # readback deadline; never dispatch from this interim state.
+                if (not await_terminal or turns[0].get("status") not in {"inProgress", "interrupted"}
+                        or turns[0].get("completedAt") is not None or turns[0].get("error") is not None):
+                    return None
+                self._control_wait(deadline)
             error = turns[0].get("error")
             info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
             if not isinstance(info, dict) or len(info) != 1:
@@ -1374,7 +1385,7 @@ class CodexChatAgentSession:
             return {"codex_error_info": {variant: {"httpStatusCode": status}}}
 
         try:
-            terminal = failed_turn()
+            terminal = failed_turn(await_terminal=True)
             if terminal is None:
                 return None
             with self._command_items_lock:

@@ -119,10 +119,12 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     "http401", "http429", "bad-status", "commandExecution", "fileChange", "dynamicToolCall",
     "mcpToolCall", "webSearch", "collabAgentToolCall", "futureItem", "delivery", "correction",
     "wrong-turn", "missing-data", "cursor-cycle", "new-turn", "late-tool", "changed-error",
+    "native-error-before-terminal", "pending-terminal", "interrupted", "completed",
 ])
 def test_transport_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
-        messages=queue.Queue(), thread_id="recovery-thread", work_dir=tmp_path)
+        messages=queue.Queue(), thread_id="recovery-thread", work_dir=tmp_path,
+        response_timeout_sec=.2)
     calls = []
     reads = 0
 
@@ -147,6 +149,10 @@ def test_transport_recovery_requires_complete_native_terminal_and_effect_readbac
             }}]}
             if fault == "new-turn":
                 result["data"].insert(0, {"id": "new-turn", "status": "inProgress"})
+            if fault == "pending-terminal" or (fault == "native-error-before-terminal" and reads == 1):
+                result["data"][0].update(status="interrupted", error=None, completedAt=None)
+            if fault in {"interrupted", "completed"}:
+                result["data"][0].update(status=fault, error=None, completedAt=1)
         else:
             assert method == "thread/items/list"
             item = {"id": "request", "type": "userMessage"}
@@ -169,10 +175,10 @@ def test_transport_recovery_requires_complete_native_terminal_and_effect_readbac
 
     monkeypatch.setattr(session, "_write", write)
     proof = session.transport_retry_readback("failed-turn")
-    if fault is None:
+    if fault in {None, "native-error-before-terminal"}:
         assert proof == {"thread_id": "recovery-thread", "turn_id": "failed-turn", "item_count": 2,
                          "codex_error_info": {"responseStreamDisconnected": {"httpStatusCode": None}}}
-        assert len(calls) == 4 and reads == 2
+        assert reads == (3 if fault else 2) and len(calls) == reads + 2
         assert "private fixture" not in json.dumps(proof)
     else:
         assert proof is None
