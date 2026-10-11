@@ -109,6 +109,22 @@ target that topic. Admission feedback, streamed posts, terminal edits and receip
 recovery use the existing delivery path with `source_thread` placement. A revoked
 binding or unreadable source prevents later result delivery.
 
+Disconnecting an external binding, or replacing its identity/context/grant,
+publishes the typed revocation before applying native exact Turn interruption.
+Its queued work is stopped before its active Turn, across the binding's topics
+and resumed Sessions; currently authorized peers keep running. Grant history
+remains readable. Reapplying an identical binding does not stop its work. The IO
+bridge waits outside the grant publication fence and reuses Core Turn control;
+it creates no queue, scheduler or provider authority. A stop failure leaves the
+grant revoked and reports that execution stop is unconfirmed. Retry disconnect
+for the old binding identity with the current revision to confirm that stop,
+including after a failed replacement. A claimed attached-host Turn still lacks
+push stop control: revocation reports that limitation, cancels its pending
+external work and preserves unrelated local Turns. Controlled synthetic
+Codex/provider regressions qualify these source semantics; installed/live host
+stopping, physical command cancellation and community release remain separate
+acceptance requirements.
+
 Group contexts always use `workspace_only` filesystem isolation, even when the
 owner's private project uses `host_default`. Only the selected read/write workspace
 grant is available. Personal portfolio, attached Agent selection, global skills,
