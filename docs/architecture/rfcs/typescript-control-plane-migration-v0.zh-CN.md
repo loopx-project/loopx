@@ -134,6 +134,12 @@ receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 p
 这闭合 T1/T2/L2 的一组真实终结 caller，剩余 leased metadata、executor fence 和 T4
 仍未完成。[语义、调用次数与回滚](../../reference/canonical-terminal-review.zh-CN.md)。
 
+Canonical completion 的后继 role/status 现在由同一 TS 事务 head 读取；Python
+只传声明的 ID 和 registry 意图，删除完整 Todo 复制及旧快照连接。后继状态改变后，
+原 receipt 重放仍返回原策略。本批只退役 canonical 的 Python join，保留未晋升
+writer 的真实源读取、私有 validation 适配和历史回执，不增加 RPC 或改变 provider/
+默认值。见[来源与恢复边界](../../reference/canonical-terminal-review.zh-CN.md#后继来源)。
+
 Canonical supersede 的 CLI/facade 现在把已有后继关联交给同一个 terminal owner。
 一次提交关联已声明的替代工作、退役原任务并释放原租约，取代先更新关联再 supersede
 的序列。回执恢复、source/actor/lease fence 和单向显示交付仍由既有 owner 负责。
