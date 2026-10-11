@@ -446,6 +446,26 @@ export const navigationSortingScenario = {
       if (await page.locator(".personal-digest-card").count()) throw new Error("A first-visit digest repeated attention counts without any new run results");
       pass(17, "Manager home omits the empty first-visit digest and redundant Agent worker strip.");
 
+      // An earlier completion notice must not clear a newer pending refresh.
+      await page.clock.install();
+      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      const refresh = page.getByRole("button", {name: "刷新状态", exact: true});
+      await refresh.click();
+      await page.locator(".personal-refresh-control.is-done").waitFor();
+      await page.clock.runFor(1000);
+      context.api.nextStatusDelayMs = 4000;
+      await refresh.click();
+      await page.locator(".personal-refresh-control.is-loading").waitFor();
+      await page.clock.runFor(900);
+      if (!await page.locator(".personal-refresh-control.is-loading").count()) {
+        throw new Error("An old completion timer cleared a newer pending refresh");
+      }
+      await page.locator(".personal-refresh-control.is-done").waitFor();
+      await page.clock.runFor(1800);
+      await page.locator(".personal-refresh-control.is-idle").waitFor();
+      await page.clock.resume();
+      pass(25, "Refresh feedback belongs to the current request, including an overlapping prior completion timer.");
+
     } finally {
       await context.close();
     }
