@@ -52,6 +52,9 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 生命周期及结算恢复。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
+保留的 import-compatible field writer 在既有 typed field plan 中统一等待条件
+归一化及矛盾 clear 拒绝；保持 Python 空白输入省略和锁内 IO，只退役重复的
+normalization crossing，不删除仍受支持的 writer 或迁移 reader。
 
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。

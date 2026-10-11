@@ -59,6 +59,10 @@ recovery. This prepares last-caller deletion without claiming code retirement:
 bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
+The retained import-compatible field writer now composes resume normalization
+and contradictory-clear rejection in its existing typed field plan. Keep blank
+Python input omission and locked IO; retire the duplicate normalization crossing,
+not the still-supported writer or migration reader.
 
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
