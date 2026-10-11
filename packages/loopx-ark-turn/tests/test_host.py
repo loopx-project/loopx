@@ -67,6 +67,10 @@ class Provider:
         self.fail_delete = False
         self.fail_create = False
         self.empty_forever = False
+        self.startup_events = []
+        self.environment_snapshot = {"id": "env-fixture", "type": "environment", "config": {"type": "cloud"}}
+        self.frozen_environment = None
+        self.session_extras = {"resources": [], "vault_ids": []}
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path.removeprefix("/api/v3")
@@ -82,15 +86,20 @@ class Provider:
         if path == "/agents" and req.method == "POST":
             if self.fail_create:
                 raise httpx.ReadTimeout("synthetic ambiguous create", request=req)
-            assert all(t["type"] == "custom" for t in body["tools"])
+            assert body["tools"][0]["type"] == "agent_toolset_20260701"
+            assert all(t["type"] == "custom" for t in body["tools"][1:])
             self.agent_snapshot = body
             return httpx.Response(200, json={"id": "agnt-fixture", "type": "agent", **body})
         if path == "/sessions" and req.method == "POST":
+            if "environment" in body and self.frozen_environment is None:
+                self.frozen_environment = {"id": "env-fixture", "config": body["environment"]["config"]}
             return httpx.Response(200, json={"id": "sesn-fixture", "type": "session", "status": "idle", "agent": {"id": "agnt-fixture"}, "environment_id": "env-fixture"})
+        if path == "/environments/env-fixture" and req.method == "GET":
+            return httpx.Response(200, json=self.environment_snapshot)
         if path == "/sessions/sesn-fixture" and req.method == "GET":
             if self.bad_capabilities:
                 self.agent_snapshot["tools"] = [{"type": "agent_toolset_20260701"}]
-            return httpx.Response(200, json={"id": "sesn-fixture", "type": "session", "status": "idle", "agent": {"id": "other" if self.bad_binding else "agnt-fixture", **self.agent_snapshot}, "environment_id": "env-fixture", "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0}})
+            return httpx.Response(200, json={"id": "sesn-fixture", "type": "session", "status": "idle", "agent": {"id": "other" if self.bad_binding else "agnt-fixture", **self.agent_snapshot}, "environment_id": "env-fixture", "environment": self.frozen_environment, **self.session_extras, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0}})
         if path.endswith("/events") and req.method == "POST":
             sent = body["events"][0]
             if sent["type"] == "user.custom_tool_result":
@@ -101,11 +110,11 @@ class Provider:
         if path.endswith("/events") and req.method == "GET":
             assert "after" not in req.url.params
             offset = int(req.url.params.get("page", "opaque-0").removeprefix("opaque-"))
-            history = [event("startup", "session.status_idle", stop_reason={"type": "end_turn"}),
+            history = [*self.startup_events, event("startup", "session.status_idle", stop_reason={"type": "end_turn"}),
                        event("e0", "user.message", session_thread_id="thread-root")]
             if not self.empty_forever:
                 history += self.before
-                if self.results or not self.before:
+                if self.results or not any(e["type"] == "agent.custom_tool_use" for e in self.before):
                     history += self.after
             page = history[offset:offset + 100]
             next_page = "opaque-" + str(offset + 100) if len(history) > offset + 100 else None
@@ -284,6 +293,79 @@ def test_ambiguous_create_is_not_automatically_retried(tmp_path):
     assert len(provider.calls) == 1
     receipt = json.loads(Receipt(cfg.state_dir, request()["turn_key"]).path.read_text())
     assert receipt["cleanup"]["unknown_creation"] == "reconcile_required"
+
+
+@pytest.mark.parametrize("path,builtins", [("/agents", False), ("/sessions", False), ("/sessions", True)])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_explicit_create_rejection_retires_only_acknowledged_resources(tmp_path, path, builtins, status):
+    cfg = replace(config(tmp_path, tools=False), sandbox_builtins=builtins)
+
+    class RejectedProvider(Provider):
+        def __call__(self, req):
+            if req.method == "POST" and req.url.path.removeprefix("/api/v3") == path:
+                self.calls.append((req.method, path, json.loads(req.content)))
+                return httpx.Response(status, json={"error": {"message": "synthetic invalid configuration"}})
+            return super().__call__(req)
+
+    provider = RejectedProvider([])
+    with pytest.raises(Exception):
+        asyncio.run(execute(provider, cfg))
+    receipt = json.loads(Receipt(cfg.state_dir, request()["turn_key"]).path.read_text())
+    expected_stage = "creating_agent" if path == "/agents" else "creating_session"
+    assert receipt["creation_rejection"] == {"stage": expected_stage, "status_code": status}
+    assert receipt["stage"] == expected_stage  # Never rewind the attempt.
+    assert "unknown_creation" not in receipt.get("cleanup", {})
+    assert provider.deleted == (set() if path == "/agents" else {"/agents/agnt-fixture"})
+    assert not any(p.endswith("/events") for _, p, _ in provider.calls)
+    before = len(provider.calls)
+    with pytest.raises(AdapterError, match="previous_attempt_requires_reconciliation"):
+        asyncio.run(execute(provider, cfg))
+    assert not any(method == "POST" for method, _, _ in provider.calls[before:])
+
+
+@pytest.mark.parametrize("rejection", [None, {"stage": "creating_session", "status_code": 400}])
+def test_creation_rejection_does_not_clear_existing_uncertainty(tmp_path, rejection):
+    cfg = config(tmp_path, tools=False)
+    receipt = Receipt(cfg.state_dir, request()["turn_key"])
+    receipt.data = {"stage": "creating_session", "agent_id": "agnt-fixture",
+                    "cleanup": {"unknown_creation": "reconcile_required"}}
+    if rejection:
+        receipt.data["creation_rejection"] = rejection
+    provider = Provider([])
+
+    async def attempt_cleanup():
+        from loopx_ark_turn.host import cleanup
+        async with AsyncArk(api_key="synthetic", base_url="https://fixture.invalid/api/v3",
+                            http_client=httpx.AsyncClient(transport=httpx.MockTransport(provider)), max_retries=0) as client:
+            return await cleanup(client, receipt)
+
+    assert asyncio.run(attempt_cleanup()) is False
+    assert receipt.data["cleanup"] == {"unknown_creation": "reconcile_required"}
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize("status", [408, 409, 429, 500])
+def test_uncertain_session_create_keeps_known_parent_for_reconciliation(tmp_path, status):
+    cfg = config(tmp_path, tools=False)
+
+    class UncertainProvider(Provider):
+        def __call__(self, req):
+            if req.method == "POST" and req.url.path.removeprefix("/api/v3") == "/sessions":
+                self.calls.append((req.method, "/sessions", json.loads(req.content)))
+                return httpx.Response(status, json={"error": {"message": "synthetic uncertain creation"}})
+            return super().__call__(req)
+
+    provider = UncertainProvider([])
+    with pytest.raises(Exception):
+        asyncio.run(execute(provider, cfg))
+    receipt = json.loads(Receipt(cfg.state_dir, request()["turn_key"]).path.read_text())
+    assert receipt["cleanup"]["unknown_creation"] == "reconcile_required"
+    assert "creation_rejection" not in receipt
+    assert provider.deleted == set()
+    before = len(provider.calls)
+    with pytest.raises(AdapterError, match="previous_attempt_requires_reconciliation"):
+        asyncio.run(execute(provider, cfg))
+    assert provider.calls[before:] == []
 
 
 def test_tool_budget_prevents_second_effect(tmp_path):
