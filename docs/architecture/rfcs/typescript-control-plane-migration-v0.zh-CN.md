@@ -109,6 +109,17 @@ wheel 删源检查须保留后来写入及原 successor；晋升后重放保持�
 producer module。
 见[保留义务及回滚](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation)。
 
+shadow 诊断现在有独立只读边界：历史 outbox 磁盘 codec 位于
+`local_authority_shadow_history.py`，status／candidate read transport 位于
+`local_authority_shadow_readback.py`。公开 status CLI 不加载源 producer；drain
+仍走现有 orchestration。原 entry 身份、损坏证据、cursor 残留和缺失 store 行为
+保持。Python 保留历史文件解码及展示 IO；TS 保留历史证明、投递与清理权限。
+旧 producer 的已有导入为支持调用方保留 alias，不复制实现。源码及正常 wheel
+的 File/SQLite 接收端检查，在 producer 存在／缺席两臂比较完整 status 响应和
+原文件字节。这是历史 reader 的退役前置，不代表 writer 删除、outbox 处置、
+安装 cohort 采用或发布默认资格。
+见[操作读回与回滚](../../reference/authority-observation-retirement.md#retained-readback-without-source-producers)。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 

@@ -61,6 +61,24 @@ can restart the old observer if its setting is still present, so clear the
 setting on installations that must not resume observation after rollback.
 No format rewrite or destructive data cleanup accompanies retirement.
 
+## Retained readback without source producers
+
+`authority-shadow status` reads retained outbox entries and candidate history
+through independent read-only modules. It remains available when the old source
+capture producers are absent. Pending prepared/committed files, cursor residue,
+invalid evidence and the original management binding remain visible. Residue
+counts are diagnostic hints: they do not authorize cleanup or prove delivery.
+A missing candidate stays missing; status never creates a replacement identity,
+repairs bytes, drains an outbox or grants a writer permission.
+
+The retained Python filesystem codecs preserve the existing wire and errors;
+candidate proof and drain effects remain in their TypeScript owners. Supported
+unpromoted writes and `authority-shadow drain` still need their current producer
+and orchestration modules. This separation permits eventual producer retirement
+without discarding historical readback, but does not itself authorize deletion
+or disposition of pending originals. Code rollback restores the previous import
+layout without changing data or restoring retired write authority.
+
 ## Why two matching reads were not a capture guarantee
 
 The observer sampled after the writer released its lock. Another writer could

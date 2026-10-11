@@ -136,6 +136,20 @@ not the supported legacy writer. The absent arm also removes all four shadow
 producer modules using the qualified CLI startup isolation above.
 [Retained duties and rollback](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation).
 
+Shadow diagnostics now have an independent read-only boundary: retained outbox
+disk codecs live in `local_authority_shadow_history.py`, and status/candidate
+read transport in `local_authority_shadow_readback.py`. The public status CLI
+does not load source producers; drain still uses its existing orchestration.
+Original entry identity, malformed evidence, cursor residue and missing-store
+behavior remain unchanged. Python retains historical filesystem decoding and
+presentation IO; TS retains history proof, delivery and cleanup authority.
+Existing producer imports are aliases for supported callers, not duplicate
+implementations. Source and normal-wheel File/SQLite recipient checks compare
+complete status results and unchanged original bytes with producers present or
+absent. This is a historical-reader exit prerequisite, not writer deletion,
+outbox disposition, installed cohort adoption or release-default qualification.
+See [operator readback and rollback](../../reference/authority-observation-retirement.md#retained-readback-without-source-producers).
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
