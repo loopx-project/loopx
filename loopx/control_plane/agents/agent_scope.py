@@ -35,7 +35,7 @@ from ..todos.todo_semantics import (
     todo_item_task_class,
     todo_presentation_sort_key,
 )
-from ..todos.summary_item import compact_todo_summary_item
+from ..todos.summary_item import compact_todo_summary_item, compact_todo_summary_items
 from ..todos.user_gate import (
     open_todo_count as _open_todo_count,
     open_user_gate_todo_items as _open_user_gate_todo_items,
@@ -712,8 +712,8 @@ def _agent_scope_deferred_resume_candidates(
         if identity in seen:
             continue
         seen.add(identity)
-        unique.append(compact_todo_summary_item(item, text=str(item.get("text") or "").strip()))
-    return sorted(unique, key=_todo_projection_sort_key)
+        unique.append(item)
+    return sorted(compact_todo_summary_items(unique, strip_text=True), key=_todo_projection_sort_key)
 
 
 def _agent_scope_monitor_blocked_resume_candidates(
@@ -753,11 +753,12 @@ def _agent_scope_monitor_blocked_resume_candidates(
         if identity in seen:
             continue
         seen.add(identity)
-        compact = compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
+        unique.append(item)
+    compacts = compact_todo_summary_items(unique, strip_text=True)
+    for item, compact in zip(unique, compacts, strict=True):
         if item.get("blocking_monitor_todo_id"):
             compact["blocking_monitor_todo_id"] = item["blocking_monitor_todo_id"]
-        unique.append(compact)
-    return sorted(unique, key=_todo_projection_sort_key)
+    return sorted(compacts, key=_todo_projection_sort_key)
 
 
 def _agent_scope_cleared_without_successor_handoff_gates(
@@ -887,7 +888,9 @@ def _agent_scope_route_continuation_replan_candidates(
         if not identity or identity in seen:
             continue
         seen.add(identity)
-        compact = compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
+        unique.append(item)
+    compacts = compact_todo_summary_items(unique, strip_text=True)
+    for item, compact in zip(unique, compacts, strict=True):
         compact["route_continuation_replan_required"] = True
         if item.get("route_continuation_reason") is not None:
             compact["route_continuation_reason"] = item.get("route_continuation_reason")
@@ -895,8 +898,7 @@ def _agent_scope_route_continuation_replan_candidates(
             compact["route_id"] = item.get("route_id")
         if item.get("route_key") is not None:
             compact["route_key"] = item.get("route_key")
-        unique.append(compact)
-    return sorted(unique, key=_todo_projection_sort_key)
+    return sorted(compacts, key=_todo_projection_sort_key)
 
 
 @dataclass(frozen=True)
@@ -1300,10 +1302,7 @@ def _other_agent_or_exhausted_frontier(
         extra_fields={
             "other_claimants": other_claimants,
             "blocking_handoff_claimants": blocking_claimants,
-            "other_agent_claimed_items": [
-                compact_todo_summary_item(item, text=str(item.get("text") or "").strip())
-                for item in other_items[:3]
-            ],
+            "other_agent_claimed_items": compact_todo_summary_items(other_items[:3], strip_text=True),
         },
     )
 
