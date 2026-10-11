@@ -266,7 +266,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | S3/S8 | 显式配置下已实现 | P0 硬化：有界读→语义 triage→ACK/replay；默认关闭与 provider 私有 cursor 保持 |
 | [Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | S3/S8 | 已接受；periodic-report 首个 vertical 已实现 | P1：R3 返回/后继复用 durable intent；hook 失败隔离，不能加入主事务或直接执行 effect |
 | [Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | S3/S6/S8 | 已接受；三 owner 集成仍待资格 | P1/P2：IM 投递、LoopX work authority、OV context 分离；断线重放/权限撤销/来源失效 |
-| [外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | S8/S11 | 已接受；已实现类型化 Core plan/admission/retirement 与 CLI 切片 | P1：用同一 provenance 回执分别验收一个 host-method 与一个 connector 的真实执行，再补 frontend/Lark 同源投影 |
+| [外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | S8/S11 | 已接受；已实现类型化 Core/CLI；[已运行有界 host-method 与公开来源 connector 复用](ledger/external-evidence-research-capability-v0/2026-10-11-host-provider-reuse.zh-CN.md) | P1：沿既有同源投影验收 provider 撤权/失败/恢复、带认证范围与真实 frontend/Lark 送达 |
 | [自动执行准入 v0](automatic-execution-admission-v0.zh-CN.md) | S7/S2/S4 | 已接受；本地候选，宿主未推广 | P0：App 调度建议下限优先；M2 原子启动/hook 验收，M3 设置验收 |
 | [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | S7/S5 | 已接受；Codex aggregate/cost 展示已有切片 | P0 观测→P1 多 provider：未知不作零、重复扣费去重、价格来源/时效；usage 不自动授权预算 |
 | [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | S5 | 已接受；action/attention 纵切及本地交付链/验收复盘已实现 | P1：跨渠道披露和受治理的修订/结算复盘；本地可见性不代表 G2 通过 |

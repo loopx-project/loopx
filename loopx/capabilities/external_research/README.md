@@ -115,6 +115,80 @@ TypeScript 是 discovery 真值边界、请求身份、provider 准入、provena
 退休条件的唯一语义 owner。Python 仅适配 CLI 与 effect-runtime transport。Managed
 Turn 复用同一方法；CLI `readback` 的同源 Markdown 可由现有会话答复/报告和 Lark Markdown 运输路径展示，不新建 registry 或状态机。
 
+## Host methods and connectors / 宿主方法与 connector
+
+Reuse the host's existing source tools: a research skill can be a `method`,
+while a GitHub, browser or search tool can be a `connector`. No generic crawler,
+MCP client or second browser controller is needed in Core. Provider-specific
+setup and execution remain with the upstream tool and host adapter.
+
+先复用宿主已有读取工具：调研 skill 可以作为 `method`，GitHub、浏览器或搜索工具可以
+作为 `connector`。Core 无需再实现爬虫、MCP client 或浏览器控制器；安装与执行仍归
+上游工具及宿主 adapter。
+
+1. Perform a bounded readiness probe using the real host tool. Registry
+   `supported`, command presence and upstream doctor output alone are
+   insufficient. Write an observed provider inventory using the fields above;
+   carry a concrete unavailable reason when any lifecycle prerequisite fails.
+2. Run `plan --provider-inventory-json providers.json
+   --preferred-provider-id PROVIDER_ID` with the actual objective, activity and
+   decision. Retain the caller's explicit registry/runtime options. Inspect the
+   ready plan before executing the selected host tool.
+3. Execute that tool under its own permission boundary. The CLI's bundled
+   `execute` dispatches only `method:public-github`; it does not execute an
+   arbitrary host method or connector. Return the following caller-authored
+   receipt shape, copying identity fields from the saved plan:
+
+```json
+{
+  "schema_version": "loopx_external_evidence_receipt_v0",
+  "plan_id": "<plan.plan_id>",
+  "request_id": "<plan.request.request_id>",
+  "provider_id": "<plan.selected_provider.provider_id>",
+  "provider_kind": "<plan.selected_provider.provider_kind>",
+  "status": "succeeded",
+  "sources": [{
+    "source_ref": "https://example.com/original",
+    "source_family": "original-publisher",
+    "basis": "observed",
+    "finding": "The bounded observation that answers the request",
+    "limitation": "What was not inspected or tested",
+    "publication_date": null,
+    "accessed_at": "<actual ISO timestamp>",
+    "content_digest": "sha256:<digest of the inspected content>"
+  }],
+  "summary": "Compact evidence summary",
+  "limitations": ["Caller receipt is not provider execution attestation"],
+  "completed_at": "<actual ISO timestamp>"
+}
+```
+
+4. Validate with `receipt`, then explicitly `admit` or reject source refs.
+   Use `readback` for the same shared Markdown/JSON projection. For durable
+   downstream use, start the existing deepresearch ledger with **exactly the
+   plan objective** as its question, then run `readback --admission-json
+   admission.json --project research --execute`. Check `write_blockers`, actual
+   lineage coverage and retirement readiness before declaring the slice used.
+
+实际 probe 后才能填 ready inventory；先生成 plan，再调用选中的宿主工具。上述 JSON
+是 caller 回执，不是执行认证。逐来源记录原始 URL、同源关系、依据、真实日期、读取
+内容 digest 与局限；用 `receipt` 验证，再独立采纳/拒绝。持久化沿用既有 deepresearch
+账本，研究问题必须与 plan objective 完全一致；实际读回覆盖后才可退休。
+
+For a failed or empty read, use `failed` or `no_evidence` with `sources: []`;
+do not recycle a previous successful body. Parent rejection can retire that
+receipt without writing a source. Other successfully inspected sources remain
+available through their own plans and admissions. Search snippets, extracted
+text and browser observations retain their actual read scope; linked pages,
+images, authenticated scope and broad reliability are separate qualifications.
+
+失败/空读回用 `failed`/`no_evidence` 和空来源，不借用旧正文。父 Agent 拒绝后可退休
+失败回执；其他已成功读取的来源按自己的 plan/admission 继续。摘要、抽取正文和页面
+观察保留真实读取范围，不据此声称读过链接、图片或具备未测试的账户权限。
+
+[Host-provider reuse checkpoint](../../../docs/architecture/rfcs/ledger/external-evidence-research-capability-v0/2026-10-11-host-provider-reuse.md)
+records a bounded real method, public-scope connector and failed-reader journey.
+
 ## Public GitHub method / 公开 GitHub 方法
 
 The bundled `method:public-github` provider performs anonymous, bounded HTTPS
