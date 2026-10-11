@@ -218,6 +218,13 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
     );
   }
   const values = parsed.values;
+  if (expectedOperation === "ack" &&
+      parsed.booleans.has("--host-match-observed") !== (facts.host_match_observed === true)) {
+    throw new EffectRuntimeRequestError(
+      "Host-match flag does not match its bound ACK facts",
+      "scheduler_host_facts_identity_mismatch",
+    );
+  }
   const neutralObservedRrule = values["--app-automation-current-rrule"] ?? "";
   const legacyCodexObservedRrule = values["--codex-app-current-rrule"] ?? "";
   if (neutralObservedRrule && legacyCodexObservedRrule && neutralObservedRrule !== legacyCodexObservedRrule) {
@@ -273,7 +280,11 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
       reason_summary: values["--reason-summary"] ?? null,
       host_facts: {
         ...facts,
-        ...(expectedOperation === "ack" && facts.surface === "codex_app"
+        ...(expectedOperation === "ack" && (
+          facts.surface === "codex_app" ||
+          Object.hasOwn(values, "--app-automation-current-rrule") ||
+          Object.hasOwn(values, "--codex-app-current-rrule")
+        )
           ? { observed_host_rrule: neutralObservedRrule || legacyCodexObservedRrule }
           : {}),
         operation: expectedOperation,
