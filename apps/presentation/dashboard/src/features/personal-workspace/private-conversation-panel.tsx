@@ -1,7 +1,7 @@
 import {useEffect, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
   changePrivateAgentTarget, fetchChatProjects, fetchChatCapabilities, fetchLarkApps, fetchLarkGroupChats, type PrivateConversation,
-  type ChatProject, type LarkApp} from "../../data/chat";
+  type ChatProject, type LarkApp, type PrivateConversationStopRecovery} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import "./private-conversation.css";
 
@@ -12,6 +12,7 @@ export function PrivateConversationPanel() {
   const [projects, setProjects] = useState<ChatProject[]>([]);
   const [executors, setExecutors] = useState<string[]>([]);
   const [rows, setRows] = useState<PrivateConversation[]>([]);
+  const [recoveries, setRecoveries] = useState<PrivateConversationStopRecovery[]>([]);
   const [revision, setRevision] = useState(0);
   const [app, setApp] = useState("");
   const [project, setProject] = useState("");
@@ -29,7 +30,7 @@ export function PrivateConversationPanel() {
 
   async function refresh() {
     const state = await fetchPrivateConversations();
-    setRows(state.connections); setRevision(state.revision);
+    setRows(state.connections); setRecoveries(state.stop_recoveries); setRevision(state.revision);
   }
   useEffect(() => {
     let active = true;
@@ -41,10 +42,10 @@ export function PrivateConversationPanel() {
         const choices = (capabilities.adapters ?? []).filter(row => row.available).map(row => row.agent_id);
         setExecutors(choices); setExecutor(choices.includes("codex") ? "codex" : choices[0] ?? "");
         if (projects.projects.length === 1) setProject(projects.projects[0].project_ref);
-        setRows(state.connections); setRevision(state.revision);
+        setRows(state.connections); setRecoveries(state.stop_recoveries); setRevision(state.revision);
       }).catch(error => {if (active) setError(String(error));});
     const timer = setInterval(() => {fetchPrivateConversations().then(state => {
-      if (active) {setRows(state.connections); setRevision(state.revision);}
+      if (active) {setRows(state.connections); setRecoveries(state.stop_recoveries); setRevision(state.revision);}
     }).catch(() => {});}, 5000);
     return () => {active = false; clearInterval(timer);};
   }, []);
@@ -74,8 +75,13 @@ export function PrivateConversationPanel() {
 
   async function act(operation: () => Promise<unknown>) {
     setBusy(true); setError("");
-    try {await operation(); await refresh();} catch (error) {setError(String(error));}
-    finally {setBusy(false);}
+    try {await operation();} catch (error) {setError(String(error));}
+    finally {
+      // A failed stop may follow a committed revocation. Read its current
+      // revision and exact recovery target even when the mutation returned 400.
+      try {await refresh();} catch (error) {setError(String(error));}
+      setBusy(false);
+    }
   }
   function selectApp(appRef: string) {
     setApp(appRef);
@@ -102,6 +108,11 @@ export function PrivateConversationPanel() {
       {row.context_kind === "project" && row.audience !== "group" ? <PrivateAgentTargets row={row} revision={revision} zh={zh} busy={busy} act={act}/> : null}
       {row.context_kind === "steward" && row.goal_scope !== "all_registered" ? <button disabled={busy || !row.context_available} onClick={() => void act(() => connectPrivateConversation(row.app_ref, row.project_ref, row.executor_endpoint_id, "steward"))} type="button">{zh ? "授权全部已注册工作" : "Authorize all registered work"}</button> : null}
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "解绑" : "Disconnect"}</button>
+    </article>)}
+    {recoveries.map(row => <article key={row.binding_id}>
+      <strong>{row.project_title} · {zh ? "旧授权" : "Previous grant"} {row.binding_id.slice(-6)}</strong>
+      <p role="alert">{zh ? `授权已撤销；${row.pending_count} 项执行尚未确认停止。重试只停止此旧授权的工作，不恢复授权，也不影响新连接。` : `Access is revoked; ${row.pending_count} executions have not confirmed stop. Retry stops only this previous grant's work, without restoring access or affecting the new connection.`}</p>
+      <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "重试停止旧授权任务" : "Retry stop for previous grant"}</button>
     </article>)}
     {rows.length === 0 ? <p>{zh ? "尚未连接助手。" : "No assistant connected."}</p> : null}
     <label>App<select aria-label={zh ? "助手 App" : "Assistant App"} value={app} disabled={busy} onChange={event => selectApp(event.target.value)}>

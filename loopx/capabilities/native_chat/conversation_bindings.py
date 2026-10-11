@@ -345,6 +345,40 @@ class ChatConversationBindings:
             "target_observation": self.agent_observation(target["session_id"])})
 
 
+    def stop_recoveries(self, current: dict[str, Any]) -> list[dict[str, Any]]:
+        """Project revoked execution from canonical Turns, never recreate a grant.
+
+        Session and external-target context retain the exact binding identity
+        across restart. No second stop ledger or provider diagnostics are needed.
+        A recovery disappears only when the existing Turn owner settles it.
+        """
+        if self.controller is None:
+            return []
+        authorized = {row["binding_id"] for row in current["bindings"]}
+        store = self.controller.store
+        pending: dict[str, dict[str, Any]] = {}
+        for row in store.list_sessions():
+            session = store.load_session(row["session_id"])
+            if session is None:
+                continue
+            turns = store.queued_turns(session["session_id"])
+            active = store.load_turn(session["session_id"], session["active_turn_id"]) if session.get("active_turn_id") else None
+            if active:
+                turns.append(active)
+            for turn in turns:
+                if turn.get("status") in TERMINAL_TURN_STATES:
+                    continue
+                target = turn.get("external_agent_target") or {}
+                context = target.get("context") or session.get("project_context") or session.get("steward_context") or {}
+                binding_id = context.get("binding_id")
+                if not binding_id or binding_id in authorized:
+                    continue
+                recovery = pending.setdefault(binding_id, {"binding_id": binding_id,
+                    "project_ref": context.get("project_ref", ""), "pending_count": 0})
+                recovery["pending_count"] += 1
+        return [pending[key] for key in sorted(pending)]
+
+
 def validate_external_agent_turn(*, store: Any, session: dict[str, Any],
                                  goal: dict[str, Any] | None, turn: dict[str, Any]) -> None:
     """Called under the grant and canonical queue fences before host claim.

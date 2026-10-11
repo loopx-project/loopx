@@ -117,6 +117,86 @@ def test_revocation_stop_failure_keeps_grant_revoked_and_retry_confirms_stop(ord
     assert runtime.wait_for_turn(session_id=session["session_id"], turn_id=turn["turn_id"], timeout_sec=10)["status"] == "interrupted"
 
 
+@pytest.mark.parametrize("replacement", [False, True])
+def test_http_revoked_stop_recovery_survives_refresh_and_reopen_without_restoring_grant(ordinary, monkeypatch, replacement):  # noqa: F811
+    import http.client
+    import threading
+    from types import SimpleNamespace
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    import loopx.chat_lark_api as api
+
+    store, runtime, contexts, _, _, _, workspace = ordinary
+    bindings, args, binding, session, turn = _bound_project(ordinary)
+    peer, _ = runtime.open_session(goal_id=None, agent_id="codex", work_dir=workspace,
+        objective="", mode="new", project_ref=args["project_ref"])
+    peer_turn, _ = runtime.enqueue_turn(session_id=peer["session_id"], client_turn_id="peer",
+        message="wait for interrupt", work_dir=workspace, objective="", origin="web")
+    _wait_for_native_turn(store, peer["session_id"], peer_turn["turn_id"])
+    monkeypatch.setattr(api, "build_lark_goal_topic_runtime_snapshot", lambda **_: {"goals": []})
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
+    server.lark_private_conversations = SimpleNamespace(health=lambda: {}, close=lambda: None)
+    server.lark_goal_topic_runtime = SimpleNamespace(refresh=lambda: None, health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    def request(method="GET", body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, "/api/chat/lark/private-conversations",
+                None if body is None else json.dumps(body), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+    interrupt = runtime.interrupt_turn
+    def unavailable(**kwargs):
+        raise RuntimeError("private transport detail")
+    monkeypatch.setattr(runtime, "interrupt_turn", unavailable)
+    revision = bindings.read()["revision"]
+    body = {"binding_id": binding["binding_id"], "revision": revision}
+    connect = {"app_ref": "notes-app", "project_ref": args["project_ref"],
+        "executor_endpoint_id": "codex", "project_grant": "workspace_write"}
+    try:
+        contexts.workspace_grant = "workspace_write"
+        status, error = request("POST" if replacement else "DELETE", connect if replacement else body)
+        assert status == 400 and "not confirmed" in error["error"]
+        assert "private transport detail" not in json.dumps(error)
+        for _ in range(2):
+            status, refreshed = request()
+            assert status == 200
+            assert refreshed["stop_recoveries"] == [{"binding_id": binding["binding_id"],
+                "project_ref": args["project_ref"], "project_title": "notes", "pending_count": 1}]
+            assert not any(row["binding_id"] == binding["binding_id"] for row in refreshed["connections"])
+            assert all(marker not in json.dumps(refreshed) for marker in
+                ["operator_ref", "provider_ref", "workspace_path", "private transport detail", "wait for interrupt"])
+        reopened = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=bindings._observe_owner)
+        reopened.controller = runtime
+        assert reopened.stop_recoveries(reopened.read())[0]["binding_id"] == binding["binding_id"]
+        assert request("DELETE", body)[0] == 400  # stale revision cannot mutate
+        if replacement:
+            status, repeated = request("POST", connect)
+            assert status == 200 and repeated["stop_recoveries"] == refreshed["stop_recoveries"]
+            assert repeated["connections"][0]["binding_id"] != binding["binding_id"]
+        with pytest.raises(ValueError, match="no longer authorized"):
+            runtime.enqueue_turn(session_id=session["session_id"], client_turn_id="revoked",
+                message="must not run", work_dir=workspace, objective="", origin="lark")
+        assert store.load_turn(session["session_id"], turn["turn_id"])["status"] == "running"
+        frozen_grants = bindings.read()["bindings"]
+        monkeypatch.setattr(runtime, "interrupt_turn", interrupt)
+        status, recovered = request("DELETE", {**body, "revision": request()[1]["revision"]})
+        assert status == 200 and recovered["stop_recoveries"] == []
+        assert runtime.wait_for_turn(session_id=session["session_id"], turn_id=turn["turn_id"], timeout_sec=10)["status"] == "interrupted"
+        assert store.load_turn(peer["session_id"], peer_turn["turn_id"])["status"] == "running"
+        assert bindings.read()["bindings"] == frozen_grants
+    finally:
+        monkeypatch.setattr(runtime, "interrupt_turn", interrupt)
+        runtime.interrupt_turn(session_id=peer["session_id"], turn_id=peer_turn["turn_id"])
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 @pytest.mark.parametrize("external_active", [False, True])
 def test_revocation_in_attached_host_drops_only_its_work_and_reports_unavailable_active_stop(ordinary, external_active):  # noqa: F811
     store, runtime, _, _, _, _, _ = ordinary
@@ -143,6 +223,8 @@ def test_revocation_in_attached_host_drops_only_its_work_and_reports_unavailable
     assert store.load_turn(sid, active["turn_id"])["status"] == "running"
     assert store.load_turn(sid, pending["turn_id"])["status"] == "interrupted"
     assert store.load_turn(sid, local["turn_id"])["status"] == "queued"
+    recoveries = bindings.stop_recoveries(bindings.read())
+    assert [row["binding_id"] for row in recoveries] == ([binding["binding_id"]] if external_active else [])
     assert runtime.wait_for_turn(session_id=managed["session_id"], turn_id=managed_turn["turn_id"], timeout_sec=10)["status"] == "interrupted"
 
 

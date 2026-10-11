@@ -50,7 +50,10 @@ class PrivateConversationRequestMixin:
              "agent_targets": row.get("agent_targets", []),
              "listener_status": self._private_listener_status(row["transport_ref"], health),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
-            for row in current["bindings"]]})
+            for row in current["bindings"]],
+            "stop_recoveries": [{**row,
+                "project_title": titles.get(row["project_ref"], "Unavailable workspace")}
+                for row in bindings.stop_recoveries(current)]})
 
     def _private_conversation_connect(self) -> None:
         from .goal_topic_runtime import _active_profile_configs

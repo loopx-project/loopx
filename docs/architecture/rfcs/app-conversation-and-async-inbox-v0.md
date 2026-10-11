@@ -118,7 +118,12 @@ bridge waits outside the grant publication fence and reuses Core Turn control;
 it creates no queue, scheduler or provider authority. A stop failure leaves the
 grant revoked and reports that execution stop is unconfirmed. Retry disconnect
 for the old binding identity with the current revision to confirm that stop,
-including after a failed replacement. A claimed attached-host Turn still lacks
+including after a failed replacement. Settings projects these revoked targets
+from canonical queued/active Turns: a failed mutation still reads back the current
+revision, and refresh/reload retains an exact stop retry without restoring the
+grant. Successful retry removes the recovery only after Core settles the Turn;
+a newly authorized binding and unrelated work remain intact. No separate stop
+ledger is introduced. A claimed attached-host Turn still lacks
 push stop control: revocation reports that limitation, cancels its pending
 external work and preserves unrelated local Turns. Controlled synthetic
 Codex/provider regressions qualify these source semantics; installed/live host

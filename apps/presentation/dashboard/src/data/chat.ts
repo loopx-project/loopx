@@ -2433,8 +2433,11 @@ const privateConversationSchema = z.object({
   pending_count: z.number().int(), recovery_count: z.number().int(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
+const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
+  project_title: z.string(), pending_count: z.number().int().positive()});
+export type PrivateConversationStopRecovery = z.infer<typeof privateConversationStopRecoverySchema>;
 const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
-  connections: z.array(privateConversationSchema)});
+  connections: z.array(privateConversationSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema).default([])});
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 export async function fetchPrivateConversations() {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
