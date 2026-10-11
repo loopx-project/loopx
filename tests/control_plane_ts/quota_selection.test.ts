@@ -370,7 +370,7 @@ test("quota v2 validates closure in the existing batch while retaining v0/v1 wir
 });
 
 
-function planningDeadline(monitors: JsonObject[], gates: JsonObject[], fields: JsonObject = {}) {
+function planningDeadline(monitors: JsonObject[], gates: JsonObject[], fields: JsonObject = {}, retries: JsonObject[] = []) {
   const items = [...monitors.map(payload => row(String(payload.todo_id),
     {payload, task_class: "continuous_monitor", required: [], targets: []})), ...gates.map(payload => row(String(payload.todo_id),
     {payload, task_class: "user_gate", gate: true, required: [], targets: []}))];
@@ -381,7 +381,13 @@ function planningDeadline(monitors: JsonObject[], gates: JsonObject[], fields: J
       has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null,
       available_capabilities: null, sources: Object.fromEntries(["items", "backlog_items", "first_open_items",
         "deferred_items", "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
-        "current_agent_claimed_monitor_items", "claimed_monitor_open_items"].map(key => [key, []]))}});
+        "current_agent_claimed_monitor_items", "claimed_monitor_open_items"].map(key => [key,
+          key === "items" || key === "resume_blocked_items" ? retries.map(payload => ({
+            payload: {text: "Wait for an authorized retry.", ...payload}, id: payload.todo_id,
+            status: payload.status, claim: payload.claimed_by ?? null, excluded: [], done: false,
+            resume: payload.resume_when, ready: false, ready_truthy: false, priority: 1, index: 1,
+            target_id: null, target_status: null, target_class: "advancement_task",
+          })) : []]))}});
 }
 test("the existing batch keeps full gate deadlines before transport caps, scope and equal-time source", () => {
   const early = {todo_id: "early", next_due_at: "2026-10-01T08:01:00.000001+08:00"};
@@ -417,4 +423,30 @@ test("planning clock retains fresh projection extensions and rechecks stale/raw 
   assert.equal((planningDeadline([], [{title: "Review", next_due_at: "1969-12-31T23:59:59.000001Z"}],
     {current_time: "1969-12-31T23:59:58Z"}).frontier_deadline as JsonObject).next_due_at,
     "1969-12-31T23:59:59.000001+00:00");
+});
+
+
+test("receipt retries precede later full-source caches without losing hidden earlier deadlines", () => {
+  const due = "2026-10-01T00:05:00Z";
+  const retry = {schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+    todo_id: "retry", observed_at: "2026-10-01T00:00:00Z", due_at: due,
+    resume_when: `resume_at:${due}`, goal_id: "goal-a", agent_id: "agent-a", turn_instance_id: "turn-old"};
+  const row = {todo_id: "retry", status: "open", task_class: "advancement_task", claimed_by: "agent-a",
+    resume_ready: false, resume_when: retry.resume_when, next_due_at: due, blocked_retry: retry};
+  const cache = {schema_version: "todo_frontier_deadline_v0", identity: "hidden-monitor",
+    source: "continuous_monitor", next_due_at: "2026-10-01T00:25:00Z", candidate_count: 25};
+  const before = structuredClone({cache, row});
+  assert.deepEqual(planningDeadline([], [], {frontier_deadline: cache}, [row, row]).frontier_deadline,
+    {schema_version: "todo_frontier_deadline_v0", identity: "retry", source: "turn_settlement",
+      next_due_at: "2026-10-01T00:05:00+00:00", blocked_retry: retry, candidate_count: 26});
+  const earlier = {...cache, next_due_at: "2026-10-01T00:01:00Z", extension: {retained: true}};
+  assert.deepEqual(planningDeadline([], [], {frontier_deadline: earlier}, [row]).frontier_deadline, earlier);
+  const replaced = {...cache, identity: "retry", source: "turn_settlement", candidate_count: 1};
+  assert.equal((planningDeadline([], [], {frontier_deadline: replaced}, [row]).frontier_deadline as JsonObject)
+    .candidate_count, 1);
+  assert.deepEqual({cache, row}, before);
+  for (const invalid of [{...row, claimed_by: "agent-b"}, {...row, blocked_retry: {...retry, agent_id: "agent-b"}},
+    {...row, blocked_retry: {...retry, due_at: "2026-10-01T00:31:00Z"}}, {...row, resume_when: "todo_done:other"}]) {
+    assert.deepEqual(planningDeadline([], [], {frontier_deadline: cache}, [invalid]).frontier_deadline, cache);
+  }
 });

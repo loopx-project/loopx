@@ -19,7 +19,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["waiting", "due_monitor", "independent", "no_retry"])
+@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "due_monitor", "independent", "no_retry"])
 def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, scenario: str,
 ) -> None:
@@ -44,6 +44,12 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
             "task_class=advancement_task action_kind=validate -->\n"
             if scenario == "independent" else ""
         ))
+
+    if scenario == "notice_waiting":
+        state.write_text(state.read_text() +
+            "\n## User Todo\n\n- [ ] Review an independent draft.\n"
+            f"  <!-- loopx:todo todo_id=todo_retry_notice status=open bound_agent={cli.AGENT_ID} "
+            "task_class=user_action -->\n")
 
     def run(*args: str):
         return cli._run_cli(registry, runtime, *args, cwd=project)
@@ -84,9 +90,13 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
                           "--turn-instance-id", "turn-retry-next")
         assert code == 0 and guard["ok"], guard
         assert guard["heartbeat_receipt"]["status"] in {"committed", "replayed"}
-        if scenario == "waiting":
+        if scenario in {"waiting", "notice_waiting"}:
             assert guard["effective_action"] == "monitor_quiet_skip"
             assert guard["execution_obligation"]["must_attempt_work"] is False
+            if scenario == "notice_waiting":
+                assert guard["execution_obligation"]["kind"] == "blocked_wait"
+                assert guard["interaction_contract"]["user_channel"]["non_gating_notice"] is True
+                assert guard["scheduler_hint"]["cadence_class"] == "quiet_wait"
             pending = guard["scheduler_hint"]["pending_retry"]
             assert pending["todo_id"] == cli.TODO_ID
             assert pending["due_at"] == retry["due_at"]
