@@ -425,9 +425,9 @@ failure leaves the generated files untouched.
 - [Goal Workspace Surface v0](goal-workspace-surface-v0.md)
   ([中文版](goal-workspace-surface-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; Overview, Tasks, Chat, Files, the W1
-    map, usage, acceptance readback and lifecycle pause ship as separate regions.
+    map, usage, acceptance readback and lifecycle stop ship as separate regions.
   - **Current boundary:** Owns one Goal page's composition and the display
-    semantics of its vitals: persistent masthead with scoped Pause, window- and
+    semantics of its vitals: persistent masthead with scoped Stop, window- and
     coverage-labeled figures, work grouped by owner, all-work rail, shared
     selection and since-last-look delta. M1 requires first-screen preview
     approval. No new authority, Todo field, lifetime usage or Lark parity.

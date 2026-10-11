@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal. Goal Overview, Tasks, Chat and Files, the W1 work map, usage display, acceptance readback and lifecycle pause ship as separate regions; the composed page and its vital semantics are not implemented.
+- **Delivery maturity:** Proposal. Goal Overview, Tasks, Chat and Files, the W1 work map, usage display, acceptance readback and lifecycle stop ship as separate regions. M1 (masthead, vitals and Stop readback) is proposed in [#6191](https://github.com/loopx-project/loopx/pull/6191) and not yet merged; M2–M4 are not implemented.
 - **Owners:** existing workspace presentation owner. Data and action owners named in Section 5 keep their authority.
 - **Created / normative revision:** 2026-10-11.
 - **Implementation baseline:** `5c62c5c03`.
@@ -18,7 +18,7 @@ acceptance rule, cost computation or new action.
 ## 1. Decision summary
 
 1. **One Goal, one composed page.** A persistent masthead (breadcrumb, title,
-   coordinator line, Pause/Resume, settings) and a vitals strip sit above every
+   team line, Stop/Resume, settings) and a vitals strip sit above every
    Goal view: Overview, Tasks, Chat and Files. Overview becomes the composed
    brief: Direction → Needs you → Now → Results, followed by the existing
    delivery section. A right-hand All-work rail accompanies it on wide screens.
@@ -31,7 +31,7 @@ acceptance rule, cost computation or new action.
    vitals, responsibility groups, rail order and the since-last-look delta from
    already-projected facts. The strip, rail chips, Now groups and Tasks board
    agree for the same snapshot.
-4. **Decide in place.** Pause/Resume, gate decisions, task creation and, when
+4. **Decide in place.** Stop/Resume, gate decisions, task creation and, when
    its owner admits an App path, acceptance-target declaration use existing
    typed actions with preview, one confirmation and recorded readback.
 5. **Expressive, never theatrical.** Live treatment requires an observed active
@@ -55,7 +55,7 @@ An owner returns to a Goal after a few hours ([GQ09](../../product/use-cases/ste
 five answers at a glance: is anything actually running, what needs me, how far
 along is it, what did it cost, and what came back. Today the facts exist but
 are scattered. Selecting a Goal often opens Chat. Needs-you items and a 24-hour
-usage line live in Overview, lanes live in Tasks, Pause lives on a sidebar row,
+usage line live in Overview, lanes live in Tasks, Stop lives on a sidebar row,
 outputs live in Files, and the work map sits inside the delivery section. Each
 region uses its own window and wording. Nothing says what changed since the
 owner last looked.
@@ -102,7 +102,7 @@ as one object, so counts, windows and selection drift between regions.
 - Normative semantics of each vital and of the since-last-look delta.
 - The Now lens: responsibility grouping, ordering and row grammar.
 - The All-work rail: sections, filters, ordering and coverage disclosure.
-- Placement and readback of Pause/Resume, gate decisions, Add task and target
+- Placement and readback of Stop/Resume, gate decisions, Add task and target
   declaration, all through existing owners.
 - One selection model shared by Now, Board, Map, rail and the detail drawer.
 - Keyboard map, command palette, glyph set, motion grammar and dark inverse.
@@ -126,7 +126,7 @@ Facts at `5c62c5c03`:
 
 | Region | Current owner / entry | Verified behavior | Gap for this RFC |
 | --- | --- | --- | --- |
-| Goal shell | `ChannelHeader`, `GoalSidebar` in the personal workspace | Title, activity chip, Overview/Tasks/Chat/Files tabs; Pause/Resume on sidebar rows | No breadcrumb or page-level lifecycle control; no persistent summary |
+| Goal shell | `ChannelHeader`, `GoalSidebar` in the personal workspace | Title, activity chip, Overview/Tasks/Chat/Files tabs; Stop/Resume on sidebar rows | No breadcrumb or page-level lifecycle control; no persistent summary |
 | Lifecycle | `goal.stop` / `goal.resume` from `loopx/control_plane/goals/operator_actions.ts` (`goal_lifecycle`, `requires_confirmation`, state fingerprint) | Stop pauses automatic Turns, leaves active attention and projects effective quota to 0; a running tool call is not killed; Todos, history, evidence and configuration remain; only Resume restores eligibility ([user guide §3.1](../../guides/personal-workspace-user-guide.md)) | Effect and in-flight work are not read back on the Goal page |
 | Overview | `GoalOverview` | Progress sentence, Needs-you list, 24h tokens/cost/duration, then the Stage 4 delivery section (`task_graph_projection_v0`, W1 `goal_task_map_v0`, acceptance contract and observation) | No vitals strip; usage window differs from other surfaces |
 | Tasks | `GoalTasksView` | Lanes: awaiting confirmation, pending/running, scheduled, completed; agent-lane filter; completed history from `/api/chat/completed-todos` | Not grouped by responsibility; text assignee; no observed elapsed time |
@@ -174,7 +174,7 @@ screen.*
 
 | # | Region | Shown when | Earns attention because |
 | --- | --- | --- | --- |
-| 1 | **Masthead**: breadcrumb (Workspace / Goals / Goal), title, coordinator and team line, Pause/Resume, settings | Always, on every Goal view; compacts on scroll | Identity and the one consequential control stay one glance away |
+| 1 | **Masthead**: breadcrumb (Workspace / Goals / Goal), title, team line (Agent label or count, repository), Stop/Resume, settings | Always, on every Goal view; compacts on scroll | Identity and the one consequential control stay one glance away |
 | 2 | **Vitals strip**: at most six cells; each cell is a button that focuses its region | Always | Answers moving / waiting on me / how far / what cost in one line |
 | 3 | **Delta line**: "Since you looked at 09:12: 2 done · 1 new decision · +$3.10" | Only for a material delta | The return moment the product promises |
 | 4 | **Direction**: objective, acceptance criteria with verification state | Always; criteria only with a contract | What "done" means and how close it is |
@@ -196,12 +196,12 @@ unavailable(reason)`. The table is normative.
 
 | Vital | Source | Display | Unknown / partial | Never |
 | --- | --- | --- | --- | --- |
-| **State** | Lifecycle activation, existing presentation state, execution observation | "Working" with live treatment only while an active Turn or worker is observed; otherwise the existing quiet / waiting on you / blocked / scheduled / paused / completed state. Subline names the basis: "1 Turn observed", "last seen 41m ago" | Observation unavailable: state without live treatment plus "activity unknown" | Live treatment from status, claim or registration |
+| **State** | Lifecycle activation plus the existing activity presenter (`presentGoalActivity` over `goalExecution`); the reducer adds only the stop-finishing fact | The presenter's state and priority: a waiting decision leads, and an observed run stays visible in the subline ("another run is active"); "Running" carries live treatment only while an active Turn or worker is observed; otherwise quiet / scheduled / stopped. Subline names the basis, such as the observing host and age | Observation unavailable: state without live treatment plus "activity unknown" | Live treatment from status, claim or registration |
 | **Work** | Todo projection for this Goal: non-archived Agent advancement Todos; done count from the same snapshot | "done / total" and a ribbon segmented by typed display class (Section 5.6) | Done count unavailable: open count only, labeled | Counting user decisions or wishes as work; presenting done as accepted |
 | **Needs you** | Goal-scoped blocking attention items (user gates, run operator gates) | Count and oldest waiting age; danger color plus icon when above zero; zero recedes | Read failure: "unavailable", not 0 | Non-blocking wishes |
 | **Agent time** | `usage_summary` duration over the widest available window (7d, else 24h) | "3h 12m · 7 days" | Absent: "—" with "not measured"; owner-signaled sampling gap: "partial" | Wall-clock Goal age; a lifetime figure |
 | **Cost** | `usage_summary` `cost_usd` over the same window as Agent time | "$18.40 · 7 days" | Absent: "—", never "$0.00"; a measured zero shows "$0.00"; "partial" only from an owner coverage signal | A budget, a price estimate unless the owner marks it estimated |
-| **Last activity** | Most recent observed execution fact: agent-lane activity, host-thread activity, Turn or run events | Relative time and actor | No observation: "No observed activity" | `updated_at`, a registration or a configuration write |
+| **Last activity** | Most recent observed execution fact: an observed run's last activity, host-thread events, Turn or run events | Relative time and actor | No observation: "—" with "No observed activity" | `updated_at`, agent-lane `last_activity_at` (derived from Todo writes; its producer documents it as a hint, not liveness), a claim, a registration or a configuration write |
 
 Agent time and Cost always share one window. Where the owner provides no
 coverage signal, the cell names its window and source and makes no
@@ -268,9 +268,10 @@ performs no I/O and reads no clock.
 
 **Vocabulary.** It reuses Todo status (`open | done | blocked | deferred`),
 attention kinds and the existing presentation states. It adds one closed set of
-display classes local to the reducer: `running_observed`, `needs_you`, `open`,
-`waiting_dependency`, `blocked`, `deferred`, `done`. It also adds the six vital
-ids. Both sets stay local until a second consumer (CLI or Lark) adopts the
+display classes local to the reducer: `running_observed`, `open`,
+`waiting_dependency`, `blocked`, `deferred`, `done`. `needs_you` joins in M2,
+once a decision-to-work relation is projected; M1 does not infer which work a
+decision holds. It also adds the six vital ids. Both sets stay local until a second consumer (CLI or Lark) adopts the
 digest. At that point they register with the semantic vocabulary registry
 rather than being copied.
 
@@ -309,14 +310,16 @@ rather than being copied.
 
 ### 5.9 Lifecycle control
 
-- Pause/Resume sits in the masthead on every Goal view and uses the existing
-  `goal.stop` / `goal.resume` actions with the current state fingerprint.
+- Stop/Resume sits in the masthead on every Goal view and uses the existing
+  `goal.stop` / `goal.resume` actions with the current state fingerprint. Stop
+  confirms in place; Resume opens the owner's existing reviewed preview without
+  a second confirmation. The page stays on the Goal after either.
 - The confirmation states the owner's effect in plain language: "Stops new
   automatic Turns for this Goal and removes it from active attention. A tool
   call already running finishes. Tasks, history, evidence and configuration are
   kept. Only Resume restarts it."
 - After execution, the page reads back activation. While an active Turn is
-  still observed, State reads "Pausing · 1 Turn finishing", then "Paused". A
+  still observed, State reads "Stopping · Turn finishing", then "Stopped". A
   stale fingerprint is refused with a refresh prompt, and a repeated click does
   not repeat the effect. Remote sources keep the existing exact-host-alias rule.
 - This control is distinct from the live-team "pause animation" control and
@@ -331,7 +334,7 @@ region is reachable in tab order with visible focus.
 
 **Command palette (⌘K / Ctrl-K).** It navigates to Goals, Todos and results.
 It also invokes only the actions already projected for the current snapshot,
-such as Pause/Resume, open settings, Add task or decide a gate. Each opens its
+such as Stop/Resume, open settings, Add task or decide a gate. Each opens its
 existing preview. The palette is a launcher, not an executor, and it accepts no
 free-text instructions to Agents; that is Chat.
 
@@ -360,7 +363,7 @@ separate identity.
 
 - At 1200px and wider: sidebar, one content frame and the rail.
 - From 768px to 1199px: the rail becomes a drawer toggled from the masthead.
-- At 640px and narrower: one column in this order: masthead with an icon Pause,
+- At 640px and narrower: one column in this order: masthead with an icon Stop,
   vitals in a 3×2 grid, the delta line, Needs you and Now. Direction collapses,
   and All work opens from the top bar.
 
@@ -374,7 +377,7 @@ separate identity.
 | A separate Goal page route beside the workspace tabs | Rejected | Duplicates navigation; Overview is already the direct Goal destination |
 | A Python-served page projection | Rejected | The TypeScript presentation boundary is the established owner; a Python decision mirror is forbidden |
 | The W1 map as the Overview hero | Deferred | The map is a lens; "what needs me" is faster as a list; first-screen approval would still apply |
-| Vitals on Overview only | Rejected | Owners working in Chat or Tasks would lose pause and needs-you context |
+| Vitals on Overview only | Rejected | Owners working in Chat or Tasks would lose stop and needs-you context |
 | Lifetime totals summed from windows | Rejected | Double counting and retention gaps; lifetime belongs to the usage owner |
 
 ## 7. Safety, privacy and compatibility
@@ -389,7 +392,7 @@ separate identity.
 - Remote status sources stay read-only except lifecycle under the existing
   exact host-alias binding.
 - Copy is bilingual from one terminology table: Work / 工作, Needs you / 等你决定,
-  Agent time / Agent 用时, Cost / 成本, Last activity / 最近活动, Paused / 已暂停,
+  Agent time / Agent 用时, Cost / 成本, Last activity / 最近活动, Stopped / 已停止,
   Done / 已完成, Accepted / 已验收.
 - Default change: while under review, M1 may ship behind a local view toggle.
   After first-screen approval it becomes the default, with release notes naming
@@ -409,9 +412,9 @@ the local delta marker can be deleted at any time without effect.
 | V1 Vital truth | Reducer fixtures written from Section 5.3 before implementation; packaged browser compared with `loopx status --format json` for a disposable Goal | Absent usage renders "—"; measured zero renders $0.00; stale observation has no live treatment; Agent time and Cost share a window | Does not qualify provider cost coverage |
 | V2 Count agreement | One snapshot rendered in strip, chips, ribbon, Now, rail and Board; mutation case misclassifies one Todo | Totals equal; the mutation fails the test | Bounded projections disclose truncation |
 | V3 Responsibility | Multiple owners, unassigned work, out-of-order timestamps | Correct groups and order; nothing dropped | — |
-| V4 Pause journey (GQ08) | Packaged UI with the real Chat server on a disposable Goal | Preview → confirm → readback stopped; "Turn finishing" while observed; Resume; stale fingerprint refused; double click has one effect | Host heartbeat removal is the host's evidence |
+| V4 Stop journey (GQ08) | Packaged UI with the real Chat server on a disposable Goal | Preview → confirm → readback stopped; "Turn finishing" while observed; Resume; stale fingerprint refused; double click has one effect | Host heartbeat removal is the host's evidence |
 | V5 Return journey (GQ09) | Two snapshots with synthetic progress; unchanged pair; window change | Material delta shown and dismissable; none when unchanged; cost delta omitted on window change | Not a notification guarantee |
-| V6 States and access | Populated, quiet, blocked, paused, loading, unavailable, partial, long titles; en and zh-CN; 1440/1024/390px; keyboard; reduced motion; dark contrast | All regions readable; AA contrast; full keyboard path; no motion under reduced motion | — |
+| V6 States and access | Populated, quiet, blocked, stopped, loading, unavailable, partial, long titles; en and zh-CN; 1440/1024/390px; keyboard; reduced motion; dark contrast | All regions readable; AA contrast; full keyboard path; no motion under reduced motion | — |
 | V7 Decide in place | Gate decision and Add task through existing actions, including a failed apply | Recorded readback; failure keeps the draft | — |
 | V8 Target declaration (M3) | Preview, confirm, CAS conflict, readback; Agent-role invocation | Owner path succeeds; conflict shows the newer revision; Agent role cannot configure | Executable checks out of scope |
 | V9 No side effects | Browser network assertions while opening, refreshing, switching lenses and opening the palette | No action, quota or validator request | — |
@@ -434,10 +437,24 @@ second upgrade.
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
 | M0 Contract | This RFC, the composition study and roadmap/RFC reconciliation | — | Docs governance smoke; owner review | Revert docs |
-| M1 Masthead and vitals | Persistent masthead with Pause/Resume readback on all Goal views; vitals from `goal_workspace_digest_v0`; Overview order Direction (read-only) → Needs you → existing sections | First-screen preview approval of the Goal page | V1, V2 (strip), V4, V6, V9 | Revert composition |
+| M1 Masthead and vitals | Persistent masthead with Stop/Resume readback on all Goal views; vitals from `goal_workspace_digest_v0`; Overview order Direction (read-only) → Needs you → existing sections | First-screen preview approval of the Goal page | V1, V2 (strip), V4, V6, V9 | Revert composition |
 | M2 Work lenses and rail | Now by owner with Board/Map lenses; All-work rail and Activity; shared selection and `todo` deep link; inline Add task; Results region | M1 | V2, V3, V6, V7, V9, V10 | Revert to M1 |
 | M3 Direction and return | Since-you-looked delta; target declaration through the acceptance owner | M2; D3 decided by its owner | V5, V8 | Hide declaration; delete marker |
 | M4 Live and expressive | W2 live state on rows and map from the execution observation owner; event motion; keyboard map and palette; dark inverse | M2; W2 observation available | V6 (motion, dark); live-team W2 acceptance | Disable motion/theme |
+
+**Checkpoint 2026-10-11 (M1 proposed in [#6191](https://github.com/loopx-project/loopx/pull/6191)).**
+Passed: V1 through reducer fixtures written from Section 5.3 plus a mutation
+check, and the packaged browser on synthetic status; V2 for strip and Board
+(one shared work predicate); V4 Stop, finishing readback and Resume in the
+packaged UI against the real Chat action service and registry authority on a
+disposable Goal, including an owner-refused apply that writes nothing and
+keeps the Goal open; V6 for en and zh-CN, 1440/1024/390px, vital focus targets
+and reduced-motion styles; V9 (no action request before Stop). Untested: the V1
+comparison with `loopx status --format json`, a stale-fingerprint refusal (a
+concurrent identical stop is idempotent in the owner), double-click
+suppression, dark contrast (M4). Deferred: masthead compaction on scroll and
+usage "partial" (D4). M1 ships as the default without a view toggle after the
+first-screen approval.
 
 This track runs beside R2/R3, like the W-track. It makes their outcomes legible
 and does not pre-empt R1/R2 P0 repairs. It advances no L1, V4 or G1 gate. CLI
