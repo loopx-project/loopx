@@ -41,6 +41,18 @@ def plan_approval_closeout(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def select_review_conclusion(request: dict[str, Any]) -> int:
+    """Transport qualified bodies to the shared typed history owner."""
+    try:
+        result = effect_runtime_result("capabilities.pr_review.conclusion.select", request)
+    except EffectRuntimeRejected as error:
+        raise ValueError(str(error)) from error
+    index = result.get("index") if isinstance(result, dict) else None
+    if type(index) is not int or not 0 <= index < len(request["reviews"]):
+        raise TypeError("typed review conclusion index mismatch")
+    return index
+
+
 def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[str, Any]:
     from .github_source import _fetch_complete_pr_files, run_gh_json
     from ...pr_review import (

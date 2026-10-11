@@ -63,6 +63,17 @@ def test_aggregate_history_conflict_is_not_a_clear_closeout():
     assert "aggregate_review_decision_conflict" in result["hold_reasons"]
 
 
+def test_brief_approval_by_another_reviewer_does_not_hide_qualified_approval():
+    data = request([])
+    brief = review(51, "APPROVED", login="reporter", head=HEAD)
+    data["reviews"].append(brief)
+    data["review_conclusions"].append(conclusion(brief) | {"valid": False})
+    data["pull_request"]["reviewDecision"] = "APPROVED"
+    result = plan_approval_closeout(data)
+    assert result["status"] == "clear"
+    assert result["approval_snapshot"]["review_id"] == 50
+
+
 def test_only_latest_blocker_per_reviewer_needs_reconciliation():
     result = plan_approval_closeout(request([
         review(1, "CHANGES_REQUESTED"), review(2, "CHANGES_REQUESTED", head=HEAD),
