@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import urlopen
 
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from .public_safety import (
     PUBLIC_BOUNDARY_PATTERNS,
     public_safe_boundary,
@@ -32,7 +33,6 @@ RECEIPT_LOG_FILE = "receipts.jsonl"
 REVISION_DIR = "revisions"
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TEXT_SUFFIXES = {".css", ".html", ".js", ".json", ".md", ".svg", ".txt", ".xml"}
 _PUBLIC_BOUNDARY_PATTERNS = PUBLIC_BOUNDARY_PATTERNS
 _RESERVED_TOP_LEVEL = {MANIFEST_FILE, RECEIPT_FILE, REVISION_FILE, REVISION_DIR}
@@ -294,7 +294,7 @@ def _validate_retained_revision_files(
         expected_size = item.get("size")
         if (
             not isinstance(expected_digest, str)
-            or not _SHA256.fullmatch(expected_digest)
+            or not BARE_SHA256_PATTERN.fullmatch(expected_digest)
             or (
                 not isinstance(expected_size, int)
                 or isinstance(expected_size, bool)
