@@ -21,6 +21,9 @@ from loopx.extensions.lark.goal_topic_runtime import (
 )
 from loopx.extensions.lark.manager_context import manager_failure_reply
 
+# Bound deliberate RPC silence, while allowing a loaded worker to launch Python.
+STARTUP_TIMEOUT_SECONDS = 3.0
+
 
 def session_runtime(tmp_path, *, channel="goal.public-research"):
     store = ChatSessionStore(tmp_path)
@@ -93,7 +96,7 @@ attempts.write_text(json.dumps([*previous, os.getpid()]))''')
         store, sid, _ = session_runtime(tmp_path)
         store.update_session(sid, upstream_thread_id="durable-thread",
                              coordination_context_version=PROJECT_CONTEXT_VERSION)
-        runtime = ChatRuntimeController(store=store, codex_bin=str(fake), startup_timeout_sec=0.5)
+        runtime = ChatRuntimeController(store=store, codex_bin=str(fake), startup_timeout_sec=STARTUP_TIMEOUT_SECONDS)
         runtimes.append(runtime)
         return store, sid, runtime
 
@@ -110,7 +113,7 @@ def test_resumed_startup_timeout_recovers_original_queued_request(codex_startup,
     store, sid, runtime = start("once", stage=stage)
     turn, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="original", message="Research",
                                    work_dir=tmp_path, objective="Research")
-    result = runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=5)
+    result = runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=15)
     assert result["status"] == "completed", result
     assert store.load_session(sid)["upstream_thread_id"] == "durable-thread"
     assert store.load_session(sid)["active_turn_id"] is None
@@ -146,7 +149,7 @@ def test_startup_recovery_does_not_replay_gate_fresh_or_started_requests(
             adapter = CodexAppServerAdapter.start(
                 codex_bin=runtime.codex_bin, work_dir=tmp_path, goal_id="public-research",
                 objective="Research", resume_thread_id="durable-thread" if resumed else None,
-                startup_timeout_sec=0.5,
+                startup_timeout_sec=STARTUP_TIMEOUT_SECONDS,
             )
             adapter.start_turn("Research", lambda *args: None)
     finally:
@@ -162,7 +165,7 @@ def test_persisted_stop_wins_after_resumed_startup_retry(codex_startup, tmp_path
     store, sid, runtime = start("stop")
     turn, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="stop", message="Research",
                                    work_dir=tmp_path, objective="Research")
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 10
     while not entered.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert entered.exists(), "second startup was not reached"

@@ -171,7 +171,7 @@ CASES.extend([
 # corresponding row red.
 LADDER_ROW = "tests/control_plane/test_shared_goal_authority_e2e.py::test_ladder_row_passes_or_is_declared_unverified"
 CASES.extend([
-    Case("status_hides_prepared_only", ((COORDINATION + "local_authority_shadow_outbox.py", replacement(
+    Case("status_hides_prepared_only", ((COORDINATION + "local_authority_shadow_history.py", replacement(
         '            "committed_pending": sum(1 for entry in entries if entry.is_committed),\n'
         '            "prepared_only": sum(1 for entry in entries if not entry.is_committed),',
         '            "committed_pending": len(entries),\n'

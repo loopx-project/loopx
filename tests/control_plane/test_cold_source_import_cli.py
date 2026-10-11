@@ -227,13 +227,14 @@ def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path
     assert not (runtime / "authority-transition").exists()
 
 
-@pytest.mark.parametrize("command,action,missing", [
-    ("coordination-shadow", "inspect", "runtime_shadow"),
-    ("authority-shadow", "status", "local_authority_shadow_adapter"),
-    ("authority-shadow", "drain", "local_authority_shadow_adapter"),
+@pytest.mark.parametrize("command,action,missing,expected_ok", [
+    ("coordination-shadow", "inspect", "runtime_shadow", False),
+    ("authority-shadow", "status", "local_authority_shadow_adapter", True),
+    ("authority-shadow", "status", "local_authority_shadow_readback", False),
+    ("authority-shadow", "drain", "local_authority_shadow_adapter", False),
 ])
-def test_explicit_shadow_action_reports_missing_producer_without_writing(
-    tmp_path, monkeypatch, command, action, missing,
+def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
+    tmp_path, monkeypatch, command, action, missing, expected_ok,
 ):
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     registry = tmp_path / "project/.loopx/registry.json"
@@ -255,10 +256,11 @@ def test_explicit_shadow_action_reports_missing_producer_without_writing(
         capture_output=True, text=True, timeout=60)
     assert str(receiver / "loopx/__init__.py") in child.stderr
     assert "Traceback" not in child.stderr, child.stderr
-    assert child.returncode == 1
+    assert child.returncode == (0 if expected_ok else 1)
     result = json.loads(child.stdout)
-    assert result["ok"] is False
-    assert missing in result["error"]
+    assert result["ok"] is expected_ok
+    if not expected_ok:
+        assert missing in result["error"]
     after = {str(path.relative_to(tmp_path)): path.read_bytes()
              for root in (registry.parent, state.parent, runtime)
              for path in root.rglob("*") if path.is_file()}
