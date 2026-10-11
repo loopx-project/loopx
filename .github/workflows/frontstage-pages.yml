@@ -2,6 +2,9 @@ name: Frontstage Pages
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [Desktop Release Artifacts]
+    types: [completed]
   schedule:
     - cron: "37 */6 * * *"
   pull_request:
@@ -103,11 +106,16 @@ concurrency:
 
 jobs:
   build:
+    # A completed public release refreshes downloads from trusted current main.
+    # PR validation, foreign runs and failed uploads must never deploy Pages.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.repository.default_branch || '' }}
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -128,6 +136,10 @@ jobs:
       - name: Install homepage dependencies
         working-directory: apps/presentation/site
         run: npm ci --include=dev --no-audit --no-fund --registry=https://registry.npmjs.org
+
+      - name: Validate complete-release selection
+        working-directory: apps/presentation/site
+        run: node --test scripts/desktop-download.test.mjs
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -169,10 +181,16 @@ jobs:
 
       - name: Validate public-safe frontstage bundle
         working-directory: apps/presentation/dashboard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOOPX_SITE_RESOLVE_DESKTOP_RELEASE: "1"
         run: npm run smoke:frontstage-share-bundle
 
       - name: Export Pages frontstage artifact
         working-directory: apps/presentation/dashboard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOOPX_SITE_RESOLVE_DESKTOP_RELEASE: "1"
         run: npm run export:frontstage-share -- --base /loopx/ --out-dir ../../../output/frontstage-pages
 
       - name: Fetch complete GitHub stargazer history
