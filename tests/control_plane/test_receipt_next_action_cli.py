@@ -1,4 +1,4 @@
-"""Original Turn writeback cannot attach its step to a newly selected Todo."""
+"""A Turn can edit only its original Todo step, never a replan's display advice."""
 from __future__ import annotations
 
 import json
@@ -118,3 +118,79 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
     route = next_guard["agent_lane_next_action"]
     assert route["todo_id"] == fixture.ALTERNATIVE_TODO_ID
     assert route["next_step"] == "Keep B's independent experiment."
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("recommendation_mode", ["derived", "explicit"])
+def test_todoless_replan_refuses_step_and_recovers_original_settlement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    provider: str, recommendation_mode: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    fixture._configure_autonomous_replan_fixture(project, runtime, registry)
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+
+    def run(*args: str) -> tuple[int, dict]:
+        return fixture._run_cli(registry, runtime, *args, cwd=project)
+
+    code, listed = run("todo", "list", "--goal-id", fixture.GOAL_ID)
+    assert code == 0, listed
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID,
+            todos=listed["todos"], handoff_mode="soft_claim", leases=[]),
+        state_path=state, provider=provider)
+    turn = "replan-recommendation-recovery"
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", fixture.GOAL_ID,
+        "--agent-id", fixture.AGENT_ID, "--turn-instance-id", turn,
+        "--scan-path", str(project))
+    code, guard = run(*guard_args)
+    assert code == 0 and guard["decision"] == "autonomous_replan_required", guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan" and "todo_id" not in identity
+    code, before_todos = run("todo", "list", "--goal-id", fixture.GOAL_ID)
+    assert code == 0, before_todos
+    index = runtime / "goals" / fixture.GOAL_ID / "runs" / "index.jsonl"
+    before_index, before_display = index.read_bytes(), state.read_bytes()
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
+        "state": "active", "vision_patch": {
+            "acceptance_summary": "Observe the original monitor only when due.",
+            "advancement_policy": "as_needed"},
+        "path_delta": {"outcome": "no_change",
+            "prior_assumption": "The monitor might need another early observation.",
+            "observed_reality": "Independent evidence retains its future observation window.",
+            "retained": ["Original monitor identity, state and deadline."],
+            "evidence_refs": ["evidence:replan-recommendation"]}}), encoding="utf-8")
+    refresh = ("refresh-state", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
+        "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--progress-result-class", "advanced",
+        "--progress-surface-id", "surface-new", "--progress-hypothesis-id", "hypothesis-new",
+        "--progress-probe-kind", "probe-new", "--progress-evidence-id", "evidence:replan-recommendation",
+        "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks")
+    for _ in range(2):
+        code, rejected = run(*refresh, "--next-action", "Continue the replan.", "--dry-run")
+        assert code == 1 and rejected["error_code"] == "next_action_task_unavailable", rejected
+        assert "--recommended-action" in rejected["error"]
+        assert rejected["appended"] is False
+        assert index.read_bytes() == before_index and state.read_bytes() == before_display
+    explicit = ("--recommended-action", "Observe the monitor when due.") if recommendation_mode == "explicit" else ()
+    code, preview = run(*refresh, *explicit, "--dry-run")
+    assert code == 0 and preview["appended"] is False, preview
+    code, written = run(*refresh, *explicit)
+    assert code == 0 and written["settlement_identity"] == identity, written
+    assert "todo_id" not in written["recommended_action_resolution"]
+    spend = ("quota", "spend-slot", "--goal-id", fixture.GOAL_ID,
+        "--agent-id", fixture.AGENT_ID, "--replan-obligation-id", identity["replan_obligation_id"],
+        "--turn-instance-id", turn, "--source", "heartbeat", "--slots", "1", "--execute",
+        "--scan-path", str(project))
+    code, spent = run(*spend)
+    assert code == 0 and spent["settlement_result"]["ok"], spent
+    code, replay = run(*spend)
+    assert code == 0 and replay["idempotent_replay"] and replay["appended"] is False, replay
+    assert fixture._spend_run_count(runtime) == 1
+    code, cold = run(*guard_args)
+    assert code == 0 and cold["effective_action"] == "heartbeat_settled_skip", cold
+    code, after_todos = run("todo", "list", "--goal-id", fixture.GOAL_ID)
+    assert code == 0 and after_todos["todos"] == before_todos["todos"], after_todos
