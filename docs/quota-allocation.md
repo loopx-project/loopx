@@ -1240,6 +1240,15 @@ task-step editor or replace shared prose, including after completion or repair.
 Refreshes without `--next-action` keep their existing recommendation
 and report behavior. Historical prose-update receipts remain readable.
 
+A Todo-less autonomous replan carries a v1 replan settlement identity, not a
+Todo step target. `--next-action` therefore returns
+`next_action_task_unavailable` with recovery guidance instead of trying to
+decode a missing `todo_id`. Omit that flag to derive the recommendation, or use
+`--recommended-action` for explicit replan guidance, retaining the original
+Turn and `--replan-obligation-id`. Neither route selects another Todo or grants
+its execution authority. Recommendation consumers reuse the settlement owner's
+v0/v1 identity validation, including effect and exclusive-binding checks.
+
 CLI status omits the reducer's internal source context and duplicate basis;
 the selected route and explicit peer detail retain the editable read fence.
 The unchanged base/head fixture adds 100 pretty / 94 compact JSON characters
