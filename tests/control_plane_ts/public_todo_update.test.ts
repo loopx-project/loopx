@@ -91,3 +91,54 @@ test("complete production-scale snapshot stays immutable and is not display-capp
   assert.equal((result.metadata_updates as JsonObject).resume_monitor_generation, 3);
   assert.deepEqual(fixture, snapshot);
 });
+
+
+test("external-wait successor readiness is derived from the locked dependency snapshot", () => {
+  for (const resume_ready of [undefined, false, true]) {
+    for (const task_class of ["advancement_task", "continuous_monitor"]) {
+      const dependency = {todo_id: "todo_complete", role: "agent", status: "done", task_class,
+        archive_state: "archived", resume_when: "todo_done:todo_missing"};
+      const ready = {...successor, resume_when: "todo_done:todo_complete", resume_ready};
+      const items = [todo, monitor, ready, dependency];
+      const before = structuredClone(items);
+      const result = plan({successor_todo_ids: [successor.todo_id]}, todo, {items});
+      assert.equal((result.external_wait_transition as JsonObject).state, "already_waiting");
+      assert.deepEqual(items, before);
+    }
+  }
+});
+
+test("external-wait successor monitor fence uses source generation rather than a display flag", () => {
+  for (const generation of [3, 4]) {
+    const ready = {...successor, resume_when: "monitor_changed:todo_evidence",
+      resume_monitor_generation: 3, resume_ready: generation === 3};
+    const items = [todo, monitor, {...monitor, todo_id: "todo_evidence", material_change_generation: generation}, ready];
+    if (generation === 4) {
+      assert.ok(plan({successor_todo_ids: [successor.todo_id]}, todo, {items}).external_wait_transition);
+    } else {
+      assert.throws(() => plan({successor_todo_ids: [successor.todo_id]}, todo, {items}),
+        error => (error as {code?: string}).code === "external_wait_successor_resume_gated");
+    }
+  }
+});
+
+test("forged successor readiness cannot waive pending, invalid or unavailable source evidence", () => {
+  for (const extra of [
+    {resume_when: "todo_done:todo_missing"},
+    {resume_when: "todo_done:todo_successor"},
+    {resume_when: "todo_done:todo_waiting"},
+    {resume_when: "todo_done:todo_monitor"},
+    {resume_when: "monitor_changed:todo_monitor"},
+    {resume_when: "monitor_changed:todo_monitor", resume_monitor_generation: 3},
+    {resume_when: "pr_merged:owner/repo#12"},
+    {resume_when: "capacity_available:shell"},
+    {resume_when: "resume_at:2020-01-01T00:00:00Z"},
+    {resume_when: "note_contains:approved"},
+  ]) {
+    const ready = {...successor, ...extra, resume_ready: true};
+    assert.throws(() => plan({successor_todo_ids: [successor.todo_id]}, todo,
+      {items: [todo, monitor, ready]}),
+      error => (error as {code?: string}).code === "external_wait_successor_resume_gated",
+      extra.resume_when);
+  }
+});

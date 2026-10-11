@@ -567,3 +567,69 @@ def test_native_target_lookup_keeps_public_value_error(tmp_path: Path, todo_id: 
                          role=role, agent_id="agent-a", text="Correction")
     assert records(registry) == before
     assert not state.exists()
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("condition_kind", ["todo_done", "monitor_changed"])
+@pytest.mark.parametrize("satisfied", [False, True])
+def test_public_cli_external_wait_uses_current_successor_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, condition_kind: str, satisfied: bool,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, False)
+    items = list(records(registry).values())
+    successor = next(item for item in items if item["todo_id"] == "todo_other")
+    successor.update(claimed_by="agent-a", resume_when=f"{condition_kind}:todo_evidence",
+                     resume_monitor_generation=1 if condition_kind == "monitor_changed" else None)
+    items.extend([
+        {"schema_version": "todo_item_v0", "done": condition_kind == "todo_done" and satisfied,
+         "archive_state": "active", "source_section": "Agent Todo",
+         "todo_id": "todo_evidence", "role": "agent", "status": "done" if condition_kind == "todo_done" and satisfied else "open",
+         "task_class": "advancement_task" if condition_kind == "todo_done" else "continuous_monitor",
+         "text": "Historical source evidence", "material_change_generation": 2 if satisfied else 1,
+         "claimed_by": "agent-a", "cadence": "1h", "watch_only": "true"},
+        {"schema_version": "todo_item_v0", "done": False, "archive_state": "active", "source_section": "Agent Todo",
+         "todo_id": "todo_monitor", "role": "agent", "status": "open", "text": "Await new observation",
+         "task_class": "continuous_monitor", "claimed_by": "agent-a", "material_change_generation": 3,
+         "cadence": "1h", "watch_only": "true"},
+    ])
+    if provider == "legacy":
+        rows = []
+        for item in items:
+            metadata = {key: item[key] for key in ("todo_id", "status", "task_class", "claimed_by",
+                        "note", "resume_when", "resume_monitor_generation", "material_change_generation",
+                        "cadence", "watch_only") if item.get(key) is not None}
+            rows.append(f"- [{'x' if item['status'] == 'done' else ' '}] {item['text']}\n"
+                        + format_todo_metadata_line(**metadata))
+        state.write_text("# Goal\n\n## Agent Todo\n\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    else:
+        projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=items, handoff_mode="soft_claim")
+        initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection, state_path=state, provider=provider)
+        state.unlink()
+    before = records(registry)
+    assert before["todo_other"]["resume_ready"] is satisfied
+    args = ["--resume-when", "monitor_changed:todo_monitor", "--successor-todo-id", "todo_other"]
+    if provider != "legacy":
+        args += ["--update-operation-id", "source-satisfied-successor"]
+    if not satisfied:
+        source = list_goal_todos(registry_path=registry, goal_id="goal-a")
+        display = state.read_bytes() if state.exists() else None
+        rejected = update(registry, *args, ok=False)
+        assert "external-wait successor must be runnable, not resume-gated" in json.dumps(rejected)
+        assert list_goal_todos(registry_path=registry, goal_id="goal-a") == source
+        assert (state.read_bytes() if state.exists() else None) == display
+        return
+    update(registry, *args, "--dry-run")
+    assert records(registry) == before
+    update(registry, *args)
+    after = records(registry)
+    assert after["todo_target"]["status"] == "open"
+    assert after["todo_target"]["resume_ready"] is False
+    assert after["todo_target"]["resume_monitor_generation"] == 3
+    assert after["todo_target"]["successor_todo_ids"] == ["todo_other"]
+    assert after["todo_other"] == before["todo_other"]
+    assert after["todo_other"]["resume_ready"] is True
+    if provider != "legacy":
+        assert update(registry, *args)["status"] == "replayed"
+        assert records(registry) == after
