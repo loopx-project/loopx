@@ -75,14 +75,34 @@ def test_existing_implicit_file_goal_is_not_retargeted(environment):
 
 
 @pytest.mark.parametrize("configuration_present", [False, True])
-def test_unconfigured_new_goal_defaults_to_canonical_sqlite_and_retains_later_writes(environment, configuration_present):
+def test_unconfigured_new_goal_preserves_released_creation_without_sqlite(environment, configuration_present):
+    _, bootstrap, marker, project, runtime = environment
+    if configuration_present:
+        (runtime / "machine/configuration.json").write_text(json.dumps({
+            "schema_version": "loopx_machine_configuration_v0", "namespaces": {
+                "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v1",
+                    "count_unit": "completed_todos", "count": 5}}}))
+    assert bootstrap("first", "--dry-run")["storage_target"] is None
+    created = bootstrap()
+    assert created["storage_target"] is None
+    assert created["storage_selection"] is None
+    assert not marker().exists()
+    assert not (runtime / "authority/sqlite-v0").exists()
+    added = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(project / ".loopx/registry.json"),
+        "--runtime-root", str(runtime), "--format", "json", "todo", "add", "--goal-id", "first", "--role", "agent",
+        "--text", "Retain the released creation path"], capture_output=True, text=True, timeout=60)
+    assert added.returncode == 0, added.stdout + added.stderr
+    restart_effect_runtime()
+    assert bootstrap()["storage_selection"] is None
+    assert "Retain the released creation path" in Path(created["state_file"]).read_text()
+
+
+def test_explicit_sqlite_creation_retains_later_writes_after_setting_removal(environment):
     from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
     configure, bootstrap, _, project, runtime = environment
+    configure("sqlite", mode="hard_lease")
     configuration = runtime / "machine/configuration.json"
-    if configuration_present:
-        configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
-            "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v1", "count_unit": "completed_todos", "count": 5}}}))
     target = {"schema_version": "loopx_new_goal_storage_target_v1", "provider": "sqlite", "handoff_mode": "hard_lease"}
     assert bootstrap("first", "--dry-run")["storage_target"] == target
     assert not (runtime / "authority-transition").exists()
@@ -91,13 +111,13 @@ def test_unconfigured_new_goal_defaults_to_canonical_sqlite_and_retains_later_wr
     assert created["storage_selection"]["authority_initialized"] is True
     added = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(project / ".loopx/registry.json"),
         "--runtime-root", str(runtime), "--format", "json", "todo", "add", "--goal-id", "first", "--role", "agent",
-        "--text", "Retain the default Goal's later work"], capture_output=True, text=True, timeout=60)
+        "--text", "Retain the opted-in Goal's later work"], capture_output=True, text=True, timeout=60)
     assert added.returncode == 0, added.stdout + added.stderr
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="first", include_leases=True)
     assert before["source_authority"] == "sqlite_v0"
     assert before["handoff_mode"] == "hard_lease"
     assert len(before["todos"]) == 1
-    configure("file", mode="soft_claim")
+    configuration.unlink()
     Path(created["state_file"]).unlink()
     restart_effect_runtime()
     retried = bootstrap()

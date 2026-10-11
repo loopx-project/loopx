@@ -32,25 +32,25 @@ def goal_storage_machine_configuration_namespace() -> MachineConfigurationNamesp
         normalize=normalize_goal_storage_defaults, project_public=dict,
         apply_public_update=lambda _current, update: dict(update),
         title="New Goal authority",
-        description=("New Goals default to canonical SQLite with hard leases. Choose storage and execution policy. "
+        description=("Opt in to canonical creation and choose storage and execution policy. "
                      "Fixed for future Goals only; existing data requires a separate reviewed migration."),
-        default_configuration={"schema_version": CANONICAL_GOAL_STORAGE_DEFAULTS_SCHEMA, "new_goal_provider": "sqlite",
-                               "canonical_creation": True, "new_goal_handoff_mode": "hard_lease"},
+        default_configuration={"schema_version": CANONICAL_GOAL_STORAGE_DEFAULTS_SCHEMA, "new_goal_provider": "file",
+                               "canonical_creation": False, "new_goal_handoff_mode": "hard_lease"},
         documentation={"path": "docs/reference/local-authority-provider-selection.md",
                        "url": "https://github.com/loopx-project/loopx/blob/main/docs/reference/local-authority-provider-selection.md"},
     )
 
 
-def new_goal_storage_target(runtime_root: Path) -> dict[str, Any]:
+def new_goal_storage_target(runtime_root: Path) -> dict[str, Any] | None:
     from .builtins import build_builtin_machine_configuration_registry
     from .store import read_machine_configuration
     registry = build_builtin_machine_configuration_registry()
     configuration = read_machine_configuration(runtime_root, registry=registry)
     raw = (configuration or {}).get("namespaces", {}).get("goal_storage")
     if raw is None:
-        # Reuse the registered configuration owner also projected by Settings.
-        # Existing Goals do not enter this creation-time resolution path.
-        raw = registry.resolve("goal_storage").default_configuration
+        # Preserve the released creation path until the separate SQLite
+        # default qualification is complete. Explicit settings remain TS-owned.
+        return None
     return effect_runtime_result(NEW_GOAL_STORAGE_METHOD, {"action": "resolve", "configuration": raw})
 
 

@@ -13,15 +13,19 @@ const periodicReportEditor = {
 };
 
 const storageEditor = { fields: [{ key: "new_goal_provider" }, { key: "canonical_creation" }, { key: "new_goal_handoff_mode" }] };
-const storageDefault = { schema_version: "loopx_goal_storage_defaults_v1", new_goal_provider: "sqlite",
-  canonical_creation: true, new_goal_handoff_mode: "hard_lease" };
+const storageDefault = { schema_version: "loopx_goal_storage_defaults_v1", new_goal_provider: "file",
+  canonical_creation: false, new_goal_handoff_mode: "hard_lease" };
 assert.deepEqual(projectEditableCapabilityConfiguration(storageEditor,
   goalStorageEditorValue({ schema_version: "loopx_goal_storage_defaults_v0", new_goal_provider: "file" }), storageDefault),
   { new_goal_provider: "file", canonical_creation: false, new_goal_handoff_mode: "hard_lease" },
   "opening a historical selector must not enable canonical creation through today's defaults");
 assert.deepEqual(projectEditableCapabilityConfiguration(storageEditor, goalStorageEditorValue(storageDefault), storageDefault),
+  { new_goal_provider: "file", canonical_creation: false, new_goal_handoff_mode: "hard_lease" },
+  "an unconfigured device editor preserves explicit creation opt-in");
+assert.deepEqual(projectEditableCapabilityConfiguration(storageEditor,
+  goalStorageEditorValue({ ...storageDefault, new_goal_provider: "sqlite", canonical_creation: true }), storageDefault),
   { new_goal_provider: "sqlite", canonical_creation: true, new_goal_handoff_mode: "hard_lease" },
-  "an unconfigured device editor shows the shared new-Goal default");
+  "an explicit SQLite creation setting remains enabled");
 assert.equal((goalStorageEditorValue({ ...storageDefault, canonical_creation: false }) as typeof storageDefault).canonical_creation, false,
   "an explicit v1 opt-out survives editor mode changes");
 

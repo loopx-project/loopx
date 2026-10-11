@@ -62,18 +62,20 @@ See [reviewed promotion and recovery](reviewed-coordination-promotion.md) for th
 ## New Goal authority (machine setting)
 
 **Settings → Capability Center → Device defaults → New Goal authority** selects
-File or SQLite independently of the execution policy. In the new-Goal default
-candidate, a device without a `goal_storage` namespace creates canonical SQLite
-with `hard_lease`; CLI bootstrap and App creation reuse the same configuration
-and typed initialization owner. **Create canonical authority** can be disabled
-explicitly, or used with File and either `soft_claim` or `hard_lease`. Agents
+File or SQLite independently of the execution policy. The 1.4 release candidate
+preserves the 1.3.1 creation path when `goal_storage` is absent: it does not
+initialize canonical authority or open SQLite. **Create canonical authority**
+requires explicit opt-in, with File or SQLite and either `soft_claim` or
+`hard_lease`. CLI bootstrap and App creation reuse the same configuration and
+typed initialization owner. Agents
 inherit the Goal policy; this grants no tool, repository,
 scheduler, account or network permission and does not migrate existing data.
 
-The candidate changes only unconfigured new creation. Released v0 settings and
+SQLite default activation remains held on its separate D2/D3 qualification.
+Released v0 settings and
 v1 with `canonical_creation=false` retain the post-promotion target behavior.
 Opening v0 in the guided editor previews a v1 envelope upgrade with creation
-still disabled; switching editor modes cannot enable it through the new default.
+still disabled; switching editor modes cannot enable it implicitly.
 The CLI continues to accept v0. Existing Goals keep their recorded target,
 including its absence, even when device settings change. Invalid configuration
 fails before registry publication rather than being treated as an absent setting.
@@ -175,10 +177,11 @@ Released v0 preferences remain target-only when opened in the candidate editor.
 
 ![Existing File preference stays disabled](images/new-goal-authority/v0-retained.png)
 
-Removing that preference restores canonical SQLite/hard-lease defaults, with
-native removal readback. It does not migrate the existing Goals.
+The following view records the earlier SQLite-default implementation candidate,
+not the 1.4 opt-in release setting. In 1.4, removal restores creation-off and
+leaves existing Goals on their recorded route.
 
-![Candidate SQLite defaults after preference removal](images/new-goal-authority/sqlite-default.png)
+![Historical SQLite-default candidate before release qualification](images/new-goal-authority/sqlite-default.png)
 
 The existing preview/apply revision gate is unchanged. Unsupported `legacy`
 policy is rejected before apply; correct the policy and preview again. No new
@@ -187,8 +190,8 @@ layout or responsive navigation is introduced.
 </details>
 
 To disable future canonical creation, preview and apply the same v1 document
-with `canonical_creation=false`. Removing the preference restores the candidate
-SQLite/hard-lease default for future new Goals; removal is **not** opt-out.
+with `canonical_creation=false`. Removing the preference also disables future
+canonical creation; neither action migrates existing Goals.
 To remove the whole preference:
 
 ```sh
@@ -213,8 +216,9 @@ default admission remain separate; the existing RFC acceptance is unchanged.
 ### 新 Goal 的权威存储
 
 在“设置 → 能力中心 → 此设备默认 → 新 Goal 的权威存储”中，分别选择 File/SQLite
-和 `soft_claim`/`hard_lease`。候选实现让未配置此命名空间的新 Goal 默认建立
-canonical SQLite、使用 `hard_lease`，CLI 与 App 共用配置和类型化创建归属。
+和 `soft_claim`/`hard_lease`。1.4 发布候选保留 1.3.1 未配置命名空间时的创建路径，
+不初始化 canonical authority 或打开 SQLite；canonical 创建仍须显式启用。
+CLI 与 App 共用配置和类型化创建归属。SQLite 默认启用仍受独立 D2/D3 资格门约束。
 旧 v0 或显式关闭状态仍只固定晋升后的目标；表单以关闭状态预览 v1 升级，
 切换编辑模式也不会自动启用。CLI 继续接受旧格式，已有 Goal 保留原路径。
 Registry 中的相对 runtime 路径按实际文件位置比较；等价路径不会误触发权威迁移检查。
@@ -231,8 +235,8 @@ CLI 使用上面的完整 JSON 和 preview/apply/inspect/bootstrap 命令；App 
 后的存储丢失须恢复完整备份，不能重新创建空库；通用 force 不能重建。原回执在
 后续写入后仍可读回，重试不得丢失或重复 Todo。
 
-显式设置 `canonical_creation=false` 才关闭之后的新建；remove 删除偏好会恢复候选
-SQLite/hard-lease 默认，不能用于关闭。两者均不会迁回已有数据、
+显式设置 `canonical_creation=false` 或 remove 删除偏好，都会关闭之后的 canonical
+新建。两者均不会迁回已有数据、
 删除 fence 或重新开放旧 writer。既有 Goal 升级仍需备份、停止写入、结算租约和
 审核计划；反向迁移须保留新增写入。受支持的旧备份、格式和原回执恢复能力保留。
 配置损坏明确失败，不视为未配置；候选实现不代表完整升级、D2 长期资格或发布默认已通过。
