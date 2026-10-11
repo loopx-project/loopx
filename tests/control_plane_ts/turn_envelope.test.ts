@@ -167,6 +167,24 @@ test("a projected successor preserves its original closeout guard in the compact
   assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
 });
 
+test("receipt-bound settlement recovery transports the original executable command intact", () => {
+  const source = payload();
+  const command = "loopx --runtime-root /" + "long-path/".repeat(50) +
+    " quota spend-slot --goal-id goal-turn-envelope --agent-id agent-ts --todo-id todo-1" +
+    " --turn-instance-id turn-original --execute";
+  const interaction = source.interaction_contract as JsonObject;
+  Object.assign(interaction.agent_channel as JsonObject, {delivery_allowed: false});
+  Object.assign(interaction.cli_channel as JsonObject, {next_cli_actions: [command], spend_allowed_now: true});
+  source.unsettled_host_turn_recovery = {schema_version: "unsettled_host_turn_recovery_v0",
+    scope: "current_turn", repair: "quota_spend", binding_kind: "todo", binding_id: "todo-1",
+    turn_instance_id: "turn-original"};
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  assert.equal((envelope.action as JsonObject).delivery_allowed, false);
+  assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, [command]);
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+});
+
 test("large peer inventories retain scoped gates and signed detail without hiding tasks", () => {
   const source = payload();
   const items = Array.from({ length: 50 }, (_, i) => ({ todo_id: `todo_${i}`,
