@@ -18,7 +18,7 @@ from .contract import (
     normalize_todo_task_repository,
 )
 from .handoff_gate import handoff_ready_successor_todo_ids
-from .handoff_note import attach_todo_handoff_note, compact_todo_continuation_hint
+from .handoff_note import handoff_context_source, project_handoff_context
 from .todo_semantics import todo_blocker_reason, todo_item_task_class
 from .frontier_revision import FRONTIER_REVISION_FIELDS
 
@@ -123,7 +123,7 @@ def todo_text_content_revision(value: Any) -> str | None:
     return "sha256:" + sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def compact_todo_summary_item(
+def _compact_todo_summary_item_record(
     item: dict[str, Any],
     *,
     text: str | None = None,
@@ -199,23 +199,39 @@ def compact_todo_summary_item(
     else:
         compact.pop("replan_obligation_id", None)
     compact["task_class"] = todo_item_task_class(compact)
-    if (
-        compact["task_class"] == "advancement_task"
-        and compact.get("status") == "open"
-    ):
-        continuation_hint = compact_todo_continuation_hint(item)
-        if continuation_hint:
-            compact["continuation_hint"] = continuation_hint
     reason = todo_blocker_reason(item)
     if reason:
         compact["reason"] = reason
-    attach_todo_handoff_note(compact)
     return compact
+
+
+def compact_todo_summary_items(
+    items: list[dict[str, Any]], *, texts: list[str | None] | None = None, strip_text: bool = False,
+) -> list[dict[str, Any]]:
+    if texts is None:
+        texts = [str(item.get("text") or "").strip() for item in items] if strip_text else [None] * len(items)
+    records = [_compact_todo_summary_item_record(item, text=text)
+               for item, text in zip(items, texts, strict=True)]
+    contexts = project_handoff_context([
+        handoff_context_source(item) for pair in zip(items, records, strict=True) for item in pair
+    ])
+    for index, record in enumerate(records):
+        hint, note = contexts[2 * index]["continuation_hint"], contexts[2 * index + 1]["note"]
+        if record["task_class"] == "advancement_task" and record.get("status") == "open" and hint:
+            record["continuation_hint"] = hint
+        if note:
+            record["handoff_note"] = note
+    return records
+
+
+def compact_todo_summary_item(item: dict[str, Any], *, text: str | None = None) -> dict[str, Any]:
+    return compact_todo_summary_items([item], texts=[text])[0]
 
 
 def todo_summary_source_items(value: dict[str, Any]) -> list[dict[str, Any]]:
     ready_successor_todo_ids = handoff_ready_successor_todo_ids(value)
     open_items: list[dict[str, Any]] = []
+    originals: list[dict[str, Any]] = []
     for key in TODO_SUMMARY_SOURCE_KEYS:
         raw_items = value.get(key)
         source_items = raw_items if isinstance(raw_items, list) else []
@@ -234,7 +250,7 @@ def todo_summary_source_items(value: dict[str, Any]) -> list[dict[str, Any]]:
             )
             if duplicate:
                 continue
-            compact = compact_todo_summary_item(item, text=text)
+            compact = _compact_todo_summary_item_record(item, text=text)
             todo_id = normalize_todo_id(compact.get("todo_id"))
             if (
                 todo_id
@@ -250,7 +266,13 @@ def todo_summary_source_items(value: dict[str, Any]) -> list[dict[str, Any]]:
                     "source": "handoff_gate_cleared_with_successor",
                 }
             open_items.append(compact)
-    return open_items
+            originals.append(item)
+    projected = compact_todo_summary_items(originals, texts=[row["text"] for row in open_items])
+    for compact, prepared in zip(projected, open_items, strict=True):
+        for key in ("resume_ready", "resume_condition"):
+            if key in prepared:
+                compact[key] = prepared[key]
+    return projected
 
 
 def todo_planning_source_items(
@@ -267,6 +289,7 @@ def todo_planning_source_items(
     """
 
     planning_items: list[dict[str, Any]] = []
+    originals: list[dict[str, Any]] = []
     seen: set[str] = set()
     for key in TODO_PLANNING_SOURCE_KEYS:
         raw_items = value.get(key)
@@ -288,11 +311,18 @@ def todo_planning_source_items(
             if not todo_id or not text or todo_id in seen:
                 continue
             seen.add(todo_id)
-            compact = compact_todo_summary_item(item, text=text)
+            compact = _compact_todo_summary_item_record(item, text=text)
             if include_terminal:
                 # Terminal-inclusive planning also proves exact frontier causality.
                 for field in (*FRONTIER_REVISION_FIELDS, "evidence", "note", "last_actor_agent_id"):
                     if item.get(field) is not None:
                         compact[field] = item[field]
             planning_items.append(compact)
-    return planning_items
+            originals.append(item)
+    projected = compact_todo_summary_items(originals, texts=[row["text"] for row in planning_items])
+    if include_terminal:
+        for compact, prepared in zip(projected, planning_items, strict=True):
+            for field in (*FRONTIER_REVISION_FIELDS, "evidence", "note", "last_actor_agent_id"):
+                if field in prepared:
+                    compact[field] = prepared[field]
+    return projected

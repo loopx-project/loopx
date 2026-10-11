@@ -1,3 +1,4 @@
+import {projectTodoHandoffContext} from "./handoff_projection.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireInteger, requireJsonObject } from "../runtime_decode.ts";
@@ -14,6 +15,12 @@ const CONTEXT_FIELDS = [
 
 /** Select before redaction; never convert nested scopes or booleans to prose. */
 export function projectTodoContextPage(input: JsonObject): JsonObject {
+  if (input.handoff_sources !== undefined) {
+    if (Object.keys(input).some(key => key !== "handoff_sources" && key !== "handoff_followups")) {
+      throw new EffectRuntimeRequestError("handoff context cannot be combined with list/detail/page inputs");
+    }
+    return {handoff_context: projectTodoHandoffContext(input.handoff_sources, input.handoff_followups)};
+  }
   if (input.list_payload !== undefined) return projectTodoListPayload(input);
   if (input.detail_payload !== undefined) return projectTodoDetailPayload(input);
   if (!Array.isArray(input.records)) throw new EffectRuntimeRequestError("Todo context records must be an array");

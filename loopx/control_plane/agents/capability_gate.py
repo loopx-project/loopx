@@ -15,7 +15,7 @@ from ..todos.todo_semantics import (
     todo_item_task_class,
     todo_priority_rank,
 )
-from ..todos.summary_item import compact_todo_summary_item
+from ..todos.summary_item import compact_todo_summary_items
 from .agent_scope import agent_scope_item_claimed_by
 from .profile import agent_profile_candidate_rank
 
@@ -190,11 +190,12 @@ def build_capability_gate(
     profile = profile if isinstance(profile, dict) else None
     policy = ("claim_then_profile_then_priority_then_active_next_then_repair" if profile else
               "claim_then_priority_then_active_next_then_repair") if agent else None
+    displays = compact_todo_summary_items(candidates, strip_text=True)
     return _evaluate("project", source=source,
                      available=normalize_required_capabilities(available_capabilities),
                      candidate_order_policy=policy, candidates=[{
-                         "payload": compact_todo_summary_item(item, text=str(item.get("text") or "").strip()),
+                         "payload": display,
                          "required": normalize_required_capabilities(item.get("required_capabilities")),
                          "targets": normalize_target_capabilities(item.get("target_capabilities")),
                          "rank": list(_agent_lane_candidate_sort_key(item, agent_id=agent, agent_profile=profile)),
-                     } for item in candidates])
+                     } for item, display in zip(candidates, displays, strict=True)])

@@ -78,6 +78,30 @@ without changing their output, history retention or outbox recovery. Python
 retains this Host IO adapter until its last supported source writer is replaced;
 this is neither whole-writer retirement nor default-provider qualification.
 
+Handoff/continuation display decisions now belong to the existing TypeScript Todo
+context owner. Summary reuses its normalized identity/claim/exclusion/class
+facts in one batch; the index keeps source compaction before labelling and audit
+merging in one native batch. Planning and quota collectors project whole chosen
+sets. Oversized display context uses byte-bounded read-lens batches while
+counts, dependency decisions and closure retain their full-source owner. A
+single oversized historical record reuses the existing private snapshot transport:
+credential checks see its full text before display truncation. The
+Python facade keeps shared metadata codecs and historical tuple/SHA-1 identity
+encoding, with no Python decision fallback. Retain nested-empty precedence,
+Unicode whitespace/codepoint limits and credential rejection before truncation;
+these are compatibility obligations. File/SQLite CLI and normal-wheel recovery
+must preserve exact source and provider revision when Markdown display is absent
+or the selected provider is unavailable. This read-model retirement does not
+retire the supported mutation/Host callers or certify a released SQLite default.
+
+Public add now composes scope, supported wait and bounded Monitor metadata in
+one typed creation-scope request. The legacy add writer consumes that same
+fresh draft rather than re-planning it; standalone line codecs and successor
+creation retain their own admission. Priority and validation-declaration
+checks keep their prior diagnostic order, and canonical provider transactions
+still recheck registry/claim/lease/CAS authority. This retires duplicate add
+composition, not the supported Markdown writer or bootstrap/Host/history IO.
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.

@@ -41,7 +41,7 @@ from .summary_item import todo_text_content_revision
 from .completion_validation_projection import project_completion_validation_authority
 from .frontier_revision import frontier_source_facts, TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION
 from .handoff_gate import build_todo_handoff_gate_states
-from .handoff_note import attach_todo_handoff_note
+from .handoff_note import attach_todo_handoff_notes, handoff_context_source, validate_handoff_context
 from .todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
     todo_item_is_deferred as projection_todo_item_is_deferred,
@@ -438,7 +438,7 @@ def structured_todo_item(
     return normalized
 
 
-def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
+def _compact_todo_item_record(item: dict[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {
         "index": item.get("index"),
         "done": bool(item.get("done")),
@@ -453,8 +453,16 @@ def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
         compact["content_revision"] = item["content_revision"]
     if isinstance(item.get("goal_acceptance_guard"), dict):
         compact["goal_acceptance_guard"] = item["goal_acceptance_guard"]
-    attach_todo_handoff_note(compact)
     return compact
+
+
+def compact_todo_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return attach_todo_handoff_notes([_compact_todo_item_record(item) for item in items])
+
+
+def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Singleton adapter; whole-source consumers use the batch owner."""
+    return compact_todo_items([item])[0]
 
 
 def canonical_todo_read_record(
@@ -494,7 +502,7 @@ def _task_orchestration_authority(lanes: dict[str, list[dict[str, Any]]], *, rol
     """Materialize the typed selection using the existing public field allowlist."""
     return {"schema_version": TASK_ORCHESTRATION_AUTHORITY_SCHEMA_VERSION, "role": role,
         **{name: [{key: compact[key] for key in fields if key in compact}
-                  for item in lanes[name] for compact in [compact_todo_item(item)]]
+                  for compact in lanes[name]]
            for name, fields in (("candidate_items", TASK_ORCHESTRATION_CANDIDATE_FIELDS),
                                 ("user_blocker_items", TASK_ORCHESTRATION_USER_BLOCKER_FIELDS))}}
 
@@ -584,13 +592,13 @@ def open_todo_items(
             if key in seen:
                 continue
             seen.add(key)
-            compact = compact_todo_item(item)
+            compact = _compact_todo_item_record(item)
             compact["done"] = False
             compact["text"] = text
             result.append(compact)
             if len(result) >= limit:
-                return sorted(result, key=projection_todo_presentation_sort_key)
-    return sorted(result, key=projection_todo_presentation_sort_key)
+                return sorted(attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key)
+    return sorted(attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key)
 
 
 def todo_lane_items(
@@ -846,12 +854,63 @@ def _resume_condition_evaluated(item: dict[str, Any], resume: str | None) -> boo
         and item.get("resume_ready") is condition.get("satisfied"))
 
 
+def _materialize_summary_lanes(items: list[dict[str, Any]], compacts: list[dict[str, Any]],
+    result: dict[str, Any], summary: dict[str, Any], lanes: dict[str, Any],
+    orchestration: dict[str, list[int]], *, fused_context: bool,
+) -> None:
+    """Materialize validated ordinals with the existing display field allowlist."""
+    if fused_context:
+        contexts = validate_handoff_context(result.get("handoff_context"), len(items))
+        for compact, context in zip(compacts, contexts, strict=True):
+            if context["note"]:
+                compact["handoff_note"] = context["note"]
+    else:
+        # Counts/closure still use every source row in their existing batch.
+        # The independent display lens only needs the ordinals that are used.
+        visible = sorted({index for lane in lanes.values() if lane["format"] != "raw" for index in lane["indices"]}
+                         | {index for indices in orchestration.values() for index in indices})
+        attach_todo_handoff_notes([compacts[index] for index in visible])
+    warning = summary.get("todo_succession_warning")
+    warning_action = warning.get("recommended_action") if isinstance(warning, dict) else None
+    if summary.get("completed_without_successor_count") and not isinstance(warning_action, str):
+        raise ValueError("invalid typed Todo succession warning")
+    for name, lane in lanes.items():
+        mode = lane.get("format")
+        if mode not in {"raw", "active", "compact", "recent", "gap"}:
+            raise ValueError("invalid Todo summary display format")
+        formatted = []
+        for index in lane["indices"]:
+            item = items[index]
+            if mode == "raw":
+                compact = item
+            elif mode == "active":
+                compact = dict(compacts[index])
+                for key in ("note", "evidence", "reason", "completed_at", "updated_at", "superseded_by"):
+                    compact.pop(key, None)
+            elif mode in {"compact", "recent", "gap"}:
+                compact = dict(compacts[index])
+                if mode in {"recent", "gap"}:
+                    for key in ("note", "evidence", "reason"):
+                        compact.pop(key, None)
+                if mode == "gap":
+                    compact.update(succession_tracked=True,
+                        recommended_action=warning_action)
+            else:
+                raise ValueError("invalid Todo summary display format")
+            formatted.append(compact)
+        summary[name] = formatted
+    if isinstance(warning, dict):
+        warning["items"] = summary["completed_without_successor_items"]
+
+
 def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] | None,
     *, selection: dict[str, Any] | None, role: str | None, source_section: str | None,
     item_limit: int | None, full_selection: bool,
 ) -> dict[str, Any]:
     """Adapt evaluated facts and materialize one typed summary decision."""
-    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+    import json
+
+    from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
 
     from .succession_warning import succession_evaluations, succession_request
 
@@ -895,9 +954,18 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
                 "blocks": normalize_todo_blocks_agent(item.get("blocks_agent")),
                 "global": bool(item.get("global_gate")),
                 "excluded": normalize_todo_excluded_agents(item.get("excluded_agents"))}})
+    compacts = [_compact_todo_item_record(item) for item in items]
+    contexts = [handoff_context_source(item) for item in compacts]
+    for context in contexts:
+        for key in ("todo_id", "claimed_by", "excluded_agents"):
+            context.get("metadata", {}).pop(key, None)
+        context.get("texts", {}).pop("task_class", None)
+        if not context.get("metadata"):
+            context.pop("metadata", None)
     try:
-        result = effect_runtime_result("todo.summary.project", {
+        request = {
             "schema_version": SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION,
+            "handoff_sources": contexts,
             "columns": list(SUMMARY_PROJECTION_COLUMNS),
             "rows": [[row[name] for name in SUMMARY_PROJECTION_COLUMNS] for row in rows],
             "succession": succession_request(items, reuse=True),
@@ -905,7 +973,11 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
             "observed_at": now_utc().timestamp(),
             "selection": selection, "role": role, "source_section": source_section,
             "item_limit": item_limit, "full_selection": full_selection,
-        })
+        }
+        fused_context = len(json.dumps(request, separators=(",", ":")).encode()) <= MAX_REQUEST_BYTES - 4096
+        if not fused_context:
+            request.pop("handoff_sources")
+        result = effect_runtime_result("todo.summary.project", request)
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from error
     if not isinstance(result, dict) or result.get("schema_version") != "todo_summary_projection_v0":
@@ -938,38 +1010,11 @@ def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] |
         index = summary.get("advancement_frontier_revision_index")
         if not isinstance(index, dict) or index.get("schema_version") != TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION:
             raise ValueError("invalid typed Todo summary frontier index")
-    warning = summary.get("todo_succession_warning")
-    warning_action = warning.get("recommended_action") if isinstance(warning, dict) else None
-    if summary.get("completed_without_successor_count") and not isinstance(warning_action, str):
-        raise ValueError("invalid typed Todo succession warning")
-    for name, lane in lanes.items():
-        mode = lane.get("format")
-        if mode not in {"raw", "active", "compact", "recent", "gap"}:
-            raise ValueError("invalid Todo summary display format")
-        formatted = []
-        for index in lane["indices"]:
-            item = items[index]
-            if mode == "raw":
-                compact = item
-            elif mode == "active":
-                compact = compact_active_next_action_todo_item(item)
-            elif mode in {"compact", "recent", "gap"}:
-                compact = compact_todo_item(item)
-                if mode in {"recent", "gap"}:
-                    for key in ("note", "evidence", "reason"):
-                        compact.pop(key, None)
-                if mode == "gap":
-                    compact.update(succession_tracked=True,
-                        recommended_action=warning_action)
-            else:
-                raise ValueError("invalid Todo summary display format")
-            formatted.append(compact)
-        summary[name] = formatted
-    if isinstance(warning, dict):
-        warning["items"] = summary["completed_without_successor_items"]
+    _materialize_summary_lanes(items, compacts, result, summary, lanes, orchestration,
+        fused_context=fused_context)
     return {"summary": summary, "items": [items[index] for index in selected],
         "succession": [succession[index] for index in selected],
-        "orchestration": {name: [items[index] for index in indices] for name, indices in orchestration.items()}}
+        "orchestration": {name: [compacts[index] for index in indices] for name, indices in orchestration.items()}}
 
 
 def compact_todo_group(

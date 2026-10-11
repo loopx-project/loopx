@@ -158,3 +158,12 @@ test("default exact detail removes duplicate views without truncating or grantin
   assert.equal(missing.not_found, true);
   assert.equal((missing.todo_detail_projection as JsonObject).source_complete, false);
 });
+
+test("handoff context is an exclusive read lens with aligned stages", () => {
+  assert.throws(() => projectTodoContextPage({handoff_sources: [], list_payload: {}}), /cannot be combined/);
+  assert.throws(() => projectTodoContextPage({handoff_sources: [{}], handoff_followups: []}), /cardinality/);
+  const result = projectTodoContextPage({handoff_sources: [{texts: {note: "Continue the complete requirement"}}]});
+  assert.deepEqual(result.handoff_context, [{note: null, continuation_hint: "Continue the complete requirement"}]);
+  // No execution grant or source record is manufactured by this projection.
+  assert.deepEqual(Object.keys(result), ["handoff_context"]);
+});
