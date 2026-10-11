@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from test_quota_settlement_cli import (
     TODO_ID,
     _configure_read_only_todo,
     _configure_selectable_alternative,
+    _initialize_git_checkout,
     _spend_run_count,
     _write_fixture,
 )
@@ -45,25 +47,59 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
     _configure_selectable_alternative(project)
+    dependency_owner = (
+        AGENT_ID if kind == "monitor_changed" else "codex-dependency-peer"
+    )
+    workspace = project
+    if kind == "todo_done":
+        configuration = json.loads(registry.read_text())
+        configuration["goals"][0]["coordination"]["registered_agents"].append(
+            dependency_owner
+        )
+        registry.write_text(json.dumps(configuration))
+        _initialize_git_checkout(project)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=LoopX Test",
+                "-c",
+                "user.email=loopx-test@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-s",
+                "-m",
+                "dependency fixture",
+            ],
+            cwd=project,
+            check=True,
+        )
+        workspace = tmp_path / "linked-worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "--quiet", "--detach", str(workspace)],
+            cwd=project,
+            check=True,
+        )
     dependency = (
         "task_class=continuous_monitor target_key=later-dependency cadence=6h "
         "next_due_at=2099-01-01T00:00:00Z expires_at=2099-01-08T00:00:00Z "
         "material_change_generation=0"
         if kind == "monitor_changed"
-        else "task_class=advancement_task continuation_policy=same_agent_non_delivery priority=2"
+        else "task_class=advancement_task priority=2"
     )
     state.write_text(
         state.read_text()
         + (
             "\n- [ ] [P2] Await independent dependency evidence.\n"
             f"  <!-- loopx:todo todo_id={DEPENDENCY_ID} status=open "
-            f"claimed_by=independent-dependency-worker {dependency} -->\n"
+            f"claimed_by={dependency_owner} {dependency} -->\n"
         )
     )
 
     def run(*args: str) -> tuple[int, dict]:
         with monkeypatch.context() as context:
-            context.chdir(project)
+            context.chdir(workspace)
             rc = cli_main(
                 [
                     "--registry",
