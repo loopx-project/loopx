@@ -435,19 +435,24 @@ monitor therefore stays quiet during that wait without failing the heartbeat
 receipt or changing the monitor's due time, hash, or material generation.
 The typed deadline owner reconciles a newer, earlier receipt-owned retry with
 an existing full-source deadline cache; hidden earlier monitor deadlines and
-unchanged caches remain intact. When the receipt retry owns the next deadline,
-a non-blocking `user_action` notice does not turn its quiet wait into a human
-gate. Earlier or equal independent monitor clocks retain their existing route;
-this repair does not qualify their notice explanation. The pending retry is a
-recheck deadline, not execution authority: current gates and the configured
-cadence floor still apply at and after due time.
+unchanged caches remain intact. The same typed batch derives `blocked_retry_wait`
+from qualified full-source receipts independently of `frontier_deadline`, which
+still names the earliest wakeup. A non-blocking `user_action` notice therefore
+does not turn the retry into a human gate even when an earlier or equal monitor
+owns that wakeup. The retry identity and original due time remain visible; the
+monitor clock, genuine gate and independent runnable work keep their own rules.
+This corrects the automatic notice explanation without adding configuration or
+persisted state. The pending retry is a recheck deadline, not execution authority:
+current gates and the configured cadence floor still apply at and after due time.
 
 类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
-缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。当 receipt retry
-拥有下一到期时间时，普通 `user_action` 通知不会把该安静等待变成人工门禁。
-更早或同刻的独立监控时钟保留原路由，本修复不代表它们的通知解释已验收。
-重试到期仅要求重新检查，不授予
-执行权限；当前 gate 和已配置的调度周期下限仍然有效。
+缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。同一个 typed batch
+从完整且合格的 receipt 来源独立投影 `blocked_retry_wait`；`frontier_deadline`
+仍表示最早唤醒时间。即使更早或同刻的独立 monitor 拥有下一唤醒，普通
+`user_action` 提醒也不会把重试解释为人工门禁；原 retry 身份/到期时间、monitor
+时钟、真实 gate 和独立可执行工作各自保持。这是自动通知解释的修正，不新增
+配置或持久化状态。重试到期仅要求重新检查，不授予执行权限；当前 gate 和
+已配置的调度周期下限仍然有效。
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a
