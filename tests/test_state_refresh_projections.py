@@ -70,7 +70,7 @@ def test_refresh_output_projections_preserve_optional_run_contracts() -> None:
         "frontmatter": {"updated_at": "2026-07-30T23:59:00+00:00"},
     }
     assert index_record["requested_classification"] == "repair_completed"
-    assert index_record["agent_vision"] == {
+    expected_vision = {
         key: agent_vision[key]
         for key in (
             "schema_version",
@@ -83,6 +83,10 @@ def test_refresh_output_projections_preserve_optional_run_contracts() -> None:
             "path_delta",
         )
     }
+    # The run-index contract carries an explicit null for the optional,
+    # default-off stride decision. All original fields remain unchanged.
+    expected_vision["stride_decision"] = None
+    assert index_record["agent_vision"] == expected_vision
     assert "validation" not in index_record["agent_vision"]
     for field in (
         "delivery_batch_scale",

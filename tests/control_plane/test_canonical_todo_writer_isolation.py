@@ -363,11 +363,13 @@ def test_new_goal_and_original_creation_recovery_without_source_todo_writers(tmp
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
-    project, runtime, registry, display, _ = _source(
+    project, runtime, registry, display, prefix = _source(
         tmp_path, provider=provider, handoff_mode="hard_lease",
         extra=f"claimed_by={settlement.AGENT_ID}",
     )
-    display.unlink()
+    # The isolated package removes the writers; erase only the Todo display,
+    # not the Goal objective and constraints needed for delivery admission.
+    display.write_text(prefix)
 
     def run(*args, succeeds=True):
         result = subprocess.run(
