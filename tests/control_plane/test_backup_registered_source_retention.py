@@ -3,6 +3,7 @@ import json
 import hashlib
 import os
 import sqlite3
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -12,9 +13,21 @@ import pytest
 import loopx
 
 from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.coordination.local_authority_shadow_adapter import read_local_authority_shadow
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.shadow_e2e_fixture import workspace
+
+
+def extract_verified_backup(archive_path, destination):
+    """Check the saved member witness independently before using copied bytes."""
+    with tarfile.open(archive_path) as archive:
+        archive.extractall(destination, filter="data")
+    manifest = json.loads((destination / "manifest.json").read_bytes())
+    for member in manifest["execution"]["file_members"]:
+        data = (destination / member["archive_path"]).read_bytes()
+        assert len(data) == member["size_bytes"]
+        assert hashlib.sha256(data).hexdigest() == member["sha256"]
 
 
 @pytest.fixture(autouse=True)
@@ -229,13 +242,7 @@ def test_cold_import_then_new_writes_full_backup_and_independent_history_readbac
     assert saved["ok"] is True
     copy = tmp_path / "independent-empty-recovery"
     assert not copy.exists()
-    with tarfile.open(saved["archive_path"]) as archive:
-        archive.extractall(copy, filter="data")
-    manifest = json.loads((copy / "manifest.json").read_bytes())
-    for member in manifest["execution"]["file_members"]:
-        data = (copy / member["archive_path"]).read_bytes()
-        assert len(data) == member["size_bytes"]
-        assert hashlib.sha256(data).hexdigest() == member["sha256"]
+    extract_verified_backup(saved["archive_path"], copy)
     routes = {row["key"]: row["archive_path"] for row in saved["included"]}
     assert (copy / routes["registry_active_state:goal-e2e"]).read_bytes() == post_import_state
     assert (copy / routes["configuration_source_registry"]).read_bytes() == fixture.registry.read_bytes()
@@ -275,3 +282,209 @@ def test_cold_import_then_new_writes_full_backup_and_independent_history_readbac
     assert not selected_directory.exists()
     if provider == "sqlite":
         assert not (restored_runtime / "authority/file-v0").exists()
+
+
+@pytest.mark.parametrize("window", ["before_replace", "before_marker", "before_commit", "after_commit"])
+@pytest.mark.parametrize("policy", ["soft_claim", "hard_lease"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_restored_source_outbox_resumes_once_before_cold_import(
+    tmp_path, policy, window, provider
+):
+    """Restore only the owned runtime at its original binding before import.
+
+    Original source paths remain; this does not reactivate a whole Goal.
+    """
+    fixture = workspace(tmp_path / "project", bootstrap=False)
+    registry = fixture.state.parent / ".loopx/registry.json"
+    registry.parent.mkdir()
+    fixture.registry.rename(registry)
+    fixture.registry = registry
+    fixture.state.write_text(
+        fixture.state.read_text().replace(
+            "handoff_mode: hard_lease", f"handoff_mode: {policy}"
+        )
+    )
+    fixture.cli("coordination-shadow", "bootstrap", "--execute")
+    first = fixture.add("Keep the original requirement")["todo_id"]
+    source_before = fixture.state.read_bytes()
+    fixture.crash(
+        window,
+        "todo",
+        "add",
+        "--role",
+        "agent",
+        "--text",
+        "Retain the interrupted original operation",
+    )
+    source_after = fixture.state.read_bytes()
+    assert (source_after == source_before) == (window == "before_replace")
+    outbox = fixture.runtime / "authority-shadow/outbox" / fixture.goal / "todos"
+    prepared = next(outbox.glob("*.prepared.json"))
+    operation = json.loads(prepared.read_bytes())["entry_id"]
+    original = {
+        str(path.relative_to(fixture.runtime)): path.read_bytes()
+        for path in fixture.runtime.rglob("*")
+        if path.is_file() and not path.name.endswith(".lock")
+    }
+    registry_bytes = fixture.registry.read_bytes()
+    inventory = fixture.cli("coordination-shadow", "inspect-source")["source_inventory"]
+    assert (
+        inventory["outbox_reconciliation_verified"] is False
+        and inventory["writer_stop_verified"] is False
+    )
+    assert inventory["capture"]["management_state"]["status"] == "active"
+    assert original == {
+        str(path.relative_to(fixture.runtime)): path.read_bytes()
+        for path in fixture.runtime.rglob("*")
+        if path.is_file() and not path.name.endswith(".lock")
+    }
+
+    def backup(name):
+        child = subprocess.run(
+            [
+                *fixture.command,
+                "--registry",
+                str(fixture.registry),
+                "--runtime-root",
+                str(fixture.runtime),
+                "--format",
+                "json",
+                "backup-state",
+                "--project",
+                str(fixture.state.parent),
+                "--output-dir",
+                str(tmp_path / "saved"),
+                "--backup-id",
+                name,
+                "--current-project-only",
+                "--no-skills",
+                "--no-automations",
+                "--execute",
+            ],
+            cwd=fixture.cwd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert child.returncode == 0, child.stdout + child.stderr
+        return json.loads(child.stdout)
+
+    saved = backup("interrupted-source")
+    copy = tmp_path / "independent-copy"
+    extract_verified_backup(saved["archive_path"], copy)
+    for relative, data in original.items():
+        assert (copy / "runtime-root" / relative).read_bytes() == data
+    routes = {row["key"]: row["archive_path"] for row in saved["included"]}
+    assert (
+        copy / routes["registry_active_state:goal-e2e"]
+    ).read_bytes() == source_after
+    assert (
+        copy / routes["configuration_source_registry"]
+    ).read_bytes() == registry_bytes
+
+    # The killed writer is owned by this fixture. Stop its remaining transport
+    # before replacing only its disposable runtime at the original binding path.
+    restart_effect_runtime()
+    fixture.runtime.rename(tmp_path / "quarantined-original-runtime")
+    shutil.copytree(copy / "runtime-root", fixture.runtime)
+    assert (
+        fixture.state.read_bytes() == source_after
+        and fixture.registry.read_bytes() == registry_bytes
+    )
+    resumed = fixture.drain()
+    assert resumed["ok"] is True and resumed["outcome"] == "drained", resumed
+    assert resumed["pending_after"] == 0 and resumed["prepared_only_after"] == 0
+    assert resumed["no_op"] == (1 if window == "before_replace" else 0)
+    assert not list(outbox.glob("*.prepared.json")) and not list(
+        outbox.glob("*.committed.json")
+    )
+    proof = read_local_authority_shadow(
+        runtime_root=fixture.runtime, goal_id=fixture.goal, scan_limit=100
+    )["proof"]
+    transactions = proof["transactions"]
+    # Bootstrap, original requirement and exactly one interrupted position.
+    assert len(transactions) == 3, transactions
+    assert transactions[-1]["receipts"][0]["entry_id"] == operation
+    assert transactions[-1]["receipts"][0]["no_op"] == (window == "before_replace")
+    head = transactions[-1]["projection"]
+    todos = {row["todo_id"]: row for row in head["todos"]}
+    assert first in todos and len(todos) == (1 if window == "before_replace" else 2)
+    assert fixture.state.read_bytes() == source_after
+    revision = fixture.cli("coordination-shadow", "inspect")["inspection"][
+        "provider_revision"
+    ]
+    again = fixture.drain()
+    assert again["ok"] and again["outcome"] == "nothing_pending"
+    assert (
+        read_local_authority_shadow(
+            runtime_root=fixture.runtime, goal_id=fixture.goal, scan_limit=100
+        )["proof"]["transactions"]
+        == transactions
+    )
+
+    rollback = fixture.cli(
+        "coordination-shadow", "rollback", "--provider-revision", revision, "--execute"
+    )["rollback"]
+    assert rollback["status"] == "applied"
+    settled = backup("settled-source")
+    plan = fixture.cli(
+        "coordination-shadow",
+        "prepare-import",
+        "--operation-id",
+        "original-reviewed-import",
+        "--backup-manifest",
+        settled["manifest_path"],
+        "--provider",
+        provider,
+        "--target-handoff-mode",
+        policy,
+    )["cold_import"]
+    assert (
+        plan["status"] == "prepared" and plan["complete_goal_backup_verified"] is False
+    )
+    digest = plan["plan_sha256"]
+    imported = fixture.cli(
+        "coordination-shadow",
+        "apply-import",
+        "--operation-id",
+        "original-reviewed-import",
+        "--plan-sha256",
+        digest,
+        "--writers-stopped",
+        "--execute",
+    )["cold_import"]
+    assert (
+        imported["status"] == "applied"
+        and imported["execution_authority_granted"] is False
+    )
+    created = fixture.cli(
+        "todo",
+        "add",
+        "--role",
+        "agent",
+        "--text",
+        "New canonical data after recovered source",
+        "--operation-id",
+        "later-new-data",
+        "--claimed-by",
+        "agent-a",
+    )
+    assert created["ok"]
+    before = fixture.cli("todo", "list")["todos"]
+    recovered = fixture.cli(
+        "coordination-shadow",
+        "recover-import",
+        "--operation-id",
+        "original-reviewed-import",
+        "--plan-sha256",
+        digest,
+        "--execute",
+    )["cold_import"]
+    assert (
+        recovered["status"] == "replayed"
+        and recovered["execution_authority_granted"] is False
+    )
+    assert fixture.cli("todo", "list")["todos"] == before
+    assert first in {row["todo_id"] for row in before} and created["todo_id"] in {
+        row["todo_id"] for row in before
+    }
