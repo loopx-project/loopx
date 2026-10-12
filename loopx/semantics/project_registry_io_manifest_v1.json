@@ -199,7 +199,7 @@
     },
     {
       "site": "loopx/capabilities/issue_fix/explore_projection.py::<module>.project_issue_fix_explore_graph::codec_read:load_registry#1",
-      "line": 666,
+      "line": 667,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -215,7 +215,7 @@
     },
     {
       "site": "loopx/capabilities/issue_fix/pr_gate_reconcile.py::<module>.reconcile_acknowledged_issue_fix_pr_reviews::codec_read:load_registry#1",
-      "line": 372,
+      "line": 373,
       "column": 35,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2191,7 +2191,7 @@
     },
     {
       "site": "loopx/state_backup.py::<module>._registry_goals::direct_json_read:json.loads#1",
-      "line": 54,
+      "line": 58,
       "column": 15,
       "kind": "direct_json_read",
       "api": "json.loads",

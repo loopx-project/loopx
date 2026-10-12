@@ -25,7 +25,7 @@ from .paths import resolve_runtime_root
 from .registry import registry_goals
 from .runtime import validate_goal_id_path_segment
 from .state_refresh import now_local
-from .todos import add_goal_todo, update_goal_todo
+from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 DREAMING_DRY_RUN_SCHEMA_VERSION = "dreaming_dry_run_proposal_v0"
 DREAMING_PROPOSAL_SCHEMA_VERSION = "dreaming_proposal_v0"
