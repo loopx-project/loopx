@@ -3,7 +3,10 @@ from .effective_action import EffectiveAction
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..goals.goal_frontier.fallback_source import FallbackTodoSource
 
 from ...quota import (
     _build_quota_plan_for_goal,
@@ -320,6 +323,7 @@ def build_quota_should_run(
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    authoritative_fallback_todo_items: FallbackTodoSource = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     resolved_scheduler_context = resolve_scheduler_execution_context(
@@ -390,6 +394,7 @@ def build_quota_should_run(
             receipt_bound_replay_phase=receipt_bound_replay_phase,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+            authoritative_fallback_todo_items=authoritative_fallback_todo_items,
             receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         )
         route = _resolve_quota_should_run_route(prepared)

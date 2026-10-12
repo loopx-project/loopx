@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,8 +22,8 @@ OBSERVATION_FIELDS = (
 )
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["unavailable", "capability_restore", "observed"])
+@pytest.mark.parametrize("provider", ["markdown", "file", "sqlite"])
+@pytest.mark.parametrize("scenario", ["unavailable", "capability_restore", "observed", "peer_git"])
 def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     provider: str, scenario: str,
@@ -40,6 +41,11 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         "last_checked_at=1999-01-01T00%3A00%3A00Z next_due_at=2000-01-01T00%3A00%3A00Z "
         f"result_hash={'a' * 64} material_change=false material_change_generation=7",
     ))
+    if scenario == "peer_git":
+        registered = json.loads(registry.read_text())
+        registered["goals"][0]["coordination"]["registered_agents"].append("other-peer")
+        registry.write_text(json.dumps(registered))
+        subprocess.run(["git", "init", str(project)], capture_output=True, check=True)
 
     def cli(*args: str) -> tuple[int, dict]:
         with monkeypatch.context() as context:
@@ -50,9 +56,10 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
 
     rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
-    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease", leases=[],
-    ), state_path=state, provider=provider)
+    if provider != "markdown":
+        initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease", leases=[],
+        ), state_path=state, provider=provider)
     original_turn = f"unavailable-original-{provider}"
     binding = ("--agent-id", AGENT_ID, "--todo-id", MONITOR_ID,
                "--turn-instance-id", original_turn)
@@ -69,9 +76,13 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     writeback_step = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
     assert "observation is unavailable" in writeback_step["precondition"]
-    rc, lease = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
-                    "--owner", AGENT_ID, "--idempotency-key", f"unavailable-{provider}")
-    assert rc == 0 and lease["acquired"] is True, lease
+    lease_args: tuple[str, ...] = ()
+    if provider != "markdown":
+        rc, lease = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
+                        "--owner", AGENT_ID, "--idempotency-key", f"unavailable-{provider}")
+        assert rc == 0 and lease["acquired"] is True, lease
+        lease_args = ("--task-lease-idempotency-key", f"unavailable-{provider}",
+                      "--task-lease-expected-version", str(lease["lease"]["version"]))
     rc, before = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID)
     assert rc == 0, before
     fields = {k: before["todo"].get(k) for k in OBSERVATION_FIELDS}
@@ -101,8 +112,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     if scenario == "observed":
         rc, poll = cli("quota", "monitor-poll", "--goal-id", GOAL_ID, "--codex-app", *binding,
                        "--target-key", "synthetic-source", "--result-hash", "synthetic-observed",
-                       "--task-lease-idempotency-key", f"unavailable-{provider}",
-                       "--task-lease-expected-version", str(lease["lease"]["version"]),
+                       *lease_args,
                        "--execute")
         assert rc == 0 and poll["appended"] is True, poll
         rc, denied = cli(*refresh)
@@ -150,16 +160,21 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     assert rc == 0 and after["todo"]["status"] == "open", after
     assert {k: after["todo"].get(k) for k in OBSERVATION_FIELDS} == fields
     assert not after["todo"].get("resume_when")
+    if scenario == "peer_git":
+        assert closed.get("delivery_workspace") is None
+        return
 
     # A newly executable independent advancement belongs to the same recovery
     # host Turn after the original effect is closed, without a third identity.
-    rc, restored = cli("task-lease", "release", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
-                       "--owner", AGENT_ID, "--idempotency-key", f"unavailable-{provider}",
-                       "--expected-version", str(lease["lease"]["version"]))
-    assert rc == 0, restored
+    if provider != "markdown":
+        rc, restored = cli("task-lease", "release", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
+                           "--owner", AGENT_ID, "--idempotency-key", f"unavailable-{provider}",
+                           "--expected-version", str(lease["lease"]["version"]))
+        assert rc == 0, restored
     rc, successor = cli("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
                         "--text", "Inspect an independent public source.", "--task-class", "advancement_task",
-                        "--claimed-by", AGENT_ID, "--operation-id", f"independent-{provider}")
+                        "--claimed-by", AGENT_ID,
+                        *(("--operation-id", f"independent-{provider}") if provider != "markdown" else ()))
     assert rc == 0, successor
     rc, next_turn = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app",
                         "--agent-id", AGENT_ID, "--turn-instance-id", recovery_turn, *capabilities)

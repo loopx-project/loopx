@@ -25,7 +25,7 @@ GOAL = "installed-authority-e2e"
 REQUIRED_STAGES = {
     "installed_python_ts_json_resources", "real_baseline_bootstrap",
     "three_mutations_one_receipt_each", "default_qualification_and_exact_candidate_read",
-    "rollback_inactive_write_new_lineage",
+    "rollback_inactive_write_new_lineage", "installed_fallback_dispatch",
 }
 
 
@@ -123,6 +123,7 @@ for relative in ['control_plane/coordination/runtime_shadow.ts', 'control_plane/
     'control_plane/coordination/file_authority_store.ts', 'control_plane/coordination/local_authority_shadow_identity.ts',
     'control_plane/coordination/legacy_writer_lock_paths.ts',
     'control_plane/runtime/receipt_log_snapshot.ts',
+    'control_plane/goals/goal_frontier/fallback_disposition.ts',
     'control_plane/work_items/task_lease_acquire.ts',
     'control_plane/coordination/coordination_state_contract_v0.json',
     'control_plane/coordination/coordination_state_contract.generated.ts']:
@@ -141,6 +142,21 @@ print(json.dumps({'executable': sys.executable, 'package': str(package),
             require(Path(path).resolve().is_relative_to(package), f"resource escaped installed package: {path}")
         self.report["provenance"] = provenance
         self.checked("installed_python_ts_json_resources", resource_count=len(provenance["resources"]))
+
+        fallback_code = """
+import json
+from loopx.control_plane.effect_runtime import effect_runtime_result
+print(json.dumps(effect_runtime_result('goal.fallback_disposition.project', {
+    'schema_version': 'goal_fallback_disposition_request_v0',
+    'terminal': False, 'agent_id': 'agent-a', 'blocker_present': False,
+    'resume_planning': {}, 'source_state': 'complete', 'items': [],
+    'resume_evaluation': {}, 'legacy_selectable_ids': [], 'declarations': [],
+    'created_or_reopened_ids': [],
+})))
+"""
+        fallback = self.process("installed_fallback_dispatch", [str(self.python), "-I", "-c", fallback_code])
+        require(fallback.get("kind") == "resolved", "empty fallback declarations must resolve")
+        self.checked("installed_fallback_dispatch")
 
         storage_defaults = {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": "file",
             "canonical_creation": False, "new_goal_handoff_mode": "hard_lease"}

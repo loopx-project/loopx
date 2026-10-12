@@ -99,6 +99,36 @@ def test_full_state_backup_has_first_class_configuration_component(environment, 
     assert payload["execution"]["configuration_backup"]["readback_verified"] is True
 
 
+def test_full_archive_explicit_configuration_cohort_retains_missing_source_inventory(environment, tmp_path):
+    source, runtime, registry, goal = environment
+    original = json.loads(registry.read_text())
+    original["goals"].append({"id": "historical", "repo": str(tmp_path / "removed-project"),
+        "state_file": "original.md", "source_registry": str(tmp_path / "removed-registry.json"),
+        "control_plane": {"stale_projection": True}})
+    registry.write_text(json.dumps(original))
+    original_bytes = registry.read_bytes()
+    common = ("--runtime-root", runtime, "--registry", registry, "backup-state", "--project",
+        source.parent.parent, "--no-skills", "--no-automations", "--execute")
+    # Default capture cannot invent source-owned configuration from a projection.
+    code, failed = cli(*common, "--output-dir", tmp_path / "strict")
+    assert code == 1 and "source_registry is missing" in failed["error"]
+    assert not list((tmp_path / "strict").glob("*.tar.gz"))
+    code, saved = cli(*common, "--output-dir", tmp_path / "selected",
+        "--configuration-goal-id", "fixture")
+    assert code == 0, saved
+    assert saved["configuration_goal_ids"] == ["fixture"]
+    assert any(row["key"] == "registry_source_registry:historical" for row in saved["missing"])
+    with tarfile.open(saved["archive_path"]) as archive:
+        checkpoint = json.load(archive.extractfile("configuration-backup.json"))
+        assert checkpoint["data"]["goals"] == [{"goal_id": "fixture", "goal_configuration": goal}]
+        assert archive.extractfile("runtime-root/registry.global.json").read() == original_bytes
+    assert saved["execution"]["configuration_backup"]["readback_verified"] is True
+    assert registry.read_bytes() == original_bytes
+    code, rejected = cli(*common, "--output-dir", tmp_path / "still-strict",
+        "--configuration-goal-id", "historical")
+    assert code == 1 and "source_registry is missing" in rejected["error"]
+
+
 def test_current_project_cli_uses_selected_project_not_invoked_registry(environment, tmp_path):
     source, runtime, registry, goal = environment
     other = tmp_path / "other-project/.loopx/registry.json"
@@ -175,7 +205,9 @@ def test_live_http_download_recovery_and_negative_digest(environment):
 
 def test_browser_backup_rejects_selected_environment_without_loopx(tmp_path):
     selected = tmp_path / "empty-environment"
-    venv.EnvBuilder(with_pip=False).create(selected)
+    # uv's macOS Python resolves libpython relative to its real executable.
+    # A copied binary is not a runnable empty environment on that host.
+    venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(selected)
     python = selected / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     temporary = tmp_path / "servers"
     temporary.mkdir()

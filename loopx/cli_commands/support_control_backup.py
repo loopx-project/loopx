@@ -63,6 +63,12 @@ def register_backup_state_command(
         help="Do not discover additional project state from the global registry.",
     )
     parser.add_argument(
+        "--configuration-goal-id",
+        action="append",
+        help=("Select source-owned Goal configurations for the embedded checkpoint; "
+              "repeat for a reviewed cohort. Raw state discovery is unchanged."),
+    )
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Write the backup archive and manifest. Omit for a dry-run plan.",
@@ -91,6 +97,7 @@ def handle_backup_state_command(
             include_skills=not bool(args.no_skills),
             include_registry_projects=not bool(args.current_project_only),
             registry_path=(Path(args.project).expanduser() / ".loopx/registry.json") if args.current_project_only else None,
+            configuration_goal_ids=getattr(args, "configuration_goal_id", None),
         )
         if args.execute:
             payload = execute_state_backup_plan(payload)

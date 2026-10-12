@@ -919,7 +919,7 @@
     },
     {
       "site": "loopx/cli_commands/support_control_backup.py::<module>.handle_backup_state_command::codec_read:load_registry#1",
-      "line": 84,
+      "line": 90,
       "column": 49,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1433,6 +1433,14 @@
       "site": "loopx/control_plane/goals/goal_amendment_proposal.py::<module>.admit_goal_amendment_proposal::codec_read:load_registry#1",
       "line": 198,
       "column": 28,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/control_plane/goals/goal_frontier/fallback_source.py::<module>.read_fallback_source_snapshot::codec_read:load_registry#1",
+      "line": 280,
+      "column": 18,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"

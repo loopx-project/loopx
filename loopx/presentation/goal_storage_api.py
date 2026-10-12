@@ -160,7 +160,11 @@ class GoalStorageRequestMixin:
                     registry_path=registry_path))
                 request.update(projection=projection, source_snapshot=snapshot,
                     target_provider=body["provider"], target_handoff_mode=body["handoff_mode"],
-                    source_backup=read_cold_source_backup(Path(backup["manifest_path"])))
+                    source_backup=read_cold_source_backup(Path(backup["manifest_path"]), source_paths=[
+                        Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
+                        *(Path(item["path"]) for item in snapshot["evidence_files"]),
+                        root / "goals" / goal_id / "task-leases",
+                    ]))
             else:
                 request["expected_plan_sha256"] = _token(body, "plan_sha256", 64)
                 if action == "apply":

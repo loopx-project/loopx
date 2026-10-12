@@ -404,6 +404,12 @@ original evidence and settled lease history. The trusted Python tar adapter
 reads actual archive members, including older backups without a member list;
 the TypeScript owner verifies coverage of the coordination source bytes and
 pins both saved artifacts. A missing source path in the backup refuses import.
+CLI and App retain the full backup and validate every archive member, but
+transport only member digests covering the registered Goal's source files,
+registry, evidence and lease directory. Unrelated backup inventory does not
+inflate the bounded import request; unsafe members and changed complete
+artifacts still reject. This does not reduce imported Todo records or qualify
+whole-Goal reactivation.
 Prepare may select an empty target and persist its identity and immutable plan,
 but does not fence the writer, import state or grant execution authority.
 

@@ -1205,6 +1205,13 @@ def refresh_state_run(
             turn_scoped_settlement_qualified
             and workspace_requirement != "not_required"
             and not checkpoint_supplement
+            # The TS settlement owner has qualified only an unavailable
+            # observation, with no delivery, Todo mutation or quota debit.
+            # Recording that failed attempt needs no producing git worktree.
+            and not (
+                isinstance(blocked_retry, dict)
+                and blocked_retry.get("schema_version") == "quota_monitor_unavailable_v0"
+            )
         ):
             delivery_workspace = capture_delivery_workspace(
                 current_path=delivery_workspace_path,

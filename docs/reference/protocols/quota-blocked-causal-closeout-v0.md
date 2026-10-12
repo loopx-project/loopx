@@ -95,8 +95,8 @@ closeout. Unsupported PR waits now name this recovery route explicitly.
 
 ### Unavailable Monitor observation
 
-An admitted open Agent `continuous_monitor` on canonical authority may discover
-that its observation cannot be obtained. Close the original Goal/Agent/Todo/Turn
+An admitted open Agent `continuous_monitor` on supported Markdown or canonical
+authority may discover that its observation cannot be obtained. Close the original Goal/Agent/Todo/Turn
 with `refresh-state --delivery-outcome outcome_gap --progress-result-class
 blocked`, a stable blocker ID, evidence IDs and a normal vision decision. Do not
 invent a `monitor-poll` hash, record control metadata as an account observation,
@@ -116,7 +116,7 @@ Exact replay returns the frozen receipt, with no duplicate writeback or debit.
 After closing the original effect, reenter the current recovery host Turn to
 select independently eligible work; do not create a third identity or rebind the
 old one. Missing capability admission or evidence and wrong bindings still fail.
-File and SQLite CLI acceptance covers this recovery, preserved observation
+Markdown, File and SQLite CLI acceptance covers this recovery, preserved observation
 fields, capability restoration, committed-poll rejection and zero debit.
 PostgreSQL and live host adoption remain separate qualifications. Before rollback,
 reconcile these receipts using a runtime that recognizes the new proof.
@@ -196,7 +196,7 @@ excluded/bound 限制仍拒绝。恢复后，模式要求执行 fencing 时获�
 
 ### Monitor 观察不可取得
 
-canonical authority 上已准入、开放的 Agent `continuous_monitor`，可能在尝试中
+受支持的 Markdown 或 canonical authority 上已准入、开放的 Agent `continuous_monitor`，可能在尝试中
 发现无法取得观察。用原 Goal/Agent/Todo/Turn 调用 `refresh-state`，提供
 `outcome_gap`、typed `blocked`、稳定 blocker、证据 ID 与正常 vision 决策，沿既有
 计划关闭本次尝试。不得编造 poll hash、把控制元数据记成账户观察或扣额。

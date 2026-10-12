@@ -594,6 +594,14 @@ into core. Dashboard's generic status parser consumes only that compact
 contract. A built-in renderer may separately own a provider view schema, as the
 Finance renderer does for `decision_research_dashboard_v0`.
 
+The validator executes inside the active runtime interpreter - the extension's
+own environment, not the LoopX process - and LoopX launches it isolated
+(`python -I`), so `PYTHONPATH`, `PYTHONIOENCODING`, and `PYTHONUTF8` are ignored
+there. It must be importable from that environment alone, and the request and
+response cross stdio as UTF-8 bytes: the generated helper decodes and encodes
+them explicitly instead of through the locale text streams, which would corrupt
+non-ASCII view text on a host whose locale is not UTF-8.
+
 The finance value-discovery extension declares the first such view,
 `decision_research_dashboard_v0`, a read-only decision-research view:
 
