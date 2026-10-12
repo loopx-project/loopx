@@ -37,6 +37,11 @@ unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
+The bundled runtime carries its Core package version from the archived wheel
+metadata. Main App build numbers (`0.0.0-main.…`) identify the native shell;
+they are not compared with CLI package versions. Older bundle metadata retains
+its previous shell-version fallback; this correction requires an App update.
+
 If the bundle is newer, or no selected CLI qualifies, the App prepares its
 bundled snapshot in its own data directory through the existing installer.
 This updates the CLI used by the App without replacing uv/pip/pipx's command or
@@ -69,6 +74,9 @@ The release workflow packages both layers from one Git revision.
 The installer and App-owned services use the same bounded tool search,
 including standard Homebrew locations on macOS, without loading interactive
 shell profiles. Finder launches therefore do not depend on terminal PATH setup.
+When preparing the first App-owned snapshot, an already selected managed CLI's
+recorded Python is reused if the App has no interpreter record of its own.
+This leaves that CLI's launcher and installation owner unchanged.
 Installation uses `loopx doctor --deep --installation-only`: package ownership,
 representative imports/commands/files and the TypeScript runtime semantic probe
 remain required, but existing Goal projects are not traversed. Native runtime

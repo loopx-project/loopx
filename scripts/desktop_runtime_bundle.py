@@ -15,6 +15,7 @@ import sys
 import tarfile
 import io
 import importlib.util
+import tomllib
 
 
 def build(root: Path) -> None:
@@ -109,12 +110,25 @@ def build(root: Path) -> None:
     identity = {
         "schema_version": "desktop_runtime_bundle_v1",
         "source_revision": revision,
+        "package_version": archive_package_version(archive),
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
     }
     (destination / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
     print(
         f"Prepared exact desktop runtime: {revision[:12]} ({entries} installable entries)"
     )
+
+
+def archive_package_version(archive: Path) -> str:
+    """Use the archived wheel metadata, not the shell tag or working tree."""
+    with tarfile.open(archive, "r:gz") as source:
+        metadata = source.extractfile("pyproject.toml")
+        if metadata is None:
+            raise RuntimeError("runtime archive has no package metadata")
+        version = tomllib.loads(metadata.read().decode("utf-8"))["project"]["version"]
+    if not isinstance(version, str) or not version.strip():
+        raise RuntimeError("runtime archive has no package version")
+    return version
 
 
 def qualify_archive(archive: Path) -> int:

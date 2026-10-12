@@ -1,9 +1,11 @@
 """Reject runtime snapshots the App-side installer could never unpack."""
 import gzip
+import io
 import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import tarfile
 
 spec = importlib.util.spec_from_file_location(
     "desktop_bundle", Path(__file__).resolve().parents[2] / "scripts/desktop_runtime_bundle.py"
@@ -36,6 +38,29 @@ class ArchiveQualificationTests(unittest.TestCase):
             for block in blocks:
                 compressed.write(block)
         return archive
+
+    def test_core_version_comes_from_archived_wheel_metadata(self):
+        archive = self.root / "versioned.tar.gz"
+        content = b'[project]\nversion = "1.5.2"\n'
+        with tarfile.open(archive, "w:gz") as target:
+            member = tarfile.TarInfo("pyproject.toml")
+            member.size = len(content)
+            target.addfile(member, io.BytesIO(content))
+        # Neither a newer working-tree version nor a Main shell tag owns this
+        # archive's package identity.
+        (self.root / "pyproject.toml").write_text('[project]\nversion = "1.6.0"\n')
+        self.assertEqual(bundle.archive_package_version(archive), "1.5.2")
+
+    def test_invalid_archived_package_version_is_rejected(self):
+        for version in ["42", '""', '"   "']:
+            archive = self.root / "invalid-version.tar.gz"
+            content = f"[project]\nversion = {version}\n".encode()
+            with tarfile.open(archive, "w:gz") as target:
+                member = tarfile.TarInfo("pyproject.toml")
+                member.size = len(content)
+                target.addfile(member, io.BytesIO(content))
+            with self.assertRaises(RuntimeError):
+                bundle.archive_package_version(archive)
 
     def test_files_and_directories_qualify(self):
         archive = self.write_archive(
