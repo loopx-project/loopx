@@ -16,6 +16,8 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
+from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+
 from .codex_offline import CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 
@@ -56,6 +58,7 @@ class BenchmarkCodex(CodexOffline):
         scheduler_timeout_sec=5080,
         replan_after_todos=None,
         replan_after_turns=None,
+        stride_strategy=None,
         task_entry=None,
         planning_timeout_sec=300,
         turn_envelope=False,
@@ -95,6 +98,10 @@ class BenchmarkCodex(CodexOffline):
         self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
             raise ValueError("replan_after_todos must be between 1 and 5")
+        if stride_strategy is not None and not self.execution.uses_loopx:
+            raise ValueError("stride_strategy requires a LoopX execution mode")
+        self.stride_strategy = (normalize_stride_strategy(stride_strategy)
+                                if stride_strategy is not None else None)
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
@@ -113,9 +120,10 @@ class BenchmarkCodex(CodexOffline):
         return ("replan_after_completed_todos", "--execution-replan-after-todos",
                 self.replan_after_todos)
 
-    def _replan_receipt(self) -> dict[str, int]:
+    def _replan_receipt(self) -> dict[str, int | str]:
         key, _, value = self._replan_configuration()
-        return {key: value}
+        return {key: value, **({"stride_strategy": self.stride_strategy}
+                             if self.stride_strategy is not None else {})}
 
     @staticmethod
     def name() -> str:
@@ -362,6 +370,8 @@ class BenchmarkCodex(CodexOffline):
         self, environment: BaseEnvironment, instruction: str, *, cwd: str
     ) -> None:
         key, option, expected = self._replan_configuration()
+        stride_args = (["--execution-stride-strategy", self.stride_strategy]
+                       if self.stride_strategy is not None else [])
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
         )
@@ -407,6 +417,7 @@ class BenchmarkCodex(CodexOffline):
                     "trial-workspace",
                     option,
                     str(expected),
+                    *stride_args,
                     "--agent-work-mode",
                     f"{_AGENT_ID}=active",
                     "--execute",
@@ -423,6 +434,7 @@ class BenchmarkCodex(CodexOffline):
                     _GOAL_ID,
                     option,
                     str(expected),
+                    *stride_args,
                     "--execute",
                 ],
                 cwd=cwd,
@@ -439,6 +451,11 @@ class BenchmarkCodex(CodexOffline):
         if configured != expected:
             raise RuntimeError(
                 f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
+            )
+        strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
+        if strategy != (self.stride_strategy or "off"):
+            raise RuntimeError(
+                f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
             )
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:

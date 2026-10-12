@@ -11,6 +11,42 @@ import pytest
 from benchmark.edgebench.export_report import digest, export, verify, write
 
 
+@pytest.mark.parametrize("strategy", [None, "off", "evidence_conditioned_v1"])
+def test_report_preserves_observed_stride_version_and_absence(trial, strategy):
+    runs, selection, output, task = trial
+    task = runs / "run" / "case"
+    for name in ("runtime-receipt", "worker-profile"):
+        path = task / (name + ".json")
+        value = json.loads(path.read_text())
+        if strategy is not None:
+            value["stride_strategy"] = strategy
+            value["worker" if name == "runtime-receipt" else "profile"] = "heartbeat-resume"
+        write(path, value)
+    export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+    config = json.loads((output / "settings/run.json").read_text())
+    for field in ("runner", "worker_profile"):
+        assert config[field].get("stride_strategy") == strategy
+        assert ("stride_strategy" in config[field]) is (strategy is not None)
+
+
+@pytest.mark.parametrize("runner,profile", [
+    ("evidence_conditioned_v1", "off"),
+    ("evidence_conditioned_v1", None),
+    ("future_policy", "future_policy"),
+])
+def test_report_rejects_unbound_or_unknown_stride_version(trial, runner, profile):
+    runs, selection, output, task = trial
+    task = runs / "run" / "case"
+    for name, strategy in (("runtime-receipt", runner), ("worker-profile", profile)):
+        path = task / (name + ".json")
+        value = json.loads(path.read_text())
+        if strategy is not None:
+            value["stride_strategy"] = strategy
+        write(path, value)
+    with pytest.raises(ValueError, match="stride_strategy"):
+        export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+
+
 @pytest.fixture
 def trial(tmp_path):
     row = dict(

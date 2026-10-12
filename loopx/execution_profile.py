@@ -284,6 +284,8 @@ def apply_goal_execution_profile_change(
         profile["stride_strategy"] = stride_strategy
     if clear_replan_after_effective_turns or replan_after_completed_todos is not None:
         profile.pop("replan_after_effective_turns", None)
+    if replan_after_completed_todos is not None:
+        profile["replan_after_completed_todos"] = replan_after_completed_todos
     if replan_after_effective_turns is not None:
         profile["replan_after_effective_turns"] = replan_after_effective_turns
         profile.pop("replan_after_completed_todos", None)

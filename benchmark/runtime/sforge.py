@@ -90,7 +90,8 @@ class SForgeWorker(CodexAgent):
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  replan_after_turns: int | None = None,
-                 replan_after_todos: int | None = None):
+                 replan_after_todos: int | None = None,
+                 stride_strategy: str | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -129,6 +130,12 @@ class SForgeWorker(CodexAgent):
             replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = replan_after_todos
+        if stride_strategy is not None and not profile.startswith("heartbeat-"):
+            raise ValueError("stride_strategy requires a heartbeat profile")
+        if stride_strategy is not None:
+            from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+            stride_strategy = normalize_stride_strategy(stride_strategy)
+        self.stride_strategy = stride_strategy
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
             raise ValueError("Unknown feedback mode")
@@ -214,6 +221,7 @@ class SForgeWorker(CodexAgent):
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
+                stride_strategy=self.stride_strategy,
                 task_objective=self.task_objective,
             )
             asyncio.run(self.runtime.install(self.environment))
