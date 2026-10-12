@@ -70,6 +70,18 @@ restore rejects the occupied destination; it does not silently replace it.
 CLI destinations require an existing physical parent and a new directory.
 Symlink ancestors and occupied/dangling destinations are rejected.
 
+Known invalid envelopes, changed or mismatched digests, and unsafe destination
+parents retain their specific refusal messages through the typed runtime and
+CLI. An already occupied destination is a state conflict. These use the existing
+`request_rejected`/`conflict` error categories; CLI refusals still exit with code
+1 and never activate settings or overwrite a checkpoint. Filesystem errors and
+unexpected readback failures retain the runtime's protected diagnostics. The
+browser keeps its existing bounded recovery error and permissions.
+
+中文：配置、摘要或目标父目录不合法时，CLI 保留具体拒绝原因；目标已占用按既有
+状态冲突分类。拒绝仍返回退出码 1，不覆盖检查点或激活设置。文件系统与未知读回
+故障继续使用受保护诊断，浏览器的恢复错误及权限边界不变。
+
 ## Configuration is not activation
 
 The checkpoint contains the original envelope, the machine configuration at
