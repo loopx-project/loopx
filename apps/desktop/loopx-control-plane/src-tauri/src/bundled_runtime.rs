@@ -189,6 +189,16 @@ fn install_snapshot(bytes: &[u8], metadata: &Value, private_root: &Path) -> Resu
     }
     command
         .current_dir(source.path())
+        // This directory is a verified export, not the developer's checkout.
+        // Git must not label it using shell overrides or a repository above TMPDIR.
+        .env(
+            "GIT_CEILING_DIRECTORIES",
+            source.path().parent().ok_or("runtime_staging_failed")?,
+        )
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
         .env("LOOPX_PROMOTE_DEFAULT", "1")
         // The archive staging directory is temporary, never a canary checkout.
         .env("LOOPX_INSTALL_CANARY", "0")
@@ -301,6 +311,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(observed["source_revision"], metadata["source_revision"]);
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(
+                fs::canonicalize(root.join("bin/loopx"))
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("release.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            manifest["source"]["git_ref"].is_null() && manifest["source"]["git_dirty"].is_null(),
+            "a bundled archive has no Git checkout; host repository facts are not its provenance"
+        );
         assert_eq!(
             fs::read(default).unwrap(),
             original,
