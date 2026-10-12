@@ -5,6 +5,7 @@ No write, drain, promotion or replacement-store initialization is performed.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -15,10 +16,18 @@ from ...registry import find_registry_goal
 from ..effect_runtime import effect_runtime_result
 from . import local_authority_shadow_history as outbox
 from .coordination_state_contract_generated import (
+    COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA as RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA_VERSION,
+    COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA,
+    COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA as RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA_VERSION,
+    COORDINATION_RUNTIME_SHADOW_QUALIFY_RESULT_SCHEMA,
+    COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA as RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA_VERSION,
+    COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA,
 )
-from .local_authority_shadow_projection import head_digest
+from .local_authority_shadow_projection import (
+    head_digest, source_effect_runtime_result as source_effect_runtime_result,
+)
 from .configuration import resolve_coordination_runtime_shadow_config, local_authority_shadow_summary
 from .shadow_management import read_shadow_capture_binding
 
@@ -180,3 +189,166 @@ def local_authority_shadow_status(
         if store_bytes is not None
         else None,
     }
+
+
+RuntimeInvoker = Callable[..., object]
+RUNTIME_SHADOW_INSPECT_METHOD = "coordination.runtime_shadow.inspect"
+RUNTIME_SHADOW_QUALIFY_METHOD = "coordination.runtime_shadow.qualify"
+RUNTIME_SHADOW_TODO_READ_METHOD = "coordination.runtime_shadow.todo_read_candidate"
+
+
+def inspect_coordination_runtime_shadow(
+    *,
+    goal: Mapping[str, Any] | None,
+    runtime_root: Path,
+    goal_id: str,
+    projection: Mapping[str, Any],
+    source_snapshot: Mapping[str, Any] | None = None,
+    runtime_invoker: RuntimeInvoker = source_effect_runtime_result,
+) -> dict[str, object]:
+    """Read parity evidence without allowing the shadow to drive decisions."""
+
+    config = resolve_coordination_runtime_shadow_config(goal)
+    if not config.enabled:
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA,
+            "status": "disabled",
+            "reason_code": config.reason_code,
+            "parity_matches": False,
+            "bootstrap_required": False,
+            "decision_read_from_shadow": False,
+        }
+    request = {
+        "schema_version": RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA_VERSION,
+        "runtime_root": str(runtime_root.expanduser().absolute()),
+        "goal_id": goal_id,
+        "source_snapshot": dict(source_snapshot or {}),
+        "projection": dict(projection),
+    }
+    try:
+        result = runtime_invoker(RUNTIME_SHADOW_INSPECT_METHOD, request)
+    except Exception as exc:
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA,
+            "status": "failed",
+            "reason_code": "shadow_runtime_unavailable",
+            "reason": str(exc),
+            "parity_matches": False,
+            "bootstrap_required": False,
+            "decision_read_from_shadow": False,
+        }
+    if not isinstance(result, Mapping):
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA,
+            "status": "failed",
+            "reason_code": "shadow_runtime_result_invalid",
+            "parity_matches": False,
+            "bootstrap_required": False,
+            "decision_read_from_shadow": False,
+        }
+    return dict(result)
+
+def qualify_coordination_runtime_shadow(
+    *,
+    goal: Mapping[str, Any] | None,
+    runtime_root: Path,
+    goal_id: str,
+    projection: Mapping[str, Any],
+    minimum_operations: int,
+    required_event_kinds: list[str],
+    source_snapshot: Mapping[str, Any] | None = None,
+    runtime_invoker: RuntimeInvoker = source_effect_runtime_result,
+) -> dict[str, object]:
+    """Qualify coverage across a shadow lineage without serving from it."""
+
+    config = resolve_coordination_runtime_shadow_config(goal)
+    if not config.enabled:
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_QUALIFY_RESULT_SCHEMA,
+            "status": "disabled",
+            "reason_code": config.reason_code,
+            "qualified": False,
+            "primary_writeback_preserved": True,
+            "decision_read_from_shadow": False,
+        }
+    request = {
+        "schema_version": RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA_VERSION,
+        "runtime_root": str(runtime_root.expanduser().absolute()),
+        "goal_id": goal_id,
+        "source_snapshot": dict(source_snapshot or {}),
+        "projection": dict(projection),
+        "minimum_operations": minimum_operations,
+        "required_event_kinds": list(required_event_kinds),
+    }
+    try:
+        result = runtime_invoker(RUNTIME_SHADOW_QUALIFY_METHOD, request)
+    except Exception as exc:
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_QUALIFY_RESULT_SCHEMA,
+            "status": "failed",
+            "reason_code": "shadow_qualification_runtime_unavailable",
+            "reason": str(exc),
+            "qualified": False,
+            "primary_writeback_preserved": True,
+            "decision_read_from_shadow": False,
+        }
+    if not isinstance(result, Mapping):
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_QUALIFY_RESULT_SCHEMA,
+            "status": "failed",
+            "reason_code": "shadow_qualification_runtime_result_invalid",
+            "qualified": False,
+            "primary_writeback_preserved": True,
+            "decision_read_from_shadow": False,
+        }
+    return dict(result)
+
+def read_coordination_runtime_shadow_todo_candidate(
+    *,
+    goal: Mapping[str, Any] | None,
+    runtime_root: Path,
+    goal_id: str,
+    todo_id: str,
+    projection: Mapping[str, Any],
+    source_snapshot: Mapping[str, Any] | None = None,
+    runtime_invoker: RuntimeInvoker = source_effect_runtime_result,
+) -> dict[str, object]:
+    """Read one parity-matched file Todo as pre-promotion evidence only."""
+
+    config = resolve_coordination_runtime_shadow_config(goal)
+    if not config.enabled:
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
+            "status": "disabled",
+            "reason_code": config.reason_code,
+            "read_candidate_qualified": False,
+            "decision_read_from_shadow": False,
+        }
+    request = {
+        "schema_version": RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA_VERSION,
+        "runtime_root": str(runtime_root.expanduser().absolute()),
+        "goal_id": goal_id,
+        "source_snapshot": dict(source_snapshot or {}),
+        "todo_id": todo_id,
+        "projection": dict(projection),
+    }
+    try:
+        result = runtime_invoker(RUNTIME_SHADOW_TODO_READ_METHOD, request)
+    except Exception as exc:
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
+            "status": "failed",
+            "reason_code": "shadow_todo_read_runtime_unavailable",
+            "reason": str(exc),
+            "read_candidate_qualified": False,
+            "decision_read_from_shadow": False,
+        }
+    if not isinstance(result, Mapping):
+        return {
+            "schema_version": COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
+            "status": "failed",
+            "reason_code": "shadow_todo_read_runtime_result_invalid",
+            "read_candidate_qualified": False,
+            "decision_read_from_shadow": False,
+        }
+    return dict(result)

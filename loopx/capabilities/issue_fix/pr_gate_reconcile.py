@@ -9,7 +9,8 @@ from ...control_plane.todos.contract import (
     normalize_todo_decision_scope,
 )
 from ...control_plane.todos.todo_semantics import todo_item_task_class
-from ...todos import complete_goal_todo, list_goal_todos
+from ...control_plane.todos.mutation_api import complete_goal_todo
+from ...control_plane.todos.list_readback import list_goal_todos
 from .pr_lifecycle import (
     TERMINAL_PR_STATES,
     build_issue_fix_pr_lifecycle_monitor_packet,

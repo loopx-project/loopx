@@ -122,6 +122,25 @@ The source physical provider revisions remain in the archive for provenance;
 restored transactions receive the destination provider's own revision tokens.
 Business operation identities and receipt payloads remain unchanged.
 
+File restore appends up to 16 verified logical transactions before publishing
+each updated journal envelope, under its existing writer lock and target
+identity/CAS check.
+The same prefix and original-receipt audit verifies each page before another
+page is written. A crash retains either the previous complete page or the new
+complete page; resume verifies that prefix and imports only the missing suffix.
+Each original operation still has its own cursor, revision, events and receipt.
+Ordinary File commits and the persisted journal format are unchanged. SQLite
+and service-owned PostgreSQL keep their existing per-transaction writes.
+This reduces repeated serialization and filesystem publication of retained
+history; it does not raise the 300-second CLI request budget or remove unknown
+outcome handling, whole-archive verification, adoption fencing or audit.
+
+File 恢复在原 writer lock 与目标 identity/CAS 内，将最多 16 笔新增事务一次
+写入包含完整历史的 durable envelope。下一页写入前，仍逐笔核验 journal 和原回执。
+中断保留上一完整页或新完整页；恢复先验证已有前缀，再导入缺失后缀。每笔原 operation 的 cursor、
+revision、events 和 receipts 不合并。普通 File 提交、持久化格式、SQLite/PostgreSQL
+逐笔写入保持原行为；300 秒请求预算、结果未知处理、完整验证和采用 fence 仍适用。
+
 ### When the CLI stops waiting
 
 An executed restore whose Effect response is lost or exceeds the 300-second
@@ -155,8 +174,8 @@ audit. If recovery needs to resume, repeat only the original `restore --execute`
 command with the same reviewed inputs and destination; retain partial output.
 The original lock, prefix audit and divergent-history rejection still apply.
 
-This readback fixes completion visibility, not the remaining File restore cost
-or the need for separately qualified provider activation.
+Completion readback and paged File publication address different recovery
+boundaries. Provider activation still needs its separate qualification.
 
 The full archive is validated before restore writes begin and again during
 replay. Modifying the input during recovery fails verification; any partial

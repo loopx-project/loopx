@@ -64,6 +64,19 @@ without claiming code retirement:
 bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
+Production Todo consumers now bypass the historic `loopx.todos` re-export:
+CLI registration/actions, quota and planning, capability writeback, source lease
+reads and the Lark source projection import the same concrete mutation, full-read,
+path or Markdown display owners. No new wrapper, decision or RPC is introduced.
+The historic public imports and their supported unpromoted IO remain available.
+Disposable source/normal-wheel probes remove the facade, the whole legacy Todo
+writer and four shadow producers together; real File/SQLite CLI lifecycle,
+once-only settlement, Monitor replay and App cold-import/action/restart journeys
+must still work, with missing-provider/lease and changed-source/backup refusals.
+Lark dry-run and Explore replay qualify local consumers only, not live external
+adoption. This closes the production re-export dependency, while last supported
+source writers, historical recovery, installed cohort and release exits remain.
+
 The retained import-compatible field writer now composes resume normalization
 and contradictory-clear rejection in its existing typed field plan. Keep blank
 Python input omission and locked IO; retire the duplicate normalization crossing,
@@ -145,8 +158,16 @@ producer modules using the qualified CLI startup isolation above.
 
 Shadow diagnostics now have an independent read-only boundary: retained outbox
 disk codecs live in `local_authority_shadow_history.py`, and status/candidate
-read transport in `local_authority_shadow_readback.py`. The public status CLI
-does not load source producers; drain still uses its existing orchestration.
+read transport in `local_authority_shadow_readback.py`. The public status and enabled
+`coordination-shadow inspect`/`qualify`/`read-candidate` commands call that owner
+without loading source producers. Full source and normal-wheel observations
+retain matched/refused, default-off, source-drift and missing/corrupt-store
+recovery behavior with all four producer modules absent. Historical imports
+remain exact aliases; bootstrap, rollback and promotion retain their live adapter.
+The existing TS qualifier now propagates provider read refusals before lineage
+validation can mislabel corruption as `bootstrap_required`; valid/missing stores
+retain their behavior. This is an explicit failure-diagnostic correction, with
+no new RPC or migration authority; drain still uses its existing orchestration.
 Original entry identity, malformed evidence, cursor residue and missing-store
 behavior remain unchanged. Python retains historical filesystem decoding and
 presentation IO; TS retains history proof, delivery and cleanup authority.
@@ -1515,6 +1536,15 @@ Python writer retirement remain separate exits.
   change, and provider outage without a Markdown fallback. Unpromoted writers,
   lease capture recovery and the legacy migration window remain separate
   retirement obligations; this closes the canonical setter's import dependency.
+- Source task-lease facts now use `todos/list_readback.py` directly instead of
+  the historic mutation facade. TypeScript retains acquire/lifecycle decisions;
+  Markdown IO, source capture and public compatibility exports remain live.
+  The CLI distribution counterfactual removes the facade and disables editable
+  install finders, which could otherwise borrow deleted modules from a checkout.
+  Source and installed-wheel coverage includes capture off/on, all three handoff
+  modes, replay, ownership/version rejection, transfer, release and retained
+  history. This removes a reader-to-writer dependency; full writer deletion still
+  needs its remaining callers and migration window qualified.
 
 **Validation and stop rules for every card**
 

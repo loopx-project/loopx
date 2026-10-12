@@ -15,7 +15,7 @@ from pathlib import Path
 from ..control_plane.goals.shared_goal_alignment import (
     project_shared_goal_alignment,
 )
-from ..todos import resolve_todo_state_path
+from ..control_plane.todos.path_resolution import resolve_todo_state_path
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],

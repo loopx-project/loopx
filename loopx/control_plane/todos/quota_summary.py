@@ -299,6 +299,8 @@ def summarize_user_todos_for_quota(
         summary["closure_intent"] = planning["closure_intent"]
     if planning.get("frontier_deadline"):
         summary["frontier_deadline"] = planning["frontier_deadline"]
+    if planning.get("blocked_retry_wait"):
+        summary["blocked_retry_wait"] = planning["blocked_retry_wait"]
     monitor_writeback = todo_summary_monitor_writeback_contract(value)
     if monitor_writeback:
         summary["monitor_writeback"] = monitor_writeback
@@ -677,6 +679,8 @@ def summarize_project_asset_todos_for_quota(
     }
     if planning.get("frontier_deadline"):
         summary["frontier_deadline"] = planning["frontier_deadline"]
+    if planning.get("blocked_retry_wait"):
+        summary["blocked_retry_wait"] = planning["blocked_retry_wait"]
     monitor_writeback = todo_summary_monitor_writeback_contract(value)
     if monitor_writeback:
         summary["monitor_writeback"] = monitor_writeback

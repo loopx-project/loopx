@@ -131,13 +131,26 @@ export class FileAuthorityJournal {
 
   static append(current: FileAuthorityJournal | null, goal: string, identity: string,
     commit: AuthorityStoreCommit, revisionFor: JournalRevision): FileAuthorityJournal {
-    const transaction = {cursor: (parseAuthorityCursor(current?.cursor ?? null) + 1n).toString(),
-      operation_id: commit.operation_id, events: commit.events, projection: commit.next_projection,
-      receipts: commit.receipts};
-    const row = retain({...transaction,
-      provider_revision: revisionFor(current?.provider_revision ?? null, transaction)}, current?.head ?? null);
-    return new FileAuthorityJournal(goal, identity, commit.next_projection,
-      {rows: [...(current?.history.rows ?? []), row]});
+    return FileAuthorityJournal.appendCommits(current, goal, identity, [commit], revisionFor);
+  }
+
+  /** Provider checks CAS, goal/cursor binding and operation uniqueness before
+   * constructing this journal. A page keeps every logical row; construction
+   * never publishes bytes or grants archive/cutover authority. */
+  static appendCommits(current: FileAuthorityJournal | null, goal: string, identity: string,
+    commits: readonly AuthorityStoreCommit[], revisionFor: JournalRevision): FileAuthorityJournal {
+    const rows = [...(current?.history.rows ?? [])];
+    let previous = current?.head ?? null;
+    let revision = current?.provider_revision ?? null;
+    for (const commit of commits) {
+      const transaction = {cursor: (BigInt(rows.length) + 1n).toString(),
+        operation_id: commit.operation_id, events: commit.events,
+        projection: commit.next_projection, receipts: commit.receipts};
+      revision = revisionFor(revision, transaction);
+      rows.push(retain({...transaction, provider_revision: revision}, previous));
+      previous = transaction.projection;
+    }
+    return new FileAuthorityJournal(goal, identity, previous!, {rows});
   }
 
   /** Migration boundary: callers supply fully verified logical transactions.

@@ -1,12 +1,15 @@
 """An intentionally exempt job must be skipped; all required jobs must pass."""
 from __future__ import annotations
 import copy
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+import yaml
 from review_gate import CHECK_OUTPUT, JOB_OUTPUT, requires_core_tests, verify, verify_checks
 
 # Independent acceptance: client-only work retains compiled frontend/browser
@@ -34,6 +37,116 @@ def needs(kind="full", *, presentation=False, jobs=JOB_OUTPUT):
 
 
 class GateTests(unittest.TestCase):
+    def test_closed_pr_cancels_same_lane_and_skips_qualification(self):
+        workflow = yaml.load(
+            (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        self.assertIn("closed", workflow["on"]["pull_request"]["types"])
+        concurrency = workflow["concurrency"]
+        jobs = workflow["jobs"]
+
+        # These workflow clauses use only string comparisons and Boolean logic.
+        # Exercise the configured clauses against GitHub's documented ref change.
+        def expression(value, action, *, number=17, event="pull_request"):
+            ref = "refs/heads/main" if action == "closed" or event != "pull_request" else f"refs/pull/{number}/merge"
+            github = SimpleNamespace(event_name=event, ref=ref, event=SimpleNamespace(
+                action=action, number=number, pull_request=None))
+            return eval(value.strip().removeprefix("${{").removesuffix("}}").strip()
+                        .replace("&&", "and").replace("||", "or"),
+                        {"__builtins__": {}}, {"github": github, "always": lambda: True,
+                            "format": lambda template, number: template.format(number)})
+
+        def lane(action, **kwargs):
+            return re.sub(r"\$\{\{(.*?)\}\}", lambda match: str(expression(match[0], action, **kwargs)),
+                          concurrency["group"])
+
+        self.assertEqual(lane("synchronize"), lane("closed"))
+        self.assertNotEqual(lane("closed"), lane("closed", number=18))
+        self.assertNotEqual(lane("closed"), lane("closed", event="push"))
+        for action in ("opened", "synchronize", "reopened", "closed"):
+            self.assertTrue(expression(concurrency["cancel-in-progress"], action))
+            for name in ("changes", "merge-gate"):
+                self.assertEqual(bool(expression(jobs[name]["if"], action)), action != "closed")
+        for event in ("push", "schedule", "workflow_dispatch", "merge_group"):
+            for name in ("changes", "merge-gate"):
+                self.assertTrue(expression(jobs[name]["if"], "", event=event))
+        self.assertEqual([name for name, job in jobs.items() if not job.get("needs")],
+                         ["cancel-closed-pr", "changes"])
+        for name in ("changes", "merge-gate"):
+            self.assertFalse(expression(jobs[name]["if"], "closed", event="pull_request_target"))
+        cleanup = jobs["cancel-closed-pr"]
+        self.assertTrue(expression(cleanup["if"], "closed", event="pull_request_target"))
+        self.assertFalse(expression(cleanup["if"], "closed"))
+        self.assertFalse(expression(cleanup["if"], "reopened", event="pull_request_target"))
+        self.assertNotEqual(lane("closed", event="pull_request_target"),
+                            lane("closed", number=18, event="pull_request_target"))
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(cleanup["permissions"],
+                         {"actions": "write", "contents": "read", "pull-requests": "read"})
+        self.assertEqual(len(cleanup["steps"]), 1)
+        self.assertEqual(cleanup["steps"][0]["uses"], "actions/github-script@v8")
+        for name, job in jobs.items():
+            if "always()" in job.get("if", "") and name != "merge-gate":
+                self.assertIn("needs.changes.outputs.", job["if"])
+                self.assertIn("== 'true'", job["if"])
+
+    def test_trusted_cleanup_executes_only_obsolete_closed_pr_runs(self):
+        workflow = yaml.load(
+            (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        script = workflow["jobs"]["cancel-closed-pr"]["steps"][0]["with"]["script"]
+        # Execute the shipped transport script, independently supplying legal and
+        # illegal lifecycle fixtures. No token or untrusted PR code is involved.
+        harness = r"""
+import assert from 'node:assert/strict';
+const script = JSON.parse(process.argv[1]);
+const execute = new (Object.getPrototypeOf(async function(){}).constructor)(
+  'github', 'context', 'core', 'setTimeout', script);
+const pr = {state:'closed', closed_at:'2026-01-02T00:00:00Z',
+  head:{repo:{id:7}, ref:'fix', label:'contributor:fix', sha:'head'}};
+const old = {id:1, status:'queued', head_repository:{id:7}, head_branch:'fix',
+  head_sha:'head', created_at:'2026-01-01T00:00:00Z', pull_requests:[]};
+async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=false,
+                    conflict=false, stuck=false, failure=false}={}) {
+  const cancelled=[], forced=[], queries=[]; let reads=0;
+  const github = {rest:{pulls:{get:async()=>({data:reads++ ? current : first}), list:'pulls'},
+    actions:{listWorkflowRuns:'runs',
+      cancelWorkflowRun:async p=>{cancelled.push(p.run_id); if(conflict || failure)
+        throw Object.assign(new Error('provider failure'), {status:conflict ? 409 : 403});},
+      getWorkflowRun:async p=>({data:{status:(conflict || ordinaryDone ||
+        (forced.includes(p.run_id) && !stuck)) ? 'completed' : 'queued'}})}},
+    paginate:async (method,params)=>{queries.push([method,params]); return method==='pulls' ? open : runs;},
+    request:async (route,p)=>{assert.equal(route,
+      'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel'); forced.push(p.run_id);}};
+  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17}},
+    {info:()=>{}}, fn=>fn());
+  return {cancelled,forced,queries};
+}
+const selected = await run({runs:[old,
+  {...old,id:2,pull_requests:[{number:17}],head_sha:'previous'},
+  {...old,id:3,status:'completed'}, {...old,id:4,head_repository:{id:8}},
+  {...old,id:5,created_at:'2026-01-03T00:00:00Z'},
+  {...old,id:6,pull_requests:[{number:18}]}, {...old,id:7,head_sha:'unknown'},
+  {...old,id:8,head_branch:'another'}, {...old,id:9,created_at:'invalid'}]});
+assert.deepEqual(selected.cancelled,[1,2]); assert.deepEqual(selected.forced,[1,2]);
+assert.equal(selected.queries[1][1].workflow_id,'python-tests.yml');
+assert.equal(selected.queries[1][1].event,'pull_request');
+assert.equal(selected.queries[1][1].branch,'fix');
+for (const fixture of [{first:{...pr,state:'open'}}, {current:{...pr,state:'open'}},
+  {current:{...pr,closed_at:'2026-01-04T00:00:00Z'}},
+  {current:{...pr,head:{...pr.head,sha:'new'}}}, {open:[{number:18}]}]) {
+  assert.deepEqual((await run(fixture)).cancelled,[]);
+}
+assert.deepEqual((await run({ordinaryDone:true})).forced,[]);
+assert.deepEqual((await run({conflict:true})).forced,[]);
+await assert.rejects(run({stuck:true}),/has not completed/);
+await assert.rejects(run({failure:true}),/provider failure/);
+await assert.rejects(run({first:{...pr,head:{...pr.head,repo:null}}}),/no verifiable source/);
+"""
+        subprocess.run(["node", "--input-type=module", "-e", harness, json.dumps(script)], check=True)
+
     def test_legal_profiles_and_policy_rehearsal(self):
         for kind in ("docs", "presentation", "full"):
             verify(needs(kind))
@@ -99,22 +212,14 @@ class PythonShardAdmissionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.workflow = (Path(__file__).resolve().parents[2]
-                        / ".github/workflows/python-tests.yml").read_text()
-
-    def job(self, name):
-        body = self.workflow.split(f"\n  {name}:\n", 1)[1]
-        return re.split(r"\n  [\w-]+:\n", body, maxsplit=1)[0]
+        cls.workflow = yaml.load(
+            (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
 
     def script(self, job, step):
-        body = self.job(job).split(f"      - name: {step}\n", 1)[1]
-        body = body.split("        run: |\n", 1)[1]
-        lines = []
-        for line in body.splitlines():
-            if line and not line.startswith("          "):
-                break
-            lines.append(line[10:])
-        return "\n".join(lines)
+        return next(row["run"] for row in self.workflow["jobs"][job]["steps"]
+                    if row.get("name") == step)
 
     def test_required_python_gate_rejects_cancelled_overflow_and_missing_shards(self):
         script = self.script("pytest", "Require every upstream check")
@@ -128,9 +233,9 @@ class PythonShardAdmissionTests(unittest.TestCase):
                 with self.subTest(checks=checks, shards=shards):
                     self.assertEqual(result.returncode == 0,
                                      checks == shards == "success")
-        gate = self.job("pytest")
-        self.assertIn("if: always() && needs.changes.outputs.python_tests == 'true'", gate)
-        self.assertIn("needs: [changes, checks, test-shard]", gate)
+        gate = self.workflow["jobs"]["pytest"]
+        self.assertEqual(gate["if"], "always() && needs.changes.outputs.python_tests == 'true'")
+        self.assertEqual(gate["needs"], ["changes", "checks", "test-shard"])
 
     def test_required_python_gate_reads_every_nonempty_coverage_partition(self):
         script = self.script("pytest", "Combine complete coverage and enforce the existing floor")
@@ -152,10 +257,8 @@ class PythonShardAdmissionTests(unittest.TestCase):
                         self.assertEqual(result.returncode == 0, absent is None)
 
     def test_long_shards_share_groups_across_current_heads_without_replacement(self):
-        job = self.job("test-shard")
-        admission = re.search(r"\n    concurrency:\n((?:      [^\n]*\n)+)", job)
-        self.assertIsNotNone(admission, "long shards need cross-run admission")
-        fields = dict(re.findall(r"^      ([\w-]+): (.+)$", admission.group(1), re.MULTILINE))
+        job = self.workflow["jobs"]["test-shard"]
+        fields = job.get("concurrency", {})
         self.assertEqual(fields.get("queue"), "max")
         self.assertEqual(fields.get("cancel-in-progress"), "false")
         template = fields["group"]
@@ -164,13 +267,10 @@ class PythonShardAdmissionTests(unittest.TestCase):
         groups = {re.sub(r"\$\{\{.*?\}\}", str(shard), template).casefold()
                   for shard in range(1, 5)}
         self.assertEqual(len(groups), 4)
-        self.assertIn("shard: [1, 2, 3, 4]", job)
-        self.assertIn("fail-fast: false", job)
-        root = self.workflow.split("\njobs:\n", 1)[0]
-        self.assertIn("group: python-tests-${{ github.event_name }}-${{ github.ref }}", root)
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}", root)
-        self.assertIn("permissions:\n  contents: read", root)
-        self.assertNotIn("secrets.", job)
+        self.assertEqual(job["strategy"]["matrix"]["shard"], ["1", "2", "3", "4"])
+        self.assertEqual(job["strategy"]["fail-fast"], "false")
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        self.assertNotIn("secrets.", json.dumps(job))
 
 
 if __name__ == "__main__":

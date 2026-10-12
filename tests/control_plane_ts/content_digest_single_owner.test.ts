@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 import {
@@ -13,7 +14,7 @@ import { delegationInventoryQuery } from "../../loopx/control_plane/collaboratio
 import { normalizeCollaborationBrief } from "../../loopx/control_plane/collaboration/semantic_request.ts";
 import { decodeOutboxCursor } from "../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts";
 
-const PACKAGE_ROOT = new URL("../../loopx", import.meta.url).pathname;
+const PACKAGE_ROOT = fileURLToPath(new URL("../../loopx", import.meta.url));
 const OWNER_FILE = "control_plane/content_digest.ts";
 const CANONICAL_EXPORTS = ["BARE_SHA256_PATTERN", "ENVELOPED_SHA256_PATTERN"];
 const HEX_CHARS = [..."0123456789abcdef"];

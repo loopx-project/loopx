@@ -9,6 +9,7 @@ import type {
   AuthorityStore,
   AuthorityStoreCommit,
   AuthorityStoreCommitResult,
+  AuthorityStoreCommittedTransaction,
   AuthorityStoreIdentityResult,
   AuthorityStoreLoadResult,
   AuthorityStoreHead,
@@ -427,24 +428,7 @@ export class FileAuthorityStore implements AuthorityStore {
         }
         const document = FileAuthorityJournal.append(current, this.goalId, identity, normalized, (previous, transaction) =>
           fileAuthorityRevision(this.goalId, identity, previous, transaction));
-        const {cursor, provider_revision: revision} = document;
-        try {
-          const bytes = canonicalAuthorityBytes(document.toDocument());
-          await this.replaceDurably(this.path, bytes);
-          rememberVerifiedDocument(this.path, identity, bytes, documentDigest(bytes), document,
-            this.fullDocumentCacheLimitBytes());
-        } catch (error) {
-          // A failure after rename may already have published the new bytes.
-          // The next read must prove the actual file rather than reuse either
-          // the previous or attempted document.
-          verifiedDocuments.delete(this.path);
-          return {
-            status: "ambiguous",
-            reason_code: "commit_outcome_unknown",
-            reason: error instanceof Error ? error.message : "commit outcome unknown",
-          };
-        }
-        return { status: "applied", provider_revision: revision, cursor };
+        return await this.publishDocument(identity, document);
       });
     } catch (error) {
       return {
@@ -455,6 +439,70 @@ export class FileAuthorityStore implements AuthorityStore {
         reason: error instanceof Error ? error.message : "provider write unavailable",
       };
     }
+  }
+
+  /** File-only archive IO seam, called after verified-input and prefix audit.
+   * The existing lock/CAS protects one bounded page. Every original transaction
+   * gets its own revision, cursor and receipt; only envelope publication is
+   * coalesced. No selector, admission or execution authority changes here. */
+  async appendArchivePage(expectedRevision: string | null, expectedIdentity: string,
+    rows: readonly AuthorityStoreCommittedTransaction[]): Promise<AuthorityStoreCommitResult> {
+    try {
+      if (rows.length < 1 || rows.length > 16) throw new AuthorityStoreProtocolError("archive page requires 1..16 rows");
+      const page = rows.map(row => {
+        if (row.projection.goal_id !== this.goalId) throw new AuthorityStoreProtocolError("archive page goal mismatch");
+        return {cursor: row.cursor, commit: normalizeAuthorityStoreCommit({expected_provider_revision: null,
+          operation_id: row.operation_id, events: row.events,
+          next_projection: row.projection, receipts: row.receipts})};
+      });
+      return await withFileMutationLock(this.path, async () => {
+        const identity = await this.readStoreIdentity(false);
+        if (identity !== expectedIdentity) throw new AuthorityStoreProtocolError("archive target lineage changed");
+        const current = await this.readDocument(identity);
+        if (this.existingOnly && current === null) {
+          return {status: "failed", reason_code: "existing_authority_missing",
+            reason: "existing-only store cannot bootstrap a missing authority"};
+        }
+        if ((current?.provider_revision ?? null) !== expectedRevision) {
+          return {status: "conflict", conflict_kind: "provider_revision_mismatch",
+            current_provider_revision: current?.provider_revision ?? null, current_cursor: current?.cursor ?? null};
+        }
+        const operations = new Set<string>();
+        for (const [index, {cursor, commit}] of page.entries()) {
+          if (cursor !== (BigInt(current?.cursor ?? "0") + BigInt(index + 1)).toString()) {
+            throw new AuthorityStoreProtocolError("archive page cursor gap");
+          }
+          if (current?.receipt(commit.operation_id) || operations.has(commit.operation_id)) {
+            throw new AuthorityStoreProtocolError("archive page operation identity is duplicated");
+          }
+          operations.add(commit.operation_id);
+        }
+        const document = FileAuthorityJournal.appendCommits(current, this.goalId, identity, page.map(row => row.commit),
+          (previous, transaction) => fileAuthorityRevision(this.goalId, identity, previous, transaction));
+        return await this.publishDocument(identity, document);
+      });
+    } catch (error) {
+      return {status: "failed", reason_code: error instanceof AuthorityStoreProtocolError
+        ? "provider_protocol_violation" : error instanceof EffectRuntimeLockTimeoutError
+        ? "provider_lock_timeout" : "provider_write_unavailable",
+        reason: error instanceof Error ? error.message : "archive page unavailable"};
+    }
+  }
+
+  private async publishDocument(identity: string, document: FileAuthorityJournal): Promise<AuthorityStoreCommitResult> {
+    try {
+      const bytes = canonicalAuthorityBytes(document.toDocument());
+      await this.replaceDurably(this.path, bytes);
+      rememberVerifiedDocument(this.path, identity, bytes, documentDigest(bytes), document,
+        this.fullDocumentCacheLimitBytes());
+    } catch (error) {
+      // Rename may already have published the page. Neither cached version
+      // proves the outcome; the archive owner reads journal and original receipts.
+      verifiedDocuments.delete(this.path);
+      return {status: "ambiguous", reason_code: "commit_outcome_unknown",
+        reason: error instanceof Error ? error.message : "commit outcome unknown"};
+    }
+    return {status: "applied", provider_revision: document.provider_revision, cursor: document.cursor};
   }
 
   async readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult> {
