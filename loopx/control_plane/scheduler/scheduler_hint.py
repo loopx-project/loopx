@@ -629,9 +629,11 @@ def build_codex_app_scheduler_fallback_hint(
 
 
 def _pending_retry_projection(payload: dict[str, Any]) -> dict[str, Any]:
-    deadline = _dict_or_empty(_dict_or_empty(payload.get("agent_todo_summary")).get("frontier_deadline"))
-    retry = deadline.get("blocked_retry")
-    if deadline.get("source") != "turn_settlement" or not isinstance(retry, dict):
+    summary = _dict_or_empty(payload.get("agent_todo_summary"))
+    deadline = _dict_or_empty(summary.get("frontier_deadline"))
+    retry = summary.get("blocked_retry_wait") or (deadline.get("blocked_retry")
+        if deadline.get("source") == "turn_settlement" else None)
+    if not isinstance(retry, dict):
         return {}
     return {"pending_retry": {**retry, "execution_authority_granted": False,
         "recheck": "rerun quota at or after due_at; current gates and owner cadence still apply"}}
@@ -649,6 +651,11 @@ def _receipt_retry_wait_profile(
             or due is None or due <= current_time):
         return None
     horizon = max(1, math.ceil((due - current_time).total_seconds() / 60))
+    frontier = build_frontier_recheck_plan(payload, current_time=current_time)
+    if frontier:
+        # The retry explains the wait, but an independent earlier clock still
+        # owns the next wakeup. The owner cadence floor is applied afterward.
+        horizon = min(horizon, max(1, math.ceil(frontier["frontier_recheck_after_seconds"] / 60)))
     return {"interval_minutes": horizon, "retry": retry} if horizon < interval_minutes else None
 
 

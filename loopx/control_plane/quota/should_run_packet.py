@@ -1291,8 +1291,9 @@ def _build_active_quota_payload(
     # gate explanation. Genuine gates and unknown scope keep their old route.
     notice_only = (user_summary.get("user_action_open_count", 0) > 0 and
                    user_summary.get("all_open_count") == user_summary.get("user_action_open_count"))
-    retry_wait = (retry_deadline.get("blocked_retry")
-                  if notice_only and retry_deadline.get("source") == "turn_settlement" else None)
+    retry_wait = ((prepared.agent_todo_summary or {}).get("blocked_retry_wait") or
+                  (retry_deadline.get("blocked_retry")
+                   if retry_deadline.get("source") == "turn_settlement" else None)) if notice_only else None
     execution_obligation = _execution_obligation(
         should_run=route.should_run,
         effective_action=route.effective_action,
