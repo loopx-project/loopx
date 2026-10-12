@@ -380,15 +380,87 @@ harness 形式签入
 
 ## 12. 开放决策
 
-1. **Schema 容量。** Goal authority owner 必须在 M1 前选择最大 declaration row
-   与 projected item 数。建议：尽可能复用现有 Material Frontier 限制。所需
-   证据：production-scale synthetic registry fixture。
-2. **Required receipt outcome。** Goal Vision owner 必须决定 `read`、`used`、
-   `verified` 是否都满足方向 requirement，或 v0 是否只接受 `used`/`verified`。
-   建议：M1 保持当前 Material Frontier 语义，只有在具备迁移证据后才收紧。
-3. **首个 consumer。** Control-plane owner 必须批准 M2 是在 Goal Frontier、
-   status 还是其他已有 Agent-scoped view 呈现。建议：选择单个 cold-path read
-   surface，避免 promotion 到 quota/scheduler。
+以下建议**等待 owner 决策，不构成运行时授权**。它们根据附录 F 的源码审计与合成
+测量细化现有三项决策；交付成熟度仍为 Proposal。
+
+### 12.1 Schema 容量 — Goal authority owner
+
+当前 Material Frontier 限制单个文本字段与 handoff ref，**没有完整 material 或
+receipt 数量上限**，因此不存在可直接继承的完整 frontier 数值限制。建议 M1 对
+一次所选 Goal/Agent 读取采用以下边界：
+
+| 维度 | 建议上限 | 理由 / 所需验证 |
+| --- | --- | --- |
+| Declaration row | 64 | 限定 owner 声明的 requirement 数；topic 展开另有限制。 |
+| 去重后的 resolved material，含 optional item | 256 | 包含声明的全部 topic 成员和直接 ref，保留每条 binding。 |
+| 输入 receipt row | 4,096 | 限定历史检查量；不能任意截取最近一段，隐藏相关 receipt。 |
+| 完整输入的紧凑 UTF-8 JSON 字节数 | 2 MiB | 包含完整传入的 authority registry、declaration 和 receipt；数量限制不能约束字符串和 topic 展开量。 |
+| 完整投影的紧凑 UTF-8 JSON 字节数 | 256 KiB | 包含全部 binding 与 reason code；数量合规不代表输出大小合规。 |
+
+各项限制独立适用，不承诺所有最大值能同时容纳。紧凑 JSON 指没有无意义空白且
+字符串以 UTF-8 原文编码。仍须校验字段。输入或输出越界必须返回 typed capacity
+refusal，不能给出可用的局部 baseline 或 `current` 结果。不能截断 material、
+binding 或 receipt，不能用紧凑 authority summary 替代完整读取，也不能静默
+扩大限制。现有 authority owner 必须提供完整且有界的读取，否则拒绝；加索引
+属于另行举证的优化，不是丢弃历史的许可。
+
+M1 进入批准可授权将这些数值作为实现的候选限制。M1 退出前，需在 TypeScript
+builder 上验证恰好上限、超出一项、最大字段宽度、重叠 topic、重复 binding、
+非法输入和组合边界。附录 F 为初始建议提供依据，不证明生产规模、SLO 或已验证
+的最大容量；生产容量冻结仍需单独验证。
+
+### 12.2 Receipt outcome 与来源 — Goal Vision owner
+
+建议保留 `read`、`used`、`verified` 为 exact-revision receipt 的可接受 outcome；
+`unavailable` 仍为 inaccessible。这些 outcome 均不证明认同、语义理解、工作
+验收或写权限。收紧为仅 `used`/`verified` 需要迁移证据。
+
+M1 决策还必须明确选择与拒绝行为：
+
+- 先校验 schema、identity、outcome、revision 和 timestamp，再选择 receipt；
+  非法或未知输入不能被忽略后回退到较早的通过记录；
+- 只考虑所选 Goal、Agent 及适用的 Todo scope；其他 Agent 的合法 receipt
+  不能满足当前 Agent，也不能复制到其结果中；
+- 按 timestamp 选择最新的合格 observation；相同 replay id 的一致记录去重，
+  只有同时间 observation 的 scope、outcome 和 revision 一致时才按 receipt-id
+  顺序选择。重复 id 内容冲突或同时间 observation 矛盾必须拒绝，不能选择通过记录；
+- 较晚的 `unavailable` 不能回退到较早的 `read`；revision 是不透明身份，
+  不能作为可排序版本号；
+- 保持 replay identity 和输入不变性，包括输入重新排序。
+
+审计基线已有 receipt reader 与合成 fixture，但**没有生产环境的
+`material_usage_receipt_v0` writer**。调用方提供 schema 合法的 row，不足以
+证明真实 source read。M1 可以使用合成 receipt；M2 需要通过现有 material-read
+owner 单独验证 producer，将实际获授权的读取绑定到精确 material revision 和
+所选 Agent。存储与读取绑定应复用现有 Goal-instance identity 边界：复用
+`goal_id` 或恢复出的 archive 本身不能证明 receipt 所属的生命周期。无法证明
+来源的旧记录保持未验证。不能在 pure builder 内另建 receipt store 或静默
+扩展 v0 schema。
+
+### 12.3 首个 consumer 与恢复 — control-plane owner
+
+建议从显式指定 Goal/Agent 的 status 进入已有 **agent-management 冷路径读取**，
+并在已打包的 Goal 详情交互中呈现同一投影。当前 management 层只在
+`material_lifecycle` envelope 下消费预构建的
+`status.agent_material_frontiers`，不会读取完整 authority、生成 receipt 或
+渲染 direction 详情。这些是明确的 M2 依赖，不是已交付行为。
+
+Direction 加载保持 opt-in，不进入普通 status 轮询、quota 或 scheduler 准入。
+复用 Goal/Agent identity 与现有 capability owner，不为该投影另建 capability。
+已有 `agent-context` 命令提供 coordinator lifecycle guidance，并非通用
+material-read consumer；peer discovery 同样不是该 consumer。
+
+建议 M2 旅程为：选择 Goal 和 Agent → 查看当前 material basis 与缺失/过期
+原因 → 通过 owner 执行已有授权的 source read → 刷新同一 Agent 的结果。
+打包验证必须覆盖 revision drift、source unavailable、错误 Agent 的 receipt、
+reload 和 retry，同时 Vision/Todo/lease/route 状态保持不变。Baseline current
+只表示材料读取依据当前有效，不能让全 Goal 验收变绿。Direction 到 acceptance
+的关联必须通过现有 acceptance owner 绑定观测 basis，不能改写历史结果。
+CLI 与前端必须共享该结果；Lark 在实际交互测试前仍单独保持未验证。
+
+维护者可以批准或调整容量和 receipt 决策，允许仅 TypeScript M1 pure builder，
+同时明确暂缓 M2。这项较窄决策不批准 consumer、writer 或 recovery UX；第 11 节
+仍要求 M2 显式批准及真实 producer/consumer 验证。
 
 ---
 
@@ -427,8 +499,9 @@ harness 形式签入
 | --- | --- | --- | --- | --- | --- |
 | E1 | 已审计当前 Material Frontier 语义。 | `41a95d9` | [Agent Material Frontier](../../reference/protocols/agent-material-frontier-v0.md) | documented | 仅 public contract；无 live material。 |
 | E2 | 路线变更 ownership 保持现有契约。 | `41a95d9` | [Goal Vision and Replan](../../reference/protocols/goal-vision-replan-contract-v0.md) | documented | 不证明 proposed baseline。 |
-| E3 | M0 repository 文档保持 public-safe。 | PR validation | `loopx check --scan-path docs/architecture/rfcs --scan-path docs/development/contributor-tasks.md` | pending | 仅文档 scope。 |
-| E4 | F2 revision-drift 不变量可执行且带 mutation 检查。 | `99839ae` | `python3 examples/goal-direction-baseline-f2-smoke.py` | 等待 PR 验证 | 仅虚构 id；无 runtime builder 或 live material。 |
+| E3 | 当前 RFC 双语文件保持 public-safe，符合文档治理。 | `c464cf308` 加第 12 节建议 | 对两个 RFC 文件运行 `loopx check`；`uv run --extra test python examples/docs-governance-smoke.py` | 通过 | 公开扫描覆盖两个文件；仅文档 scope。 |
+| E4 | F2 revision-drift 不变量可执行且带 mutation 检查。 | `c464cf308`；fixture 引入于 `99839ae` | `uv run --extra test python examples/goal-direction-baseline-f2-smoke.py` | 通过，含 mutation arm | 仅 fixture 内部合成 builder；无 runtime builder 或 live material。 |
+| E5 | 现有 frontier 成本与缺失的 runtime owner 为第 12 节建议提供依据。 | `c464cf308`，Python 3.11.7，macOS arm64 | 附录 F 配方；`material_frontier.py`、`management_projection.py`、`agent_context.py` | 已测量五种合成输入并检查源码边界。 | 仅现有 Python 基础实现；无 M1 builder、receipt writer、SLO 或运行时批准。 |
 
 ## 附录 D：Synthetic drift fixture 计划
 
@@ -458,3 +531,40 @@ M1 前应把该表变成 checked-in public-safe fixture 与 mutation test。Muta
 第 6 节记录当前拒绝设计。若证据表明某 provider-specific owner 能保持相同
 authority、privacy 与 no-mutation 不变量，可以新增 profile，但不能分叉 core
 contract。
+
+## 附录 F：入口决策证据（非规范性）
+
+在 `c464cf308`，`loopx/control_plane/agents/material_frontier.py` 中的
+`build_agent_material_frontier` 会为每个 resolved material 扫描输入 receipt。
+下表描述现有 Python 调用，不代表未来 TypeScript direction builder 的性能：
+
+| Material 数 | Receipt 数 | Topic 数 | 输入字节 | 输出字节 | 中位数 ms | 观测范围 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| 16 | 16 | 16 | 8,153 | 5,988 | 0.783 | 0.679–1.032 |
+| 64 | 64 | 64 | 31,961 | 22,404 | 3.193 | 3.013–3.419 |
+| 256 | 256 | 64 | 122,741 | 88,226 | 19.286 | 18.857–19.675 |
+| 256 | 4,096 | 64 | 1,059,587 | 88,482 | 184.327 | 177.839–200.030 |
+| 512 | 8,192 | 64 | 2,119,171 | 176,546 | 670.294 | 658.070–688.730 |
+
+复现配方：macOS arm64、Python 3.11.7；固定 Goal `direction-fixture`、Agent
+`agent-a`、id `material-{i:04d}`、revision `revision-1`。每条 authority row
+包含其 id、revision、`boundary=public_safe`、`gate_status=ready`、
+`freshness=current`、`role=direction_source`、`owner_status=reviewed` 和
+`conflict_rule=owner_wins`。对 `i < min(64, material_count)`，将
+`topic-{i:02d}` 映射到下标为 `i::64` 的 material id；Agent profile 包含相同
+`agent_id` 并请求全部 topic。前三种输入每个 material 生成一条 receipt，后两种每个生成十六条，
+包含现有 schema、Goal/Agent/material id、observed revision、`outcome=read`、
+id `receipt-{i}-{j}` 及 timestamp `2026-10-12T00:{j:02d}:00Z`；
+`generated_at=2026-10-12T00:30:00Z`。
+
+先调用现有 builder 预热一次，再对相同输入运行七次，用
+`time.perf_counter_ns` 记录中位数与最小/最大值。将完整参数和结果用排序 key
+及紧凑 JSON 分隔符序列化，计算字节数；断言输入序列化结果未变、输出 item
+数量精确且全部 current。不涉及 provider、网络或模型。另行运行
+`tracemalloc`，256/4,096 时峰值为 474,642 字节，512/8,192 时为 973,250
+字节；这仅是调用期间 Python 分配追踪峰值，不是 RSS 或总进程内存。
+计时不含 fixture 构造与序列化。
+
+这些观测说明 material 数与 receipt 历史都影响成本，不验证拟议 declaration
+schema、最大字段宽度、conflict、组合最坏情况、端到端时延或实际负载占比。
+原始测量保留在公开仓库外；fixture 配方与有界汇总观测作为评审证据。
