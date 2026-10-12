@@ -39,6 +39,8 @@ done
 
 native_scheduler_facts=0
 native_scheduler_turn=0
+native_scheduler_host_match=0
+native_scheduler_trae=0
 for arg in "$@"; do
   case "$arg" in
     --scheduler-host-facts-chunk|--scheduler-host-facts-chunk=*)
@@ -47,13 +49,22 @@ for arg in "$@"; do
     --turn-instance-id|--turn-instance-id=*)
       native_scheduler_turn=1
       ;;
+    --host-match-observed)
+      native_scheduler_host_match=1
+      ;;
+    --trae_app)
+      native_scheduler_trae=1
+      ;;
   esac
 done
 
 if [[ "$loopx_command" == "quota" \
   && ( "$loopx_subcommand" == "scheduler-ack-current" || "$loopx_subcommand" == "scheduler-fail-current" ) \
   && "$native_scheduler_facts" == "1" \
-  && "$native_scheduler_turn" == "1" ]]; then
+  && "$native_scheduler_turn" == "1" \
+  && "${LOOPX_KUNLUNCODE_OUTER_CONTROLLER:-}" != "1" \
+  && ! ( "$loopx_subcommand" == "scheduler-ack-current" \
+    && "$native_scheduler_host_match" == "1" && "$native_scheduler_trae" == "0" ) ]]; then
   native_scheduler_entry="$repo_root/loopx/control_plane/scheduler/heartbeat_followup_cli.ts"
   if ! command -v node >/dev/null 2>&1; then
     echo "loopx runtime error: native scheduler follow-up requires Node.js 22.22.3 or newer" >&2
@@ -62,6 +73,9 @@ if [[ "$loopx_command" == "quota" \
   export LOOPX_RELEASE_ROOT="$repo_root"
   exec node --no-warnings --experimental-strip-types "$native_scheduler_entry" "$@"
 fi
+
+# Codex host-match ACKs need the entrypoint's fresh App read before TS commit.
+# Outer-controlled writes also retain that entrypoint's owning permission guard.
 
 python_selector="$repo_root/scripts/loopx-python.sh"
 if [[ -n "${LOOPX_PYTHON:-}" ]]; then

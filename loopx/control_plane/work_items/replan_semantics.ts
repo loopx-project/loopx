@@ -42,7 +42,8 @@ const REPLAN_PLANNING_GUIDANCE = [
     "and hard constraints from provisional agent-created candidate rules; revisit the latter " +
     "when they obstruct the goal. Do not relax frozen acceptance, authority, budget or stops, " +
     "or rewrite criteria after failure.",
-  "Before widening repeated validation, check that the changed intervention reaches the " +
+  "Compare expected goal/information gain with full marginal cost. " +
+    "Before widening repeated validation, check that the changed intervention reaches the " +
     "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
     "scope negative results to tested conditions and local proxies to their coverage. " +
     "Reuse still-applicable evidence instead of repeating checks without a new uncertainty.",

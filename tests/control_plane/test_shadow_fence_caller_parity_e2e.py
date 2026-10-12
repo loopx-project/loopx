@@ -30,6 +30,17 @@ BUILDER = (
 PLACEHOLDERS = ("runtime_root", "todo_a", "todo_b", "todo_c", "todo_gate")
 
 
+def _posix_runtime_paths(value: object) -> object:
+    """Spell paths under the runtime root with the fixture's POSIX separators."""
+    if isinstance(value, str) and value.startswith("{runtime_root}"):
+        return value.replace("\\", "/")
+    if isinstance(value, list):
+        return [_posix_runtime_paths(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _posix_runtime_paths(item) for key, item in value.items()}
+    return value
+
+
 class Workspace:
     """One seeded goal; rows are executed against it in fixture order."""
 
@@ -63,7 +74,7 @@ class Workspace:
         for key in ("todo_gate", "todo_c", "todo_b", "todo_a"):
             if key in self.ids:
                 text = text.replace(self.ids[key], "{" + key + "}")
-        return json.loads(text)
+        return _posix_runtime_paths(json.loads(text))
 
     def observe(self, args: tuple[str, ...]) -> dict:
         before, outbox_before = self.w.primary(), self.outbox()

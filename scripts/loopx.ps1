@@ -54,11 +54,18 @@ $hasNativeSchedulerTurn = @(
         $_ -eq "--turn-instance-id" -or $_.StartsWith("--turn-instance-id=")
     }
 ).Count -gt 0
+$needsCodexHostRead = (
+    $loopxSubcommand -eq "scheduler-ack-current" -and
+    $args -contains "--host-match-observed" -and
+    $args -notcontains "--trae_app"
+)
 $isNativeSchedulerFollowup = (
     $loopxCommand -eq "quota" -and
     $loopxSubcommand -in @("scheduler-ack-current", "scheduler-fail-current") -and
     $hasNativeSchedulerFacts -and
-    $hasNativeSchedulerTurn
+    $hasNativeSchedulerTurn -and
+    -not $needsCodexHostRead -and
+    $env:LOOPX_KUNLUNCODE_OUTER_CONTROLLER -ne "1"
 )
 if ($isNativeSchedulerFollowup) {
     $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
@@ -74,6 +81,8 @@ if ($isNativeSchedulerFollowup) {
     & $node.Source --no-warnings --experimental-strip-types $nativeEntry @args
     exit $LASTEXITCODE
 }
+
+# Fresh Codex App readback and the outer-controller guard belong to entrypoint.
 
 if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "LoopX configured Python executable is invalid: $python"

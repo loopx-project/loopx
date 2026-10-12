@@ -126,7 +126,7 @@
       if (!anchor) return;
       const url = new URL(anchor.href);
       if (marked === "desktop_download" && url.hostname === "github.com" &&
-          url.pathname === "/loopx-project/loopx/releases/latest/download/LoopX.app.zip") {
+          /^\/loopx-project\/loopx\/releases\/download\/v\d+\.\d+\.\d+\/LoopX\.app\.zip$/.test(url.pathname)) {
         event("desktop_download", { platform: "macos", artifact: "app_zip" });
         return;
       }
