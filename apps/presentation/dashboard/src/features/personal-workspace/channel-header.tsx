@@ -15,6 +15,7 @@ export function ChannelHeader({
   managerRuntime,
   mobileNavigationOpen,
   onOpenGoalCapabilities,
+  onOpenGoalDetails,
   onOpenManagerChat,
   onOpenManagerSettings,
   onOpenWorkspace,
@@ -43,6 +44,7 @@ export function ChannelHeader({
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   mobileNavigationOpen?: boolean;
   onOpenGoalCapabilities?: () => void;
+  onOpenGoalDetails?: () => void;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
   onOpenWorkspace?: () => void;
@@ -179,7 +181,7 @@ export function ChannelHeader({
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
-        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t("header.manager")}</h1>}
+        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t("header.manager")}</h1>}
         {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
         <div className="personal-manager-context">
         {stewardBindingVisible && managerChannelBinding ? (

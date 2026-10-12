@@ -358,6 +358,7 @@
         "loopx/control_plane/agents/agent_scope.py::_blocking_handoff_frontier",
         "loopx/control_plane/agents/agent_scope.py::_cleared_handoff_frontier",
         "loopx/control_plane/agents/agent_scope.py::_deferred_resume_frontier",
+        "loopx/control_plane/agents/agent_scope.py::_dependency_cycle_frontier",
         "loopx/control_plane/agents/agent_scope.py::_monitor_blocked_resume_frontier",
         "loopx/control_plane/agents/agent_scope.py::_other_agent_or_exhausted_frontier",
         "loopx/control_plane/agents/agent_scope.py::_route_continuation_frontier",

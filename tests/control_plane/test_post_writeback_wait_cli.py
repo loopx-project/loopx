@@ -35,13 +35,16 @@ DEPENDENCY_ID = "todo_later_dependency"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("kind", ["monitor_changed", "todo_done"])
+@pytest.mark.parametrize("kind,cycle", [
+    ("monitor_changed", False), ("todo_done", False), ("todo_done", True),
+])
 def test_committed_progress_before_wait_recovers_only_original_spend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     provider: str,
     kind: str,
+    cycle: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
@@ -210,8 +213,19 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
         ALTERNATIVE_TODO_ID,
     )
     assert rc == 0, waiting
+    if cycle:
+        rc, changed = run(
+            "todo", "update", "--goal-id", GOAL_ID, "--todo-id", DEPENDENCY_ID,
+            "--agent-id", dependency_owner, "--resume-when", f"todo_done:{TODO_ID}",
+            "--successor-todo-id", ALTERNATIVE_TODO_ID,
+        )
+        assert rc == 0, changed
     rc, before = run("todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, before
+    if cycle:
+        waiting_todo = next(row for row in before["todos"] if row["todo_id"] == TODO_ID)
+        assert waiting_todo["resume_condition"]["invalid_state"] == "dependency_cycle"
+        assert waiting_todo["resume_ready"] is False
     rc, recovery = run(*guard_args)
     assert rc == 0, recovery
     assert recovery["settlement_progress"]["state"] == "spend_required", recovery.get(

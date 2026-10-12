@@ -1,6 +1,7 @@
 import {useEffect, useState} from "react";
 import {readTodoRequest} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
+import {MarkdownText} from "./markdown";
 import type {WorkspaceTodo} from "./personal-workspace-model";
 
 // Per-open read state, never a second Task store. A different selection or
@@ -29,7 +30,7 @@ export function TaskRequest({todo, local}: {todo: WorkspaceTodo; local: boolean}
   }, [identity, local, retry, todo.goalId, sourceId]);
   const current = local && read?.identity === identity ? read : null;
   return <div className="personal-task-request">
-    <h3>{current?.phase === "ready" ? current.text : todo.requestText ?? todo.text}</h3>
+    <MarkdownText text={current?.phase === "ready" ? current.text : todo.requestText ?? todo.text} />
     {current?.phase !== "ready" ? <div className="personal-proposal-explainer" role={current?.phase === "error" ? "alert" : "status"}>
       <span>{t(!local ? "drawer.requestLocalOnly" : !sourceId ? "drawer.requestUnidentified" : current?.phase === "error" ? "drawer.requestError" : "drawer.requestLoading")}</span>
       {current?.phase === "error" ? <button className="personal-secondary-action" type="button" onClick={() => setRetry(value => value + 1)}>{t("drawer.requestRetry")}</button> : null}

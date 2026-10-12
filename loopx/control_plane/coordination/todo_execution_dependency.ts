@@ -44,24 +44,14 @@ export function todoExecutionDependencyRejection(
   const immediateTarget = completionTarget(todo);
   if (immediateTarget === null) return {code: "todo_dependency_invalid",
     reason: "Completion dependency target is invalid", condition: {resume_when: todo.resume_when}};
-  // The resume evaluator owns satisfaction and diagnosis. We only supply its
-  // exact source records and reject a structural cycle in this one-edge chain.
+  // The resume owner diagnoses both satisfaction and transitive cycles from
+  // the same canonical head. A direct-target slice would hide longer cycles.
   const result = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
-    items: [todo], source_items: todos.has(immediateTarget) ? [todos.get(immediateTarget)!] : [],
+    items: [todo], source_items: [...todos.values()],
     kinds: ["todo_done"]});
   const entry = (result.conditions as JsonObject[])[0];
   const condition = entry?.condition as JsonObject | undefined;
   if (!condition) return {code: "todo_dependency_invalid", reason: "Completion dependency could not be evaluated", condition: {}};
-  const seen = new Set([todoId]);
-  let target: string | null = immediateTarget;
-  while (target !== null) {
-    if (seen.has(target)) return {code: "todo_dependency_invalid", reason: "Completion dependency contains a cycle", condition};
-    seen.add(target);
-    const prerequisite = todos.get(target);
-    // A retained completion is the exact condition's terminal fact. Its old
-    // planning wait is history, not a live edge in the waiting chain.
-    target = prerequisite?.status === "done" ? null : completionTarget(prerequisite);
-  }
   const diagnosis = diagnoseTodoResumeCondition(condition, todoId);
   if (diagnosis.state === "satisfied") return null;
   return {code: diagnosis.state === "invalid" ? "todo_dependency_invalid" : "todo_dependency_pending",

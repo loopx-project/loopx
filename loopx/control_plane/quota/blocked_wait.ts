@@ -32,7 +32,10 @@ function causalCondition(waiting: JsonObject, target: JsonObject): JsonObject | 
        target.material_change_generation < 0)) return null;
   const evaluated = evaluateTodoResumeConditions({
     schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
-    items: [waiting], source_items: [target],
+    // The v0 receipt freezes only a pair and historically validates its direct
+    // condition. Do not retroactively apply graph diagnosis to historical
+    // receipts. New waits additionally validate the current graph below.
+    items: [waiting], source_items: [{...target, resume_when: undefined}],
   });
   const rows = evaluated.conditions as JsonObject[];
   const condition = jsonObject(rows[0]?.condition);
@@ -79,6 +82,15 @@ function retainedTodo(todo: JsonObject): JsonObject {
   return Object.fromEntries(fields.filter((field) => todo[field] !== undefined)
     .map((field) => [field, todo[field]]));
 }
+
+function currentCompletionCondition(todo: JsonObject, todos: JsonObject[]): JsonObject | null {
+  if (typeof todo.resume_when !== "string" || !todo.resume_when.trim().toLowerCase().startsWith("todo_done:")) return null;
+  const evaluated = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [todo], source_items: todos, kinds: ["todo_done"]});
+  return jsonObject((evaluated.conditions as JsonObject[])[0]?.condition);
+}
+
+const CYCLE_REPAIR = "The Todo bound to this Turn depends on a completion dependency cycle. Inspect the cycle and current owners; repair only an owner-reviewed obsolete dependency through the authorized Todo lifecycle with fresh owner/lease proof, then re-enter this same Turn. If the needed edit belongs to another owner, retain the binding and report that blocker. Do not qualify the cycle as an ordinary wait, clear valid dependencies, fabricate completion, or rebind the Turn to independent work.";
 
 /** An unavailable attempt is not an observation or a retry clock. The
  * surrounding settlement owner verifies the exact guard, typed blocker and
@@ -127,6 +139,8 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   const resume = todo.resume_when;
   const condition = jsonObject(todo.resume_condition);
   if (typeof resume === "string" && /^(?:monitor_changed|todo_done):/.test(resume)) {
+    const fresh = currentCompletionCondition(todo, todos);
+    if (fresh?.invalid_state === "dependency_cycle") reject("cannot qualify a completion dependency cycle; inspect dependency_cycle_todo_ids and repair the plan through the authorized Todo lifecycle");
     const targets = todos.filter((target) => target.todo_id === resume.slice(resume.indexOf(":") + 1));
     const target = targets[0];
     const current = targets.length === 1 && target ? causalCondition(todo, target) : null;
@@ -205,6 +219,9 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   // be rejected by the separate 1–30 minute blocked-retry writeback budget.
   const kind = jsonObject(todo.resume_condition)?.kind;
   if (kind !== "monitor_changed" && kind !== "todo_done") return {status: "none"};
+  if (currentCompletionCondition(todo, todos)?.invalid_state === "dependency_cycle") {
+    return boundRecovery(request, "dependency", CYCLE_REPAIR);
+  }
   // Share the real writeback validation of target existence and generation.
   const wait = prepareBlockedWait({...request, schema_version: BLOCKED_WAIT_REQUEST_SCHEMA,
     allow_turn_settlement_retry: false});
@@ -214,11 +231,12 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
 
 /** Recovery routes preserve the existing binding and grant no independent work. */
 function boundRecovery(
-  request: JsonObject, repair: "lifecycle" | "blocked_writeback" | "quota_spend", reason: string, wait?: JsonObject,
+  request: JsonObject, repair: "lifecycle" | "blocked_writeback" | "quota_spend" | "dependency", reason: string, wait?: JsonObject,
 ): JsonObject {
   const obligation = repair === "blocked_writeback"
     ? "close_bound_wait_without_spend" : repair === "quota_spend"
-    ? "settle_bound_turn" : "repair_bound_monitor_lifecycle";
+    ? "settle_bound_turn" : repair === "dependency"
+    ? "repair_bound_dependency" : "repair_bound_monitor_lifecycle";
   return {
     status: "recovery_required",
     recovery: {schema_version: "unsettled_host_turn_recovery_v0", scope: "current_turn",

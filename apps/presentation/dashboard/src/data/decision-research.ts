@@ -386,6 +386,19 @@ export type PresentationProjectionEnvelope = z.infer<
   typeof presentationProjectionEnvelopeSchema
 >;
 
+/** Lineage comes from the resolved envelope, never the status summary or view. */
+export function publishedResearchLineage(projection?: PresentationProjectionEnvelope | null) {
+  const lineage = projection?.lineage;
+  const source = z.string().min(1).refine(value => value.trim().length > 0).safeParse(lineage?.source_id);
+  const version = z.number().int().positive().safeParse(lineage?.version);
+  const supersedes = z.array(z.string().min(1)).max(20).safeParse(lineage?.supersedes);
+  return {
+    sourceId: source.success ? source.data : null,
+    version: version.success ? version.data : null,
+    supersedes: supersedes.success ? supersedes.data : null,
+  };
+}
+
 export function parsePresentationProjection(
   payload: unknown,
 ): PresentationProjectionEnvelope {
@@ -434,6 +447,8 @@ export async function fetchPresentationProjection(
     || projection.view_schema !== surface.view_schema
     || projection.surface_kind !== surface.surface_kind
     || projection.goal_id !== surface.goal_id
+    || projection.generated_at !== surface.generated_at
+    || projection.review_due_at !== surface.review_due_at
   ) {
     throw new Error("projection response does not match the requested detail_ref");
   }

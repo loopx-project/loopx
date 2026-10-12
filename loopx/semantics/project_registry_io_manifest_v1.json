@@ -335,7 +335,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/cli.py::<module>.handle_periodic_report_command::codec_read:load_registry#1",
-      "line": 492,
+      "line": 549,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -343,7 +343,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/cli.py::<module>.handle_periodic_report_command::codec_read:load_registry#2",
-      "line": 518,
+      "line": 575,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -351,7 +351,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/cli.py::<module>.handle_periodic_report_command::codec_read:load_registry#3",
-      "line": 546,
+      "line": 603,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -359,7 +359,7 @@
     },
     {
       "site": "loopx/capabilities/periodic_report/cli.py::<module>.handle_periodic_report_command::codec_read:load_registry#4",
-      "line": 567,
+      "line": 624,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2127,7 +2127,7 @@
     },
     {
       "site": "loopx/project_uninstall.py::<module>.uninstall_project::codec_read:load_registry#1",
-      "line": 253,
+      "line": 327,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2135,7 +2135,7 @@
     },
     {
       "site": "loopx/project_uninstall.py::<module>.uninstall_project::codec_transaction:project_registry_transaction#1",
-      "line": 360,
+      "line": 437,
       "column": 18,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",
@@ -2175,7 +2175,7 @@
     },
     {
       "site": "loopx/runtime.py::<module>.archive_runtime_goal::codec_read:load_registry#1",
-      "line": 64,
+      "line": 76,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2183,7 +2183,7 @@
     },
     {
       "site": "loopx/runtime.py::<module>.archive_runtime_goal::codec_read:load_registry#2",
-      "line": 142,
+      "line": 159,
       "column": 31,
       "kind": "codec_read",
       "api": "load_registry",

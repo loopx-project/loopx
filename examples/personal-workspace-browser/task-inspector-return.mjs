@@ -60,15 +60,15 @@ export const taskInspectorReturnScenario = {
         assert.ok((await longOpener.innerText()).length < 150, "The card keeps its bounded preview");
         await longOpener.click();
         await drawer.waitFor();
-        assert.match(await drawer.locator(".personal-task-inspector-summary h3").innerText(), /keeps one card$/, "Opening a Task must retain its original requirements beyond the card preview");
+        assert.match(await drawer.locator(".personal-task-request .personal-md").innerText(), /keeps one card$/, "Opening a Task must retain its original requirements beyond the card preview");
         await page.keyboard.press("Escape");
         await drawer.waitFor({ state: "hidden" });
         await page.waitForFunction(() => document.activeElement?.closest(".personal-task-card")?.textContent.includes("Idless long Todo"));
         assert.equal(await longOpener.evaluate(element => document.activeElement === element), true);
 
         const fullOpener = page.locator(".personal-task-card", { hasText: "Full queue follow-up" }).locator(":scope > button");
-        const body = drawer.locator(".personal-task-inspector-summary h3");
-        const waitForFull = () => page.waitForFunction(text => document.querySelector(".personal-task-inspector-summary h3")?.textContent === text, request);
+        const body = drawer.locator(".personal-task-request .personal-md");
+        const waitForFull = () => page.waitForFunction(text => document.querySelector(".personal-task-request .personal-md")?.textContent === text, request);
         await fullOpener.click();
         await waitForFull();
         assert.equal(await body.innerText(), request, "A cold read restores every one of the 988 source characters beyond the 500-character status projection");
@@ -114,7 +114,7 @@ export const taskInspectorReturnScenario = {
         await page.keyboard.press("Escape");
         await drawer.waitFor({ state: "hidden" });
         await opener.click();
-        await page.waitForFunction(() => document.querySelector(".personal-task-inspector-summary h3")?.textContent === "Current Todo");
+        await page.waitForFunction(() => document.querySelector(".personal-task-request .personal-md")?.textContent === "Current Todo");
         releaseLate();
         await finished;
         assert.equal(await body.innerText(), "Current Todo", "A late response from the closed Task cannot overwrite the next selection");

@@ -309,6 +309,18 @@ def append_quota_slot_spend_fixture(
         )
 
 
+def write_codex_heartbeat_fixture(root: Path, *, goal_id: str, agent_id: str, rrule: str) -> None:
+    """Synthetic manifest for CLI readback tests; never a real App update proof."""
+    path = root / "automations" / "scheduler-fixture" / "automation.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = {
+        "id": "scheduler-fixture", "kind": "heartbeat", "status": "ACTIVE",
+        "prompt": f"Advance `{goal_id}` from active state. Agent: `{agent_id}`.",
+        "rrule": rrule, "target_thread_id": "scheduler-fixture",
+    }
+    path.write_text("\n".join(f"{key} = {json.dumps(value)}" for key, value in fields.items()) + "\n", encoding="utf-8")
+
+
 def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"

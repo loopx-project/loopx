@@ -957,6 +957,80 @@ def test_model_capacity_failure_keeps_session_and_original_delivery(ordinary, pr
         runtime.close()
 
 
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+@pytest.mark.parametrize("info,code", [
+    ("other", "host_gate"),
+    ({"responseStreamDisconnected": {"httpStatusCode": None}}, "upstream_transport_failure"),
+    ("cyberPolicy", "cyber_policy"),
+])
+def test_disconnect_failure_returns_original_retry_evidence_without_manual_status_or_replay(
+    ordinary, profile, info, code,  # noqa: F811
+):
+    store, runtime, provider, transport = connect(ordinary)
+    capture, fake = ordinary[-3:-1]
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+                                     f'"codexErrorInfo": {info!r}')
+    marker = '            turn_status[active_turn] = "failed"'
+    source = source.replace(marker, marker + '\n'
+        '            for _ in range(5):\n'
+        '                print(json.dumps({"method": "error", "params": {"threadId": "durable-thread", '
+        '"turnId": active_turn, "willRetry": True, "error": {"codexErrorInfo": '
+        '{"responseStreamDisconnected": {"httpStatusCode": None}}, "message": "private retry detail"}}}), flush=True)')
+    fake.write_text(source)
+    try:
+        event = provider.event(profile, "disconnect", "typed terminal failure")
+        assert transport.admit(profile, event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        sid, tid = row["session_id"], row["turn_id"]
+        turn = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert turn["status"] == "failed" and turn["response"] is None
+        assert turn["error_code"] == code
+        events = store.events_after(sid, tid, None)
+        assert sum(bool(r.get("payload", {}).get("retry")) for r in events) == 5
+        thread = store.load_session(sid)["upstream_thread_id"]
+        provider.verify_replies = False
+        assert transport.reconcile() == 0
+        terminal = provider.writes[-1][1]
+        label = {"host_gate": "响应流曾中断", "upstream_transport_failure": "响应连接失败",
+                 "cyber_policy": "安全策略拦截"}[code]
+        assert label in terminal and "原会话已保留" in terminal
+        assert "/status" not in terminal and "已过期" not in terminal
+        assert "private" not in terminal and "Partial answer" not in terminal
+        if code != "host_gate":
+            assert "响应流曾中断" not in terminal
+        # The failed delivery resumes its frozen intent after a transport
+        # restart. It cannot turn a retry observation into a new model call.
+        before = list(provider.writes)
+        provider.verify_replies = True
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                                             runner=provider, cli_bin="lark-cli")
+        assert restarted.reconcile() == 1 and restarted.reconcile() == 0
+        assert provider.writes == before
+        assert store.load_turn(sid, tid)["error_code"] == code
+        requests = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(r["method"] == "turn/start" for r in requests) == 1
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+        # Retry history belongs to a Turn, not the entire Session. A later
+        # unclassified failure cannot inherit this disconnect explanation.
+        fake.write_text(source.replace('            for _ in range(5):', '            for _ in range(0):')
+                        .replace(f'"codexErrorInfo": {info!r}', '"codexErrorInfo": "other"'))
+        runtime.close()
+        from loopx.chat_runtime import ChatRuntimeController
+        resumed = ChatRuntimeController(store=store, codex_bin=str(fake), project_contexts=ordinary[2])
+        runtime = resumed
+        following = LarkPrivateConversations(controller=resumed, runtime_root=store.root.parent,
+                                             runner=provider, cli_bin="lark-cli")
+        following.admit(profile, provider.event(profile, "new-failure", "typed terminal failure"))
+        next_row = next(r for r in following.core.pending() if r.get("turn_id") != tid)
+        assert next_row["session_id"] == sid
+        assert resumed.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=10)["error_code"] == "host_gate"
+        following.reconcile()
+        assert "响应流曾中断" not in provider.writes[-1][1]
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+    finally:
+        runtime.close()
+
+
 def test_source_rejection_unsupported_file_notice_and_ambiguous_reply_readback(ordinary):  # noqa: F811
     _, runtime, provider, transport = connect(ordinary)
     try:

@@ -34,7 +34,8 @@ test("online backup preserves committed metadata, schema and blobs, excluding an
     } finally { copy.close(); }
     writer.exec("ROLLBACK");
     assert.equal(writer.prepare("SELECT metadata FROM facts").get()?.metadata, metadata);
-    assert.equal((await stat(target)).mode & 0o777, 0o600);
+    // Windows stat reports 0o666 for every writable file and has no owner-only mode.
+    if (process.platform !== "win32") assert.equal((await stat(target)).mode & 0o777, 0o600);
   } finally { writer.close(); }
 });
 

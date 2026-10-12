@@ -556,3 +556,33 @@ The retired `finance_market_snapshot` value-connector selectors remain only as
 machine-readable migration tombstones for upgrades. They point to this
 extension but cannot execute it, register a capability, or install an absent
 provider implicitly.
+
+### Same-event funding cash (candidate 0.8.13)
+
+Assess two declared funding payments with explicit native periods, event,
+payment direction, quantity basis and currency. Different native periods can
+contribute to the same payment event; this does not compare naked rates.
+Forecast estimates and declared realized cash use separate fields. Missing
+second legs, event/period evidence, units or costs stay unknown; no trade or
+guaranteed carry is admitted. See the [closed Finance contract](CONTRACT.md#same-event-funding-cash-candidate-extension-0813).
+
+```sh
+loopx-finance-value-discovery assess-funding-event \
+  --input-json packages/loopx-finance-value-discovery/examples/funding-event-v1.json
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/funding-event-v1.json \
+  --execute --format json
+```
+
+The synthetic example's declared same-event net cash is -0.4 SYN despite
+different 1h/8h accrual periods. It authenticates neither source nor payment.
+Install/doctor and enable through the existing lifecycle above. Disable with
+`loopx extension disable loopx-finance-value-discovery --execute`; rollback to
+the pinned 0.8.12 wheel and matching manifest rejects the new input schema while
+preserving old inputs. App/Lark interaction and the source-provider production
+consumer are separate, unqualified stages of this candidate.
+
+两腿分别声明原率、期间、事件、付收方向、数量与币种。同币且已明确结算于同一
+事件的现金可以相加，期间长度不同本身不拒绝；裸率不直接比较。未来预测的条件
+估计单列，realized net_cash 始终为空。缺腿、事件/期间、单位或费用不补零，
+合成样例及本地计算不证明来源、成交、PIT、金融效用或交易授权。

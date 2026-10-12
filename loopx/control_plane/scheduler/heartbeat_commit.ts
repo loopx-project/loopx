@@ -867,6 +867,20 @@ export async function evaluateSchedulerHeartbeatCommit(
         );
       }
     }
+    if (
+      request.operation === "ack" && request.host_match_observed &&
+      (!request.observed_host_rrule || request.observed_host_rrule !== request.applied_rrule)
+    ) {
+      return result(
+        request, path, "conflict", existing,
+        "host-match ACK requires a current observation matching applied_rrule",
+        {
+          reason_code: "rrule_mismatch",
+          applied_rrule: request.applied_rrule,
+          observed_host_rrule: request.observed_host_rrule,
+        },
+      );
+    }
     if (request.execute && canonical === null) {
       existing = await migrateLegacySchedulerStateUnderLock(
         request.runtime_root,

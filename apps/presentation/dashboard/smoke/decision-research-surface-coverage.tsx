@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { DecisionResearchView } from "../src/data/decision-research";
+import { fetchPresentationProjection, parsePresentationProjection, publishedResearchLineage, type DecisionResearchView } from "../src/data/decision-research";
+import projectionFixture from "../src/data/fixtures/presentation-projection.example.json";
+import { presentationSurfaceSchema } from "../src/data/status";
 import {
   SourcePeriodMetricsCard,
   SpotMarketIdentityCard,
+  DecisionResearchSurface,
 } from "../src/views/decision-research-surface";
 
 type SourcePeriodMetric = DecisionResearchView["source_period_metrics"][number];
@@ -133,4 +136,60 @@ assert.match(spotMarkup, /SYN \/ USDC/);
 assert.match(spotMarkup, /4.25/);
 assert.match(spotMarkup, /missing \(not zero\)/);
 
-console.log("Decision research source-period rendering coverage passed");
+const projection = parsePresentationProjection(projectionFixture);
+const surface = presentationSurfaceSchema.parse({
+  extension_id: projection.extension_id, extension_revision: projection.extension_revision,
+  surface_id: projection.surface_id, surface_kind: projection.surface_kind,
+  title: "Synthetic research", view_schema: projection.view_schema, visibility: "public-safe",
+  state: "review_due", goal_id: projection.goal_id, generated_at: projection.generated_at,
+  review_due_at: projection.review_due_at, diagnostic: null,
+  empty_state_title: "No research", empty_state_detail: "No projection",
+  detail_ref: {extension_id: projection.extension_id, surface_id: projection.surface_id,
+    extension_revision: projection.extension_revision, payload_sha256: projection.payload_sha256},
+});
+const markup = renderToStaticMarkup(<DecisionResearchSurface goals={[]} surface={surface}
+  view={projection.view} projection={{...projection, lineage: {...projection.lineage,
+    supersedes: ["synthetic-previous-source"]}}} />);
+for (const value of [projection.goal_id, projection.generated_at, projection.review_due_at!,
+  "synthetic-research-2026-01-15", "Source version", "synthetic-previous-source",
+  projection.extension_revision, projection.payload_sha256, "does not extend the review deadline"]) {
+  assert(markup.includes(value), `Published reference must retain ${value}`);
+}
+assert.match(markup, /<details[^>]*data-testid="research-reference-details"/);
+assert.deepEqual(publishedResearchLineage(), {sourceId: null, version: null, supersedes: null});
+assert.deepEqual(publishedResearchLineage({...projection, lineage: {source_id: false, version: "1", supersedes: false}}),
+  {sourceId: null, version: null, supersedes: null});
+const legacy = {...projection, review_due_at: null, lineage: undefined};
+const legacyMarkup = renderToStaticMarkup(<DecisionResearchSurface goals={[]}
+  surface={{...surface, review_due_at: null}} view={legacy.view} projection={legacy} zh />);
+assert.match(legacyMarkup, /原复核期限/);
+assert.match(legacyMarkup, /未知/);
+assert(!legacyMarkup.includes("synthetic-research-2026-01-15"), "Absent lineage must not be guessed from the view");
+
+const originalFetch = globalThis.fetch;
+let reply = projection;
+globalThis.fetch = async () => new Response(JSON.stringify({ok: true, projection: reply}));
+try {
+  assert.deepEqual(await fetchPresentationProjection("http://localhost/extension-projection", surface), projection);
+  for (const changes of [
+    {payload_sha256: "0".repeat(64)}, {extension_revision: "old-revision"},
+    {goal_id: "other-goal"}, {generated_at: "2026-01-16T12:00:00Z"},
+    {review_due_at: "2026-03-15T12:00:00Z"},
+  ]) {
+    reply = {...projection, ...changes};
+    await assert.rejects(fetchPresentationProjection("http://localhost/extension-projection", surface),
+      /does not match the requested detail_ref/);
+  }
+  reply = projection;
+  assert.deepEqual(await fetchPresentationProjection("http://localhost/extension-projection", surface), projection);
+  await assert.rejects(fetchPresentationProjection("http://localhost/extension-projection",
+    {...surface, visibility: "owner-only"}), /public-safe/);
+  await assert.rejects(fetchPresentationProjection("http://localhost/extension-projection",
+    {extension_id: surface.extension_id, extension_revision: surface.extension_revision,
+      surface_id: surface.surface_id, surface_kind: surface.surface_kind, title: surface.title,
+      view_schema: surface.view_schema, visibility: "public-safe", goal_id: null, generated_at: null,
+      review_due_at: null, diagnostic: null, empty_state_title: "Empty", empty_state_detail: "Disabled", state: "empty"}),
+    /no published projection/);
+} finally {globalThis.fetch = originalFetch;}
+
+console.log("Decision research source-period and published-reference coverage passed");

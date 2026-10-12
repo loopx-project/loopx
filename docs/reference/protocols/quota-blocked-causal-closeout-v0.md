@@ -46,6 +46,22 @@ CLI/provider acceptance checks both dependency kinds, replay, no debit,
 original validator preservation and independent next-Turn selection. It does
 not claim live research adoption or PostgreSQL qualification.
 
+### Registering a source-satisfied successor
+
+External-wait authoring recomputes a successor's `todo_done` or
+`monitor_changed` condition from the same locked Todo snapshot using the
+existing typed resume evaluator. A completed dependency (including archived
+history) or a strictly advanced monitor generation can therefore serve as the
+runnable successor without clearing its condition. A pending, missing,
+self-referential or invalid dependency still rejects the whole edit without
+writing. Caller-supplied `resume_ready` no longer admits work: it is a display
+projection, not proof. The default change affects CLI, native planning and the
+shared Chat/Lark Todo update owner; no activation switch or new authority is
+added. PR, capacity and clock conditions lack evidence at this authoring
+boundary and remain rejected as successor proof. Their ordinary scheduling
+semantics are unchanged. Dry-run and canonical operation replay keep their
+existing behavior; live host and packaged App/Lark adoption are separate checks.
+
 ### Suspending leased work
 
 For an open, leased Agent Todo, the current claim/lease owner can use the
@@ -143,6 +159,18 @@ Dashboard 已消费 canonical 等待与回执，Chat／Lark 仍复用 Todo updat
 不新增前端控件、Lark 命令或独立 UI 权威。File、SQLite 的真实 CLI／provider
 验收覆盖两种依赖、重放、零扣额、原验收器保留与下一 Turn 独立选择；不据此
 宣称投研真实采用或 PostgreSQL 资格已通过。
+
+### 登记源证据已满足的后继
+
+external-wait authoring 复用既有 typed resume evaluator，从同一份锁定的 Todo
+快照重算后继的 `todo_done` 或 `monitor_changed` 条件。已完成的依赖（包括归档
+历史）或严格超过基线的 monitor generation，可合法承接工作，无须删除后继的
+等待条件。尚未满足、缺失、自引用或非法依赖仍整体拒绝且不写入。
+`resume_ready` 是展示投影，调用方提供的值不再授权后继。这项默认行为调整覆盖
+CLI、native planning 及同源 Chat/Lark Todo update owner，不新增开关或权限。
+PR、capacity 和 clock 条件在此 authoring 边界缺少证据，仍不能靠展示字段承接；
+它们的普通调度语义不变。Dry-run 与 canonical 操作重放沿用原契约，本机 Host
+及打包 App/Lark 采用须分别验收。
 
 ### 有租约任务的延期
 

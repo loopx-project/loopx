@@ -31,6 +31,16 @@ def recovery_cli_actions(
         if not isinstance(owed, Mapping) or not isinstance(owed.get("command"), str):
             raise RuntimeError("receipt-bound settlement recovery is missing its exact spend command")
         return [owed["command"]]
+    if recovery.get("repair") == "dependency" and recovery.get("scope") == "current_turn":
+        bound_turn = shlex.quote(str(recovery["turn_instance_id"]))
+        return [
+            (f"{command_prefix} todo list --goal-id {goal_id}{lifecycle_actor_args}"
+             f" --todo-id {shlex.quote(prior_todo_id)}"),
+            (f"{command_prefix} task-lease inspect --goal-id {goal_id}"
+             f" --todo-id {shlex.quote(prior_todo_id)}"),
+            "Inspect dependency_cycle_todo_ids and current owners. Repair only a reviewed obsolete dependency through todo update or the owning lifecycle, using fresh owner/lease/CAS proof. Follow any returned lifecycle recovery before retrying. If another owner must repair the edge, retain the binding and report that blocker. Do not clear a valid wait, claim completion, spend quota, or switch the bound Todo to escape the cycle.",
+            f"{typed_quota_guard} --turn-instance-id {bound_turn}",
+        ]
     if recovery.get("repair") == "lifecycle" and recovery.get("scope") == "current_turn":
         bound_turn = shlex.quote(str(recovery["turn_instance_id"]))
         return [

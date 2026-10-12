@@ -60,6 +60,10 @@ from .stock_change import (
     FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION,
     assess_stock_change,
 )
+from .funding_event import (
+    FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION,
+    assess_funding_event_pair,
+)
 
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
 
@@ -121,6 +125,11 @@ def _direct_parser() -> argparse.ArgumentParser:
         help="Reconcile six source-column signed cash amounts and retain unknowns.",
     )
     cash_parser.add_argument("--input-json", required=True)
+    funding_parser = sub.add_parser(
+        "assess-funding-event",
+        help="Assess declared same-event funding cash; separate forecasts and unknowns.",
+    )
+    funding_parser.add_argument("--input-json", required=True)
     reduce_parser = sub.add_parser(
         "reduce",
         help="Reduce frozen public-safe evidence into a bounded research packet.",
@@ -224,7 +233,9 @@ def run(argv: Sequence[str] | None = None) -> int:
             if not isinstance(payload, Mapping):
                 raise ValueError("provider input must be a JSON object")
             schema_version = payload.get("schema_version")
-            if schema_version == FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION:
+            if schema_version == FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION:
+                packet = assess_funding_event_pair(payload)
+            elif schema_version == FINANCE_CASH_RECONCILIATION_INPUT_SCHEMA_VERSION:
                 packet = assess_cash_reconciliation(payload)
             elif schema_version == FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION:
                 packet = assess_stock_change(payload)
@@ -268,6 +279,8 @@ def run(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "assess-period":
             packet = assess_period_comparison(_load_json(args.input_json))
+        elif args.command == "assess-funding-event":
+            packet = assess_funding_event_pair(_load_json(args.input_json))
         elif args.command == "assess-stock-change":
             packet = assess_stock_change(_load_json(args.input_json))
         elif args.command == "assess-period-difference":
@@ -340,7 +353,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "replay-beta, evaluate-pack, replay-pack, list-packs, "
                 "render-lark-card, build-operation-request, or "
                 "evaluate-contract-liquidity, evaluate-position, assess-period, "
-                "assess-period-difference, assess-stock-change, or assess-cash"
+                "assess-period-difference, assess-stock-change, assess-funding-event, or assess-cash"
             )
     except Exception as exc:
         # Position inputs are private; malformed values never enter diagnostics.

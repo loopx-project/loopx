@@ -447,8 +447,11 @@ export const navigationSortingScenario = {
       pass(17, "Manager home omits the empty first-visit digest and redundant Agent worker strip.");
 
       // An earlier completion notice must not clear a newer pending refresh.
-      await page.clock.install();
-      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      // Freeze at a future virtual instant; a sampled "now" can already be
+      // in the past when the next browser command arrives.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
+      await page.clock.pauseAt(clockStart + 60_000);
       const refresh = page.getByRole("button", {name: "刷新状态", exact: true});
       await refresh.click();
       await page.locator(".personal-refresh-control.is-done").waitFor();

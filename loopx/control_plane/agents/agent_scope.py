@@ -547,6 +547,11 @@ def _agent_lane_frontier_hint(
                     "--evidence '<public-safe rationale>'"
                 ),
             )
+        if frontier.get("dependency_cycle_candidates"):
+            # The typed replan and its CLI contract carry the repair. None of
+            # the legacy hints describes dependency repair without suggesting
+            # unrelated work, so do not manufacture an add-next hint.
+            return None
         monitor_candidates = (
             frontier.get("monitor_blocked_resume_candidates")
             if isinstance(frontier.get("monitor_blocked_resume_candidates"), list)
@@ -987,6 +992,25 @@ def _agent_scope_advancement_counts(
     return current, unclaimed
 
 
+def _dependency_cycle_frontier(
+    context: _AgentScopeNoCandidateContext,
+) -> dict[str, Any] | None:
+    repair = project_todo_resume_planning(
+        context.summary, agent_id=context.agent_id,
+    ).get("dependency_cycle_replan")
+    if not repair:
+        return None
+    return build_agent_scope_frontier_payload(
+        agent_id=context.agent_id,
+        action=AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED,
+        quiet_noop_allowed=False, requires_replan=True,
+        spend_policy=repair["spend_policy"], reason=repair["reason"],
+        recommended_action=repair["recommended_action"],
+        candidate_counts={**context.candidate_counts, "dependency_cycle_count": repair["count"]},
+        extra_fields={"dependency_cycle_candidates": repair["candidates"]},
+    )
+
+
 def _monitor_blocked_resume_frontier(
     context: _AgentScopeNoCandidateContext,
 ) -> dict[str, Any] | None:
@@ -1308,6 +1332,7 @@ def _other_agent_or_exhausted_frontier(
 
 
 _AGENT_SCOPE_NO_CANDIDATE_RULES = (
+    _dependency_cycle_frontier,
     _monitor_blocked_resume_frontier,
     _deferred_resume_frontier,
     _blocked_successor_wait_frontier,

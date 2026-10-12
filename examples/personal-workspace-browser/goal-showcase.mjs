@@ -80,8 +80,11 @@ export const goalShowcaseScenario = {
       await costCell.locator(".goal-vital-value").filter({hasText: "$25.40"}).waitFor();
 
       // Focus belongs to the committed input, even before another frame runs.
-      await page.clock.install();
-      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      // Freeze at a future virtual instant; a sampled "now" can already be
+      // in the past when the next browser command arrives.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
+      await page.clock.pauseAt(clockStart + 60_000);
       await page.getByTestId("overview-composer-pill").click();
       const composer = page.getByRole("textbox", { name: /发送消息|Send message/ });
       await composer.waitFor();

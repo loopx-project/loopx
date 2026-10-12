@@ -270,3 +270,144 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_pa
         assert sum(row.get("classification") == "validated_progress" for row in runs) == 1
     finally:
         restart_effect_runtime()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
+    tmp_path, monkeypatch, provider,
+):
+    """Use one ordinary command journey for the candidate and File control.
+
+    This is bounded synthetic qualification, not elapsed usage or a model Turn.
+    A historical add/update/terminal retry must not resurrect archived work,
+    repeat settlement or replace newer metadata after a provider conversion.
+    """
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    registry = project / ".loopx/registry.json"
+    goal, agent, turn = "ordinary-lifecycle", "trial-agent", "ordinary-turn"
+    package = Path(os.environ.get("LOOPX_COLD_IMPORT_PACKAGE", str(Path(__file__).resolve().parents[2] / "loopx")))
+    receiver = tmp_path / "receiver"
+    shutil.copytree(package, receiver / "loopx", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    entry = (
+        f"import sys; sys.path.insert(0, {str(receiver)!r}); import loopx; "
+        f"assert loopx.__file__ == {str(receiver / 'loopx/__init__.py')!r}; "
+        "from loopx.entrypoint import main; raise SystemExit(main())"
+    )
+
+    def command(*args, expected_code=0):
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", entry, "--registry", str(registry),
+             "--runtime-root", str(runtime), "--format", "json", *args],
+            cwd=project, capture_output=True, text=True, timeout=90,
+        )
+        assert result.returncode == expected_code, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload.get("ok") is (expected_code == 0), payload
+        return payload
+
+    def listed(*archived_ids):
+        payload = command("todo", "list", "--goal-id", goal, "--role", "agent")
+        assert not set(archived_ids).intersection(row["todo_id"] for row in payload["todos"])
+        # Normal lists stay active-only; historical records require exact reads.
+        for archived_id in archived_ids:
+            exact = command("todo", "list", "--goal-id", goal, "--role", "agent", "--todo-id", archived_id)
+            assert exact["todo"]["todo_id"] == archived_id
+            payload["todos"].append(exact["todo"])
+        return payload
+
+    if provider == "file":
+        config = tmp_path / "storage-defaults.json"
+        config.write_text(json.dumps({"schema_version": "loopx_goal_storage_defaults_v1",
+            "new_goal_provider": "file", "canonical_creation": True,
+            "new_goal_handoff_mode": "hard_lease"}))
+        preview = command("machine-config", "preview", "--namespace", "goal_storage", "--config-json", str(config))
+        command("machine-config", "apply", "--namespace", "goal_storage", "--config-json", str(config),
+                "--expected-plan-revision", str(preview["plan_revision"]), "--execute")
+    created = command("bootstrap", "--project", str(project), "--goal-id", goal,
+                      "--objective", "Qualify ordinary lifecycle and reversible exit", "--no-global-sync")
+    assert created["storage_selection"]["provider"] == provider
+    assert created["storage_selection"]["handoff_mode"] == "hard_lease"
+    command("configure-goal", "--goal-id", goal, "--registered-agent", agent,
+            "--quota-compute", "1", "--execute")
+    add = ["todo", "add", "--goal-id", goal, "--role", "agent", "--text", "Complete a task 完整 🧭",
+           "--priority", "P1", "--task-class", "advancement_task", "--action-kind", "validate",
+           "--required-capability", "filesystem_read", "--operation-id", "ordinary-add"]
+    todo = command(*add)["todo_id"]
+    claim = ["todo", "claim", "--goal-id", goal, "--todo-id", todo, "--agent-id", agent,
+             "--claimed-by", agent, "--claim-operation-id", "ordinary-claim"]
+    assert command(*claim, expected_code=1)["error_code"] == "handoff_mode_requires_lease"
+    lease = command("task-lease", "acquire", "--goal-id", goal, "--todo-id", todo,
+                    "--owner", agent, "--idempotency-key", "ordinary-lease")
+    proof = ["--task-lease-idempotency-key", "ordinary-lease",
+             "--task-lease-expected-version", str(lease["lease"]["version"])]
+    command(*claim, *proof)
+    guard = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+             "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
+             "--available-capability", "filesystem_read", "--scan-path", str(project)]
+    assert command(*guard)["normal_delivery_allowed"] is True
+    update = ["todo", "update", "--goal-id", goal, "--todo-id", todo, "--agent-id", agent,
+              "--note", "Keep the latest note 完整 🧭", "--update-operation-id", "ordinary-update", *proof]
+    command(*update)
+    refreshed = command("refresh-state", "--goal-id", goal, "--agent-id", agent,
+        "--todo-id", todo, "--turn-instance-id", turn, "--classification", "validated_progress",
+        "--delivery-batch-scale", "test_only", "--delivery-outcome", "outcome_progress",
+        "--no-global-sync", "--suppress-external-sinks", "--vision-state", "vision_on_track",
+        "--vision-summary", "Continue the ordinary lifecycle.",
+        "--vision-acceptance", "Retain current work and original receipts through exit.")
+    spend = shlex.split(refreshed["settlement_owed"]["command"])[1:]
+    assert command(*spend)["settlement_progress"]["state"] == "settled"
+    complete = ["todo", "complete", "--goal-id", goal, "--todo-id", todo,
+                "--agent-id", agent, "--turn-instance-id", turn,
+                "--evidence", "synthetic:ordinary-lifecycle-validated", *proof]
+    command(*complete)
+    # Replanning is a normal caller, too: replace another task through its owner,
+    # then retain both the archived predecessor and the new successor on exit.
+    obsolete = command("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,
+                       "--text", "Replace the obsolete task", "--operation-id", "ordinary-obsolete")["todo_id"]
+    other = command("task-lease", "acquire", "--goal-id", goal, "--todo-id", obsolete,
+                    "--owner", agent, "--idempotency-key", "ordinary-other")
+    command("todo", "supersede", "--goal-id", goal, "--todo-id", obsolete, "--agent-id", agent,
+            "--reason", "Continue with the replacement", "--next-agent-todo", "Replacement remains runnable",
+            "--next-claimed-by", agent, "--task-lease-idempotency-key", "ordinary-other",
+            "--task-lease-expected-version", str(other["lease"]["version"]))
+    command("todo", "archive-completed", "--goal-id", goal, "--max-active-done", "0", "--execute")
+    before = listed(todo, obsolete)
+    rows = before["todos"]
+    completed = next(row for row in rows if row["todo_id"] == todo)
+    assert completed["status"] == "done" and completed["archive_state"] == "archive"
+    assert completed["claimed_by"] == agent and completed["priority"] == "P1"
+    assert completed["note"] == "Keep the latest note 完整 🧭"
+    assert completed["required_capabilities"] == ["filesystem_read"]
+    predecessor = next(row for row in rows if row["todo_id"] == obsolete)
+    assert predecessor["status"] == "done" and predecessor["archive_state"] == "archive"
+    replacement = next(row for row in rows if row["todo_id"] in predecessor["successor_todo_ids"])
+    assert replacement["status"] == "open" and replacement["claimed_by"] == agent
+    assert before["authority_read"]["source_authority"] == f"{provider}_v0"
+    command("configure-goal", "--goal-id", goal, "--quota-compute", "0", "--execute")
+    target = "file" if provider == "sqlite" else "sqlite"
+    plan = tmp_path / "current-exit.json"
+    preview = command("authority-archive", "plan-migration", "--goal-id", goal,
+                      "--provider", target, "--plan", str(plan))
+    migration = ["authority-archive", "migrate", "--goal-id", goal, "--plan", str(plan),
+                 "--plan-sha256", preview["plan_sha256"], "--execute"]
+    command(*migration)
+    assert command(*migration)["status"] == "already_applied"
+    after = listed(todo, obsolete)
+    assert after["authority_read"]["source_authority"] == f"{target}_v0"
+    assert after["authority_read"]["legacy_fallback_used"] is False
+    assert after["todos"] == rows
+    # Every invocation reopens the copied package's real backend. Original
+    # command identities survive conversion and cannot unarchive older state.
+    for args in (add, update, complete, spend):
+        command(*args)
+    replayed = listed(todo, obsolete)
+    assert replayed["todos"] == rows
+    assert replayed["authority_read"]["provider_revision"] == after["authority_read"]["provider_revision"]
+    command("configure-goal", "--goal-id", goal, "--quota-compute", "1", "--execute")
+    assert command(*guard)["effective_action"] == "heartbeat_settled_skip"
+    runs = [json.loads(line) for line in (runtime / "goals" / goal / "runs/index.jsonl").read_text().splitlines()]
+    assert sum(row.get("classification") == "quota_slot_spent" for row in runs) == 1
+    assert sum(row.get("classification") == "validated_progress" for row in runs) == 1

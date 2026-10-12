@@ -187,11 +187,30 @@ def _run(executable: str, script: str, *, deadline: float | None = None) -> subp
     timeout = TIMEOUT_SECONDS if deadline is None else deadline - time.monotonic()
     if timeout <= 0:
         raise subprocess.TimeoutExpired(executable, TIMEOUT_SECONDS)
-    return subprocess.run(
-        [executable, "nodejs", "-e", script],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
-        timeout=timeout, check=False,
-    )
+    # Ego discards console output on a native control stop, including our
+    # sentinel. Preserve only its stable code outside that buffered channel.
+    with tempfile.TemporaryDirectory(prefix="loopx-source-control-") as directory:
+        stop = Path(directory) / "stop.txt"
+        wrapped = (
+            "try{" + script + "}catch(e){"
+            "if(['EGO_TASK_SPACE_USER_IN_CONTROL','EGO_TASK_SPACE_INACTIVE']"
+            ".includes(e?.error_code)){"
+            f"(await import('node:fs')).writeFileSync({json.dumps(str(stop))},e.error_code);"
+            "}throw e;}"
+        )
+        result = subprocess.run(
+            [executable, "nodejs", "-e", wrapped],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            timeout=timeout, check=False,
+        )
+        if stop.exists() and stop.read_text(encoding="utf-8") in {
+            "EGO_TASK_SPACE_USER_IN_CONTROL", "EGO_TASK_SPACE_INACTIVE",
+        }:
+            return subprocess.CompletedProcess(
+                result.args, 1,
+                MARKER + '{"error":"source_reader_not_agent_owned"}', "",
+            )
+        return result
 
 
 def _navigation(config: ReaderConfig, url: str, *, image: bool = False) -> str:

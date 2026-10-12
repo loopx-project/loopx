@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import sys
 from collections.abc import Callable
@@ -43,6 +44,49 @@ from .surface import (
     render_content_ops_walkthrough_artifact_markdown,
 )
 
+MAX_INPUT_BYTES = 16 * 1024 * 1024
+
+
+def _input_byte_limit(text: str) -> int:
+    # An explicit, positive byte count; there is no unbounded setting.
+    if not text.isdecimal() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive whole number of bytes, got {text!r}")
+    return int(text)
+
+
+def _add_input_limit(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-input-bytes",
+        type=_input_byte_limit,
+        default=MAX_INPUT_BYTES,
+        help=(
+            "Refuse JSON read from stdin ('-') larger than this many bytes before "
+            f"parsing (default {MAX_INPUT_BYTES}). Bounds input size, not process memory."
+        ),
+    )
+
+
+def _read_stdin_text(limit: int, label: str) -> str:
+    # Read through the text stream so stdin keeps its decoding, but charge each
+    # chunk by its encoded size: one character can take up to four bytes. One
+    # incremental encoder spans all chunks, so a BOM is charged only once.
+    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+    errors = getattr(sys.stdin, "errors", None) or "surrogatepass"
+    encoder = codecs.getincrementalencoder(encoding)(errors)
+    chunks: list[str] = []
+    consumed = 0
+    while consumed <= limit:
+        chunk = sys.stdin.read(max(1, (limit + 1 - consumed) // 4))
+        if not chunk:
+            consumed += len(encoder.encode("", final=True))
+            break
+        chunks.append(chunk)
+        consumed += len(encoder.encode(chunk))
+    if consumed > limit:
+        raise ValueError(f"{label} exceeds the {limit}-byte limit")
+    return "".join(chunks)
+
+
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
@@ -51,9 +95,9 @@ FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
 
-def _load_json_object(path_text: str) -> dict[str, Any]:
+def _load_json_object(path_text: str, limit: int) -> dict[str, Any]:
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        payload = json.loads(_read_stdin_text(limit, "content-ops stdin JSON input"))
     else:
         payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -109,6 +153,7 @@ def register_content_ops_commands(
     reference_parser.add_argument("--observed-at")
     reference_parser.add_argument("--output-json", help="Create a new mode-0600 private result artifact; never overwrite an existing catalog.")
     add_subcommand_format(reference_parser)
+    _add_input_limit(reference_parser)
     preview_parser = content_ops_sub.add_parser(
         "preview",
         help="Preview metadata-only connector trials and content-ops projection.",
@@ -234,6 +279,7 @@ def register_content_ops_commands(
         ),
     )
     add_subcommand_format(aggregate_parser)
+    _add_input_limit(aggregate_parser)
     aggregate_parser.add_argument(
         "--public-packet-json",
         action="append",
@@ -414,6 +460,7 @@ def register_content_ops_commands(
         ),
     )
     add_subcommand_format(item_transition_parser)
+    _add_input_limit(item_transition_parser)
     item_transition_parser.add_argument(
         "--item-json",
         required=True,
@@ -432,6 +479,7 @@ def register_content_ops_commands(
         ),
     )
     add_subcommand_format(queue_parser)
+    _add_input_limit(queue_parser)
     queue_parser.add_argument(
         "--item-json",
         action="append",
@@ -492,6 +540,7 @@ def register_content_ops_commands(
         help="Check rendered-page measurements against a typed layout plan.",
     )
     add_subcommand_format(layout_check_parser)
+    _add_input_limit(layout_check_parser)
     layout_check_parser.add_argument(
         "--plan-json",
         required=True,
@@ -520,10 +569,10 @@ def handle_content_ops_command(
                     raise ValueError("inventory requires a catalog file, --goal-id, --store-id and --observed-at")
                 payload = inspect_reference_materials(library_path=Path(args.library_json).expanduser(), goal_id=args.goal_id, store_id=args.store_id, observed_at=args.observed_at)
             else:
-                request = _load_json_object(args.input_json) if args.input_json else {}
+                request = _load_json_object(args.input_json, args.max_input_bytes) if args.input_json else {}
                 if args.operation in {"capture", "draft"} and not args.input_json:
                     raise ValueError("capture/draft require --input-json")
-                request["library"] = _load_json_object(args.library_json)
+                request["library"] = _load_json_object(args.library_json, args.max_input_bytes)
                 if args.operation == "search":
                     request.update(query=args.query, structure=args.structure)
                 payload = content_reference_operation(args.operation, request)
@@ -565,10 +614,10 @@ def handle_content_ops_command(
         elif args.content_ops_command == "aggregate-packets":
             payload = build_content_ops_packet_aggregation_packet(
                 public_handle_packets=[
-                    _load_json_object(path) for path in args.public_packet_json
+                    _load_json_object(path, args.max_input_bytes) for path in args.public_packet_json
                 ],
                 private_connector_gate_packets=[
-                    _load_json_object(path) for path in args.private_gate_packet_json
+                    _load_json_object(path, args.max_input_bytes) for path in args.private_gate_packet_json
                 ],
                 surface_id=args.surface_id,
                 generated_at=args.generated_at,
@@ -615,14 +664,14 @@ def handle_content_ops_command(
             renderer = render_content_ops_item_packet_markdown
         elif args.content_ops_command == "item-transition":
             payload = apply_content_ops_item_event(
-                _load_json_object(args.item_json),
-                _load_json_object(args.event_json),
+                _load_json_object(args.item_json, args.max_input_bytes),
+                _load_json_object(args.event_json, args.max_input_bytes),
             )
             renderer = render_content_ops_item_packet_markdown
         elif args.content_ops_command == "queue-status":
             payload = build_content_ops_queue_status_packet(
                 items=[
-                    _load_json_object(path) for path in args.item_json
+                    _load_json_object(path, args.max_input_bytes) for path in args.item_json
                 ],
                 queue_id=args.queue_id,
                 generated_at=args.generated_at,
@@ -646,8 +695,8 @@ def handle_content_ops_command(
             renderer = render_layout_packet_markdown
         elif args.content_ops_command == "layout-check":
             payload = check_layout_packet(
-                _load_json_object(args.plan_json),
-                _load_json_object(args.measurement_json),
+                _load_json_object(args.plan_json, args.max_input_bytes),
+                _load_json_object(args.measurement_json, args.max_input_bytes),
             )
             renderer = render_layout_packet_markdown
         else:

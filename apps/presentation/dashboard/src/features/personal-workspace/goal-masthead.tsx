@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronRight, LoaderCircle, Pause, RotateCcw } from "lucide-react";
+import { AlertCircle, ChevronRight, Info, LoaderCircle, Pause, RotateCcw } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   compileGoalWorkspaceDigest,
@@ -35,7 +35,7 @@ export function useGoalWorkspaceDigest(goal: WorkspaceGoal, userTodos: Workspace
   }), [goal, userTodos, items]);
 }
 
-export function GoalMastheadIdentity({ goal, onOpenWorkspace }: { goal: WorkspaceGoal; onOpenWorkspace: () => void }) {
+export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: { goal: WorkspaceGoal; onOpenWorkspace: () => void; onOpenDetails?: () => void }) {
   const { t } = useWorkspaceI18n();
   const agents = (goal.agentLanes ?? []).map((lane) => lane.label);
   const context = [
@@ -48,10 +48,11 @@ export function GoalMastheadIdentity({ goal, onOpenWorkspace }: { goal: Workspac
         <button onClick={onOpenWorkspace} type="button">{t("masthead.workspace")}</button>
         <ChevronRight aria-hidden size={12} />
         <span>{t("masthead.goals")}</span>
-        <ChevronRight aria-hidden size={12} />
-        <span aria-current="page" title={goal.title}>{goal.title}</span>
+        {/* Announce the current page to assistive readers; show its long identity once in the heading. */}
+        <span className="personal-sr-only" aria-current="page">{goal.title}</span>
+
       </nav>
-      <h1>{goal.title}</h1>
+      <div className="goal-masthead-title"><h1>{goal.title}</h1>{onOpenDetails ? <button type="button" onClick={onOpenDetails} aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}</div>
       {context.length ? <p className="goal-masthead-context" title={agents.join(", ")}>{context.join(" · ")}</p> : null}
     </>
   );

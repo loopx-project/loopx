@@ -106,8 +106,10 @@ def test_duplicate_targets_reuse_snapshot_and_preserve_ordinary_files(tmp_path):
     assert (restored / "runtime-root/database-link").is_symlink()
     assert "runtime-root/notes-wal" in names
     assert (restored / "runtime-root/not-a-database.sqlite").read_text() == "ordinary text"
-    assert (Path(payload["archive_path"]).stat().st_mode & 0o777) == 0o600
-    assert (Path(payload["manifest_path"]).stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":
+        # Windows stat reports 0o666 for every writable file and has no owner-only mode.
+        assert (Path(payload["archive_path"]).stat().st_mode & 0o777) == 0o600
+        assert (Path(payload["manifest_path"]).stat().st_mode & 0o777) == 0o600
 
 
 def test_backup_does_not_walk_or_archive_junction_targets(tmp_path, monkeypatch):

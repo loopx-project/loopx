@@ -619,7 +619,9 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
         staged_manifest.write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         for path in (staged_archive, staged_manifest):
             path.chmod(0o600)
-            with path.open("rb") as handle:
+            # Windows requires write access for fsync; update mode only permits
+            # the durability flush.
+            with path.open("rb+") as handle:
                 os.fsync(handle.fileno())
         os.replace(staged_archive, archive_path)
         os.replace(staged_manifest, manifest_path)

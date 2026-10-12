@@ -9,11 +9,14 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AGENT_ID = "codex-scheduler-route-smoke"
 GOAL_ID = "scheduler-route-smoke"
+sys.path.insert(0, str(REPO_ROOT))
+from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture  # noqa: E402
 
 
 def write_registry(path: Path, *, project: Path, runtime: Path) -> None:
@@ -74,8 +77,11 @@ def run_cli(*args: str, cwd: Path) -> dict:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="loopx-scheduler-registry-route-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="loopx-scheduler-registry-route-") as tmp, patch.dict(os.environ):
         root = Path(tmp)
+        codex_home = root / "codex-home"
+        os.environ.update(CODEX_HOME=str(codex_home), CODEX_THREAD_ID="scheduler-fixture")
+        write_codex_heartbeat_fixture(codex_home, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule="FREQ=MINUTELY;INTERVAL=3")
         project = root / "project"
         project.mkdir()
         project_registry = project / ".loopx" / "registry.json"

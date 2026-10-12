@@ -106,7 +106,13 @@ export const goalWorkMapScenario = {
   async run({ browser, collectCoverage, url }) {
     let limits = {};
     const reads = [];
-    const originalRequest = "Reserve the hall only after approval; confirm the full room capacity.";
+    const requestParagraphs = [
+      "Reserve the hall only after approval; confirm the full room capacity.",
+      "Keep the original constraints and the source of each decision. Compare the approved capacity with the requested seating plan, retain the budget limit, and explain how to recover when the venue cannot meet it. A summary is not an acceptance result.",
+      "The final requirement is to read the verified capacity before releasing the deposit.",
+    ];
+    const originalRequest = requestParagraphs.join("\n\n");
+    const finalRequirement = requestParagraphs.at(-1);
     const authority = await requestAuthority(originalRequest);
     try {
       const routeRequest = (api, page) => page.route("**/api/chat/todo/detail?*", async route => {
@@ -155,7 +161,12 @@ export const goalWorkMapScenario = {
       await page.screenshot({ path: resolve(outputDir, "goal-work-map.png"), animations: "disabled" });
       await inspector.getByRole("button", { name: "打开详情" }).click();
       const drawer = page.getByRole("dialog", { name: "Todo 详情" });
-      await drawer.getByRole("heading", { name: originalRequest, exact: true }).waitFor();
+      await drawer.getByText(finalRequirement, { exact: true }).waitFor();
+      assert.deepEqual(await drawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs,
+        "The complete canonical request retains its paragraphs, including the final requirement");
+      assert.equal(await drawer.locator(".personal-task-request h3").count(), 0,
+        "A long request is reading copy, not a single heading");
+      assert.equal(await drawer.locator(".personal-task-request .personal-md > p").first().evaluate(node => getComputedStyle(node).fontWeight), "400");
       assert.deepEqual(desktop.api.todoRequestReads, [{ goalId: reads[0], todoId: "todo_map_reserve" }],
         "Map details read the exact canonical Task request rather than trusting the projected node title");
       assert.match(await drawer.innerText(), /当前状态与操作仍不可用/);
@@ -173,12 +184,12 @@ export const goalWorkMapScenario = {
       assert.deepEqual(desktop.errors.splice(errorsBeforeLoss), [
         "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
       ], "Only the deliberately unavailable source may emit a transport error");
-      assert.equal(await drawer.getByRole("heading", { name: originalRequest, exact: true }).count(), 0,
+      assert.equal(await drawer.getByText(finalRequirement, { exact: true }).count(), 0,
         "A missing source must not retain the previously read canonical request");
       assert.equal(await drawer.locator(".personal-task-inspector-actions").count(), 0);
       await rename(hiddenRegistry, authority.registry);
       await drawer.getByRole("button", { name: "重试读取完整要求", exact: true }).click();
-      await drawer.getByRole("heading", { name: originalRequest, exact: true }).waitFor();
+      await drawer.getByText(finalRequirement, { exact: true }).waitFor();
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
       limits = { omitted_node_count: 3, topology_complete: false };
@@ -206,7 +217,8 @@ export const goalWorkMapScenario = {
       await list.locator(".work-map-node", { hasText: "Reserve the hall" }).click();
       await phone.page.getByRole("region", { name: "选中事项" }).getByRole("button", { name: "打开详情" }).click();
       const phoneDrawer = phone.page.getByRole("dialog", { name: "Todo 详情" });
-      await phoneDrawer.getByRole("heading", { name: originalRequest, exact: true }).waitFor();
+      await phoneDrawer.getByText(finalRequirement, { exact: true }).waitFor();
+      assert.deepEqual(await phoneDrawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs);
       assert.equal(await phoneDrawer.locator(".personal-task-inspector-actions").count(), 0);
       await phone.page.screenshot({ path: resolve(outputDir, "goal-map-request-only-mobile.png"), animations: "disabled" });
       coverageEntries.push(...await phone.close());

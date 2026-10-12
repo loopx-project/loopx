@@ -2,6 +2,12 @@
 
 from importlib import import_module
 
+from .funding_event import (
+    FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION,
+    FINANCE_FUNDING_EVENT_SCHEMA_VERSION,
+    assess_funding_event_pair,
+)
+
 from .stock_change import (
     FINANCE_STOCK_CHANGE_INPUT_SCHEMA_VERSION,
     FINANCE_STOCK_CHANGE_SCHEMA_VERSION,
@@ -80,6 +86,9 @@ from .replay import (
 )
 
 __all__ = [
+    "FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION",
+    "FINANCE_FUNDING_EVENT_SCHEMA_VERSION",
+    "assess_funding_event_pair",
     "EVIDENCE_AXES",
     "EXPLAINED_BETA_COMPONENTS",
     "FINANCE_BETA_ATTRIBUTION_INPUT_SCHEMA_VERSION",

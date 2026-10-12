@@ -86,6 +86,25 @@ test("exact ACK commits scheduler state and is replay-safe", async (t) => {
   assert.equal(replay.replayed, true);
   assert.equal(replay.state_digest, first.state_digest);
 });
+
+test("host-match ACK requires a matching observation before any state write", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  for (const observed of ["", "FREQ=MINUTELY;INTERVAL=3"]) {
+    const refused = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+      host_match_observed: true,
+      observed_host_rrule: observed,
+    }));
+    assert.equal(refused.status, "conflict");
+    assert.equal(refused.reason_code, "rrule_mismatch");
+    assert.equal(refused.written, false);
+    await assert.rejects(readFile(refused.path, "utf8"), { code: "ENOENT" });
+  }
+  const accepted = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    host_match_observed: true,
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
+  }));
+  assert.equal(accepted.status, "written");
+});
 test("steady-state ACK is reduced to a typed skipped receipt", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
@@ -213,6 +232,7 @@ test("CAS rejects a stale writer and leaves the newer state unchanged", async (t
     expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
     applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
     host_match_observed: true,
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=30",
     expected_state_digest: first.state_digest,
     generated_at: "2026-08-24T08:01:00Z",
   }));
@@ -496,6 +516,7 @@ test(
       apply_needed: false,
       host_match_observed: true,
       generated_at: "2026-08-24T08:00:00Z",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
       execute: true,
     });
 
@@ -555,6 +576,7 @@ test("exact host-match ACK binds a fresh reset identity", async (t) => {
     expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
     applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
     host_match_observed: true,
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
     expected_state_digest: first.state_digest,
   }));
 

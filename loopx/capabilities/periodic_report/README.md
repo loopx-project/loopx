@@ -203,6 +203,12 @@ The CLI streams the append-only log and applies the 4,096-row capacity limit
 only after goal, segment-window, and relevant-kind filtering. Malformed durable
 rows and an oversized relevant window fail closed.
 
+Every `--*-json` input, from a file or `-` for stdin, is refused before parsing
+when it exceeds 16 MiB (16,777,216 bytes). Pass `--max-input-bytes N` on the
+subcommand to set a different positive limit for a legitimately larger or
+deliberately smaller request; there is no unlimited setting. The limit counts
+input bytes, not total process memory. Request files stay strict UTF-8.
+
 ### Automatic post-writeback intent
 
 Automatic milestone evaluation is default-off. A project may opt the built-in

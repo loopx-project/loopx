@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -30,6 +31,17 @@ def unique_archive_path(archive_root: Path, goal_id: str, timestamp: str) -> Pat
         candidate = archive_root / f"{goal_id}-{timestamp}-{suffix}"
         suffix += 1
     return candidate
+
+
+def _validate_archive_destination(source: Path, destination: Path) -> None:
+    source_path = source.resolve()
+    destination_path = Path(os.path.abspath(destination))
+    if destination.resolve().is_relative_to(source_path) or any(
+        parent.resolve() == source_path for parent in destination_path.parents
+    ):
+        raise ValueError(
+            "archive destination must be outside the runtime goal directory"
+        )
 
 
 def _archive_source_registry_paths(
@@ -71,7 +83,9 @@ def archive_runtime_goal(
     registered_ids = {str(goal.get("id")) for goal in registry_goals(registry)}
     registry_member = safe_goal_id in registered_ids
     if registry_member and not allow_registered:
-        raise ValueError("goal exists in registry; pass --allow-registered only after confirming it is obsolete")
+        raise ValueError(
+            "goal exists in registry; pass --allow-registered only after confirming it is obsolete"
+        )
 
     source = runtime_root / "goals" / safe_goal_id
     if not source.exists():
@@ -84,8 +98,11 @@ def archive_runtime_goal(
         raise ValueError("runtime goal directory resolved outside the goals root")
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive_base = archive_root.expanduser() if archive_root else runtime_root / "archived-goals"
+    archive_base = (
+        archive_root.expanduser() if archive_root else runtime_root / "archived-goals"
+    )
     destination = unique_archive_path(archive_base, safe_goal_id, timestamp)
+    _validate_archive_destination(source, destination)
 
     if execute:
         from .control_plane.coordination.shadow_management import (
@@ -163,6 +180,7 @@ def archive_runtime_goal(
                 safe_goal_id,
                 timestamp,
             )
+            _validate_archive_destination(source, destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
 
@@ -182,6 +200,7 @@ def archive_runtime_goal(
             "goal id is a single path segment",
             "source runtime goal directory exists",
             "source resolves under runtime_root/goals",
+            "archive destination resolves outside the source directory",
             "registry membership checked",
         ],
     }

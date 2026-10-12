@@ -58,6 +58,50 @@ prequota；只声明 filesystem/shell 不会启用。省略该声明即关闭外
 通过 `todo list --goal-id GOAL --todo-id TODO --format json` 回读。
 TurnEnvelope 应复用同一类型化依赖事实；本批未证明所有 Turn host 已接入自动核验。
 
+## Completion dependency cycles / 完成依赖环
+
+An unfinished `todo_done` chain that reaches a cycle now projects
+`resume_condition_invalid` with `invalid_state=dependency_cycle`, consistently
+with canonical execution admission. `dependency_cycle_todo_ids` identifies up
+to eight members in dependency order; `dependency_cycle_size` retains the full
+count. A task leading into the cycle is also invalid, even when another Agent
+owns the cyclic tasks. Actual `done` records, including retained archived
+completion, terminate the chain. Missing records in a partial source do not
+prove a cycle; other resume kinds keep their own rules.
+
+When no independent work is executable, the current/unclaimed, non-excluded
+Agent lane requests successor replan instead of quiet waiting. Read the exact
+Todo with `todo list --goal-id GOAL --todo-id TODO --format json`, inspect the
+reported members and their owners, and repair only a reviewed obsolete
+dependency through the existing Todo lifecycle and owner/lease/CAS checks.
+Cycle detection grants no authority to delete dependencies or complete work.
+An already-bound Turn retains its identity and exposes `repair=dependency`
+unless its earlier verified writeback still requires settlement. In that case,
+finish only the original settlement through its exact receipt-bound spend
+command; a later cycle cannot replace the committed outcome or debit it twice.
+Settlement leaves the current dependency graph unchanged. Otherwise, re-enter
+the same Turn after authorized dependency repair. New causal wait closeout cannot
+qualify a cycle, and current delivery supervision cannot use it as an ordinary
+wait exemption. Frozen v0 causal receipts keep their historical pair-only
+readback semantics; they never certify today's graph. No receipt migration or
+automatic dependency rewrite is performed.
+
+未完成的 `todo_done` 依赖链进入环时，读回与执行检查统一返回无效依赖；
+`dependency_cycle_todo_ids` 最多展示八个环内任务，完整数量保存在
+`dependency_cycle_size`。实际完成（含归档完成）截断追踪；局部快照缺少任务不能
+作为有环的证据。没有独立可执行工作时，当前 Agent 可处理的任务进入明确重规划，
+不能静默等待。通过精确 Todo 读回查看环及 owner，只能按既有权限、租约和 CAS
+规则修复经核实已经过时的依赖；诊断不授权删边或虚报完成。已绑定 Turn 保留
+原身份，修复后重新进入同一 Turn。若该 Turn 先前已有经验证的写回、只差结算，
+优先执行原回执对应的结算命令；后来形成的环不能改写已提交结果或重复扣费，
+结算也不会解除当前依赖。新等待结算和当前交付监督不再将环视为正常
+因果等待；旧 v0 回执仍按冻结的双任务事实读回，不重新裁决过去，也不证明当前图合法。
+
+Synthetic packaged-UI readback: [before](images/completion-dependency-cycle/before.png),
+[cycle diagnosed](images/completion-dependency-cycle/after.png),
+[mobile](images/completion-dependency-cycle/mobile.png), and
+[after owner-reviewed repair](images/completion-dependency-cycle/repaired.png).
+
 ## Relationship evidence
 
 The policy evaluates the complete available Todo graph before role, status,

@@ -255,6 +255,11 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
         "unauthorized": ("unauthorized", "Codex 上游身份验证失败，本轮未完成。"),
     }
     selected = known.get(info) if isinstance(info, str) else None
+    # Reuse the v2 envelope validator. A prior retry is not the terminal
+    # classification; only an explicit terminal transport variant selects this.
+    safe_info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+    if isinstance(safe_info, dict) and "activeTurnNotSteerable" not in safe_info:
+        selected = ("upstream_transport_failure", "Codex 上游响应连接失败，本轮未完成。")
     if selected is None:
         return CodexChatAgentError(
             fallback,
@@ -263,7 +268,7 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             ),
         )
     code, summary = selected
-    policy = info in {"cyberPolicy", "misalignmentPolicyViolation"}
+    policy = isinstance(info, str) and info in {"cyberPolicy", "misalignmentPolicyViolation"}
     return CodexChatAgentError(
         summary,
         error_code=code,
@@ -275,6 +280,8 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 if policy
                 else "请先核对已有结果，再决定是否稍后重试；本次请求不会自动重放。"
                 if code == "server_overloaded"
+                else "保留原会话并核对已有结果；连接错误不证明本轮没有产生副作用，不自动重放。"
+                if code == "upstream_transport_failure"
                 else "请处理对应的上游限制后再继续。"
             ),
         },

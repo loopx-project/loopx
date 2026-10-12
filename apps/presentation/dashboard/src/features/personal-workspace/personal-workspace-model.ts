@@ -37,6 +37,7 @@ export type WorkspaceAgentTodo = {
   completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
+  resumeInvalidReason?: string | null;
   resumeReceiptId?: string | null;
   blockedReason?: string | null;
   claimedBy?: string | null;
@@ -89,6 +90,8 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
+    resumeInvalidReason: typeof todo.resume_condition?.invalid_state === "string"
+      ? todo.resume_condition.invalid_state : null,
     resumeReceiptId: typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null,
     validationDigest: todo.completion_validation_sha256 ?? null,
     validationRevision: todo.completion_validation_revision ?? null,

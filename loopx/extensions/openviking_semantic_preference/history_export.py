@@ -295,7 +295,7 @@ def _publish_generation(
         staged = Path(temp_dir) / "publish"
         staged.mkdir()
         for name, data in sorted(documents.items()):
-            (staged / name).write_text(data.decode("utf-8"), encoding="utf-8")
+            (staged / name).write_bytes(data)
         _write_manifest(staged / _MANIFEST_FILE, manifest)
         _validate_staged_generation(
             staged,

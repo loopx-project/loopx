@@ -16,7 +16,11 @@ from .control_plane.projects.registry_codec import (
 from .control_plane.runtime.time import now_local_iso, utc_timestamp
 from .file_lock import exclusive_cross_runtime_file_lock
 from .global_registry import GlobalRegistryReduction, mutate_global_registry
-from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
+from .paths import (
+    global_registry_path,
+    resolve_runtime_root,
+    select_default_runtime_root,
+)
 from .registry import read_json, registry_goals
 from .runtime import validate_goal_id_path_segment
 
@@ -49,6 +53,14 @@ def _same_path(left: str | Path | None, right: str | Path | None) -> bool:
     if left is None or right is None:
         return False
     return _resolve_path(Path(str(left))) == _resolve_path(Path(str(right)))
+
+
+def _path_is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(directory.expanduser().resolve())
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _project_root_from_registry(registry_path: Path) -> Path:
@@ -85,6 +97,7 @@ def _unique_destination(path: Path) -> Path:
 def _archive_state_directory(
     *,
     goal: dict[str, Any],
+    retained_goals: list[dict[str, Any]],
     registry_path: Path,
     archive_root: Path,
     timestamp: str,
@@ -111,6 +124,33 @@ def _archive_state_directory(
             "archived": False,
             "warning": "state file is outside the project root; kept in place",
         }
+    retained_state_owners = [
+        (str(retained.get("id") or ""), retained_state)
+        for retained in retained_goals
+        if (
+            retained_state := _resolve_state_file(
+                retained,
+                registry_path=registry_path,
+            )
+        )
+        is not None
+        and _path_is_within(retained_state, state_dir_resolved)
+    ]
+    shared_state_owners = [
+        retained_goal_id
+        for retained_goal_id, retained_state in retained_state_owners
+        if _same_path(retained_state, state_file)
+    ]
+    if shared_state_owners:
+        return {
+            "goal_id": goal_id,
+            "state_file": str(state_file),
+            "state_dir": str(state_dir),
+            "action": "kept-shared-state-file",
+            "archived": False,
+            "retained_goal_ids": sorted(shared_state_owners),
+            "warning": "state file is still registered by a retained goal; kept in place",
+        }
     if not state_dir.exists():
         return {
             "goal_id": goal_id,
@@ -120,6 +160,40 @@ def _archive_state_directory(
             "archived": False,
         }
     destination = _unique_destination(archive_root / timestamp / "goals" / goal_id)
+    if retained_state_owners:
+        if not state_file.exists():
+            return {
+                "goal_id": goal_id,
+                "state_file": str(state_file),
+                "state_dir": str(state_dir),
+                "action": "state-file-missing",
+                "archived": False,
+                "retained_goal_ids": sorted(
+                    retained_goal_id for retained_goal_id, _ in retained_state_owners
+                ),
+                "warning": (
+                    "state directory is still registered by a retained goal; "
+                    "kept in place"
+                ),
+            }
+        if not dry_run:
+            destination.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(state_file), str(destination / state_file.name))
+        return {
+            "goal_id": goal_id,
+            "state_file": str(state_file),
+            "state_dir": str(state_dir),
+            "archive_path": str(destination),
+            "action": "would-move-state-file" if dry_run else "moved-state-file",
+            "archived": not dry_run,
+            "retained_goal_ids": sorted(
+                retained_goal_id for retained_goal_id, _ in retained_state_owners
+            ),
+            "warning": (
+                "state directory is still registered by a retained goal; "
+                "archived only the selected state file"
+            ),
+        }
     if not dry_run:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(state_dir), str(destination))
@@ -270,6 +344,7 @@ def uninstall_project(
         project_registry,
         target_goal_ids=target_goal_ids,
     )
+    retained_goals = registry_goals(new_project_registry)
 
     global_preview = _uninstall_global_registry_reduction(
         read_json(global_path) if global_path.exists() else {},
@@ -289,6 +364,7 @@ def uninstall_project(
             [
                 _archive_state_directory(
                     goal=goal,
+                    retained_goals=retained_goals,
                     registry_path=registry_path,
                     archive_root=archive_root,
                     timestamp=timestamp,
@@ -345,6 +421,7 @@ def uninstall_project(
                 state_actions = [
                     _archive_state_directory(
                         goal=goal,
+                        retained_goals=retained_goals,
                         registry_path=registry_path,
                         archive_root=archive_root,
                         timestamp=timestamp,

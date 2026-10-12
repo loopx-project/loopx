@@ -28,7 +28,9 @@ export async function snapshotSqliteDatabase(source: string, destination: string
         throw new Error("SQLite backup integrity check failed");
       }
     } finally { copy.close(); }
-    const handle = await open(destination, "r");
+    // Windows flush (FlushFileBuffers) requires write access; the snapshot bytes
+    // are already complete, so update mode only permits the durability sync.
+    const handle = await open(destination, "r+");
     try { await handle.sync(); } finally { await handle.close(); }
     return info;
   } catch (error) {

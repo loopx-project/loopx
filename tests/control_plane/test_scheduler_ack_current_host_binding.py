@@ -260,6 +260,32 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     assert settled_app["host_action"] == "none"
 
 
+@pytest.mark.parametrize("host_missing", [False, True])
+def test_scheduler_ack_current_rejects_claim_before_matching_host_readback(
+    tmp_path: Path, monkeypatch, host_missing: bool,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture", scoped_agents=True,
+    )
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
+    _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
+    app = _quota(registry_path, runtime_root, project)["scheduler_hint"]["codex_app"]
+    if host_missing:
+        (codex_home / "automations/fixture/automation.toml").unlink()
+
+    _, ack = run_json_cli_result(
+        *app["ack_hint"]["cli_args"], registry_path=registry_path,
+        runtime_root=runtime_root, cwd=project,
+    )
+    assert ack["ok"] is False
+    assert ack["scheduler_commit"]["reason_code"] == "rrule_mismatch"
+    assert not Path(ack["scheduler_commit"]["path"]).exists()
+    assert ack["appended"] is False
+    assert ack["registry_mutated"] is False
+
+
 def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     tmp_path: Path,
     monkeypatch,

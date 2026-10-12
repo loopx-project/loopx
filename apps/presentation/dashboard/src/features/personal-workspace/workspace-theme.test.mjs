@@ -43,7 +43,9 @@ assert.match(styles, /personal-task-card > button > strong { font-size: var\(--t
 assert.match(styles, /personal-task-lane-scroll > button, \.personal-task-card { flex: 0 0 auto;/, "Task cards do not shrink below their content height");
 assert.match(styles, /personal-files-list { border-radius: 12px/, "LoopX Files uses the standard card radius");
 assert.match(styles, /personal-icon-button {[^}]*flex: 0 0 36px;[^}]*min-width: 36px;[^}]*min-height: 36px;/, "Header icon buttons keep a stable square footprint");
-assert.match(styles, /personal-channel-header\[data-goal-selected="true"\] \.personal-channel-title h1 {[^}]*overflow: hidden;[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/, "Long Goal titles remain on one line without widening the header");
+// The packaged craft smoke checks actual desktop wrapping, overflow and the
+// mobile action that opens the complete Goal when its compact title is clipped.
+assert.match(styles, /personal-channel-header\[data-goal-selected="true"\] \.personal-channel-title h1 {[^}]*overflow: visible;[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/, "Long desktop Goal titles wrap within the header");
 assert.doesNotMatch(header, /personal-live-indicator/, "The Goal header omits the misleading live-status badge");
 assert.match(styles, /@media \(max-width: 720px\) {[\s\S]*personal-home-lane,[\s\S]*personal-task-kanban \.personal-object-list { border-left: 0; border-top: 1px solid #ebebeb;/, "Mobile LoopX lanes use horizontal rather than vertical separators");
 assert.match(styles, /personal-select-listbox[\s\S]*border-radius: 12px/, "Workspace select menus use the card radius");

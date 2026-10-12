@@ -724,6 +724,23 @@ def _render_replan_successor_closeout_guard(
     return typed_quota_guard + settlement_args
 
 
+def _dependency_cycle_cli_actions(
+    frontier: dict[str, Any], *, command_prefix: str, goal_id: str,
+    lifecycle_actor_args: str, typed_quota_guard: str,
+) -> list[str]:
+    """Render the typed cycle repair without adding selection policy here."""
+    candidates = frontier.get("dependency_cycle_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return []
+    todo_id = str(candidates[0]["todo_id"])
+    return [
+        f"{command_prefix} todo list --goal-id {goal_id} --todo-id {todo_id}{lifecycle_actor_args}",
+        str(frontier["recommended_action"]),
+        f"{command_prefix} task-lease inspect --goal-id {goal_id} --todo-id {todo_id}",
+        typed_quota_guard,
+    ]
+
+
 def interaction_next_cli_actions(
     payload: dict[str, Any],
     *,
@@ -911,6 +928,11 @@ def interaction_next_cli_actions(
             if isinstance(payload.get("agent_scope_frontier"), dict)
             else {}
         )
+        if cycle_actions := _dependency_cycle_cli_actions(
+            agent_scope_frontier, command_prefix=command_prefix, goal_id=goal_id,
+            lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
+        ):
+            return cycle_actions
         monitor_candidates = (
             agent_scope_frontier.get("monitor_blocked_resume_candidates")
             if isinstance(agent_scope_frontier.get("monitor_blocked_resume_candidates"), list)

@@ -20,10 +20,13 @@ MONITOR_ID = "todo_causal_monitor"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("kind,defer", [("monitor_changed", False), ("todo_done", False), ("todo_done", True)])
+@pytest.mark.parametrize("kind,defer,cycle", [
+    ("monitor_changed", False, False), ("todo_done", False, False),
+    ("todo_done", True, False), ("todo_done", False, True),
+])
 def test_pending_causal_wait_settles_once_and_releases_independent_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-    provider: str, kind: str, defer: bool,
+    provider: str, kind: str, defer: bool, cycle: bool,
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -65,6 +68,11 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
         f"  <!-- loopx:todo todo_id={MONITOR_ID} status=open "
         f"claimed_by={dependency_owner} {dependency_metadata} -->\n"
     ))
+    if cycle:
+        state.write_text(state.read_text() + (
+            "\n- [ ] [P2] Complete the transitive prerequisite.\n"
+            f"  <!-- loopx:todo todo_id=todo_cycle_third status=open claimed_by={dependency_owner} task_class=advancement_task -->\n"
+        ))
     rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
     if defer:
@@ -104,6 +112,31 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
                        "--resume-when", f"{kind}:{MONITOR_ID}",
                        "--successor-todo-id", ALTERNATIVE_TODO_ID)
         assert rc == 0, wait
+    if cycle:
+        for todo_id, target in [(MONITOR_ID, "todo_cycle_third"), ("todo_cycle_third", TODO_ID)]:
+            rc, changed = cli("todo", "update", "--goal-id", GOAL_ID,
+                              "--todo-id", todo_id, "--agent-id", dependency_owner,
+                              "--resume-when", f"todo_done:{target}",
+                              "--successor-todo-id", ALTERNATIVE_TODO_ID)
+            assert rc == 0, changed
+        rc, current = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert rc == 0, current
+        assert current["todo"]["resume_condition"]["invalid_state"] == "dependency_cycle"
+        rc, recovery = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                           *binding, "--scan-path", str(project))
+        assert rc == 0, recovery
+        repair = recovery["unsettled_host_turn_recovery"]
+        assert repair["repair"] == "dependency"
+        assert repair["binding_id"] == TODO_ID and repair["turn_instance_id"] == binding[-1]
+        assert recovery["normal_delivery_allowed"] is False
+        assert "selected_todo" not in recovery
+        assert _spend_run_count(runtime) == 0
+        # The actual owner repairs the obsolete back edge. The bound Turn then
+        # follows its original ordinary wait and settles exactly once below.
+        rc, repaired = cli("todo", "update", "--goal-id", GOAL_ID,
+                           "--todo-id", "todo_cycle_third", "--agent-id", dependency_owner,
+                           "--clear-resume-when", "--reason", "Reviewed mistaken back edge")
+        assert rc == 0, repaired
     refresh_args = ("refresh-state", "--goal-id", GOAL_ID,
                     "--classification", "causal_wait_writeback", "--delivery-batch-scale", "single_surface",
                     "--delivery-outcome", "outcome_gap", *binding,

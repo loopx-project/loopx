@@ -48,6 +48,41 @@ journal replay 使用自己的判决，不再输出动作字段。host 提供的
 解释为 quota 决策。这只改变瞬时结果投射，不重写落盘的 host result、receipt
 或 journal plan。
 
+## Interaction consistency validation
+
+The TypeScript interaction-contract owner supplies the execution-consistency
+rules used by the Effect interpreter, scoped-override projection and Python
+scheduler arbitration. Delivery requires an attempt; a quiet no-op cannot
+coexist with required work or user action. Terminal, peer-blocked and
+monitor-only modes require `quiet_noop_allowed=true`, no required action or
+delivery, and no quota spend. An already-settled mode permits neither required
+work/user action, delivery nor another spend. Non-blocking notifications remain valid.
+Independent capability intent retains its own mode and existing authority.
+
+This strengthens transient contract validation: typed consumers now reject the
+closed-mode contradictions that scheduler arbitration already rejected, and
+all consumers reject a closed mode with `spend_allowed_now=true` or
+`spend_after_validation=true`. TurnEnvelope construction uses the same interpreter
+before signing its action. Missing spend metadata remains false for older packets;
+a present value must be boolean. Python retains structural diagnostics and cadence selection, while
+semantic rules come from the existing Effect runtime. Runtime unavailability
+cannot fall back to a second Python rule. No persisted receipt is rewritten and
+these checks do not grant execution, lease or charging authority.
+
+TypeScript interaction-contract owner 统一提供 Effect 解释器、scoped-override
+投影与 Python 调度仲裁使用的执行一致性规则。delivery 必须有 attempt；quiet
+no-op 不能与必须执行的工作或用户动作并存。terminal、peer-blocked、monitor-only
+模式必须允许 quiet no-op，不得要求动作、允许交付或扣费；已结算模式也不得重新
+要求工作或用户动作、允许交付或扣费。非阻塞通知仍然有效。
+独立 capability intent 保留自己的模式与现有权限。
+
+本次加强瞬时合同校验：类型化消费者开始拒绝此前调度仲裁已拒绝的关闭模式矛盾，
+消费者都拒绝关闭模式的 `spend_allowed_now=true` 或 `spend_after_validation=true`；
+TurnEnvelope 构造在签署动作前也使用同一解释器。旧 packet 缺失扣费字段时仍按
+false 处理，显式提供的值必须是布尔值。Python 保留结构诊断与 cadence
+选择，语义规则来自已有 Effect runtime；运行时不可用时不回退到另一套 Python
+判断。不重写历史回执，也不授予执行、租约或扣费权限。
+
 ## Turn Journal Lens
 
 `interpret_turn_journal` reads an existing fenced Turn journal and returns an

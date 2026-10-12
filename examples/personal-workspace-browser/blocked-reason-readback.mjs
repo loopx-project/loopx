@@ -40,10 +40,18 @@ def blocked(text, *extra):
 try:
     with_reason = blocked('Synthetic blocked readback', '--reason', reason)
     without_reason = blocked('Synthetic unexplained blocker')
+    def add_task(text):
+        return cli('todo', 'add', '--goal-id', 'goal-a', '--role', 'agent', '--text', text)['todo']['todo_id']
+    cyclic = add_task('Synthetic circular dependency')
+    prerequisite = add_task('Synthetic cycle prerequisite')
+    independent = add_task('Synthetic independent work')
+    for source, target in [(cyclic, prerequisite), (prerequisite, cyclic)]:
+        cli('todo', 'update', '--goal-id', 'goal-a', '--todo-id', source,
+            '--resume-when', 'todo_done:' + target, '--successor-todo-id', independent)
     server = ChatHTTPServer(('127.0.0.1', 0), ChatRequestHandler)
     server.registry_path, server.runtime_root, server.verbose = registry, runtime, False
     server.runtime_root_override, server.selected_goal_id, server.scan_roots, server.limit = runtime, 'goal-a', [], 10
-    print(json.dumps({'port': server.server_address[1], 'registry': str(registry), 'runtime': str(runtime), 'with_reason': with_reason, 'without_reason': without_reason}), flush=True)
+    print(json.dumps({'port': server.server_address[1], 'registry': str(registry), 'runtime': str(runtime), 'with_reason': with_reason, 'without_reason': without_reason, 'cyclic': cyclic, 'prerequisite': prerequisite, 'independent': independent}), flush=True)
     def terminate(*_): raise SystemExit(0)
     signal.signal(signal.SIGTERM, terminate)
     server.serve_forever()
@@ -92,6 +100,8 @@ export const blockedReasonReadbackScenario = {
         for (const mobile of [false, true]) {
           await authority.cli("todo", "update", "--goal-id", "goal-a", "--role", "agent", "--todo-id", authority.with_reason,
             "--status", "blocked", "--text", "Synthetic blocked readback", "--reason", REASON);
+          await authority.cli("todo", "update", "--goal-id", "goal-a", "--todo-id", authority.prerequisite,
+            "--resume-when", `todo_done:${authority.cyclic}`, "--successor-todo-id", authority.independent);
           let writes = 0;
           let omitReason = false;
           const context = await openWorkspacePage({ newPage: (options) => browser.newPage({ ...options, locale }) }, url, {
@@ -146,14 +156,26 @@ export const blockedReasonReadbackScenario = {
             };
             const field = (drawer, label) => drawer.locator("dl > div", { has: page.locator("dt", { hasText: label }) }).locator("dd").innerText();
             const refresh = async () => {
+              // The Todo inspector is non-modal. Keyboard activation keeps it
+              // open even at widths where it overlaps the header control.
               await Promise.all([
                 page.waitForResponse(response => new URL(response.url()).pathname === "/status.json" && response.status() === 200),
-                page.getByRole("button", { name: locale === "en" ? "Refresh status" : "刷新状态", exact: true }).click(),
+                page.getByRole("button", { name: locale === "en" ? "Refresh status" : "刷新状态", exact: true }).press("Enter"),
               ]);
               await page.locator(".personal-refresh-control.is-done").waitFor();
             };
 
-            let drawer = await openTodo("Synthetic blocked readback");
+            let drawer = await openTodo("Synthetic circular dependency");
+            await drawer.screenshot({ path: resolve(outputDir, `dependency-cycle-${suffix}.png`) });
+            assert.equal(await field(drawer, locale === "en" ? "Resume state" : "恢复状态"),
+              locale === "en" ? "Circular dependency" : "循环依赖");
+            assert.equal(await drawer.evaluate(element => element.scrollWidth > element.clientWidth + 1), false);
+            await authority.cli("todo", "update", "--goal-id", "goal-a", "--todo-id", authority.prerequisite,
+              "--clear-resume-when", "--reason", "Reviewed obsolete back edge");
+            await refresh();
+            await drawer.getByText(locale === "en" ? "Waiting for condition" : "等待条件满足", {exact: true}).waitFor();
+            await drawer.screenshot({ path: resolve(outputDir, `dependency-cycle-repaired-${suffix}.png`) });
+            drawer = await openTodo("Synthetic blocked readback");
             await drawer.screenshot({ path: resolve(outputDir, `blocked-reason-${suffix}.png`) });
             await page.screenshot({ path: resolve(outputDir, `blocked-reason-viewport-${suffix}.png`) });
             const cause = drawer.getByRole("region", { name: locale === "en" ? "Why it is blocked" : "为何受阻" });
@@ -177,7 +199,7 @@ export const blockedReasonReadbackScenario = {
               await authority.cli("todo", "update", "--goal-id", "goal-a", "--role", "agent", "--todo-id", authority.with_reason,
                 "--status", "open", "--text", "Synthetic validated readback");
               await refresh();
-              await drawer.locator(".personal-task-inspector-summary h3", { hasText: "Synthetic validated readback" }).waitFor();
+              await drawer.locator(".personal-task-request .personal-md", { hasText: "Synthetic validated readback" }).waitFor();
               await drawer.locator(".personal-task-request [role]").waitFor({ state: "hidden" });
               assert.equal(await cause.count(), 0, "Resolved work must not retain its old blocked cause");
               assert.equal(await field(drawer, locale === "en" ? "Status" : "状态"), locale === "en" ? "Ready" : "待执行");

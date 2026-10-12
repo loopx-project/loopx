@@ -106,6 +106,7 @@ function followupRequest(
     ? {
       operation,
       applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
       source: "quota_scheduler_ack",
     }
     : {

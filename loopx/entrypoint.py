@@ -50,6 +50,16 @@ def _bound_option_present(argv: list[str], option: str) -> bool:
     return False
 
 
+def _option_value(argv: list[str], option: str) -> str:
+    result = ""
+    for index, value in enumerate(argv):
+        if value.startswith(f"{option}="):
+            result = value.split("=", 1)[1]
+        if value == option and index + 1 < len(argv):
+            result = argv[index + 1]
+    return result
+
+
 def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
     """Select only generated, receipt-bound scheduler follow-up commands."""
 
@@ -92,6 +102,22 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
         / "scheduler"
         / "heartbeat_followup_cli.ts"
     )
+    if positionals[1] == "scheduler-ack-current" and (
+        "--host-match-observed" in raw_argv
+        and "--trae_app" not in raw_argv
+    ):
+        # The bound hint predates the host update. Read the App again; only the
+        # typed commit owner may decide whether that observation proves an ACK.
+        from .upgrade import resolve_codex_app_automation_rrule
+
+        observed = resolve_codex_app_automation_rrule(
+            goal_id=_option_value(raw_argv, "--goal-id"),
+            agent_id=_option_value(raw_argv, "--agent-id"),
+        )
+        raw_argv = [
+            *raw_argv, "--app-automation-current-rrule",
+            str(observed.get("rrule") or "") if observed.get("available") else "",
+        ]
     return [
         node,
         "--no-warnings",

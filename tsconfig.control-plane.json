@@ -150,6 +150,7 @@
     "tests/control_plane_ts/scheduler_heartbeat_followup_cli.test.ts",
     "tests/control_plane_ts/scheduler_state_transition_rules.test.ts",
     "tests/control_plane_ts/todo_completion_fence.test.ts",
+    "tests/control_plane_ts/todo_completion_cycle.test.ts",
     "tests/control_plane_ts/todo_completion_state.test.ts",
     "tests/control_plane_ts/todo_completion_validation_plan.test.ts",
     "tests/control_plane_ts/todo_next_action.test.ts",
