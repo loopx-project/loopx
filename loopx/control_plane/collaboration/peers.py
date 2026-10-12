@@ -24,6 +24,7 @@ from .inbox import (
     _target,
     _write,
     normalize_request,
+    plan_request_publication,
 )
 from .peer_context_observation import require_parent_context_access
 from .goal_instance_scope import (
@@ -182,21 +183,11 @@ def request(
             goal_scope,
             operation_path.with_suffix(".lock"),
         ):
-            if operation_path.exists() and _read(operation_path) != row:
-                raise ValueError("peer request operation identity conflict")
-            if not operation_path.exists():
-                _write(operation_path, row)
-            replayed = path.exists()
-            if (
-                replayed
-                and {
-                    key: value
-                    for key, value in _read(path).items()
-                    if key != "delivered_at"
-                }
-                != row
-            ):
-                raise ValueError("peer request identity conflict")
+            prior_operation = _read(operation_path) if operation_path.exists() else None
+            plan = plan_request_publication(row,
+                entry=_read(path) if path.exists() else None, operation=prior_operation)
+            if prior_operation is None:
+                _write(operation_path, plan["operation"])
             route = {
                 key: row[key]
                 for key in (
@@ -213,16 +204,23 @@ def request(
             route_path = _root(root) / "roundtrips" / (request_id + ".json")
             if route_path.exists() and _read(route_path) != route:
                 raise ValueError("peer return route identity conflict")
-            _write(route_path, route)
-            if not replayed:
-                _write(path, row | {"delivered_at": _now()})
+            if not route_path.exists():
+                _write(route_path, route)
+            if _read(route_path) != route:
+                raise ValueError("peer return route readback failed")
+            expected_entry = plan["entry"]
+            if not plan["replayed"]:
+                expected_entry = expected_entry | {"delivered_at": _now()}
+                _write(path, expected_entry)
+            if _read(path) != expected_entry:
+                raise ValueError("peer request readback failed")
         return {
             "ok": True,
             "request_id": request_id,
             "goal_id": goal_id,
             "agent_id": target_agent_id,
             "status": "delivered",
-            "replayed": replayed,
+            "replayed": plan["replayed"],
             "todo_created": False,
             "priority_changed": False,
             "execution_interrupted": False,

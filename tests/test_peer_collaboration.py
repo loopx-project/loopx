@@ -374,6 +374,79 @@ def test_two_peer_review_rounds_return_to_original_conversation_after_restart(sc
     assert not pending(root, "delivery", "builder")["items"]
 
 
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "goal-instance"])
+@pytest.mark.parametrize("interrupted", [False, True], ids=["delivered", "prepared"])
+def test_peer_request_recovers_original_guidance_after_upgrade(scenario, monkeypatch, exact, interrupted):
+    from loopx.control_plane.collaboration import peers
+
+    root, registry, brief, *_ = scenario
+    if exact:
+        data = json.loads(registry.read_text())
+        data["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+        registry.write_text(json.dumps(data))
+
+    def send(value=brief):
+        return request(root, registry, "delivery", "builder", "reviewer", "review-upgrade", value)
+
+    original_write = peers._write
+
+    def stop_before_entry(path, value):
+        if path.parent.parent.name == "entries":
+            raise OSError("publication interrupted")
+        original_write(path, value)
+
+    with monkeypatch.context() as old_version:
+        old_version.setattr(peers, "PEER_INSTRUCTION", "Earlier receiver guidance.")
+        if interrupted:
+            old_version.setattr(peers, "_write", stop_before_entry)
+            with pytest.raises(OSError, match="publication interrupted"):
+                send()
+        else:
+            first = send()
+    before = {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")}
+
+    recovered = send()
+    assert recovered["replayed"] is (not interrupted)
+    rid = recovered["request_id"]
+    entry = next(_root(root).glob("entries/*/" + rid + ".json"))
+    assert json.loads(entry.read_text())["instruction"] == "Earlier receiver guidance."
+    assert all((_root(root) / p).read_bytes() == value for p, value in before.items())
+    if not interrupted:
+        assert recovered == {**first, "replayed": True}
+
+    cli(root, registry, "reviewer", "acknowledge", "--request-id", rid,
+        "--decision", "adopt", "--reason", "Retain the original work")
+    cli(root, registry, "reviewer", "report", "--request-id", rid,
+        "--reply-text", "Original review result")
+    settled = {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")}
+    assert send() == {**recovered, "replayed": True}
+    assert {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")} == settled
+    with pytest.raises(ValueError, match="identity conflict"):
+        send({**brief, "purpose": "A different task"})
+    assert {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")} == settled
+
+
+def test_peer_request_requires_return_route_readback_before_publication(scenario, monkeypatch):
+    from loopx.control_plane.collaboration import peers
+
+    root, registry, brief, *_ = scenario
+    original_read = peers._read
+
+    def unreadable_route(path):
+        if path.parent.name == "roundtrips":
+            raise OSError("return readback unavailable")
+        return original_read(path)
+
+    with monkeypatch.context() as failed:
+        failed.setattr(peers, "_read", unreadable_route)
+        with pytest.raises(OSError, match="return readback unavailable"):
+            request(root, registry, "delivery", "builder", "reviewer", "route-retry", brief)
+    assert pending(root, "delivery", "reviewer")["items"] == []
+    recovered = request(root, registry, "delivery", "builder", "reviewer", "route-retry", brief)
+    assert recovered["replayed"] is False
+    assert [item["request_id"] for item in pending(root, "delivery", "reviewer")["items"]] == [recovered["request_id"]]
+
+
 def test_operation_replay_conflicts_and_independent_requests(scenario):
     root, registry, brief, _, _, _, parent = scenario
 
