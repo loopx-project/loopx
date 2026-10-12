@@ -111,6 +111,7 @@ function TaskLane({
 export function GoalTasksView({
   digest: sharedDigest,
   historyEnabled = false,
+  historyActive = true,
   historyRefreshRevision = 0,
   goal,
   items,
@@ -124,6 +125,7 @@ export function GoalTasksView({
 }: {
   digest?: GoalWorkspaceDigest;
   historyEnabled?: boolean;
+  historyActive?: boolean;
   historyRefreshRevision?: number;
   goal: WorkspaceGoal;
   items: WorkspaceTimelineItem[];
@@ -299,7 +301,7 @@ export function GoalTasksView({
         ))}
         {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
       </TaskLane>
-      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
+      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled && historyActive} listView={listView} onSelect={onSelect} selectedTodoId={selectedTodoId} />
       </div>
       {isEmpty ? (
         <p className="personal-task-empty">

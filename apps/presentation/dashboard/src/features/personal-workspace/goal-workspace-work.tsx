@@ -62,7 +62,8 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
 }
 
 export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoId, onSelect, board, map, results,
-  readOnly, active, historyRefreshRevision, proposals, onPreview}: {
+  readOnly, active, historyRefreshRevision, proposals, onPreview, railOpen, onCloseRail}: {
+  railOpen: boolean; onCloseRail: () => void;
   goal: WorkspaceGoal; digest: GoalWorkspaceDigest; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
   selectedTodoId: string | null; onSelect: (selection: WorkspaceDrawerSelection) => void;
   board: ReactNode; map: ReactNode; results: ReactNode; readOnly: boolean; active: boolean; historyRefreshRevision: number;
@@ -70,6 +71,23 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
 }) {
   const {locale, t} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
+  const [compactRail, setCompactRail] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 1199px)").matches);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1199px)");
+    const update = () => setCompactRail(media.matches);
+    update(); media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    const node = dialog.current;
+    if (compactRail && railOpen && active) node?.showModal(); else node?.close();
+    return () => node?.close();
+  }, [compactRail, railOpen, active]);
+  const select = (selection: WorkspaceDrawerSelection) => {
+    if (compactRail && railOpen) {dialog.current?.close(); onCloseRail();}
+    onSelect(selection);
+  };
   const [lens, setLens] = useState<"owner" | "board" | "map">("owner");
   const [visited, setVisited] = useState(() => new Set(["owner"]));
   const [railTab, setRailTab] = useState<"work" | "activity">("work");
@@ -93,7 +111,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
     return <button className={`goal-work-row${compact ? " is-compact" : ""}`} data-todo-id={id} data-work-class={row.displayClass}
       aria-pressed={selectedTodoId === id} key={id} type="button" onClick={event => {
         event.currentTarget.focus({preventScroll: true});
-        onSelect({kind: "todo", item: {...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy}});
+        select({kind: "todo", item: {...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy}});
       }}>
       <Glyph size={16} aria-hidden/>
       <span className="goal-work-row-text"><strong>{todo.text}</strong>{reason ? <small>{reason}</small> : null}</span>
@@ -106,6 +124,25 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
     || (item.kind === "output" && item.output.goalId === goal.goalId)
     || (item.kind === "proposal" && item.proposal.goalId === goal.goalId && item.proposal.status === "applied"
       && item.proposal.actionKind === "gate.resolve"));
+  const rail = <aside className="goal-all-work" aria-label={zh ? "全部工作" : "All work"}>
+      <div role="group" aria-label={zh ? "工作侧栏" : "Work rail"}>{(["work", "activity"] as const).map(value => <button type="button" key={value} aria-pressed={railTab === value} onClick={() => setRailTab(value)}>{value === "work" ? (zh ? "全部工作" : "All work") : (zh ? "活动" : "Activity")}</button>)}</div>
+      {railTab === "work" ? <>
+        <label className="goal-work-search"><Search size={14} aria-hidden/><input aria-label={zh ? "搜索当前已列出的任务" : "Search listed tasks"} value={query} onChange={event => setQuery(event.target.value)} placeholder={zh ? "搜索任务" : "Search tasks"}/></label>
+        <div className="goal-work-filters" role="group" aria-label={zh ? "工作筛选" : "Work filters"}>
+          <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{zh ? "全部" : "All"} · {digest.work.total ?? "—"}</button>
+          {(["needsYou", "open", "blocked", "done"] as const).map(section => <button key={section} type="button" aria-pressed={filter === section} onClick={() => setFilter(section)}>{sectionLabels[section]} · {section === "done" ? digest.work.done ?? "—" : digest.work.rail[section].length}</button>)}
+        </div>
+        {filter === "all" && attention.length ? <section className="goal-rail-section"><h3>{zh ? "需要你" : "Needs you"}</h3>{attention.filter(item => item.text.toLocaleLowerCase(locale).includes(query.trim().toLocaleLowerCase(locale))).map(item => <button type="button" key={item.todoId} onClick={() => select({kind: "attention", item})}><Hand size={14} aria-hidden/><span>{item.text}</span></button>)}</section> : null}
+        {(["needsYou", "open", "blocked"] as const).filter(section => filter === "all" || filter === section).map(section => <section className="goal-rail-section" key={section}>
+          <h3>{sectionLabels[section]}</h3>{digest.work.rail[section].filter(matches).map(id => task(id, true))}
+        </section>)}
+        {filter === "all" || filter === "done" ? <CompletedTaskLane key={`${goal.goalId}:${readOnly}`} goal={goal} agentId="all" seed={digest.work.rail.done.flatMap(id => todos.get(id) ?? [])}
+          enabled={!readOnly && active && (!compactRail || railOpen)} refreshRevision={historyRefreshRevision} listView onSelect={select} selectedTodoId={selectedTodoId} query={query}/> : null}
+      </> : <div className="goal-material-activity">{activity.map(item => <button type="button" key={item.id} onClick={() => item.kind === "run" ? select({kind: "run", item: item.run}) : item.kind === "output" ? select({kind: "output", item: item.output}) : item.kind === "proposal" ? select({kind: "proposal", item: item.proposal}) : undefined}>
+        {item.kind === "run" ? <>{item.run.status === "completed" ? <CircleCheck size={14} aria-hidden/> : <CircleAlert size={14} aria-hidden/>}<span>{item.run.title}<small>{localizedSessionStatus(item.run.status, t)}</small></span></> : item.kind === "output" ? <><CircleCheck size={14} aria-hidden/><span>{item.output.title}<small>{zh ? "成果返回" : "Result returned"}</small></span></> : item.kind === "proposal" ? <><Hand size={14} aria-hidden/><span>{item.proposal.title}<small>{zh ? "决定已记录" : "Decision recorded"}</small></span></> : null}
+      </button>)}{!activity.length ? <p>{zh ? "当前时间线尚无已完成或返回的记录。" : "No completed work or returned results in this timeline."}</p> : null}</div>}
+      <footer className="goal-work-scope">{zh ? "统计仅覆盖此 Goal；任务与历史可能分批载入。" : "Counts cover this Goal; tasks and history may be loaded in bounded pages."}<time dateTime={digest.observedAt}>{new Date(digest.observedAt).toLocaleTimeString(locale)}</time></footer>
+    </aside>;
   return <div className="goal-workspace-composition">
     <div className="goal-workspace-document">
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
@@ -115,7 +152,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
               {value === "owner" ? (zh ? "按负责人" : "By owner") : value === "board" ? (zh ? "看板" : "Board") : (zh ? "关系图" : "Map")}
             </button>)}
           </div>
-          {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={onSelect}/> : null}
+          {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={select}/> : null}
         </header>
         {digest.work.coverage !== "complete" ? <p className="goal-work-scope" role="status">{zh ? `当前列出 ${digest.work.listedOpen} 项；总数或覆盖范围不完整。` : `${digest.work.listedOpen} items listed; total or coverage is incomplete.`}</p> : null}
         <div className="goal-owner-groups" hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
@@ -129,24 +166,9 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </section>
       <section className="goal-workspace-results" aria-label={zh ? "成果" : "Results"}><h2>{zh ? "成果" : "Results"}</h2>{results}</section>
     </div>
-    <aside className="goal-all-work" aria-label={zh ? "全部工作" : "All work"}>
-      <div role="group" aria-label={zh ? "工作侧栏" : "Work rail"}>{(["work", "activity"] as const).map(value => <button type="button" key={value} aria-pressed={railTab === value} onClick={() => setRailTab(value)}>{value === "work" ? (zh ? "全部工作" : "All work") : (zh ? "活动" : "Activity")}</button>)}</div>
-      {railTab === "work" ? <>
-        <label className="goal-work-search"><Search size={14} aria-hidden/><input aria-label={zh ? "搜索当前已列出的任务" : "Search listed tasks"} value={query} onChange={event => setQuery(event.target.value)} placeholder={zh ? "搜索任务" : "Search tasks"}/></label>
-        <div className="goal-work-filters" role="group" aria-label={zh ? "工作筛选" : "Work filters"}>
-          <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>{zh ? "全部" : "All"} · {digest.work.total ?? "—"}</button>
-          {(["needsYou", "open", "blocked", "done"] as const).map(section => <button key={section} type="button" aria-pressed={filter === section} onClick={() => setFilter(section)}>{sectionLabels[section]} · {section === "done" ? digest.work.done ?? "—" : digest.work.rail[section].length}</button>)}
-        </div>
-        {filter === "all" && attention.length ? <section className="goal-rail-section"><h3>{zh ? "需要你" : "Needs you"}</h3>{attention.filter(item => item.text.toLocaleLowerCase(locale).includes(query.trim().toLocaleLowerCase(locale))).map(item => <button type="button" key={item.todoId} onClick={() => onSelect({kind: "attention", item})}><Hand size={14} aria-hidden/><span>{item.text}</span></button>)}</section> : null}
-        {(["needsYou", "open", "blocked"] as const).filter(section => filter === "all" || filter === section).map(section => <section className="goal-rail-section" key={section}>
-          <h3>{sectionLabels[section]}</h3>{digest.work.rail[section].filter(matches).map(id => task(id, true))}
-        </section>)}
-        {filter === "all" || filter === "done" ? <CompletedTaskLane key={`${goal.goalId}:${readOnly}`} goal={goal} agentId="all" seed={digest.work.rail.done.flatMap(id => todos.get(id) ?? [])}
-          enabled={!readOnly && active} refreshRevision={historyRefreshRevision} listView onSelect={onSelect} selectedTodoId={selectedTodoId} query={query}/> : null}
-      </> : <div className="goal-material-activity">{activity.map(item => <button type="button" key={item.id} onClick={() => item.kind === "run" ? onSelect({kind: "run", item: item.run}) : item.kind === "output" ? onSelect({kind: "output", item: item.output}) : item.kind === "proposal" ? onSelect({kind: "proposal", item: item.proposal}) : undefined}>
-        {item.kind === "run" ? <>{item.run.status === "completed" ? <CircleCheck size={14} aria-hidden/> : <CircleAlert size={14} aria-hidden/>}<span>{item.run.title}<small>{localizedSessionStatus(item.run.status, t)}</small></span></> : item.kind === "output" ? <><CircleCheck size={14} aria-hidden/><span>{item.output.title}<small>{zh ? "成果返回" : "Result returned"}</small></span></> : item.kind === "proposal" ? <><Hand size={14} aria-hidden/><span>{item.proposal.title}<small>{zh ? "决定已记录" : "Decision recorded"}</small></span></> : null}
-      </button>)}{!activity.length ? <p>{zh ? "当前时间线尚无已完成或返回的记录。" : "No completed work or returned results in this timeline."}</p> : null}</div>}
-      <footer className="goal-work-scope">{zh ? "统计仅覆盖此 Goal；任务与历史可能分批载入。" : "Counts cover this Goal; tasks and history may be loaded in bounded pages."}<time dateTime={digest.observedAt}>{new Date(digest.observedAt).toLocaleTimeString(locale)}</time></footer>
-    </aside>
+    {compactRail ? <dialog className="goal-work-rail-dialog" aria-label={zh ? "全部工作" : "All work"} ref={dialog} onCancel={event => {event.preventDefault(); onCloseRail();}}>
+      <button type="button" className="goal-work-rail-close" onClick={onCloseRail}>{zh ? "关闭全部工作" : "Close all work"}</button>
+      {rail}
+    </dialog> : rail}
   </div>;
 }

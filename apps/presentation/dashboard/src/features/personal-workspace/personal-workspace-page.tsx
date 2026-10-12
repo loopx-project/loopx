@@ -861,6 +861,7 @@ export function PersonalWorkspacePage({
     if (todoId !== (routedTodoId ?? null)) callbacks.onSelectTodo?.(todoId);
   }
   const restoredTodoRoute = useRef("");
+  const [railScope, setRailScope] = useState<string | null>(null);
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
@@ -1151,19 +1152,19 @@ export function PersonalWorkspacePage({
       setSelectionState(current => current?.value?.kind === "todo" ? null : current);
       return;
     }
+    // A URL update caused by a current selection must not discard the facts
+    // just read by the completed-history owner outside the active Todo window.
+    if (selectionState?.scope === selectionScope && selectionState.value?.kind === "todo"
+      && selectionState.value.item.todoId === routedTodoId) return;
     const todo = selectedGoal.agentTodos.find(item => item.todoId === routedTodoId);
     // Unknown local IDs may read the exact request through the existing owner;
     // remote status cannot grant a fallback request to the local backend.
     if (!todo && readOnly) {setSelectionState(null); return;}
-    // A local click already carries the owning history/map readback. Mirroring
-    // that selection into the URL must not replace it with a weaker fallback.
-    if (selectionState?.scope === selectionScope && selectionState.value?.kind === "todo"
-      && selectionState.value.item.todoId === routedTodoId) return;
     const item = todo ?? {todoId: routedTodoId, sourceTodoId: routedTodoId, detailMode: "request_only" as const,
       text: locale === "zh-CN" ? "任务详情待读取" : "Task details pending", done: false};
     setSelectionState({scope: selectionScope, visible: true, value: {kind: "todo", item: {...item,
       goalId: selectedGoal.goalId, goalTitle: selectedGoal.title, ownerLabel: item.claimedBy}}});
-  }, [selectionScope, routedTodoId, selectedGoal, readOnly, locale]);
+  }, [selectionScope, routedTodoId, selectedGoal, readOnly, locale, selectionState]);
   const workspaceReview = useDeliveryReview(selectedGoal, model.userTodos, !readOnly && !settingsOpen
     && (selectedGoalTab === "overview" || selectedGoalTab === "tasks") && !selectedGoal?.loadState, selectionScope);
   const workspaceDigest = useGoalWorkspaceDigest(selectedGoal, model.userTodos, items,
@@ -2033,7 +2034,7 @@ export function PersonalWorkspacePage({
             )}
             </details> : null;
   const taskBoard = (active: boolean) => selectedGoal ? (<GoalTasksView digest={workspaceDigest}
-                    historyEnabled={!readOnly && active}
+                    historyEnabled={!readOnly} historyActive={active}
                     historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
@@ -2065,7 +2066,7 @@ export function PersonalWorkspacePage({
       notice={serviceNotice}
       drawer={drawerSelection && selectionState?.visible ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
-          goal.goalId === drawerSelection.item.goalId && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
+          goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
         proposalReadbackUnavailable={creationProposalId ? proposalReadback.isError || !proposalReadback.data
           : actionReadback.isError || !actionReadback.data
@@ -2114,6 +2115,8 @@ export function PersonalWorkspacePage({
             managerChannelBinding={managerChannelBinding}
             managerRuntime={managerRuntime}
             mobileNavigationOpen={mobileSidebarOpen}
+            allWorkOpen={railScope === selectionScope}
+            onOpenAllWork={selectedGoal ? () => {setSelectedGoalTab("overview"); setRailScope(selectionScope);} : undefined}
             onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
@@ -2183,6 +2186,10 @@ export function PersonalWorkspacePage({
                 <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null} {!actionReadback.isError && homeOperations.length ? t("home.operationSummary", {count: homeOperations.length}) : null}</>}</p></div>
               </section>
             ) : null}
+            {selectedGoal && !selectedGoal.loadState && readOnly && routedTodoId
+              && !selectedGoal.agentTodos.some(todo => todo.todoId === routedTodoId) ? <p className="goal-overview-source-note" role="status">
+                {locale === "zh-CN" ? "链接中的任务未出现在此来源的当前快照中；暂时无法查看其详情。" : "The linked task is not in this source’s current snapshot; its details are unavailable."}
+              </p> : null}
             {selectedGoal?.loadState ? (
               <section className="personal-manager-greeting" role="status" data-testid="goal-status-loading">
                 <div><strong>{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</strong>
@@ -2192,7 +2199,7 @@ export function PersonalWorkspacePage({
             ) : selectedGoal ? (
               <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
                 activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={{
-                  overview: <GoalOverview digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
+                  overview: <GoalOverview railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}

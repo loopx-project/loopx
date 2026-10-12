@@ -1,4 +1,4 @@
-import {type ReactNode} from "react";
+import {useEffect, useState, type ReactNode} from "react";
 import {type DeliveryReviewRead} from "./delivery-review-state";
 import {GoalWorkspaceWork} from "./goal-workspace-work";
 import { ArrowRight, CircleCheck, CircleDashed, CircleX, Hand, Info } from "lucide-react";
@@ -25,7 +25,8 @@ function criterionStates(contract: Extract<NonNullable<NonNullable<WorkspaceGoal
   }));
 }
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest }: {
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail }: {
+  railOpen: boolean; onCloseRail: () => void;
   review: DeliveryReviewRead; digest: GoalWorkspaceDigest;
   active: boolean; goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
   selectedTodoId: string | null; board: ReactNode; results: ReactNode; historyRefreshRevision: number;
@@ -33,6 +34,14 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   readOnly: boolean; onOpenDetails: () => void; onSelect: (selection: WorkspaceDrawerSelection | null) => void; onView: (view: WorkspaceGoalTab) => void;
 }) {
   const { t, locale } = useWorkspaceI18n();
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches);
+  const [directionExpanded, setDirectionExpanded] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 640px)");
+    const update = () => setNarrow(media.matches);
+    update(); media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   const copy = locale === "zh-CN" ? {
     direction: "方向", current: "当前推进", agentSummary: "Agent 的进展摘要", attention: "需要你", details: "Goal 信息",
     tasks: "查看任务", execution: "执行记录", optional: "{count} 项可选",
@@ -67,6 +76,10 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           {contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}
           <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
         </header>
+        <button className="goal-direction-toggle" type="button" aria-expanded={!narrow || directionExpanded} onClick={() => setDirectionExpanded(value => !value)}>
+          {locale === "zh-CN" ? (directionExpanded ? "收起目标与条件" : "展开目标与条件") : (directionExpanded ? "Hide direction and criteria" : "Show direction and criteria")}
+        </button>
+        <div className="goal-direction-content" hidden={narrow && !directionExpanded}>
         {contract ? <>
           <p className="goal-overview-objective">{contract.objective || acceptanceCopy.unknown}</p>
           {criteria.length ? <>
@@ -86,6 +99,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           <p className="goal-overview-note">{copy.noTarget}</p>
         </>}
         {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><ArrowRight aria-hidden size={15} /></button> : null}
+        </div>
       </section>
       {showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
         <header>
@@ -104,7 +118,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
       </section> : null}
     </div>
     <GoalWorkspaceWork goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
-      readOnly={readOnly} active={active} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
+      readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>
       : <DeliveryReviewContent review={review} hideWorkMap active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />}

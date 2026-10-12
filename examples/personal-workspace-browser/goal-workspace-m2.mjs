@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {resolve} from "node:path";
-import {outputDir} from "./fixture.mjs";
+import {outputDir, repoRoot} from "./fixture.mjs";
+import {readFile} from "node:fs/promises";
 import {openWorkspacePage} from "./scenario-context.mjs";
 import {installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId} from "./showcase-workspace.mjs";
 
@@ -59,10 +60,10 @@ export const goalWorkspaceM2Scenario = {
       assert.equal(new URL(page.url()).searchParams.get("goalId"),showcaseGoalId);
       assert.equal(await now.locator('[data-todo-id="showcase-map-columns"]').getAttribute('aria-pressed'),'true');
       // A selected item missing from the next bounded read can inspect its
-      // exact request, but must not keep the earlier mutation controls.
+      // retained history later, but must not keep the earlier mutation controls.
       omitSelected = true;
       await page.getByRole("button", {name:"刷新状态",exact:true}).click();
-      await page.locator('.personal-context-drawer').getByText(/只读|完整要求/, {exact:false}).first().waitFor();
+      await page.locator('.personal-context-drawer').getByText("当前任务状态不可用。请刷新或打开保留的历史记录，再决定后续操作。", {exact:true}).first().waitFor();
       await page.waitForFunction(() => !document.querySelector('.personal-context-drawer .personal-primary-action'));
       assert.equal(await page.locator('.personal-context-drawer').getByRole('button', {name:/标记完成/}).count(), 0);
       await page.locator('.personal-drawer-close').click();
@@ -85,6 +86,25 @@ export const goalWorkspaceM2Scenario = {
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
       await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-mobile.png'),animations:'disabled'});
+      const direction = page.locator(".goal-direction-content");
+      await direction.waitFor({state:"hidden"});
+      await page.getByRole("button",{name:"展开目标与条件",exact:true}).click();
+      await direction.waitFor({state:"visible"});
+      await page.getByRole("button",{name:"收起目标与条件",exact:true}).click();
+      const railTrigger = page.getByRole("button",{name:"打开全部工作",exact:true});
+      await railTrigger.focus(); await page.keyboard.press("Enter");
+      const railDialog = page.getByRole("dialog",{name:"全部工作",exact:true});
+      await railDialog.waitFor();
+      assert.equal(await railDialog.getByRole("complementary",{name:"全部工作",exact:true}).count(),1);
+      await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-mobile-rail.png'),animations:'disabled'});
+      await page.keyboard.press("Escape"); await railDialog.waitFor({state:"hidden"});
+      assert.equal(await railTrigger.evaluate(node=>node===document.activeElement),true,"Rail Escape restores its launcher focus");
+      await railTrigger.click();
+      await railDialog.locator('[data-todo-id="showcase-map-columns"]').click();
+      await railDialog.waitFor({state:"hidden"});
+      await page.locator('.personal-context-drawer').waitFor();
+      assert.equal(new URL(page.url()).searchParams.get("todo"),"showcase-map-columns");
+      await page.locator('.personal-drawer-close').click();
       await page.setViewportSize({width:1440,height:1000});
       scale = true;
       const statusResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/status.json");
@@ -97,6 +117,20 @@ export const goalWorkspaceM2Scenario = {
       assert.equal(await now.locator('.goal-owner-group [data-todo-id]').count(),200);
       await now.getByRole('button',{name:'关系图',exact:true}).click();
       await now.locator('.work-map-node').filter({hasText:'Synthetic work item 200'}).waitFor();
+      await now.getByRole('button',{name:'按负责人',exact:true}).click();
+      await now.locator('[data-todo-id="scale-199"][data-work-class="waiting_dependency"]').waitFor();
+      assert.equal(await now.locator('.goal-owner-group [data-work-class="waiting_dependency"]').count(),100);
+      assert.equal(await now.locator('.goal-owner-group [data-work-class="blocked"]').count(),1);
+      assert.equal(await now.locator('.goal-owner-group [data-work-class="open"]').count(),99);
+      const rail = page.getByRole('complementary',{name:'全部工作',exact:true});
+      await rail.getByRole('button',{name:'全部 · 200',exact:true}).waitFor();
+      assert.equal(await rail.getByRole('button',{name:'未完成 · 199',exact:true}).count(),1);
+      assert.equal(await rail.getByRole('button',{name:'受阻与延后 · 1',exact:true}).count(),1);
+      await now.getByRole('button',{name:'看板',exact:true}).click();
+      assert.equal(await now.locator('.personal-task-card[data-work-class]').count(),200);
+      assert.equal(await now.locator('.personal-task-card[data-work-class="waiting_dependency"]').count(),100);
+      assert.equal(await now.locator('.personal-task-card[data-work-class="blocked"]').count(),1);
+      assert.equal(await now.locator('.personal-task-card[data-work-class="open"]').count(),99);
       const switchMs = [];
       for (const name of ['按负责人','看板','关系图','按负责人','关系图']) {
         const start = performance.now();
@@ -108,8 +142,38 @@ export const goalWorkspaceM2Scenario = {
       assert.equal(writes.length,0,`Rendering created effects: ${writes}`);
       assert.equal(session.errors.length,0,session.errors.join('\n'));
       console.log(JSON.stringify({m2RenderBudget:{initialMs,switchMs,nodeCount:200}}));
+      await verifyRemoteSelection(browser, url);
       return {coverageEntries:session.coverageEntries,note:'Responsibility groups, shared task selection/reload, Board/Map switching, no effect requests, desktop/mobile composition. Synthetic status/map; creation is separately qualified against real backend.'};
     } catch(error) {await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-failed.png')});throw error;}
     finally {await session.close();}
   },
 };
+
+
+async function verifyRemoteSelection(browser, url) {
+  const snapshot = JSON.parse(await readFile(resolve(repoRoot,"examples/status.example.json"),"utf8"));
+  const goalId = snapshot.run_history.goals[0].id;
+  const target = new URL(url);
+  target.searchParams.set("statusUrl","http://127.0.0.1:8978/status.json");
+  target.searchParams.set("goalId",goalId);
+  target.searchParams.set("view","overview");
+  target.searchParams.set("todo","missing-remote-task");
+  const localOwnerReads = [];
+  const session = await openWorkspacePage(browser,target.toString(),{beforeGoto: async (_api,page) => {
+    await page.route("http://127.0.0.1:8978/status.json*", route => route.fulfill({json:snapshot}));
+    page.on("request",request => {
+      const parsed = new URL(request.url());
+      if (parsed.port === new URL(url).port && /\/api\/chat\/(todo\/detail|completed-todos|delivery-review|goal-results)/.test(parsed.pathname)) localOwnerReads.push(parsed.pathname);
+    });
+  }});
+  try {
+    const {page} = session;
+    await page.getByRole("region",{name:"当前工作",exact:true}).waitFor();
+    assert.equal(await page.locator(".personal-context-drawer").count(),0,"An unknown remote Todo must not acquire a local request reader");
+    await page.getByRole("status").filter({hasText:"链接中的任务未出现在此来源的当前快照中"}).waitFor();
+    assert.equal(await page.getByRole("button",{name:"添加任务",exact:true}).count(),0);
+    await page.getByRole("region",{name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
+    assert.equal(await page.locator(".work-map").count(),0,"Remote selection cannot reuse a local map");
+    assert.deepEqual(localOwnerReads,[],"Remote deep link caused local owner reads");
+  } finally {await session.close();}
+}
