@@ -404,6 +404,44 @@ def test_shutdown_uses_live_control_not_creation_snapshot(configured, monkeypatc
     assert observations == [["resolve", "finish"] if ownership == "agent" else []]
 
 
+@pytest.mark.parametrize("code,expected", [
+    ("EGO_TASK_SPACE_USER_IN_CONTROL", "source_reader_not_agent_owned"),
+    ("EGO_TASK_SPACE_INACTIVE", "source_reader_not_agent_owned"),
+    ("EGO_OPERATION_FAILED", "browser_read_failed"),
+])
+@pytest.mark.parametrize("stage", ["resolve", "navigate", "extract"])
+@pytest.mark.parametrize("image", [False, True])
+def test_native_control_race_survives_discarded_cli_output(
+    configured, monkeypatch, code, expected, stage, image,
+):
+    # Inventory still says Agent, but a later SDK boundary denies control.
+    # Run the production script in a real child. Model Ego's hard-stop sink,
+    # which discards all result markers and does not print error_code.
+    real_run = subprocess.run
+    trace = []
+    def run(args, **kwargs):
+        harness = (
+            "const code=" + json.dumps(code) + ";const stage=" + json.dumps(stage) + ";"
+            "function denied(){const e=Error('native wording changed');e.error_code=code;throw e;}"
+            "async function listTaskSpaces(){return [{id:7,ownership:'agent'}];}"
+            "async function taskSpace(){if(stage==='resolve')denied();return {page(){return {"
+            "async goto(){if(stage==='navigate')denied();},async waitForFunction(){},"
+            "async evaluate(){denied();},async screenshot(){throw Error('capture forbidden');}};}};}"
+            "(async()=>{" + args[3] + "})().catch(()=>{process.exitCode=1;});"
+        )
+        child = real_run(["node", "-e", harness], **kwargs)
+        trace.append(child.returncode)
+        # Neither code nor an extraction sentinel survives the real SDK sink.
+        return subprocess.CompletedProcess(args, child.returncode, "", "SDK hard stop guidance")
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    if image:
+        result = json.loads(reader.read_public_image(URL, 0)[0].text)
+    else:
+        result = reader.read_public_url(URL)
+    assert result["ok"] is False and result["error"] == expected
+    assert trace == [1]  # No retry, new space, claim, takeover, or capture.
+
+
 def test_creation_and_read_share_one_timeout_budget(configured, monkeypatch):
     auto_config(monkeypatch)
     clock = iter([0, 5, 29])

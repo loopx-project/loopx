@@ -677,6 +677,25 @@ def test_console_entrypoint_selects_only_receipt_bound_native_scheduler_followup
     )
 
 
+@pytest.mark.parametrize("observation", [
+    {"available": True, "rrule": "FREQ=MINUTELY;INTERVAL=3"},
+    {"available": False},
+])
+def test_native_scheduler_reads_host_instead_of_the_applied_claim(monkeypatch, observation) -> None:
+    from loopx import entrypoint, upgrade
+
+    monkeypatch.setattr(shutil, "which", lambda value: "/fixture/node")
+    seen = []
+    monkeypatch.setattr(upgrade, "resolve_codex_app_automation_rrule", lambda **kw: seen.append(kw) or observation)
+    args = ["quota", "scheduler-ack-current", "--goal-id", "goal", "--agent-id", "agent",
+            "--scheduler-host-facts-chunk", "facts", "--turn-instance-id", "turn",
+            "--host-match-observed", "--applied-rrule", "FREQ=MINUTELY;INTERVAL=30",
+            "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=30"]
+    native = entrypoint._native_scheduler_followup_argv(args)
+    assert seen == [{"goal_id": "goal", "agent_id": "agent"}]
+    assert native[-2:] == ["--app-automation-current-rrule", observation.get("rrule", "")]
+
+
 def test_explicit_main_argv_remains_an_in_process_compatibility_call(
     monkeypatch,
 ) -> None:

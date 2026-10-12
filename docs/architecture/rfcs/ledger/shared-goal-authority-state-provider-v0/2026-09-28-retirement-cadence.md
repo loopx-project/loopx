@@ -257,6 +257,35 @@ Host、写状态、ACK 或扣额度。打包 App 显示可用 Codex 与不可用
 或悄悄另建 Session 来通过。真实模型完成、自然试用、其他 runtime、Lark 与冻结
 D2 的失败/未测继续分开，复用既有 R5/T4 Todo；启动成功不代表入组或发布默认。
 
+The ordinary lifecycle checkpoint compares the unconfigured SQLite candidate
+with an explicitly configured canonical File control through the same full CLI
+entrypoint. `test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit`
+joins creation, unleased-claim refusal, leased claim/update, quota admission,
+refresh/spend, completion, supersession, archival and current-state conversion
+in both directions. Exact historical reads retain the archived records, latest
+metadata and successor; original add/update/complete/spend retries neither revive
+archived work nor append another settlement or authority revision.
+
+This bounded synthetic journey passes at source `df8262639` on CPython 3.14.8
+and the installed package `c51ec1a60` on CPython 3.12.15, both on macOS arm64
+with Node 24.21.0 / SQLite 3.53.4. Each command reopens an isolated real backend
+and verifies the copied package's provenance. It extends CLI recovery evidence;
+it does not qualify the packaged App interaction, actual model work, natural
+cohort operation, latency/resource growth or other installation profiles.
+The [D2 record](https://github.com/loopx-project/loopx/issues/4224#issuecomment-5965294711)
+still has no completed applicable elapsed-soak certificate. Retain each older
+report's source and failed/missing rows; do not restart its elapsed clock or
+replace it with this functional comparison.
+
+普通生命周期 checkpoint 以同一完整 CLI 入口比较未配置时的 SQLite 候选与显式
+canonical File 对照，贯通创建、无 lease claim 拒绝、持 lease 的 claim/update、
+quota admission→refresh/spend、完成、替代、归档及双向导出当前状态。精确历史
+读取保留归档记录、最新元数据与 successor；原 add/update/complete/spend 重试
+不能复活旧任务、再次结算或追加 authority revision。上述源码与安装包 profile
+通过的是隔离真实 backend 的有界合成旅程；App 交互、真实模型、自然试用、
+延迟/资源增长及其他安装 profile 继续未测。D2 旧报告按原 source 保留失败/缺失，
+尚无适用的自然时间完成证书；本次功能对照不重启其时钟，也不替代该证书。
+
 ### One reusable validation matrix
 
 Record candidate and independent control revisions, actual runtime, complete

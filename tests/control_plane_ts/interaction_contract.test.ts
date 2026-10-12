@@ -6,6 +6,7 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { interpretQuotaShouldRunPacket } from "../../loopx/control_plane/effect_program.ts";
 import {
   decodeInteractionContract,
+  projectInteractionConsistencyValidation,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
   type AgentInteractionChannel,
@@ -19,6 +20,32 @@ const invalidDeliveryChannel: AgentInteractionChannel = {
   quiet_noop_allowed: false,
 };
 void invalidDeliveryChannel;
+
+test("a closed contract can notify without requiring user action or spending", () => {
+  const contract = {schema_version: "loopx_interaction_contract_v0", mode: "terminal_no_followup",
+    user_channel: {action_required: false, notify: "NOTIFY"},
+    agent_channel: {must_attempt: false, delivery_allowed: false, quiet_noop_allowed: true},
+    cli_channel: {next_cli_actions: ["no quota spend until explicit goal resume"]}};
+  assert.deepEqual(decodeInteractionContract(contract), contract);
+});
+
+test("shared consistency validation retains diagnostic order and does not gate independent capability intent", () => {
+  const invalid = {mode: "heartbeat_settled_skip", user_required: true,
+    must_attempt: false, delivery_allowed: true, quiet_noop_allowed: true,
+    spend_allowed_now: false, spend_after_validation: true};
+  assert.deepEqual(projectInteractionConsistencyValidation(invalid), {errors: [
+    "interaction_contract.delivery_without_attempt",
+    "interaction_contract.quiet_noop_conflicts_with_required_action",
+    "interaction_contract.settled_conflicts_with_open_action",
+    "interaction_contract.settled_conflicts_with_spend",
+  ]});
+  assert.deepEqual(projectInteractionConsistencyValidation({
+    mode: "governed_capability_intent", user_required: true,
+    must_attempt: true, delivery_allowed: true, quiet_noop_allowed: false,
+    spend_allowed_now: false, spend_after_validation: false,
+  }), {errors: []});
+  assert.throws(() => projectInteractionConsistencyValidation({...invalid, must_attempt: "false"}), /must_attempt.*boolean/);
+});
 
 function readFacts(): JsonObject {
   return {required_reads: [{command: "read-existing-evidence", source: "existing"}],

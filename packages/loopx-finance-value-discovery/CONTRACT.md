@@ -647,3 +647,91 @@ original behavior and replay clocks. No new catalog or Core authority exists.
 This stage delivers CLI/runtime computation. Its App/Lark interaction and the
 source provider's production consumer are still companion qualifications;
 installation and this calculation do not establish financial utility.
+
+# Same-event funding cash (candidate extension 0.8.13)
+
+`finance_funding_event_pair_input_v1` has exactly `schema_version`, a zoned
+`decision_at`, two nullable `legs`, and nullable `costs`. The packaged input and
+response schemas describe the closed shapes; Finance owns bounded number,
+timestamp and semantic validation. Its enums are local to this versioned
+Finance provider, not new Core states or a catalog capability. Specialized
+Decimal arithmetic reuses Finance's numeric bounds, finite clock decoder and
+canonical input digest; no financial-statement/XBRL duration is manufactured.
+
+Each non-null leg declares `source`, `instrument`, `side`, `rate`, nullable
+`calculation_basis` and nullable `settlement`. Source ref/digest/field/version,
+producer-as-of and original capture bounds are separate. Instrument venue,
+identity/version, base unit, quote currency and mapping evidence are explicit.
+Only declared `linear_quote_notional` is supported; inverse, quanto and unknown
+units withhold cash. Quantity unit and price base must match that instrument's
+base, and payment currency must match the declared quote currency. No FX,
+collateral substitution, quantity rounding or contract inference occurs.
+
+Rate `original_literal` is retained verbatim. `value` is the caller's parsed
+finite decimal lexeme with explicit `fraction`, `percent` or `basis_points`
+unit. Parsing/source correspondence remains caller-declared. Kind is `forecast`
+or `realized`, otherwise null/unknown. Payment convention is explicitly
+`positive_long_pays` or `positive_short_pays`; side is `long` or `short`.
+Signed lexical arithmetic for positive-long-pays is `+quantity*price*rate` for
+a short and its negative for a long; positive-short-pays reverses it. A
+negative rate reverses payment direction again. This is conditional declared
+linear arithmetic, not a verified venue contract or execution price.
+
+The native economic period has explicit zoned start/end, evidence and declared
+`accrual_ends_no_later_than_payment` relation. The event has an exact common
+venue/event ref, settlement dateTime and evidence. Periods must be positive and
+end no later than their event. Chart intervals, observation clocks, historical
+rates and guessed next timestamps cannot supply these fields or event counts.
+Capture/producer/payment/cost clocks are normalized for absolute comparisons,
+including offsets and fractional seconds, while original input remains intact.
+Capture must be no later than decision, and producer/start no later than capture
+end. These clocks and refs remain caller assertions, not PIT authentication.
+
+This operation adds **same-event cash**, not naked rates. Equal event timestamps
+alone do not establish the common venue/event identity or each native period.
+Once both legs independently qualify, different native accrual periods may
+still contribute same-currency cash paid at the same declared event; 1h versus
+8h does not itself forbid addition. `native_period_relation` reports that
+distinction without comparing or annualizing rates. Event/currency/kind
+mismatch withholds the pair while retaining independently qualified leg output.
+Repeated same-venue payment identity refuses double counting.
+
+A forecast requires an event strictly after decision and no claimed settled
+payment. `conditional_signed_estimate`, gross and net estimates are separate
+outputs; **`net_cash` stays null**, even with fully declared forecast inputs.
+A realized leg needs a nonfuture event and explicit payment ref, zoned
+settlement time, signed amount, currency and evidence. Payment cannot precede
+its event or follow decision. The declared amount must equal the bounded
+lexical calculation; rounding/error propagation is unsupported and conflicting
+amounts hold. Eligible cash is still declared, not authenticated settlement.
+
+Costs require amount, currency, kind (`conditional`/`realized`), observation
+clock and evidence. Null does not mean zero; explicit zero with evidence is
+allowed. Missing costs preserve eligible gross output but withhold net output.
+Only realized costs can produce declared realized `net_cash`; a forecast may
+use declared conditional costs for its estimate. No profitability threshold,
+strategy recommendation, market-risk neutrality or fill guarantee is assessed.
+
+The result preserves the complete input and canonical hash, each leg's reasons,
+diagnostic candidate arithmetic, qualified forecast/realized outputs, event and
+period relations, and sorted pair reasons. Unknown dimensions suppress even
+candidate multiplication. Missing evidence is an `ok:true` assessment with held
+outputs; malformed shapes, unsupported literals or numeric bounds fail through
+the existing error packet. Replay is deterministic calculation, not current
+source validation. Source/payment authentication, lifecycle/PIT, financial
+admission, trading and external read/write flags always remain false.
+
+For managed calls, read Core's typed run receipt and provider result together.
+A provider refusal uses `status=provider_failed` and preserves its nonzero
+`exit_code`; an admission refusal before invocation is a different path. Do not
+assume every unsuccessful managed call exits with code 2. A held `ok:true`
+assessment is neither kind of process failure and never grants financial use.
+
+`assess-funding-event --input-json` and schema-selected installed stdin call the
+same owner. Old input versions keep their original results. Disable via the
+existing extension lifecycle; a pinned 0.8.12 rollback rejects this new schema
+and preserves its original stock/cash/period behavior. The package includes a
+synthetic same-event 1h/8h example. This stage is the CLI/runtime prerequisite;
+the existing Investment Research App/Lark interaction, source-provider consumer
+and independent financial utility remain companion qualifications. No default
+activation, account access or parallel authority is introduced.

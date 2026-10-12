@@ -28,13 +28,13 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
 }) {
   const { t, locale } = useWorkspaceI18n();
   const copy = locale === "zh-CN" ? {
-    direction: "方向", agentSummary: "Agent 的进展摘要", attention: "需要你", details: "Goal 信息",
+    direction: "方向", current: "当前推进", agentSummary: "Agent 的进展摘要", attention: "需要你", details: "Goal 信息",
     tasks: "查看任务", execution: "执行记录", optional: "{count} 项可选",
     noTarget: "尚未声明可衡量目标。目标通过 Goal 的验收配置声明。",
     verified: "{passed}/{total} 项条件已核验", criterion: { verified: "已核验", failing: "未通过", unverified: "尚未核验" },
     remote: "此来源仅提供同步的状态与验收观察，交付链需要实时本机来源。",
   } : {
-    direction: "Direction", agentSummary: "Agent's progress summary", attention: "Needs you", details: "Goal information",
+    direction: "Direction", current: "Current work", agentSummary: "Agent's progress summary", attention: "Needs you", details: "Goal information",
     tasks: "View tasks", execution: "Execution", optional: "{count} optional",
     noTarget: "No measurable target declared. Targets are declared through the Goal's acceptance configuration.",
     verified: "{passed} of {total} criteria verified", criterion: { verified: "Verified", failing: "Failing", unverified: "Not yet verified" },
@@ -57,7 +57,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
     <div className={`goal-overview-summary${showAttention ? " has-attention" : ""}`}>
       <section className="goal-overview-direction" aria-label={copy.direction}>
         <header className="goal-overview-heading">
-          <h2>{copy.direction}</h2>
+          <h2>{contract ? copy.direction : copy.current}</h2>
           {contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}
           <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
         </header>
@@ -75,11 +75,11 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           </> : null}
           <p className="goal-overview-note"><small>{copy.agentSummary}</small> {goal.nextSentence}</p>
         </> : <>
-          <p className="goal-overview-objective">{goal.nextSentence}</p>
-          {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <p className="goal-overview-note">{goal.agentSentence}</p> : null}
-          <p className="goal-overview-note"><small>{copy.agentSummary}</small> {copy.noTarget}</p>
+          <p className="goal-overview-objective goal-overview-current">{goal.nextSentence}</p>
+          {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <details className="goal-overview-agent-note"><summary>{copy.agentSummary}</summary><p className="goal-overview-note">{goal.agentSentence}</p></details> : null}
+          <p className="goal-overview-note">{copy.noTarget}</p>
         </>}
-        {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><strong>{run.run.title}</strong><ArrowRight aria-hidden size={15} /></button> : null}
+        {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><ArrowRight aria-hidden size={15} /></button> : null}
       </section>
       {showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
         <header>

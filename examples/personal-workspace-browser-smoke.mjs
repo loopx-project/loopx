@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-workspace-selection.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
 import {privateStewardScopeScenario} from "./personal-workspace-browser/private-steward-scope.mjs";
@@ -97,6 +98,7 @@ scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(goalWorkspaceSelectionScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

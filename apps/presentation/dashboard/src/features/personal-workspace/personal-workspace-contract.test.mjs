@@ -385,6 +385,13 @@ for (const contextGoalId of [null, "existing-research-goal"]) {
   assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
   assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
 }
+const explicitWorkspace = goalCreateRequest({
+  objective: "Inspect the second project", completion: "A checked report", boundary: "Read only",
+  agentId: "research-agent", permission: "read_only", contextGoalId: "first-project",
+  workspaceRef: "second-project", operationId: "explicit-workspace",
+}, (key) => key);
+assert.equal(explicitWorkspace.normalizedParameters.workspace_ref, "second-project");
+assert.equal(explicitWorkspace.context.goal_id, "first-project", "Conversation and workspace remain separate");
 assert.match(page, /t\("proposal\.workspace\.current"\)/, "Create Goal localizes its execution workspace explanation");
 assert.match(i18n, /Current local workspace \(no Repository bound\)/, "English workspace copy explains that no repository is bound");
 assert.match(i18n, /当前本地工作区（未绑定 Repository）/, "Chinese workspace copy explains that no repository is bound");

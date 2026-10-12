@@ -22,7 +22,7 @@
 .delivery-loading i:nth-child(1) { width: 42%; }
 .delivery-loading i:nth-child(2) { width: 68%; }
 .delivery-loading i:nth-child(3) { width: 54%; }
-.goal-overview .delivery-review { padding-top: 24px; border-top: 1px solid var(--pw-line); }
+.goal-overview .delivery-review { gap: 16px; padding-top: 16px; border-top: 1px solid var(--pw-line); }
 .goal-overview .delivery-review-toolbar h2 { font-size: var(--text-lead); line-height: var(--leading-lead); }
 .goal-overview .delivery-review-toolbar button { border-color: transparent; background: transparent; color: var(--pw-muted); transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); }
 .goal-overview .delivery-review-toolbar button:hover:not(:disabled) { background: var(--pw-hover, var(--pw-card)); color: var(--pw-text); }

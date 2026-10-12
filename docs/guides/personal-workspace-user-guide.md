@@ -158,6 +158,26 @@ loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner -
 
 ---
 
+### 创建 Goal 时选择已有工作目录 / Reuse a workspace when creating a Goal
+
+打开侧边栏的「创建 Goal」，填写目标和完成标准后，在「工作目录」中选择一个已有
+Goal，即可沿用它绑定的目录。检查配置并确认一次后，新的 Goal 在所选目录中创建；
+执行权限仍由表单中的权限选择与后端校验决定。对话草稿也可通过「修改」打开同一个表单。
+如果检查配置失败，目标文本与目录选择会保留供重试；失效或不可用的目录不会自动换成另一目录。
+
+默认工作区继续由现有连接配置解析。这一入口支持沿用**已注册 Goal 的目录**，不提供任意
+本机路径输入或新目录接入；未连接的目录仍需先通过
+[项目连接流程](../guides/newcomer-command-path.md)接入。创建前检查预览中的工作区标识。
+
+Open **Create Goal** in the sidebar, enter the objective and completion criteria, and select an
+existing Goal under **Working directory** to reuse its directory. Review and confirm once; the new
+Goal is created there under the selected execution permission and the existing backend checks.
+Conversational drafts reach the same form through **Edit**. A failed preview retains the text and
+selection for retry; unavailable selections do not silently redirect to another directory. The
+default still follows existing connection routing. This supports registered Goal workspaces, not
+arbitrary path entry or new-directory onboarding; connect a new project first and check the workspace
+reference in the creation preview.
+
 ## 🎯 4. Goal 深度工作区
 
 在侧边栏点击具体的 Goal（例如 `Apollo Spacecraft Telemetry Pipeline`），进入该 Goal 的独立工作台。

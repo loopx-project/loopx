@@ -146,16 +146,20 @@ def build_scheduler_followup_payload(
         and resolved_context.context.host_surface is HostSurface.CODEX_APP
     )
     if (
-        args.quota_command == "scheduler-fail-current"
-        and not observed_rrule
+        (
+            args.quota_command == "scheduler-fail-current" and not observed_rrule
+            or bool(getattr(args, "host_match_observed", False))
+        )
         and codex_app_host
     ):
         host_observation = resolve_codex_app_automation_rrule(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
         )
-        if host_observation.get("available") is True:
-            observed_rrule = str(host_observation.get("rrule") or "")
+        observed_rrule = (
+            str(host_observation.get("rrule") or "")
+            if host_observation.get("available") is True else ""
+        )
 
     before_decision = _build_scheduler_followup_decision(
         status_payload,
@@ -166,7 +170,7 @@ def build_scheduler_followup_payload(
         turn_instance_id=turn_instance_id,
         codex_app_current_rrule=(
             args.applied_rrule
-            if bool(getattr(args, "host_match_observed", False))
+            if bool(getattr(args, "host_match_observed", False)) and not codex_app_host
             else observed_rrule
         ),
         scheduler_context=scheduler_context,

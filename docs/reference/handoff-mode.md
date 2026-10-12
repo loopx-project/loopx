@@ -7,6 +7,16 @@ recovery; new requests cannot select it, even as a no-op. Existing Goals are not
 silently changed, and creation/Host defaults remain unchanged in this stage.
 This is an ownership policy, not a capability grant or a storage provider.
 
+The App's Task list and Task details use the same reviewed completion entry.
+When the terminal owner requires a lease or its current execution proof, the
+App explains that completion is unavailable from this caller. The responsible
+Agent must complete from its execution with the current proof; refresh the Task
+to read back that result. A recorded claim or a lease existing in the store is
+not a proof supplied by this caller. The App does not borrow a key, acquire a
+lease or change ownership policy to make the completion succeed. Other preview
+failures retain their own diagnostics. This explains an unavailable operation;
+it does not qualify App completion under `hard_lease`.
+
 ## Choose the policy independently of storage
 
 Use `soft_claim` for an explicitly single executor without parallel takeover.
@@ -128,6 +138,11 @@ migration/recovery boundary.
 历史回执恢复输入，不能再作为新请求的目标；已有 Goal 和创建／Host 默认值不被
 静默改写。soft 用于明确的单执行者，hard 用于本机并行 Agent／automation 和云端
 共享；默认策略切换前还需验证 Host 的 acquire、renew、release 和阻塞结算。
+App 的任务列表和详情共用审核完成入口。终态 owner 要求租约或当前执行证明时，
+页面明确说明此调用方无法代为完成；负责 Agent 须从原执行提交当前证明，之后刷新
+任务读回结果。已有 claim 或 store 中存在租约不等于页面持有执行证明；App 不借用
+key、自动 acquire 或更改策略绕过拒绝。其他预览失败保留原诊断。此项只完善不可用
+状态说明，不代表 `hard_lease` 下 App 手动完成已经合格。
 存储晋升与所有权分开：新 CLI promote 默认 `preserve`，显式 hard 才审核策略升级；
 旧 v0 保存计划仍按原合同恢复。
 

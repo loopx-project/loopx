@@ -104,6 +104,8 @@ function argv(runtimeRoot: string, format = "json"): string[] {
     "-A",
     "--applied-rrule",
     "FREQ=MINUTELY;INTERVAL=15",
+    "--app-automation-current-rrule",
+    "FREQ=MINUTELY;INTERVAL=15",
     "--host-match-observed",
   ];
   for (const chunk of chunks(hintPayload())) {
@@ -196,6 +198,21 @@ test("native host-followup CLI decodes bounded argv facts and writes JSON", asyn
     (result.scheduler_commit as Record<string, unknown>).status,
     "written",
   );
+});
+
+test("native ACK cannot use its pre-update hint as fresh host readback", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot);
+  for (const observed of ["", "FREQ=MINUTELY;INTERVAL=3"]) {
+    const args = argv(runtimeRoot);
+    args[args.indexOf("--app-automation-current-rrule") + 1] = observed;
+    const child = runCli(args);
+    assert.equal(child.status, 1);
+    const result = JSON.parse(child.stdout) as Record<string, unknown>;
+    assert.equal(result.ok, false);
+    assert.equal(result.reason_code, "rrule_mismatch");
+    assert.equal((result.scheduler_commit as Record<string, unknown>).written, false);
+  }
 });
 
 test("native host-followup CLI preserves the scheduler Markdown surface", async (t) => {

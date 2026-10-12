@@ -1,6 +1,6 @@
 .goal-masthead-breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0 0 2px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .goal-masthead-breadcrumb svg { flex: none; color: var(--pw-faint); }
-.goal-masthead-breadcrumb button { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; transition: color var(--motion-fast) var(--ease-standard); }
+.goal-masthead-breadcrumb button { flex: none; white-space: nowrap; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; transition: color var(--motion-fast) var(--ease-standard); }
 .goal-masthead-breadcrumb button:hover { color: var(--pw-text); }
 .goal-masthead-breadcrumb [aria-current] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -22,7 +22,7 @@
 .goal-vital:hover { background: var(--pw-hover); }
 .goal-vital-value { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; font-size: var(--text-heading); font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: -0.02em; line-height: var(--leading-heading); text-overflow: ellipsis; white-space: nowrap; }
 .goal-vital-value small { color: var(--pw-faint); font-size: var(--text-body); font-weight: 500; letter-spacing: 0; }
-.goal-vital-meta { display: flex; align-items: baseline; gap: 0; width: 100%; min-width: 0; overflow: hidden; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); white-space: nowrap; }
+.goal-vital-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0; width: 100%; min-width: 0; overflow: hidden; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); white-space: normal; }
 .goal-vital-label { flex: none; font-weight: 500; }
 .goal-vital-sub { min-width: 0; overflow: hidden; color: var(--pw-faint); text-overflow: ellipsis; }
 .goal-vital-sub::before { content: "·"; padding: 0 5px; }
@@ -82,4 +82,18 @@
   .goal-vital { min-height: 48px; padding: 6px 8px; }
   .goal-vital-value { font-size: var(--text-lead); line-height: var(--leading-lead); }
   .personal-channel:has(.personal-channel-scroll:not([data-active-goal-view="overview"])) .goal-vital-sub { display: none; }
+}
+
+.personal-channel-header:has(.goal-masthead-breadcrumb) { align-items: flex-start; }
+.personal-channel-title .goal-masthead-context { white-space: normal; overflow-wrap: anywhere; }
+
+.goal-masthead-title { min-width: 0; }
+.goal-masthead-title > button { display: none; }
+@media (max-width: 720px) {
+  .goal-masthead-title { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 8px; align-items: start; }
+  .personal-channel-header[data-goal-selected="true"] .personal-channel-title .goal-masthead-title h1 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-wrap: wrap; }
+  .goal-masthead-title > button { display: grid; place-items: center; min-height: 32px; width: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--pw-muted); cursor: pointer; }
+  .goal-masthead-title > button:hover { background: var(--pw-hover); color: var(--pw-text); }
+  .goal-masthead-title > button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+  .personal-channel-title .goal-masthead-context { white-space: nowrap; }
 }

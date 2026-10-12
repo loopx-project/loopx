@@ -6,7 +6,9 @@ import { CompletedTaskLane } from "../src/features/personal-workspace/completed-
 import { todoItemSchema } from "../src/data/status.ts";
 import { workspaceAgentTodoFromItem } from "../src/features/personal-workspace/personal-workspace-model.ts";
 import { ContextDrawer } from "../src/features/personal-workspace/context-drawer.tsx";
-import { WorkspaceI18nProvider } from "../src/features/personal-workspace/i18n.tsx";
+import { WorkspaceI18nProvider, useWorkspaceI18n } from "../src/features/personal-workspace/i18n.tsx";
+import { ChatApiError } from "../src/data/chat.ts";
+import { todoCompletionPreviewFeedback } from "../src/features/personal-workspace/todo-completion-feedback.ts";
 
 // A Goal's default executor is not evidence that a Todo has been claimed.
 // Exercise the real consumers, including retained history and stale labels.
@@ -17,6 +19,27 @@ try {
     const render = (component, props) => renderToStaticMarkup(createElement(
       WorkspaceI18nProvider, null, createElement(component, props),
     ));
+    const completionRequest = {actionKind: "todo.update", normalizedParameters: {operation: "complete"}};
+    function CompletionFeedback({error, request}) {
+      return todoCompletionPreviewFeedback(error, request, useWorkspaceI18n().t);
+    }
+    for (const code of ["handoff_mode_requires_lease", "lease_fence_required"]) {
+      const error = new ChatApiError("Canonical refusal", {error_code: code, http_status: 400});
+      const feedback = render(CompletionFeedback, {error, request: completionRequest});
+      assert.ok(feedback.includes(locale === "en" ? "This page cannot complete" : "此页面无法代为完成"));
+      assert.ok(feedback.includes(locale === "en" ? "has not been marked complete" : "尚未标记完成"));
+      assert.equal(error.payload.error_code, code, "Presentation preserves the canonical diagnostic");
+      for (const request of [
+        {...completionRequest, actionKind: "gate.resolve"},
+        {...completionRequest, normalizedParameters: {operation: "edit"}},
+      ]) assert.equal(render(CompletionFeedback, {error, request}), "", "Unrelated actions retain their original errors");
+    }
+    for (const error of [new Error("lease_fence_required"),
+      new ChatApiError("lease_fence_required", {error_code: "provider_unavailable"}),
+      new ChatApiError("Foreign execution", {error_code: "lease_cas_mismatch"})]) {
+      assert.equal(render(CompletionFeedback, {error, request: completionRequest}), "",
+        "Neither error prose nor other refusals establish this recovery route");
+    }
     const notesLabel = locale === "en" ? "Notes" : "备注";
     const evidenceLabel = locale === "en" ? "Evidence" : "证据";
     for (const invalid of [null, "dependency_cycle"]) {

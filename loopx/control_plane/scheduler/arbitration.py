@@ -160,20 +160,22 @@ def build_scheduler_arbitration(
         errors=errors,
     )
 
-    if delivery_allowed and not must_attempt:
-        errors.append("interaction_contract.delivery_without_attempt")
-    if quiet_noop_allowed and (must_attempt or delivery_allowed or user_required):
-        errors.append("interaction_contract.quiet_noop_conflicts_with_required_action")
-    if mode in {
-        "terminal_no_followup",
-        "peer_coordination_blocked",
-        "agent_monitor_only",
-    } and (
-        user_required or must_attempt or delivery_allowed or not quiet_noop_allowed
+    from ..effect_runtime import effect_runtime_result
+
+    cli_channel = _mapping(contract.get("cli_channel"))
+    spend_flags = {field: _required_bool(
+        cli_channel, field, error_prefix="interaction_contract.cli_channel", errors=errors,
+    ) if field in cli_channel else False for field in ("spend_allowed_now", "spend_after_validation")}
+    validation = effect_runtime_result("work_item.interaction_consistency.validate", {
+        "mode": mode, "user_required": user_required, "must_attempt": must_attempt,
+        "delivery_allowed": delivery_allowed, "quiet_noop_allowed": quiet_noop_allowed,
+        **spend_flags,
+    })
+    if not isinstance(validation, dict) or not isinstance(validation.get("errors"), list) or any(
+        not isinstance(error, str) for error in validation["errors"]
     ):
-        errors.append("interaction_contract.terminal_conflicts_with_open_action")
-    if mode == "heartbeat_settled_skip" and (user_required or must_attempt or delivery_allowed):
-        errors.append("interaction_contract.settled_conflicts_with_open_action")
+        raise TypeError("interaction consistency validation returned invalid diagnostics")
+    errors.extend(validation["errors"])
     disposition, reason_code = _classify_disposition(
         mode=mode,
         user_required=user_required,

@@ -95,7 +95,14 @@ navigating or capturing it. Once Ego returns Agent control, the next call uses
 the same space automatically; no extra chat confirmation is needed. This tool
 does not force control, poll in the background or grant approval for protected
 actions. Browser failures and rendering timeouts alone are not requests for
-human handoff. A source's actual login or verification requirement remains a
+human handoff. If control changes after inventory, Ego's native boundary still
+stops the operation. Its hard-stop output sink can discard console sentinels;
+the adapter preserves only the stable user-control/inactive error code in a
+private temporary file and returns `source_reader_not_agent_owned`. It discards
+partial output, makes no replacement or takeover attempt, and removes that
+file after the call. Ordinary failures remain ordinary failures. This error
+transport does not grant control or prove a live human handoff was tested.
+A source's actual login or verification requirement remains a
 separate boundary; follow the installed Ego skill and continue independent work.
 
 On normal MCP shutdown or SIGTERM, it finishes only its own created,

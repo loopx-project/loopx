@@ -199,7 +199,7 @@ export const blockedReasonReadbackScenario = {
               await authority.cli("todo", "update", "--goal-id", "goal-a", "--role", "agent", "--todo-id", authority.with_reason,
                 "--status", "open", "--text", "Synthetic validated readback");
               await refresh();
-              await drawer.locator(".personal-task-inspector-summary h3", { hasText: "Synthetic validated readback" }).waitFor();
+              await drawer.locator(".personal-task-request .personal-md", { hasText: "Synthetic validated readback" }).waitFor();
               await drawer.locator(".personal-task-request [role]").waitFor({ state: "hidden" });
               assert.equal(await cause.count(), 0, "Resolved work must not retain its old blocked cause");
               assert.equal(await field(drawer, locale === "en" ? "Status" : "状态"), locale === "en" ? "Ready" : "待执行");

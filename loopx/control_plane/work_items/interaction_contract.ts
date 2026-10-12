@@ -47,6 +47,63 @@ export interface InteractionContract extends JsonObject {
   cli_channel: JsonObject;
 }
 
+const INTERACTION_CONSISTENCY_DIAGNOSTICS = {
+  delivery: {code: "interaction_contract.delivery_without_attempt",
+    message: "interaction_contract.agent_channel cannot allow delivery without an attempt"},
+  quiet: {code: "interaction_contract.quiet_noop_conflicts_with_required_action",
+    message: "interaction_contract quiet no-op conflicts with a required action"},
+  terminal: {code: "interaction_contract.terminal_conflicts_with_open_action",
+    message: "interaction_contract closed mode conflicts with an open action"},
+  settled: {code: "interaction_contract.settled_conflicts_with_open_action",
+    message: "interaction_contract settled mode conflicts with an open action"},
+  spend: {code: "interaction_contract.settled_conflicts_with_spend",
+    message: "interaction_contract settled mode conflicts with quota spend"},
+} as const;
+
+interface InteractionConsistencyFacts {
+  mode: string;
+  user_required: boolean;
+  must_attempt: boolean;
+  delivery_allowed: boolean;
+  quiet_noop_allowed: boolean;
+  spend_allowed_now: boolean;
+  spend_after_validation: boolean;
+}
+
+/** The scheduler and typed consumers share these rules, not independent copies. */
+function interactionConsistencyIssues(facts: InteractionConsistencyFacts) {
+  const {mode, user_required, must_attempt, delivery_allowed, quiet_noop_allowed} = facts;
+  const spendAllowed = facts.spend_allowed_now || facts.spend_after_validation;
+  const issues: Array<(typeof INTERACTION_CONSISTENCY_DIAGNOSTICS)[keyof typeof INTERACTION_CONSISTENCY_DIAGNOSTICS]> = [];
+  if (delivery_allowed && !must_attempt) issues.push(INTERACTION_CONSISTENCY_DIAGNOSTICS.delivery);
+  if (quiet_noop_allowed && (must_attempt || delivery_allowed || user_required)) {
+    issues.push(INTERACTION_CONSISTENCY_DIAGNOSTICS.quiet);
+  }
+  if ((mode === "terminal_no_followup" || mode === "peer_coordination_blocked" || mode === "agent_monitor_only")
+      && (user_required || must_attempt || delivery_allowed || !quiet_noop_allowed || spendAllowed)) {
+    issues.push(INTERACTION_CONSISTENCY_DIAGNOSTICS.terminal);
+  }
+  if (mode === "heartbeat_settled_skip") {
+    if (user_required || must_attempt || delivery_allowed) issues.push(INTERACTION_CONSISTENCY_DIAGNOSTICS.settled);
+    if (spendAllowed) issues.push(INTERACTION_CONSISTENCY_DIAGNOSTICS.spend);
+  }
+  return issues;
+}
+
+/** Python normalizes its legacy structural diagnostics, then asks this owner. */
+export function projectInteractionConsistencyValidation(request: JsonObject): JsonObject {
+  if (typeof request.mode !== "string") throw new EffectRuntimeRequestError("interaction consistency mode must be a string");
+  return {errors: interactionConsistencyIssues({
+    mode: request.mode,
+    user_required: requireBoolean(request.user_required, "user_required"),
+    must_attempt: requireBoolean(request.must_attempt, "must_attempt"),
+    delivery_allowed: requireBoolean(request.delivery_allowed, "delivery_allowed"),
+    quiet_noop_allowed: requireBoolean(request.quiet_noop_allowed, "quiet_noop_allowed"),
+    spend_allowed_now: requireBoolean(request.spend_allowed_now, "spend_allowed_now"),
+    spend_after_validation: requireBoolean(request.spend_after_validation, "spend_after_validation"),
+  }).map(issue => issue.code)};
+}
+
 function decodeUserChannel(value: unknown): UserInteractionChannel {
   const channel = requireJsonObject(value, "interaction_contract.user_channel");
   const actionRequired = requireBoolean(
@@ -106,16 +163,10 @@ function decodeAgentChannel(
     channel.quiet_noop_allowed,
     "interaction_contract.agent_channel.quiet_noop_allowed",
   );
-  if (deliveryAllowed && !mustAttempt) {
-    throw new EffectRuntimeRequestError(
-      "interaction_contract.agent_channel cannot allow delivery without an attempt",
-    );
-  }
-  if (quietNoopAllowed && (mustAttempt || deliveryAllowed || userActionRequired)) {
-    throw new EffectRuntimeRequestError(
-      "interaction_contract quiet no-op conflicts with a required action",
-    );
-  }
+  const issues = interactionConsistencyIssues({mode: "", user_required: userActionRequired,
+    must_attempt: mustAttempt, delivery_allowed: deliveryAllowed,
+    quiet_noop_allowed: quietNoopAllowed, spend_allowed_now: false, spend_after_validation: false});
+  if (issues.length) throw new EffectRuntimeRequestError(issues[0]!.message);
   if (mustAttempt) {
     return {
       ...channel,
@@ -145,16 +196,23 @@ export function decodeInteractionContract(value: unknown): InteractionContract {
     contract.agent_channel,
     { userActionRequired: userChannel.action_required },
   );
+  const mode = requireNonEmptyString(contract.mode, "interaction_contract.mode");
+  const cliChannel = requireJsonObject(contract.cli_channel, "interaction_contract.cli_channel");
+  const issues = interactionConsistencyIssues({mode, user_required: userChannel.action_required,
+    must_attempt: agentChannel.must_attempt, delivery_allowed: agentChannel.delivery_allowed,
+    quiet_noop_allowed: agentChannel.quiet_noop_allowed,
+    spend_allowed_now: cliChannel.spend_allowed_now === undefined ? false
+      : requireBoolean(cliChannel.spend_allowed_now, "interaction_contract.cli_channel.spend_allowed_now"),
+    spend_after_validation: cliChannel.spend_after_validation === undefined ? false
+      : requireBoolean(cliChannel.spend_after_validation, "interaction_contract.cli_channel.spend_after_validation")});
+  if (issues.length) throw new EffectRuntimeRequestError(issues[0]!.message);
   return {
     ...contract,
     schema_version: INTERACTION_CONTRACT_SCHEMA_VERSION,
-    mode: requireNonEmptyString(contract.mode, "interaction_contract.mode"),
+    mode,
     user_channel: userChannel,
     agent_channel: agentChannel,
-    cli_channel: requireJsonObject(
-      contract.cli_channel,
-      "interaction_contract.cli_channel",
-    ),
+    cli_channel: cliChannel,
   };
 }
 

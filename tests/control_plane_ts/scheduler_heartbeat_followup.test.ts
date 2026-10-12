@@ -101,6 +101,7 @@ function request(
       progression_minutes: [15, 30, 60],
       expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
       applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
       cadence_class: "active_work",
       generated_at: "2026-08-27T06:30:00Z",
       execute: true,

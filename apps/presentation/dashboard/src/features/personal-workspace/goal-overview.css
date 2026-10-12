@@ -4,7 +4,7 @@
 .personal-goal-view-panel[data-goal-panel="tasks"] { height: 100%; }
 
 /* A document, not a card grid: the Direction is the one hero; the rest recedes. */
-.goal-overview { display: grid; gap: 32px; min-width: 0; padding-top: 8px; }
+.goal-overview { display: grid; gap: 24px; min-width: 0; padding-top: 8px; }
 .goal-overview h2, .goal-overview h3, .goal-overview p { margin: 0; }
 .goal-overview button { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; cursor: pointer; text-align: left; transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); }
 .goal-overview button:hover { border-color: var(--pw-line-strong); background: var(--pw-hover); }
@@ -42,10 +42,9 @@
 .goal-overview-criteria .is-verified > span { color: var(--pw-muted); }
 .goal-overview-criteria .is-failing svg, .goal-overview-criteria .is-failing small { color: var(--pw-red); }
 
-.goal-overview-summary .goal-overview-run { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin-top: 4px; padding: 12px 14px; }
+.goal-overview-summary .goal-overview-run { display: inline-flex; justify-self: start; gap: 8px; margin: 0; padding: 0; min-height: 28px; border: 0; background: transparent; }
 .goal-overview-run small { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.goal-overview-run strong { grid-row: 2; font-size: var(--text-body); font-weight: 500; line-height: var(--leading-body); }
-.goal-overview-run svg { grid-column: 2; grid-row: 1 / 3; color: var(--pw-faint); transition: transform var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.goal-overview-run svg { grid-column: 2; grid-row: 1; color: var(--pw-faint); transition: transform var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
 .goal-overview-run:hover svg { color: var(--pw-text); transform: translateX(2px); }
 
 .goal-overview-attention { padding-left: 24px; border-left: 1px solid var(--pw-line); }
@@ -101,3 +100,9 @@
   .goal-overview { gap: 24px; }
   .goal-overview-objective { font-size: var(--text-lead); line-height: var(--leading-lead); }
 }
+
+.goal-overview-agent-note { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview-agent-note summary { width: fit-content; cursor: pointer; }
+.goal-overview-agent-note p { margin-top: 8px; }
+
+.goal-overview-current { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 500; }

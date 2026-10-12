@@ -460,58 +460,25 @@ class ChatActionService(
                     raise ValueError("The original creation workspace is unavailable or changed; restore it before retrying")
                 source = next((goal for goal in goals if goal.get("id") == existing.get("parent_goal_id")), existing)
                 return project, source
+        # Explicit destinations outrank conversation context and legacy fallback.
+        # A missing/stale choice must ask again, never silently select another root.
         context_goal_id = str(context.get("goal_id") or "").strip()
+        source_id = context_goal_id if workspace_ref == "current" else workspace_ref
         source_goal = next(
-            (goal for goal in goals if str(goal.get("id") or "") == context_goal_id),
+            (goal for goal in goals if str(goal.get("id") or "") == source_id),
             None,
         )
-        if source_goal is None and workspace_ref != "current":
-            source_goal = next(
-                (goal for goal in goals if str(goal.get("id") or "") == workspace_ref),
-                None,
-            )
-        if source_goal is None and len(goals) == 1:
+        if source_goal is None and workspace_ref == "current" and len(goals) == 1:
             source_goal = goals[0]
-        if source_goal is None and workspace_ref == "current":
-            workspace_candidates = [
-                root
-                for root in self.workspace_roots
-                if root.is_dir()
-            ]
-            if len(workspace_candidates) == 1:
-                return workspace_candidates[0], {
-                    "id": "",
-                    "domain": "project-goal-control-plane",
-                    "repo": str(workspace_candidates[0]),
-                    "adapter": {"kind": "generic_project_goal_v0"},
-                }
+        if source_goal is None:
+            workspace_candidates = [root for root in self.workspace_roots if root.is_dir()]
             token_map = {
                 f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}": root
                 for root in workspace_candidates
             }
-            if workspace_ref in token_map:
-                selected = token_map[workspace_ref]
-                return selected, {
-                    "id": "",
-                    "domain": "project-goal-control-plane",
-                    "repo": str(selected),
-                    "adapter": {"kind": "generic_project_goal_v0"},
-                }
-        elif source_goal is None and workspace_ref.startswith("workspace-"):
-            workspace_candidates = [
-                root
-                for root in self.workspace_roots
-                if root.is_dir()
-            ]
-            selected = next(
-                (
-                    root
-                    for root in workspace_candidates
-                    if workspace_ref
-                    == f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"
-                ),
-                None,
-            )
+            selected = (workspace_candidates[0]
+                        if workspace_ref == "current" and len(workspace_candidates) == 1
+                        else token_map.get(workspace_ref))
             if selected is not None:
                 return selected, {
                     "id": "",
@@ -539,7 +506,7 @@ class ChatActionService(
                 gate={
                     "kind": "workspace_selection_required",
                     "summary": "Select one server-configured workspace before creating this Goal.",
-                    "next_action": "Start LoopX Chat with exactly one --scan-path workspace or regenerate from an existing Goal channel.",
+                    "next_action": "Choose an available workspace or a registered Goal workspace, then review again. Unlisted directories require server workspace setup.",
                     "candidates": candidates,
                 },
             )

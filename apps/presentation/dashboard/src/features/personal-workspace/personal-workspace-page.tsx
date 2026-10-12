@@ -1,4 +1,5 @@
 import { goalCreateRequest } from "./goal-create-request";
+import { todoCompletionPreviewFeedback } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
 import { useConversationInputState } from "./use-conversation-input-state";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
@@ -1277,6 +1278,12 @@ export function PersonalWorkspacePage({
         ? await callbacks.onPreviewAction(request)
         : workspaceProposal(await previewTypedAction(request), t);
     } catch (error) {
+      const completionFeedback = todoCompletionPreviewFeedback(error, request, t);
+      if (completionFeedback !== null && error instanceof ChatApiError) {
+        // All Task entrypoints use this preview route. Keep the owner's code
+        // and diagnostics while explaining why this caller cannot complete.
+        throw new ChatApiError(completionFeedback, error.payload);
+      }
       if (!(error instanceof ChatApiError) || error.payload.error_code !== "action_preview_gate") throw error;
       const rawGate = error.payload.gate && typeof error.payload.gate === "object"
         ? error.payload.gate as Record<string, unknown>
@@ -2030,6 +2037,7 @@ export function PersonalWorkspacePage({
             managerChannelBinding={managerChannelBinding}
             managerRuntime={managerRuntime}
             mobileNavigationOpen={mobileSidebarOpen}
+            onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
@@ -2237,13 +2245,20 @@ export function PersonalWorkspacePage({
             {composerCollapsed && selectedGoal ? <>
               <button className="personal-composer-pill" data-testid="overview-composer-pill" type="button"
                 onClick={() => { setOverviewComposerOpen(true); window.requestAnimationFrame(() => composerRef.current?.focus()); }}>
-                <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPlaceholder", { goal: selectedGoal.title })}</span>
+                <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPrompt")}</span>
               </button>
             </> : null}
             {composerSuggestions}
             </div>
             {!composerCollapsed ? <>
-            {actionDraft ? <WorkspaceActionForm draft={actionDraft} onClose={() => setActionDraft(null)} onPreview={(request) => createPreview(request)} /> : null}
+            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} onClose={() => setActionDraft(null)} onPreview={async (request) => {
+              const proposal = await createPreview(request, { select: false });
+              if (proposal.gate?.kind === "workspace_unavailable") {
+                throw new Error(proposal.gate.summary);
+              }
+              if (isCurrentConversation()) setSelection({ item: proposal, kind: "proposal" });
+              return proposal;
+            }} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
                 <img alt={attachment.name} src={attachment.dataUrl} />
