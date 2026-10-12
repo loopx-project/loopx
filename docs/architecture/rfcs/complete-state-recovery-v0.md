@@ -79,8 +79,9 @@ This RFC makes seven decisions:
    emit an isolated audit, but every result states
    `execution_authority_granted=false`.
 
-Current backup creation remains unchanged. No command in this RFC may turn byte
-integrity into execution permission.
+Existing backup flags, output paths and the v0 format remain supported. The
+non-overwriting publication/retry boundary is described in Section 7. No command
+in this RFC may turn byte integrity into execution permission.
 
 ## 2. Problem and motivation
 
@@ -520,6 +521,18 @@ creation flags and output paths do not change. Unknown fields are preserved in
 private evidence where safe; unknown required semantics fail closed. Older
 binaries do not gain a restore path and cannot open an inert workspace through
 fallback discovery.
+
+Full-backup publication now refuses occupied archive or manifest names instead
+of replacing them independently. It prefers exclusive filesystem links, manifest
+before archive, and flushes directory entries on POSIX. When linking is unsupported,
+exclusive private-file copy preserves non-overwrite behavior, at the cost of another
+copy and possible visibility of an unfinished file. There is no overwrite fallback. An interrupted
+attempt can leave a partial pair; a lost response can leave a complete pair.
+Neither is silently overwritten or deleted by retry. Verify both files and their
+checksum relation, and choose a fresh backup id/output directory for a new capture.
+This preserves earlier verification units; it does not qualify an M2 capture
+profile or establish cross-owner consistency. See the
+[backup publication guide](../../reference/configuration-backup.md#full-backup-publication-and-retries).
 
 Credentials present in an archive remain private historical bytes. Recovery
 does not claim they are current, copy them into a live credential store, or use

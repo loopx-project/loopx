@@ -538,6 +538,158 @@ def test_project_uninstall_preserves_a_goal_committed_after_preview(
     assert [goal.get("id") for goal in remaining] == ["goal-beta"]
 
 
+@pytest.mark.parametrize(
+    "state_file_record",
+    ["ACTIVE_GOAL_STATE.md", ".loopx/ACTIVE_GOAL_STATE.md"],
+)
+def test_project_uninstall_archives_only_the_state_file_when_archive_is_nested(
+    tmp_path: Path,
+    state_file_record: str,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    project_root = registry_path.parents[1]
+    original_state_file = project_root / "ACTIVE_GOAL_STATE.md"
+    state_file = project_root / state_file_record
+    if state_file != original_state_file:
+        original_state_file.replace(state_file)
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry["goals"][0]["state_file"] = state_file_record
+        registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    sentinel = project_root / "project-sentinel.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+
+    preview = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=False,
+    )
+
+    preview_action = preview["state_actions"][0]
+    assert preview_action["action"] == "would-move-state-file"
+    assert "only the recorded state file" in preview_action["warning"]
+    assert state_file.read_text(encoding="utf-8") == "# state\n"
+    assert not (registry_path.parent / "archived-project-state").exists()
+
+    result = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=True,
+    )
+
+    action = result["state_actions"][0]
+    archive_path = Path(action["archive_path"])
+    assert action["action"] == "moved-state-file"
+    assert "only the recorded state file" in action["warning"]
+    assert [path.relative_to(archive_path) for path in archive_path.rglob("*")] == [
+        Path("ACTIVE_GOAL_STATE.md")
+    ]
+    assert not state_file.exists()
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert json.loads(registry_path.read_text(encoding="utf-8"))["goals"] == []
+
+
+@pytest.mark.parametrize(
+    "state_file_record",
+    ["ACTIVE_GOAL_STATE.md", ".loopx/ACTIVE_GOAL_STATE.md"],
+)
+def test_project_uninstall_archives_only_state_through_outbound_archive_symlink(
+    tmp_path: Path,
+    state_file_record: str,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    project_root = registry_path.parents[1]
+    original_state_file = project_root / "ACTIVE_GOAL_STATE.md"
+    state_file = project_root / state_file_record
+    if state_file != original_state_file:
+        original_state_file.replace(state_file)
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry["goals"][0]["state_file"] = state_file_record
+        registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    sentinel = project_root / "project-sentinel.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+    global_path = global_registry_path(runtime_root)
+    external_archive = tmp_path / "external-archive"
+    external_archive.mkdir()
+    archive_link = registry_path.parent / "archived-project-state"
+    try:
+        archive_link.symlink_to(external_archive, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    registry_before = registry_path.read_bytes()
+    global_before = global_path.read_bytes()
+
+    def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "--runtime-root",
+                str(runtime_root),
+                "uninstall-project",
+                "--goal-id",
+                "goal-alpha",
+                "--archive-state",
+                *arguments,
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "LOOPX_USAGE_PING": "0"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    preview = run_cli()
+    assert preview.returncode == 0, preview.stderr
+    preview_payload = json.loads(preview.stdout)
+    assert registry_path.read_bytes() == registry_before
+    assert global_path.read_bytes() == global_before
+
+    execute = run_cli("--execute")
+    assert execute.returncode == 0, execute.stdout + execute.stderr
+    result = json.loads(execute.stdout)
+
+    preview_action = preview_payload["state_actions"][0]
+    assert preview_action["action"] == "would-move-state-file"
+    assert "only the recorded state file" in preview_action["warning"]
+    action = result["state_actions"][0]
+    archive_path = Path(action["archive_path"])
+    assert action["action"] == "moved-state-file"
+    assert "only the recorded state file" in action["warning"]
+    assert archive_path.is_relative_to(archive_link)
+    assert archive_path.resolve().is_relative_to(external_archive.resolve())
+    assert (archive_path / state_file.name).read_text(encoding="utf-8") == "# state\n"
+    assert archive_link.is_symlink()
+    assert not state_file.exists()
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert json.loads(registry_path.read_text(encoding="utf-8"))["goals"] == []
+    assert json.loads(global_path.read_text(encoding="utf-8"))["goals"] == []
+
+
 _HOLD_CANONICAL_WRITER_GUARD = """
 import {once} from "node:events";
 import {mkdir} from "node:fs/promises";

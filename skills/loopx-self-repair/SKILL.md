@@ -58,6 +58,15 @@ not only an apology or a one-off explanation.
 7. **Write back the lesson.** Update active goal state, docs, contributor
    tasks, or this skill so the same failure mode is visible next time.
 
+When work repeatedly enters a receipt-owned retry, first check the caller's
+typed outcome against the selected Todo. Rejecting a candidate with new,
+validated evidence can advance an evaluation Todo while leaving the broader
+stage open; it is not automatically an execution blocker. Pure reuse or setup
+does not qualify as progress. Use `blocked` only when the Todo's actual next
+step cannot execute, preserve genuine retry clocks, and replan finite answered
+questions through the existing Todo/vision. Never erase receipts or fabricate
+progress to escape a wait. See [settlement classification](../../docs/quota-allocation.md#allocation-contract).
+
 ## Upstream Issue Escalation
 
 A public GitHub issue is an optional final escalation, not a default side

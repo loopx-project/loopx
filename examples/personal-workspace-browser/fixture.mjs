@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startViteDashboardServer } from "../dashboard-browser-smoke-support.mjs";
-import { resolveTestPython } from "../../scripts/test-python.mjs";
+import { testPythonCommand } from "../../scripts/test-python.mjs";
 
 const require = createRequire(import.meta.url);
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -276,8 +276,7 @@ function teamPlanApplyReceipt(proposal) {
 export async function startServer() {
   if (packaged) {
     // An explicit installed interpreter must resolve its own package, not the checkout.
-    const isolation = process.env.LOOPX_PYTHON_BIN ? ["-I"] : [];
-    const server = spawn(resolveTestPython(), [...isolation, "-c", `
+    const backendCommand = testPythonCommand(`
 from pathlib import Path
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
 from loopx.presentation.chat_bundle import validate_bundle
@@ -288,7 +287,8 @@ server.assets_dir = assets
 server.verbose = False
 print("loopx-packaged-smoke-ready", flush=True)
 server.serve_forever()
-`], {
+`);
+    const server = spawn(backendCommand.command, backendCommand.args, {
       cwd: repoRoot,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],

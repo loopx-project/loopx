@@ -416,6 +416,23 @@ from `classification`. New writes should use one of:
 execution-profile hints only as a compatibility fallback for historical runs;
 new control-plane decisions should be driven by the enum above.
 
+Classify the selected work item's result, not every unresolved candidate field.
+For example, an evaluation Todo can make `outcome_progress` with an `advanced`
+observation when new validated evidence rejects one candidate and informs the
+remaining evaluation. The candidate's rejection does not mean that the Todo's
+next executable step is blocked, nor that its whole stage is complete. Merely
+reusing known evidence, formatting a report, or repeating a negative probe does
+not create accountable progress. When a finite question is answered, stop that
+question and author the genuine next frontier or terminal result through the
+existing Todo/vision. Use `outcome_gap` with `blocked` when the selected Todo's
+actual next step cannot execute; do not choose it merely to settle an otherwise
+unchanged Turn. Outcome declarations still require their normal validation.
+
+按选定工作项的实际结果分类：有新增、可核验的证据否定候选，可以推进评估任务，
+但不等于整个阶段完成；候选缺证也不自动构成整个任务的执行阻塞。纯复用和重复
+探测不算新增进展，已回答的有限问题应停止并沿原 Todo/vision 重规划。只有实际
+下一步无法执行时才写 `blocked`，不得为结算而伪造进展或阻塞。
+
 An `outcome_gap` does not become delivery progress. A blocked writeback is
 eligible for exact Todo-bound Turn settlement only when it includes a
 `typed_progress_observation_v0` with `result_class=blocked`, the matching
