@@ -120,6 +120,36 @@ def _poll(
     return payload
 
 
+@pytest.mark.parametrize("reason", ["额度已用尽", "quota limit reached", "budget exhausted"])
+def test_admission_refusal_transports_its_action_independently_of_prose(tmp_path: Path, reason: str) -> None:
+    preview = _preview(tmp_path, before_overrides={
+        "state": "throttled", "effective_action": "throttled_skip", "reason": reason,
+    })
+    assert preview["ok"] is False and preview["appended"] is False
+    assert preview["quota_rejection_action"] == "throttled_skip"
+    assert preview["reason"] == reason
+
+
+def test_invalid_decision_cannot_supply_a_quota_rejection_action(tmp_path: Path) -> None:
+    preview = _preview(tmp_path, before_overrides={"ok": False, "effective_action": "throttled_skip"})
+    assert preview["ok"] is False
+    assert preview["quota_rejection_action"] is None
+
+
+def test_binding_refusal_does_not_borrow_an_incidental_throttled_action(tmp_path: Path) -> None:
+    preview = build_quota_slot_preview_for_decision(
+        {}, goal_id=GOAL_ID, source="adapter", todo_id="todo_requested",
+        before={"ok": True, "should_run": False, "effective_action": "throttled_skip",
+                "selected_todo": {"todo_id": "todo_other"}},
+        after_decision=lambda _: pytest.fail("a rejected spend must not project success"),
+        quota_status_builder=lambda **_: pytest.fail("a rejected spend must not change quota"),
+        self_repair_spend_actions=frozenset(),
+    )
+    assert preview["ok"] is False
+    assert "quota_rejection_action" not in preview
+    assert "binding mismatch" in preview["reason"]
+
+
 def _spent(generated_at: str, *, agent_id: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "generated_at": generated_at,

@@ -5,7 +5,10 @@ qualification probe, not a supported package format or a migration grant.
 """
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -15,6 +18,48 @@ import test_canonical_todo_writer_isolation as journeys
 from test_canonical_todo_writer_isolation import (
     isolated_todo_distribution, retirement_wheel,  # noqa: F401 -- distribution fixtures
 )
+
+
+def _historic_todo_imports(source, package):
+    """Resolve imports, including function-local relative imports and aliases."""
+    for node in ast.walk(ast.parse(source)):
+        targets = []
+        if isinstance(node, ast.Import):
+            targets = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            target = (importlib.util.resolve_name("." * node.level + (node.module or ""), package)
+                      if node.level else node.module or "")
+            targets = [target, *(target + "." + alias.name for alias in node.names)]
+        if any(target == "loopx.todos" or target.startswith("loopx.todos.") for target in targets):
+            yield node.lineno
+
+
+@pytest.mark.parametrize("source,package", [
+    ("import loopx.todos as historic", "loopx.capabilities.explore"),
+    ("from loopx import todos as historic", "loopx.capabilities.explore"),
+    ("def read():\n from ...todos import list_goal_todos", "loopx.capabilities.explore"),
+    ("from . import todos", "loopx"),
+])
+def test_import_guard_recognizes_historic_owner(source, package):
+    assert list(_historic_todo_imports(source, package))
+
+
+def test_import_guard_keeps_retained_todo_package_distinct():
+    assert not list(_historic_todo_imports("from ..todos import legacy_mutation", "loopx.control_plane.todos"))
+    assert not list(_historic_todo_imports(
+        "from ...control_plane.todos.list_readback import list_goal_todos", "loopx.capabilities.explore"))
+
+
+def test_historic_facade_has_no_production_consumers():
+    # An earlier caller inventory cannot cover imports added by a later feature.
+    # Dynamic imports still need the physically isolated production journeys.
+    root = Path(__file__).resolve().parents[2]
+    consumers = []
+    for path in sorted((root / "loopx").rglob("*.py")):
+        relative = path.relative_to(root)
+        package = ".".join(relative.parent.parts)
+        consumers.extend((str(relative), line) for line in _historic_todo_imports(path.read_text(encoding="utf-8"), package))
+    assert consumers == [], consumers
 
 
 @pytest.fixture(params=[True, False], ids=["facade-present", "facade-absent"])
@@ -33,7 +78,19 @@ def consumer_distribution(request, isolated_todo_distribution):  # noqa: F811
     provenance = json.loads(probe.stdout)
     assert provenance["package"] == str(package / "__init__.py")
     assert provenance["facade"] is request.param
-    return package, command
+    try:
+        yield package, command
+    finally:
+        # Both fixture seeding and the isolated CLI start owned runtimes under
+        # this fixture's private TMPDIR, never the shared developer service.
+        stopped = subprocess.run(
+            [sys.executable, "-S", "-c",
+             "from loopx.control_plane.effect_runtime import restart_effect_runtime;restart_effect_runtime()"],
+            cwd=package.parent, capture_output=True, text=True, timeout=15,
+        )
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        from loopx.control_plane.effect_runtime import restart_effect_runtime
+        restart_effect_runtime()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

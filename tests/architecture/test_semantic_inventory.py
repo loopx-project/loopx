@@ -372,7 +372,10 @@ def test_untracked_sources_do_not_change_inventory(repo: Path) -> None:
 
 def test_tracked_symlink_cannot_read_untracked_source(repo: Path) -> None:
     _write(repo, "private.py", 'PRIVATE_CONTEXT = ("synthetic", "local")\n')
-    (repo / "loopx/link.py").symlink_to(repo / "private.py")
+    try:
+        (repo / "loopx/link.py").symlink_to(repo / "private.py")
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
     subprocess.run(["git", "-C", str(repo), "add", "loopx/link.py"], check=True)
     with pytest.raises(ValueError, match="symlink"):
         load_sources(repo)

@@ -114,7 +114,7 @@ def append_research_observation(
         if canonical.get("execution_lineage"):
             if registry_path is None or runtime_root is None:
                 raise ValueError("research execution lineage requires the selected registry and source runtime")
-            from ...todos import list_goal_todos
+            from ...control_plane.todos.list_readback import list_goal_todos
             from ...history import load_registry
             from ...materials import find_registry_goal
             from .research_frontier import build_research_composition_frontier, read_research_todo_history

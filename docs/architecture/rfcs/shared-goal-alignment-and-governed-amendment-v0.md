@@ -31,7 +31,16 @@ The source digest binds the canonical provider revision in `source_basis.todo_ba
 With a state event log, `revision_basis=state_event_log` still names only that
 event axis. Without one, promoted reads use `canonical_todo_snapshot` with
 event sequence 0 and an unbound Agent frontier. A changed canonical digest
-requires `needs_rebase` even at sequence 0. This does not version the full Goal
+requires `needs_rebase` even at sequence 0. Legacy Markdown now also binds the
+parsed Todo/lease facts used by the typed reader, ordered by stable Todo id and
+excluding compatibility prose and observation time. A peer claim therefore changes the basis even when
+`updated_at` does not change. Previously this path omitted those facts and
+admitted any digest at sequence 0; a new submission with a different observed
+digest now requires `needs_rebase`. Re-read alignment and submit revised content
+under a new proposal id; an exact replay still returns the original historical
+admission unchanged, not a fresh current-basis decision. Pending proposals made
+by the older producer may therefore need a fresh basis after upgrade.
+This does not version the full Goal
 intent envelope, infer Agent acknowledgement, or turn admission into an approval
 or CAS commit; Stage 3 must still revalidate its own exact commit-time basis.
 
@@ -744,6 +753,137 @@ The manager RFC's A16 reuses the existing alignment/amendment fixtures for
 lane/proposal/stale-basis negatives and later qualifies the supported commit
 path. This RFC retains Stage 3–5 implementation and promotion ownership;
 manager readiness cannot silently mark those stages done.
+
+### 9.2 Proposed first commit transaction: one policy-bound work item
+
+This is the concrete transaction mapping required by §9.1, for review before
+runtime implementation. It is not a shipped commit API, a new authority
+profile, or approval to activate one. Stage 1/2 remain proposal-only. The first
+Stage 3 operation adds **one unclaimed Agent Todo from an owner-preauthorized
+fixed template**, inside `shared_work_graph`. It does not edit acceptance,
+permissions, existing Todo meaning, dependencies or another Agent's work.
+Ordinary Todo creation remains with its existing writer; the amendment path is
+used only when an admitted proposal must record a shared Goal revision and
+exact replan settlement under this policy.
+
+A fixed template is a deliberately narrow first policy, not a classifier for
+arbitrary intent-preserving prose. The owner chooses its bounded purpose and
+complete authority-relevant Todo fields once. The proposer selects its id and
+supplies only operation/causal identities; it cannot supply replacement text,
+write scopes, capabilities, recipients, claim/lease state, approval outcomes,
+validation results or a different template revision. Additional amendment
+operations require their own reviewed policy; this choice does not broaden any
+existing Agent permission or oblige owners to preauthor every ordinary Todo.
+
+#### Root intent, policy and lifetime
+
+The full canonical envelope in §3.1 must exist before this operation is
+available: objective, non-goals, acceptance, permission/write boundaries, stop
+and terminal conditions, immutable root intent, policy, Goal revision and
+intent digest. The source Goal lifecycle owns its exact `goal_instance_id`;
+provider identity, Todo digest, state-event sequence and the existing acceptance
+contract cannot substitute for it. Initialization is an explicit trusted-owner
+operation on that exact Goal, not an Agent field update or an automatic import
+from Markdown. Existing legacy goals stay on their existing path until the
+lifecycle owner admits an explicit migration; do not mint an unrelated id in
+the amendment module.
+
+Keep intent and its amendment receipts in the **existing canonical Goal
+projection and atomic journal**, not a new file/store beside it. Reuse the
+source/lifetime owner's admission and retirement fence so a Goal recreation
+cannot race a commit. A pre-commit identity read alone is insufficient. The
+current generic registry path rejects the lifecycle-only `source_session_v1`
+profile; this proposal does not waive that gate or grant all business effects.
+A selected profile must qualify this named owner before it can commit.
+
+The policy identifies the permitted operation, fixed templates and revisions,
+eligible registered proposers, bounded creation scope/capacity, and its explicit
+out-of-policy disposition. Missing policy means unavailable, not an implicit
+allow. For this deterministic class, exact template/authority checks may be the
+configured automatic rule; classes requiring an independent verifier retain
+§4's separate actor and exact proposal-digest requirements. Policy membership
+never replaces current runtime permission, capability, lease or stop checks.
+Root intent cannot be amended by this operation. Initialization and retirement
+must be retryable through their existing lifecycle owners; a lost response must
+not create another root or reactivate a retired one.
+
+#### Transaction and readback ownership
+
+| Boundary | Existing owner to reuse | Required implementation and observable result |
+| --- | --- | --- |
+| Intent and policy authoring | Goal lifecycle plus the canonical Goal authority; `acceptance_authority.ts` supplies a transaction pattern, not full-intent semantics | Owner-authored complete root/policy, exact source lifetime and provider revision; no inferred root from an acceptance document or team receipt |
+| Proposal | `goal_amendment_proposal.ts` / `.py`, existing durable admission journal | Bind the actual intent revision/digest, template revision and complete work basis. Historical Stage 2 source-only proposals remain readable but cannot be silently upgraded into commit-ready proposals |
+| Current source and actor | Current Goal source/lifetime and canonical writer fences | Same Goal instance, current registered proposer and supported profile must remain admitted through the commit boundary; stale source, recreation or unsupported owner refuses |
+| Work-item planning | `todo_create.ts::planCoordinationTodoCreate` and the existing Todo domain normalizer | Plan an active, unclaimed Agent record from the fixed template. Reuse role, scope, duplicate and record rules; do not call the standalone create transaction and then separately update the Goal |
+| In-flight work | Complete canonical Todo/lease snapshot and existing lease owner | This operation leaves every existing Todo and lease unchanged. Record the applicable `unaffected` disposition and exact observed basis; a stale basis conflicts. An operation needing cancellation/fence rotation is outside this policy and must not relabel its impact as unaffected |
+| Canonical effect | `prepareCoordinationProjectionCommit`, existing `AuthorityStore` CAS and `CoordinationCommandReceipt` recovery | One accepted transaction publishes the new Todo, Goal revision/basis change, amendment event and immutable receipt, with the same operation/proposal identity. No intermediate Todo-only or revision-only state may become authoritative |
+| Replan settlement | Existing autonomous-replan semantic observation and acknowledgement owner | The canonical receipt binds the exact obligation and committed outcome. The owning reader must validate and consume that evidence; an unchecked string, ordinary acknowledgement or new side ledger cannot settle it |
+| Peers and projections | Shared alignment, Agent Vision/frontier and existing projection delivery owners | Expose the new Goal basis and whether each peer has adopted it. Preserve current work only under its explicit compatible disposition; new semantic writes based on the old revision reject or rebase |
+| Operator result | Existing Goal/Agent interaction, proposal detail and readback; CLI and packaged frontend share the same typed result | Distinguish submitted, canonically committed, historical replay and pending replan/peer adoption. A stored receipt is not a claim, lease or current execution grant |
+
+The amendment owner must compose the existing **planner**, not nest a separate
+Todo commit inside a second transaction. A duplicate/equivalent existing Todo
+must follow the existing semantic-duplicate rules without inventing another
+Goal advancement. Operation replay returns its original historical result;
+changed operation content conflicts. The current authority projection is read
+separately so a replay cannot restamp old evidence as the latest Goal state.
+
+The atomic unit includes the canonical amendment and its exact settlement
+fact. Replan history, UI projection delivery and peer adoption are separate
+owner readbacks, not fictitious cross-store writes inside the provider CAS.
+If a reader cannot yet consume the committed evidence, report that pending
+boundary and keep the affected continuation held. Recover delivery using the
+same receipt/operation; never reapply the Todo or write an independent success
+ACK to make the projection green. The implementing change must show the actual
+consumer path before claiming Stage 3 replan settlement complete.
+
+A provider exception after dispatch is ambiguous until the original receipt is
+read. Retain the operation identity and fence; do not generate a replacement
+id or infer no effect from a timeout. For a request-derived proposal, all of
+§5.1's reservation, commit/abort ordering and request-side linkage are also
+required. A profile missing those capabilities must refuse request-derived
+commit while preserving proposal admission and unrelated work. It must not
+strip source context and relabel the request as a direct Goal proposal.
+
+#### One implementation package and decisive acceptance
+
+Deliver the following as one useful stage package rather than independent
+serializer, registry or receipt-only PRs. The first supported local profile
+must execute the actual owning backend and packaged interaction; simulated
+providers do not qualify the transaction.
+
+1. An owner can inspect the full root/policy, explicitly authorize the bounded
+   template operation and read it back through the same Goal lifetime. A regular
+   Agent cannot initialize, replace or widen it. Off/legacy behavior is unchanged.
+2. A registered proposer creates an in-envelope proposal, sees its exact current
+   basis, commits the template work item without a per-proposal human approval,
+   and reads the newly created unclaimed Todo plus its immutable amendment receipt.
+3. Exercise incorrect/missing lifetime, unsupported profile, stale Goal/provider
+   revision, edited template/proposal, unregistered actor, protected fields,
+   stopped Goal and incompatible lease impact. Each rejects without partial
+   mutation; unrelated Goal/Agent work retains its existing path.
+4. Lose responses before and after the actual provider commit and restart the
+   caller. The same operation yields zero or one canonical transaction and one
+   original outcome, with independent Todo, Goal-basis and receipt readback.
+   A stale concurrent proposal rebases; an already committed replay remains
+   historical. No generic retry creates a second work item.
+5. Complete exact-obligation settlement and have two peers read the new basis:
+   one continues compatible leased work, the other adopts the new unclaimed work
+   through ordinary claim/lease admission. Prove stale semantic writes cannot
+   proceed, and that adoption is observed rather than inferred from message send.
+6. In the packaged Goal/Agent journey, inspect unavailable/stale states, correct
+   the proposal, reload after a lost response and read both the committed result
+   and any remaining adoption hold. CLI reads the same owner state. Lark remains
+   separately unqualified until its actual interaction is tested. If shared
+   PostgreSQL authority code is changed, run its isolated real-server suite;
+   File/SQLite fixtures do not stand in for it.
+
+Revert before activation by removing the unconsumed candidate. After a root or
+amendment has been committed, keep its historical readers and fences: disabling
+the entrypoint cannot delete intent, roll back committed work or permit old
+writers. Use the original owners' forward reconciliation/retirement procedures.
+This package is a prerequisite for the broader Stage 4/5 and manager acceptance,
+not evidence that those milestones or G1's two real cycles have completed.
 
 ### Steward execution integration (2026-09-16)
 

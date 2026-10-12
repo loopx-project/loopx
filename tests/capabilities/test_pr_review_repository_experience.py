@@ -47,15 +47,17 @@ def packet(repository="loopx-project/loopx"):
     return build_pr_review_packet(pull_requests=rows(), repository=repository, source="fixture", limit=10)
 
 
-def test_real_file_recall_delivers_advice_not_a_verdict_or_utility(tmp_path):
+@pytest.mark.parametrize("head", ["a" * 40, "b" * 40])
+def test_real_file_recall_delivers_advice_not_a_verdict_or_utility(tmp_path, head):
     _, goal = enabled_goal(tmp_path)
     value = packet()
+    value["pull_requests"][0]["head_oid"] = head
     source.attach_repository_review_experience(value, goal=goal, agent_id="pilot")
     memory = value["pull_requests"][0]["repository_experience"]
     decision = memory["decision"]
     assert decision["status"] == "context_delivered"
     assert decision["context_delivery_verified"] is True
-    assert decision["artifact_ref"].endswith(f":8001:{HEAD}")
+    assert decision["artifact_ref"].endswith(f":8001:{head}")
     assert decision["semantic_disposition"] is None
     assert decision["decision_consumption_complete"] is False
     assert decision["utility_verified"] is False

@@ -1012,6 +1012,9 @@ PR review 保留这些层级。普通改动记录检查范围和理由，无共�
 
 ## 附录 A：执行账本（非规范）
 
+- 保留值与自定义 scope 处置提案：[cancelled / other](ledger/semantic-vocabulary-convergence-v0/2026-10-12-reserved-value-disposition.zh-CN.md)。
+
+
 新条目是文件，不再写在这一节里。每条放在
 [`ledger/<rfc-slug>/`](ledger/README.zh-CN.md) 下，命名 `YYYY-MM-DD-slug.md` 并配
 一份中文镜像；目录名即所属 RFC 文件名；跨 RFC 不设枚举——每个 RFC 的目录就是它的索引。

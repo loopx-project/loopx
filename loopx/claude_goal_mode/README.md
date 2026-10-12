@@ -52,6 +52,12 @@ armed, for each tool call it:
   before consulting the gate;
 - otherwise consults `should_run` and **denies** the (non-read-only) tool when
   `should_run` is `false`, or when the probe is unreachable (fail-closed);
+- **denies** an event it cannot read at all (undecodable stdin, malformed or
+  non-object JSON, a missing or unusable session `cwd`, a missing/non-string
+  tool name, or - for a non-read-only tool - a non-object `tool_input` or a
+  `command` / `file_path` / `notebook_path` field that is present but not a
+  string) rather than exiting with no decision, which Claude Code reports as a
+  non-blocking hook error and follows with an ungated tool call;
 - when `should_run` is `true`: **allows** `Edit` / `Write` whose path is inside
   `write_scope` and **denies** them outside it; gates `Bash` only by a
   **denylist** of destructive commands (everything else is allowed); and **defers

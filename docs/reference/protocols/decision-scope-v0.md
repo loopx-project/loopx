@@ -27,6 +27,31 @@ Attached to a user todo, operator gate, or controller decision.
 | `expires_at` | no | Optional ISO timestamp for temporary authority. |
 | `reason_summary` | no | Public-safe one-line reason shown in status/UI. |
 
+### Choosing `kind=other`
+
+Choose a named kind whenever it describes the decision. `other` is an explicit
+custom decision category for an owner-defined approval that none of the six
+named kinds describes. It is not an unknown-input fallback, uncertainty marker,
+or shortcut around a named permission boundary. An author who cannot identify
+the decision should clarify the requirement instead of guessing `other`.
+
+Describe what the owner must decide in the existing Todo text, and use a stable,
+public-safe `scope_key` for that decision on both the user gate and its dependent
+Agent work. For example, an owner-required approval of a study's conflict-of-interest
+declaration may use `other:action:study_conflict_review`. Reading private data,
+spending resources, changing direction and publishing the study still require
+their named kinds; this custom approval covers none of them. Another custom
+review, `other:action:study_method_review`, remains a different scope key.
+
+The existing key/granularity, recipient and exact-target rules still apply.
+`other:global:*` remains an explicit broad **other-kind** scope; it cannot cover
+`private_read`, `write_scope`, `resource`, `production`, `public_claim` or
+`direction`. Broad scopes require the same owner declaration as all other kinds.
+An unrecognized kind, including a misspelling such as `othre`, rejects at the
+input boundary. Matching describes a dependency; actual approval consumption
+continues through the existing linked-gate completion or standing-receipt owner.
+No new metadata, automatic classifier or permission is introduced.
+
 ### `required_decision_scopes`
 
 Attached to an agent todo, next action, handoff packet, or candidate runtime

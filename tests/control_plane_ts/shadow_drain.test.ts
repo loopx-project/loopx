@@ -85,6 +85,41 @@ test("deadline expiring in proof keeps recoverable evidence", async t => {
   assert.equal((await drainShadowOutbox(request(f))).replayed, 1);
 });
 
+test("inline deadline retains a markerless source commit for an independent drain", async t => {
+  const f = await fixture(t);
+  const entry = await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]}, {marker: false});
+  const before = await inventory(f), source = await readFile(f.statePath);
+  const history = await f.store.scanCommitted(null, 10);
+  const limits = {max_entries: 16, budget_seconds: 2, lock_timeout_seconds: .25};
+  let delayed = false;
+  const first = await drainShadowOutbox(request(f, limits), {afterEffect: async phase => {
+    if (phase === "after_proof" && !delayed) {
+      delayed = true;
+      await new Promise(resolve => setTimeout(resolve, 2100));
+    }
+  }});
+  assert.equal(delayed, true);
+  assert.equal(first.budget_exhausted, true);
+  assert.equal(first.prepared_only_after, 1);
+  assert.equal(first.delivered, 0);
+  assert.equal(first.reclaimed_residue, 0);
+  assert.deepEqual(await inventory(f), before);
+  assert.deepEqual(await readFile(f.statePath), source);
+  assert.deepEqual(await f.store.scanCommitted(null, 10), history);
+
+  const second = await drainShadowOutbox(request(f, limits));
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.equal(second.delivered, 1);
+  assert.equal(second.prepared_only_after, 0);
+  assert.equal(second.pending_after, 0);
+  assert.equal((second.entries as JsonObject[])[0].entry_id, (entry.entry as JsonObject).entry_id);
+  assert.equal((second.entries as JsonObject[])[0].resolution, "committed_proven_by_readback");
+  assert.deepEqual(await readFile(f.statePath), source);
+  const committed = await f.store.scanCommitted(null, 10);
+  assert.equal((await drainShadowOutbox(request(f, limits))).outcome, "nothing_pending");
+  assert.deepEqual(await f.store.scanCommitted(null, 10), committed);
+});
+
 test("one-entry budget leaves the remaining source writes intact", async t => {
   const f = await fixture(t);
   const one = {handoff_mode: "hard_lease", todos: [todo()]};

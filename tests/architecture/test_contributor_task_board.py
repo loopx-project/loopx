@@ -131,10 +131,10 @@ def test_inactive_or_unmerged_design_cannot_be_available(
 ) -> None:
     run, board, root = check_board
     path = root / "docs/architecture/rfcs/goal-direction-baseline-v0.md"
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     changed = re.sub(r"(?<=RFC status:\*\* )[^\n]+", state, text, count=1)
     assert changed != text
-    path.write_text(changed)
+    path.write_text(changed, encoding="utf-8")
     with pytest.raises(AssertionError, match="not an Accepted claimable design"):
         run(board)
 

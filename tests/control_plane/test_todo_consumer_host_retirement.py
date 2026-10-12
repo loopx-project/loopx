@@ -97,3 +97,82 @@ print(json.dumps({'todo_count': result['todo_count'], 'replayed': True}))
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout) == {"todo_count": 1, "replayed": True}
     assert state.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_fresh_research_execution_and_historical_replay_use_retained_owners(
+    tmp_path, provider, consumer_distribution,  # noqa: F811
+):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from tests.capabilities import test_explore_research_evidence as research
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.list_readback import list_goal_todos
+
+    # Seed through the existing source fixture, then use the selected copied
+    # distribution for every CLI decision. No editable finder can restore it.
+    registry, runtime, log, observation = research.execution_fixture(tmp_path)
+    state = tmp_path / "project/ACTIVE_GOAL_STATE.md"
+    todos = list_goal_todos(registry_path=registry, goal_id=research.GOAL, role="agent")["todos"]
+    initialize_canonical_authority(runtime, research.GOAL,
+        build_todo_runtime_shadow_projection(goal_id=research.GOAL, todos=todos, handoff_mode="soft_claim"),
+        state_path=state, provider=provider)
+    package, command = consumer_distribution
+    packet = tmp_path / "observation.json"
+    packet.write_text(json.dumps(observation))
+    registry_bytes = registry.read_bytes()
+
+    def cli(*args):
+        return subprocess.run([*command, "--registry", str(registry), "--runtime-root", str(runtime),
+                               "--format", "json", *args], cwd=tmp_path,
+                              capture_output=True, text=True, timeout=60)
+
+    def observe(*actor, expected_error=None):
+        before = log.read_bytes()
+        source_bytes = state.read_bytes()
+        result = cli("explore", "observe", "--goal-id", research.GOAL,
+                     "--observation-json", str(packet), *actor)
+        assert state.read_bytes() == source_bytes and registry.read_bytes() == registry_bytes
+        if expected_error:
+            assert result.returncode != 0 and expected_error in result.stdout + result.stderr
+            assert log.read_bytes() == before
+            return None
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    todo_id = observation["execution_lineage"]["successor_todo_id"]
+    observe(expected_error="actor differs")
+    observe("--agent-id", "other-agent", expected_error="actor differs")
+    deferred = cli("todo", "update", "--goal-id", research.GOAL, "--todo-id", todo_id,
+                   "--agent-id", "fixture-agent", "--status", "deferred",
+                   "--reason", "await-synthetic-capacity", "--resume-when", "capacity_available:fixture")
+    assert deferred.returncode == 0, deferred.stdout + deferred.stderr
+    observe("--agent-id", "fixture-agent", expected_error="runnable joint-probe")
+    reopened = cli("todo", "update", "--goal-id", research.GOAL, "--todo-id", todo_id,
+                   "--agent-id", "fixture-agent", "--status", "open", "--clear-resume-when")
+    assert reopened.returncode == 0, reopened.stdout + reopened.stderr
+    missing = json.loads(json.dumps(observation))
+    missing["execution_lineage"]["successor_todo_id"] = "todo_missing"
+    missing["progress"]["work_item_id"] = "todo_missing"
+    packet.write_text(json.dumps(missing))
+    observe("--agent-id", "fixture-agent", expected_error="runnable joint-probe")
+    packet.write_text(json.dumps(observation))
+    written = observe("--agent-id", "fixture-agent")
+    assert written["written"] and written["observation"]["execution_lineage"] == observation["execution_lineage"]
+    summary = cli("explore", "summary", "--goal-id", research.GOAL)
+    assert summary.returncode == 0, summary.stdout + summary.stderr
+    joint = next(node for node in json.loads(summary.stdout)["nodes"] if node["node_id"] == "joint")
+    assert joint["research_observation"]["execution_lineage"] == observation["execution_lineage"]
+    research.node(log, "a", status="open")
+    changed = json.loads(json.dumps(observation))
+    changed["progress"]["coverage_scope_id"] = "fresh-after-input-change"
+    packet.write_text(json.dumps(changed))
+    observe("--agent-id", "fixture-agent", expected_error="input")
+    changed_todo = cli("todo", "update", "--goal-id", research.GOAL, "--todo-id", todo_id,
+                       "--agent-id", "fixture-agent", "--action-kind", "inspect")
+    assert changed_todo.returncode == 0, changed_todo.stdout + changed_todo.stderr
+    packet.write_text(json.dumps(observation))
+    before = log.read_bytes()
+    replay = observe()
+    assert replay["replayed"] and not replay["written"] and log.read_bytes() == before
+    assert registry.read_bytes() == registry_bytes
+    assert (package / "control_plane/todos/legacy_mutation.py").exists() is False

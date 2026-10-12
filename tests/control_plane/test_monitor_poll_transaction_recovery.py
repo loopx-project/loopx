@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,8 @@ from loopx.control_plane.coordination.local_authority_shadow_adapter import (
     read_local_authority_shadow,
 )
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from loopx.file_lock import exclusive_cross_runtime_file_lock
+from loopx.control_plane.coordination.local_authority_shadow_outbox import drain_lock_target
 from loopx.todos import add_goal_todo, list_goal_todos
 
 from canonical_authority_fixture import (
@@ -303,8 +306,9 @@ def test_malformed_business_receipt_is_not_treated_as_absent(tmp_path: Path) -> 
     assert _poll_events(runtime) == []
 
 
-def test_enabled_shadow_ordinary_retry_recovers_one_prepared_batch(
-    tmp_path: Path,
+@pytest.mark.parametrize("held_drain_lock", [False, True], ids=["uncontended", "deferred"])
+def test_enabled_shadow_business_replay_then_bounded_drain_recovers_batch(
+    tmp_path: Path, held_drain_lock: bool,
 ) -> None:
     registry, runtime, state, _monitor_id, poll = _fixture(tmp_path)
     config = json.loads(registry.read_text(encoding="utf-8"))
@@ -319,7 +323,8 @@ def test_enabled_shadow_ordinary_retry_recovers_one_prepared_batch(
 
     assert _cli(registry, runtime, *poll, fault="after") == (83, None)
     outbox = runtime / "authority-shadow" / "outbox" / GOAL / "todos"
-    assert len(list(outbox.glob("*.prepared.json"))) == 1
+    (prepared,) = outbox.glob("*.prepared.json")
+    prepared_bytes = prepared.read_bytes()
     assert list(outbox.glob("*.committed.json")) == []
     assert "coordination_runtime_shadow" not in _business_receipt(state)["writeback"]
 
@@ -328,15 +333,55 @@ def test_enabled_shadow_ordinary_retry_recovers_one_prepared_batch(
     assert {todo["text"] for todo in before["head"]["todos"]} == {
         "Observe public synthetic target"}
     state_after = state.read_bytes()
-    retry = _ok(registry, runtime, *poll)
+    original_ids = {
+        todo["todo_id"] for todo in _business_receipt(state)["writeback"]["next_todos"]}
+    drain = ("authority-shadow", "drain", "--goal-id", GOAL,
+             "--max-entries", "16", "--budget-seconds", "2",
+             "--lock-timeout-seconds", "0.25")
+    lock = (exclusive_cross_runtime_file_lock(
+        drain_lock_target(runtime, GOAL), timeout_seconds=1, operation="test_drain_deferral")
+        if held_drain_lock else nullcontext())
+    with lock:
+        retry = _ok(registry, runtime, *poll)
+        assert state.read_bytes() == state_after
+        if held_drain_lock:
+            # Business replay succeeds even when independent catch-up must defer.
+            code, deferred = _cli(registry, runtime, *drain)
+            assert code == 1 and isinstance(deferred, dict), deferred
+            assert deferred["outcome"] == "drain_deferred"
+            assert deferred["reason_code"] == "drain_lock_busy"
+            assert deferred["prepared_only_after"] == 1
+            assert prepared.read_bytes() == prepared_bytes
+            assert read_local_authority_shadow(
+                runtime_root=runtime, goal_id=GOAL, scan_limit=20,
+            )["proof"]["transactions"] == before["proof"]["transactions"]
     assert {todo["todo"] for todo in retry["todo_writeback"]["next_todos"]} == {
         AGENT_TASK, USER_TASK}
+    assert set(retry["successor_todo_ids"]) == original_ids
+    assert state.read_bytes() == state_after
+    receipt_after = _quota_receipt(runtime).read_bytes()
+    events_after = _poll_events(runtime)
+    assert len(events_after) == 1
+    # A bounded inline attempt is not a catch-up guarantee. Use the existing
+    # independent drain with its original limits, without replaying the writer.
+    recovered = _ok(registry, runtime, *drain)
+    assert recovered["pending_after"] == recovered["prepared_only_after"] == 0
     assert state.read_bytes() == state_after
     view = read_local_authority_shadow(runtime_root=runtime, goal_id=GOAL,
                                       scan_limit=20)
-    assert {todo["text"] for todo in view["head"]["todos"]} >= {
-        AGENT_TASK, USER_TASK}
+    assert {todo["text"] for todo in view["head"]["todos"]} == {
+        "Observe public synthetic target", AGENT_TASK, USER_TASK}
+    assert len(view["proof"]["transactions"]) == 2  # Baseline and original batch.
     assert list(outbox.glob("*.prepared.json")) == []
+    late_retry = _ok(registry, runtime, *poll)
+    assert late_retry["replayed"] is True
+    assert set(late_retry["successor_todo_ids"]) == original_ids
+    assert state.read_bytes() == state_after
+    assert _quota_receipt(runtime).read_bytes() == receipt_after
+    assert _poll_events(runtime) == events_after
+    assert read_local_authority_shadow(
+        runtime_root=runtime, goal_id=GOAL, scan_limit=20,
+    )["proof"]["transactions"] == view["proof"]["transactions"]
 
 
 def test_committed_receipt_without_batch_version_still_replays(tmp_path: Path) -> None:

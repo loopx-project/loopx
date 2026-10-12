@@ -690,6 +690,50 @@ empty results; missing/stale display and provider failure never authorize a
 Markdown fallback. The guard does not append a second Markdown candidate list.
 Historical receipt-bound recovery remains separate from new work admission.
 
+The final current-selection admission and recovery predicate has one TypeScript
+owner. CLI preflight and interaction construction use that projection; the Effect
+interpreter, new TurnEnvelope construction and scoped-override projection also
+reject an unadmitted deferred/rejected packet that still carries execution,
+spend, safe-bypass or executable settlement fields. A missing typed recovery action
+fails explicitly. The recovery command itself remains valid: these checks do not
+classify command prose or remove the same-Turn re-entry route.
+
+Admission reads the canonical agent channel: pending delivery requires both
+`must_attempt=true` and `delivery_allowed=true`; pending workspace repair requires
+its explicit repair route and `delivery_allowed=false`. Missing delivery permission
+is unknown, not a grant. Compatibility `execution_obligation` annotations cannot
+independently grant or veto final admission. Its producer rejects non-boolean
+permission values before constructing the canonical channel; null/missing values
+do not grant permission. This tightens malformed/contradictory selected-Todo inputs
+without changing valid receipt-bound or current-work behavior.
+
+Receipt-bound work stays with its reconciliation owner. Existing admitted current
+work and explicitly qualified workspace repair retain their exceptions; an
+unrelated pending selection cannot borrow those facts. These are consistency and
+preflight projections over the current guard, not lease, Goal-identity or provider
+authorization. Calls without a qualification keep their existing path. Python
+retains command/structural adaptation and shares one recovery decision across the
+two interaction channels; it does not keep a parallel admission predicate.
+
+准入读取正式 agent channel：待选交付要求 `must_attempt=true` 且
+`delivery_allowed=true`；待选工作区修复要求明确的修复路径及
+`delivery_allowed=false`。缺失交付权限表示未知，不能当作授权。兼容字段
+`execution_obligation` 不能独立授予或否决最终准入；构造正式通道前会拒绝
+非布尔权限值，null/缺失值不授予权限。这会收紧非法或矛盾的选择输入，合法的
+回执绑定和当前工作路径保持不变。
+
+最终的当前工作准入和选择恢复判定统一由 TypeScript 持有，CLI preflight 与交互
+构造复用该投影。Effect 解释器、新 TurnEnvelope 构造和 scoped-override 投影也
+拒绝未获准的 deferred/rejected packet 中残留的执行、扣费、safe-bypass 或可执行
+结算字段；缺失类型化 recovery action 会明确失败。恢复命令本身仍有效，这些检查
+不按命令文案分类，也不删除同 Turn 的重新准入路径。
+
+已绑定回执的工作仍由回执协调 owner 处理；既有已获准工作和明确允许的工作区
+修复保留各自例外，不相关的待选择工作不能借用这些事实。此处只做当前 guard 的
+一致性和 preflight 投影，不验证租约、Goal 身份或 provider 权限。没有 qualification
+的调用保留原路径。Python 保留命令与结构适配，两条交互 channel 复用一次恢复
+判定，不再维护平行的准入规则。
+
 Hosts supplying their own `--turn-instance-id` use this same selection contract,
 including `generic_cli`, `outer_controller`, and native CLI profiles. An explicit
 `--todo-id` is qualified before receipt binding; it must not leave the response

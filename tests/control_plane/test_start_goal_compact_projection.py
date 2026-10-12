@@ -34,6 +34,12 @@ AGENT_ID = "codex-guided-projection"
 GOAL_TEXT = "Ship a bounded public issue triage workflow."
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ambient_ssh_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_CLIENT", raising=False)
+
+
 def _write_connected_project(root: Path) -> Path:
     project = root / "project"
     state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
@@ -120,6 +126,38 @@ def _invoke_detail_command(command: str) -> dict[str, Any]:
     payload = json.loads(output.getvalue())
     assert isinstance(payload, dict)
     return payload
+
+
+def _invoke_start_goal_for_host(
+    project: Path,
+    host_surface: str,
+    *,
+    include_detail: bool = False,
+) -> tuple[int, dict[str, Any]]:
+    args = [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--host-surface",
+        host_surface,
+        "--goal-text",
+        GOAL_TEXT,
+    ]
+    if include_detail:
+        args.append("--include-command-pack-detail")
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(args)
+    payload = json.loads(output.getvalue())
+    assert isinstance(payload, dict)
+    return exit_code, payload
 
 
 def _invoke_ark_start_goal_cli(
@@ -1503,6 +1541,46 @@ def test_cli_codex_app_ssh_reuses_ambient_thread_binding(
     assert payload["agent_id"] == AGENT_ID
     assert payload["thread_agent_binding"]["status"] == "bound"
     assert payload["guided_transaction"].get("blocked_by") is None
+
+
+def test_cli_codex_app_fails_closed_when_codex_thread_runs_over_ssh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _write_connected_project(tmp_path)
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-ssh-runtime")
+    monkeypatch.setenv("SSH_CONNECTION", "client 1000 server 22")
+    monkeypatch.setenv("SSH_CLIENT", "client 1000 22")
+
+    wrong_exit_code, rejected = _invoke_start_goal_for_host(project, "codex-app")
+    assert wrong_exit_code == 2
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == "host_surface_environment_mismatch"
+    assert rejected["blocked_by"] == "host_surface_environment_mismatch"
+    assert rejected["safety_contract"] == {
+        "writes_registry": False,
+        "activates_host_loop": False,
+    }
+    assert rejected["host_surface_environment_gate"] == {
+        "schema_version": "loopx_host_surface_environment_gate_v0",
+        "state": "blocked",
+        "requested_host_surface": "codex-app",
+        "detected_runtime": "codex-app-over-ssh",
+        "required_host_surface": "codex-app-ssh",
+        "evidence_env_vars": ["CODEX_THREAD_ID", "SSH_CONNECTION", "SSH_CLIENT"],
+    }
+
+    correct_exit_code, accepted = _invoke_start_goal_for_host(
+        project,
+        "codex-app-ssh",
+        include_detail=True,
+    )
+    assert correct_exit_code == 0
+    activation = accepted["command_pack"]["host_loop_activation"]
+    assert activation["activation_method"] == "set_visible_goal"
+    thin_prompt_command = activation["commands"]["heartbeat_prompt"]
+    assert "--thin" in thin_prompt_command
+    assert "--runtime-profile codex_app_ssh_goal" in thin_prompt_command
+    assert "--codex-app" not in thin_prompt_command
 
 
 def test_cli_codex_app_ssh_unbound_ambient_thread_requires_lane_selection(

@@ -129,7 +129,7 @@ def _turn(identity, **overrides):
                 "quota_spend_payload": None,
                 "failed_provider_attempt": {
                     "step_kind": "quota_spend",
-                    "payload": {"ok": False, "reason": "budget exhausted"},
+                    "payload": {"ok": False, "quota_rejection_action": "throttled_skip", "reason": "quota exhausted"},
                 },
             },
             "budget_rejected",
@@ -548,3 +548,28 @@ def test_terminal_compatibility_adapter_keeps_replay_semantics(
         ).value
         == expected
     )
+
+
+def test_reserved_cancelled_envelope_retains_prior_commits_and_failure_details(identity):
+    """Reader compatibility, deliberately not a cancellation producer witness."""
+    envelope = {
+        "value": None,
+        "receipts": [
+            {"step_kind": "durable_writeback", "status": "committed",
+             "effect_id": identity["effect_id"], "source_ref": "writeback:prior"},
+            {"step_kind": "quota_spend", "status": "committed",
+             "effect_id": identity["effect_id"], "source_ref": "spend:prior"},
+        ],
+        "failure": {"kind": "cancelled", "step_kind": "terminal_closeout",
+                    "reason": "caller-supplied cancellation report",
+                    "details": {"observation_ref": "caller:cancel-1"}},
+    }
+    before = json.dumps(envelope, sort_keys=True)
+    observed = effect_runtime_result("settlement.bind_gate", {"result": envelope})
+    assert observed == {"execute": False, "result": envelope}
+    value, receipts, failure = decode_settlement_result_payload(observed["result"])
+    assert value is None
+    assert [receipt.step_kind.value for receipt in receipts] == ["durable_writeback", "quota_spend"]
+    assert failure.kind.value == "cancelled"
+    assert failure.details == {"observation_ref": "caller:cancel-1"}
+    assert json.dumps(envelope, sort_keys=True) == before

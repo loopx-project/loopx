@@ -338,6 +338,8 @@ export function createEffectRuntimeHandlers(
     ["turn.delivery_route.evaluate", lazyHandler(() => import("./turn_driver/delivery_continuity.ts"), ({evaluateDeliveryRoute}) => evaluateDeliveryRoute)],
     ["work_item.action_portfolio.project", lazyHandler(() => import("./work_items/action_portfolio.ts"), ({projectQuotaActionPortfolio}) => projectQuotaActionPortfolio)],
     ["work_item.action_selection.qualify", lazyHandler(() => import("./work_items/action_portfolio.ts"), ({qualifyActionSelection}) => qualifyActionSelection)],
+    ["work_item.action_selection.admission.project", lazyHandler(() => import("./work_items/action_selection_admission.ts"), ({projectCurrentActionSelectionAdmission}) => projectCurrentActionSelectionAdmission)],
+    ["work_item.action_selection.recovery.project", lazyHandler(() => import("./work_items/action_selection_admission.ts"), ({projectActionSelectionRecovery}) => projectActionSelectionRecovery)],
     [
       "work_item.action_selection.reconcile_retained",
       lazyHandler(() => import("./work_items/action_portfolio.ts"), ({reconcileRetainedActionSelection}) => reconcileRetainedActionSelection),

@@ -347,6 +347,12 @@ def build_primary_action_projection(payload: dict[str, Any], *, mode: str) -> di
     return projection
 
 
+def _validate_permission_flag(value: object, field: str) -> None:
+    """Legacy producer inputs must not turn truthy strings into permission."""
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"{field} must be a boolean")
+
+
 def _interaction_must_attempt(
     execution_obligation: dict[str, Any],
     *,
@@ -356,12 +362,12 @@ def _interaction_must_attempt(
     bounded_delivery_with_user_notice: bool,
 ) -> bool:
     if mode == "governed_capability_intent":
-        return bool(execution_obligation.get("must_attempt_work"))
+        return execution_obligation.get("must_attempt_work") is True
     if user_required and not (
         scoped_user_gate_fallback or bounded_delivery_with_user_notice
     ):
         return False
-    return bool(execution_obligation.get("must_attempt_work"))
+    return execution_obligation.get("must_attempt_work") is True
 
 
 def _interaction_delivery_allowed(
@@ -374,7 +380,7 @@ def _interaction_delivery_allowed(
     bounded_delivery_with_user_notice: bool,
 ) -> bool:
     if mode == "governed_capability_intent":
-        return bool(execution_obligation.get("must_attempt_work"))
+        return execution_obligation.get("must_attempt_work") is True
     if mode == "mapped_noop_if_unchanged":
         return False
     if user_required and not (
@@ -417,7 +423,12 @@ def interaction_execution_flags(
     payload: dict[str, Any], *, mode: str, user_required: bool,
     blocked_successor_wait_observation: bool,
 ) -> tuple[bool, bool]:
-    execution_obligation = payload.get("execution_obligation") if isinstance(payload.get("execution_obligation"), dict) else {}
+    obligation = payload.get("execution_obligation")
+    execution_obligation = obligation if isinstance(obligation, dict) else {}
+    for field in ("must_attempt_work", "delivery_allowed"):
+        _validate_permission_flag(execution_obligation.get(field), f"execution_obligation.{field}")
+    for field in ("normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "should_run"):
+        _validate_permission_flag(payload.get(field), field)
     scoped_user_gate_fallback = mode == "scoped_user_gate_fallback"
     bounded_delivery_with_user_notice = mode == "bounded_delivery_with_user_notice"
     must_attempt = _interaction_must_attempt(

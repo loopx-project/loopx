@@ -13,7 +13,7 @@ from loopx.capabilities.explore.result_log import (
     build_explore_result_projection, explore_result_log_path, load_explore_result_events_strict,
 )
 from loopx.extensions.lark.presentation.explore_results import _node_record_values
-from loopx.todos import add_goal_todo, update_goal_todo
+from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 GOAL = "research-fixture"

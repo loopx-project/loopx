@@ -55,14 +55,21 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 revision 保持。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
-生产 Todo 消费者不再经历史 `loopx.todos` 重导出：CLI 注册／操作、quota 与规划、
+生产 Todo 消费者直接使用具体 owner：CLI 注册／操作、quota 与规划、
 能力写回、旧源租约读取及 Lark 源投影直接导入相同的 mutation、完整读取、路径或
 Markdown 显示 owner，不新增 wrapper、决策或 RPC。历史公开导入及其受支持的旧源
 IO 继续保留。隔离源码／正常 wheel 同时移除 facade、整个旧 Todo writer 和四个
 shadow producer，验证真实 File/SQLite CLI 生命周期、恰好一次结算、Monitor 重放
 及 App 冷导入／操作／重启；缺 provider／租约及源／备份变化须拒绝。Lark dry-run
-与 Explore 重放只验证本地消费者，不计 live 外部采用。此出口关闭生产重导出依赖，
-最后受支持的旧源 writer、历史恢复、安装 cohort 与发布验收继续保留。
+与 Explore 重放只验证本地消费者，不计 live 外部采用。
+此前调用方盘点后，[#5280](https://github.com/loopx-project/loopx/pull/5280) 新增的
+fresh research execution 又在函数内导入历史 facade；现直接导入既有
+`todos/list_readback.py`，保持相同 typed 当前 Todo 校验以及先于读取的历史重放。
+同一 facade 存在／缺席、源码／正常 wheel、File／SQLite 矩阵补 fresh 执行、
+actor／可运行状态／输入拒绝、精确 lineage 读回，以及当前输入／Todo 改变后的
+原观察重放。完整生产包 import 守卫解析相对导入与 alias，动态加载仍依赖真实
+隔离路径验证。新能力进入时持续守卫，不把历史库存当永久出口。最后受支持的
+旧源 writer、历史恢复、安装 cohort 与发布验收各自保持开放。
 
 保留的 import-compatible field writer 在既有 typed field plan 中统一等待条件
 归一化及矛盾 clear 拒绝；保持 Python 空白输入省略和锁内 IO，只退役重复的
@@ -118,7 +125,11 @@ cohort 采用及冻结 D2 证据保持独立。
 Monitor router 同样隔离活跃旧源 writer；历史回执 codec／replay 共用 scheduler
 只读 IO owner，原操作身份和决策继续归既有 TS batch。File/SQLite CLI 与正常
 wheel 删源检查须保留后来写入及原 successor；晋升后重放保持旧 outbox 静止，
-未晋升的 markerless batch 恢复保留原 drain。本批只移除 canonical 导入依赖，
+未晋升的 markerless batch 恢复保留原有界 drain。业务回执重放不保证 shadow
+立即追平：锁延期或 proof 预算耗尽时保留待处理证据，由独立的
+`authority-shadow drain` 恢复。恢复须保持原 source bytes、successor ID 和 quota
+effect 恰好一次；不能为追平而重放 writer 或扩大 inline 上限。
+本批只移除 canonical 导入依赖，
 不删除受支持的旧 writer；缺席臂复用上述 CLI 启动隔离，同时移除四个 shadow
 producer module。
 见[保留义务及回滚](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation)。

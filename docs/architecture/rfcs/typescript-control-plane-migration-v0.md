@@ -64,7 +64,7 @@ without claiming code retirement:
 bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
-Production Todo consumers now bypass the historic `loopx.todos` re-export:
+Production Todo consumers use the concrete owners instead of the historic `loopx.todos` re-export:
 CLI registration/actions, quota and planning, capability writeback, source lease
 reads and the Lark source projection import the same concrete mutation, full-read,
 path or Markdown display owners. No new wrapper, decision or RPC is introduced.
@@ -74,8 +74,18 @@ writer and four shadow producers together; real File/SQLite CLI lifecycle,
 once-only settlement, Monitor replay and App cold-import/action/restart journeys
 must still work, with missing-provider/lease and changed-source/backup refusals.
 Lark dry-run and Explore replay qualify local consumers only, not live external
-adoption. This closes the production re-export dependency, while last supported
-source writers, historical recovery, installed cohort and release exits remain.
+adoption. The fresh research execution path added by [#5280](https://github.com/loopx-project/loopx/pull/5280)
+reintroduced a function-local historic import after the earlier caller inventory.
+It now imports `todos/list_readback.py` directly, preserving the same typed
+current-Todo validation and the historical replay branch before that read.
+The qualification includes fresh research execution, actor/runnable/input
+refusals, exact lineage readback and replay after current input/Todo changes
+in the same facade-present/absent source and normal-wheel File/SQLite matrix.
+A whole-production Python import guard resolves relative imports and aliases;
+dynamic loading still requires the isolated real journeys. Keep this guard as
+new capabilities arrive, rather than treating a past inventory as a permanent
+exit. Last supported source writers, historical recovery, installed cohort
+and release exits remain independently open.
 
 The next T4 package is the [import-first normal-writer cutoff](../../reference/local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence),
 not another re-export or producer-loading extraction. At `38cb407ed`, live
@@ -177,7 +187,12 @@ codec/replay has a small shared scheduler IO owner, while the existing TS batch
 still owns operation identity and decisions. File/SQLite CLI and normal-wheel
 source removal must preserve later canonical writes and original successors;
 promoted replay leaves old outbox bytes inert. Unpromoted markerless batch
-recovery retains its existing drain. This removes a canonical import dependency,
+recovery retains its existing bounded drain. Business-receipt replay does not
+guarantee shadow catch-up: lock deferral or an expired proof budget preserves
+pending evidence for an independent `authority-shadow drain`. Recovery keeps
+the original source bytes, successor IDs and once-only quota effect; it does
+not replay the writer to finish catch-up or increase the inline limits.
+This removes a canonical import dependency,
 not the supported legacy writer. The absent arm also removes all four shadow
 producer modules using the qualified CLI startup isolation above.
 [Retained duties and rollback](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation).

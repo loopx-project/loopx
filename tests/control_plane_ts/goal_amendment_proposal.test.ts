@@ -214,6 +214,27 @@ test("a markdown basis admits the real sequence 0 as unverifiable", () => {
   assert.deepEqual(result.admission_facts, ["base_source_basis_unverifiable"]);
 });
 
+test("a changed markdown digest requires rebase even at sequence zero", () => {
+  const request = baseRequest({
+    proposal: {
+      ...baseRequest().proposal,
+      base_revision_basis: "markdown_active_state",
+      base_state_event_basis_sequence: 0,
+    },
+    derived_basis: {
+      state_event_basis_sequence: 0,
+      revision_basis: "markdown_active_state",
+      source_basis_digest: MISMATCHED_DIGEST,
+    },
+  });
+  const input = JSON.stringify(request);
+  const result = admitGoalAmendmentProposal(request);
+  assert.equal(result.admission, "needs_rebase");
+  assert.deepEqual(result.admission_facts, ["base_source_basis_digest_mismatch"]);
+  assert.equal(result.canonical_effect, "none");
+  assert.equal(JSON.stringify(request), input);
+});
+
 test("a real markdown base superseded by a later event log is retained as needs_rebase", () => {
   // Review round 8 counterexample: a proposal that legitimately bound the
   // real markdown basis (sequence 0, the only sequence the Stage 1 producer

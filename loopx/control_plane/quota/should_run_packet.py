@@ -112,6 +112,7 @@ from ..work_items.action_portfolio import (
 )
 from ..work_items.execution_obligation import build_execution_obligation
 from ..work_items.action_selection_contract import (
+    action_selection_context,
     apply_action_selection_recovery_projection,
 )
 from ..work_items.goal_route_hint import build_goal_route_hint
@@ -1643,6 +1644,7 @@ def _build_quota_should_run_payload(
             "override": payload[kind],
             "selected_todo": payload.get("selected_todo"),
             "interaction_contract": payload["interaction_contract"],
+            "selection_context": action_selection_context(payload),
         })
     return payload
 

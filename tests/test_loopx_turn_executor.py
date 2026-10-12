@@ -3711,9 +3711,12 @@ def test_permission_denial_during_spend_preserves_writeback_and_resumes(
     assert calls == {"host": 1, "writeback": 1, "spend": 2}
 
 
-def test_budget_rejection_is_typed_and_retry_does_not_repeat_writeback(
+def test_quota_admission_rejection_is_typed_and_retry_does_not_repeat_writeback(
     tmp_path: Path,
 ) -> None:
+    from loopx.control_plane.testing.quota_fixtures import quota_status_payload, quota_todo_item
+    from loopx.quota import spend_quota_slot
+
     plan = _plan()
     calls = {"host": 0, "writeback": 0, "spend": 0}
 
@@ -3727,11 +3730,12 @@ def test_budget_rejection_is_typed_and_retry_does_not_repeat_writeback(
 
     def reject_budget() -> dict[str, object]:
         calls["spend"] += 1
-        return {
-            "ok": False,
-            "appended": False,
-            "reason": "quota budget rejected",
-        }
+        status = quota_status_payload(
+            goal_id="fixture-goal", status="active", recommended_action="continue",
+            quota_state="throttled", quota_extra={"spent_slots": 10, "allowed_slots": 10},
+            agent_todo_items=[quota_todo_item(todo_id="todo_fixture", title="Deliver a result")],
+        )
+        return spend_quota_slot(status, goal_id="fixture-goal", source="adapter", execute=True)
 
     common = {
         "host_runner": host,
@@ -3755,6 +3759,14 @@ def test_budget_rejection_is_typed_and_retry_does_not_repeat_writeback(
     ] == ["validation", "durable_writeback"]
     assert failed["effects"]["state_written"] is True
     assert failed["effects"]["quota_spent"] is False
+
+    # Stored failure kinds remain historical facts, even if a later callback
+    # would return a differently worded refusal. Replay runs no provider.
+    replayed = run_loopx_turn_once(
+        plan, spend=lambda: pytest.fail("failed replay must not call the provider"), **common,
+    )
+    assert replayed["settlement_result"] == failed["settlement_result"]
+    assert calls == {"host": 1, "writeback": 1, "spend": 1}
 
     recovered = run_loopx_turn_once(
         plan,

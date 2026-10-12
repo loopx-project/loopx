@@ -161,12 +161,13 @@ def _requested_quota_action_selection_preflight(
     # which side of the delivery boundary refused it without re-deriving it from
     # prose.
     agent_must_attempt = agent_channel.get("must_attempt") is True
-    agent_delivery_allowed = agent_channel.get("delivery_allowed") is not False
+    delivery = agent_channel.get("delivery_allowed")
+    agent_delivery_allowed = delivery if isinstance(delivery, bool) else None
     selected_todo_id, admitted = current_action_selection_admission(
         payload,
         requested_todo_id=requested_todo_id,
         agent_must_attempt=agent_must_attempt,
-        agent_delivery_refused=not agent_delivery_allowed,
+        agent_delivery_allowed=agent_delivery_allowed,
     )
     if receipt_bound_replan_obligation_id:
         if not receipt_identity_upgraded:

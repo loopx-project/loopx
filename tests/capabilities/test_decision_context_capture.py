@@ -369,3 +369,71 @@ def test_profile_change_during_scan_rolls_back_progress(setup, change):
         for table in ["sources", "batches", "review_observations"]:
             assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
     assert not args["cursor_path"].exists()
+
+
+def test_native_capture_late_growth_refuses_cursor_and_recovers(setup, monkeypatch, capsys):
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.decision_context import capture
+
+    args, payload, authority = setup
+    authority.write_bytes(b"small")
+    payload["source_provider_bindings"][0]["config"]["max_bytes"] = 16
+    args["profile_path"].write_text(json.dumps(payload))
+    profile_bytes = args["profile_path"].read_bytes()
+    observed = datetime(2100, 1, 1, tzinfo=timezone.utc)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return observed
+
+    monkeypatch.setattr(capture, "datetime", Clock)
+    command = ["--format", "json", "--runtime-root", str(authority.parent / "runtime"),
+        "decision-context", "capture", "--goal-id", args["goal_id"],
+        "--agent-id", args["agent_id"], "--profile", str(args["profile_path"]),
+        "--spool", str(args["spool_path"]), "--cursor-state", str(args["cursor_path"]), "--execute"]
+    preflight, original_stat = authority.stat(), Path.stat
+    grew = False
+
+    def stale_preflight(path, *a, **kw):
+        nonlocal grew
+        if path == authority:
+            if not grew:
+                authority.write_bytes(b"x" * 32)
+                grew = True
+            return preflight
+        return original_stat(path, *a, **kw)
+
+    with monkeypatch.context() as race:
+        race.setattr(Path, "stat", stale_preflight)
+        assert main(command) == 0
+    failed = json.loads(capsys.readouterr().out)
+    assert grew
+    assert failed["pending_batch_count"] == 0
+    assert failed["sources"][0]["status"] == "provider_failed"
+    assert failed["sources"][0]["last_read_at"] is None
+    with sqlite3.connect(args["spool_path"]) as db:
+        assert db.execute("SELECT cursor FROM sources").fetchone() == (None,)
+        assert db.execute("SELECT count(*) FROM batches").fetchone() == (0,)
+    assert not args["cursor_path"].exists()
+    assert str(authority) not in json.dumps(failed)
+
+    # Repair the same real source, then use the ordinary due-time retry.
+    authority.write_bytes(b"repaired")
+    observed += timedelta(seconds=3601)
+    assert main(command) == 0
+    recovered = json.loads(capsys.readouterr().out)
+    assert recovered["pending_batch_count"] == 1
+    assert recovered["sources"][0]["status"] == "completed"
+    assert recovered["sources"][0]["failure_streak"] == 0
+    assert recovered["decision_cursors_mutated"] is False
+    with sqlite3.connect(args["spool_path"]) as db:
+        saved = json.loads(db.execute("SELECT receipt FROM batches").fetchone()[0])
+        assert saved["changed_count"] == 1
+    assert args["profile_path"].read_bytes() == profile_bytes
+    assert not args["cursor_path"].exists()
+    assembly = assemble_captured_decision_evidence(**args, batch_id=1,
+        decision_id="recovered-read", rebase=lambda _: DecisionEvidenceRecords(semantic_no_change=True))
+    assert assembly.proposed_cursors
+    assert not args["cursor_path"].exists()
