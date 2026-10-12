@@ -3,7 +3,7 @@ from ..quota.effective_action import EffectiveAction
 
 from typing import Any
 
-from .contract import TODO_TASK_CLASS_USER_GATE
+from .contract import TODO_TASK_CLASS_USER_ACTION, TODO_TASK_CLASS_USER_GATE
 from .todo_semantics import todo_item_task_class
 
 
@@ -71,6 +71,44 @@ def has_open_user_gate_todo(summary: dict[str, Any] | None) -> bool:
     return bool(open_user_gate_todo_items(summary))
 
 
+def has_only_open_user_actions(summary: dict[str, Any] | None) -> bool:
+    """Return whether every open user Todo is an explicit non-gating action."""
+
+    if not isinstance(summary, dict) or has_open_user_gate_todo(summary):
+        return False
+    open_count = open_todo_count(summary)
+    try:
+        all_open_count = int(summary.get("all_open_count"))
+    except (TypeError, ValueError):
+        all_open_count = open_count
+    expected_count = max(0, all_open_count)
+    if expected_count <= 0:
+        return False
+    try:
+        if int(summary.get("user_action_open_count") or 0) == expected_count:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    # Small or legacy summaries may not project the aggregate count.  Only
+    # infer the same fact when the visible items account for the full frontier;
+    # compacted partial lists must remain fail-closed.
+    visible: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for key in ("first_open_items", "items", "backlog_items"):
+        rows = summary.get(key)
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            if not isinstance(item, dict) or item.get("done") is True:
+                continue
+            identity = (item.get("todo_id"), item.get("index"), item.get("text"))
+            visible[identity] = item
+    return len(visible) == expected_count and all(
+        todo_item_task_class(item) == TODO_TASK_CLASS_USER_ACTION
+        for item in visible.values()
+    )
+
+
 def user_gate_todo_notify_reason(summary: dict[str, Any] | None) -> str:
     items = open_user_gate_todo_items(summary)
     if not items:
@@ -91,6 +129,8 @@ def should_notify_user_on_open_todo(
     if state == "operator_gate":
         return False
     if open_todo_count(user_todo_summary) <= 0:
+        return False
+    if has_only_open_user_actions(user_todo_summary):
         return False
     if state in {"focus_wait", "waiting"}:
         return True

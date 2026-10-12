@@ -2,6 +2,14 @@ from loopx.control_plane.todos.user_gate import (
     apply_scoped_user_gate_fallback_projection,
     build_user_todo_notification,
 )
+from loopx.control_plane.scheduler.execution_context import (
+    scheduler_execution_context_for_runtime_profile,
+)
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload,
+    quota_todo_item,
+)
+from loopx.quota import build_quota_should_run
 
 
 def test_user_gate_notification_repeats_until_resolved() -> None:
@@ -38,6 +46,103 @@ def test_waiting_user_todo_notification_does_not_force_repeat_policy() -> None:
         "notify_user_on_open_todo": True,
         "open_todo_notify_reason": "open user todo can resolve the user/controller blocker",
     }
+
+
+def test_waiting_user_action_remains_a_nonblocking_notice() -> None:
+    user_action = {
+        "todo_id": "todo_read_reference",
+        "status": "open",
+        "task_class": "user_action",
+        "text": "Read the optional reference.",
+    }
+
+    assert build_user_todo_notification(
+        {
+            "open_count": 1,
+            "user_action_open_count": 1,
+            "first_open_items": [user_action],
+            "user_action_items": [user_action],
+        },
+        state="waiting",
+        waiting_on="controller",
+    ) == {}
+
+
+def test_user_action_summary_fails_closed_when_a_gate_is_also_visible() -> None:
+    user_action = {
+        "todo_id": "todo_read_reference",
+        "status": "open",
+        "task_class": "user_action",
+        "text": "Read the optional reference.",
+    }
+    user_gate = {
+        "todo_id": "todo_approve_release",
+        "status": "open",
+        "task_class": "user_gate",
+        "text": "Approve the release.",
+    }
+
+    notification = build_user_todo_notification(
+        {
+            "open_count": 1,
+            "all_open_count": 2,
+            "user_action_open_count": 1,
+            "first_open_items": [user_action],
+            "gate_open_items": [user_gate],
+        },
+        state="waiting",
+        waiting_on="controller",
+    )
+
+    assert notification["notify_user_on_gate"] is True
+
+
+def test_user_action_notice_does_not_preempt_live_agent_delivery() -> None:
+    agent_id = "codex-fixture"
+    status = quota_status_payload(
+        goal_id="nonblocking-user-action-fixture",
+        status="active",
+        recommended_action="Advance the current delivery.",
+        waiting_on="controller",
+        agent_todo_items=[
+            quota_todo_item(
+                todo_id="todo_delivery",
+                title="Advance the current delivery.",
+                claimed_by=agent_id,
+                required_capabilities=["shell"],
+            )
+        ],
+        user_todo_items=[
+            quota_todo_item(
+                todo_id="todo_read_reference",
+                role="user",
+                title="Read the optional reference.",
+                task_class="user_action",
+                bound_agent=agent_id,
+            )
+        ],
+        coordination={"agent_model": "peer_v1", "registered_agents": [agent_id]},
+    )
+
+    guard = build_quota_should_run(
+        status,
+        goal_id="nonblocking-user-action-fixture",
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "codex_app_heartbeat"
+        ),
+    )
+
+    assert guard["requires_user_action"] is False
+    assert guard["selected_todo"]["todo_id"] == "todo_delivery"
+    contract = guard["interaction_contract"]
+    assert contract["mode"] == "bounded_delivery"
+    assert contract["user_channel"]["non_blocking"] is True
+    assert contract["user_channel"]["notify"] == "NOTIFY"
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is True
+    assert "response_plan" not in contract
 
 
 def test_heartbeat_repeat_reason_owns_repeat_notification_policy() -> None:
