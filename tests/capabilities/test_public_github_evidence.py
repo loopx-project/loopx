@@ -92,6 +92,62 @@ def test_partial_reads_are_observed_not_admitted_or_complete(monkeypatch):
     assert rejected["retirement"]["reason"] == "parent_rejected"
 
 
+@pytest.mark.parametrize("contents,status", [
+    ([b"first", b"second"], "succeeded"),
+    ([b"first", None], "succeeded"),
+    ([None, None], "failed"),
+    ([b"", b""], "no_evidence"),
+    ([b"\x00binary", b"\x00binary"], "failed"),
+])
+def test_source_observation_and_completion_clocks_follow_reads(monkeypatch, contents, status):
+    from datetime import datetime, timedelta, timezone
+
+    from loopx.extensions.lark.presentation.message_card import build_lark_markdown_reply_card
+
+    started = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    current = started
+    source_returns = []
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            assert tz == timezone.utc
+            return current
+
+    def delayed_read(url):
+        nonlocal current
+        current += timedelta(seconds=1)
+        if url.startswith("https://api.github.com/"):
+            return b'{"private":false}'
+        content = contents[len(source_returns)]
+        source_returns.append(current)
+        if content is None:
+            raise HTTPError(url, 404, "not found", {}, None)
+        return content
+
+    monkeypatch.setattr(provider, "datetime", Clock)
+    monkeypatch.setattr(provider, "_read", delayed_read)
+    p = plan([REF, SECOND])
+    output = provider.execute_public_github(p)
+    receipt = output["receipt"]
+    assert receipt["status"] == status
+    assert datetime.fromisoformat(receipt["completed_at"].replace("Z", "+00:00")) == started + timedelta(seconds=4)
+    expected = [(ref, at) for ref, at, content in zip([REF, SECOND], source_returns, contents)
+        if content and not content.startswith(b"\x00")]
+    assert [(s["source_ref"], datetime.fromisoformat(s["accessed_at"].replace("Z", "+00:00")))
+        for s in receipt["sources"]] == expected
+    assert all(s["publication_date"] is None for s in receipt["sources"])
+    assert output["execution"]["raw_content_persisted"] is False
+    assert output["execution"]["credentials_used"] is False
+    accepted = admission(p, receipt, "admit" if expected else "reject")
+    projected = readback(p, receipt, accepted)
+    assert projected["sources"] == receipt["sources"]
+    assert projected["evidence_coverage_observed"] is False
+    card = build_lark_markdown_reply_card(render_readback(projected))
+    body = card["elements"][0]["text"]["content"]
+    assert all(s["accessed_at"] in body for s in receipt["sources"])
+
+
 @pytest.mark.parametrize("mutate", ["source_refs", "search_terms", "objective"])
 def test_execute_rejects_mutated_plan_before_provider_calls(tmp_path, monkeypatch, mutate):
     p = plan()
