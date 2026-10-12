@@ -270,7 +270,11 @@ With `evidence_conditioned_v1` enabled, when the captured history contains a pri
 accepted evidence-linked Vision path,
 `replan_context.decision_followthrough` returns that path with the later recorded
 progress references. It uses the existing Goal/Agent/Turn binding and immutable
-history append order; timestamps do not decide causality. An explicit current
+history source order; timestamps do not decide causality. The full local index
+supplies append positions. Compact newest-first carriers and the named
+`newest_first_runs` builder reverse those positions without reordering ordinary
+evidence. Arbitrary iterables with unknown order supply no causal positions and
+therefore no decision-followthrough claim. An explicit current
 Goal instance excludes retired-instance sources. The normal history read resolves
 its evidence references; private transport facts are not returned. The derived
 `replan-decision-*` reference binds the normalized path and its original
@@ -287,7 +291,9 @@ missing, rejected or malformed basis adds no followthrough projection. No
 selection, trigger, quota, acceptance, lease or scheduler rule changes.
 
 启用 `evidence_conditioned_v1` 且历史中已有被接受、绑定证据的 Vision 路线时，replan context 返回上次决定与之后的
-进度引用，按原历史追加顺序关联，而非根据时间戳或文案猜测因果。显式当前 Goal
+进度引用，按合格来源的顺序关联，而非根据时间戳或文案猜测因果。完整本地索引提供
+追加位置；已知最新在前的紧凑载体与 `newest_first_runs` 入口转换位置，保留普通
+证据原顺序。顺序未知的 iterable 不提供因果位置，也不生成决定接续投影。显式当前 Goal
 实例排除已退休实例。详情最多六项，保留总数、遗漏数、源完整性与顺序缺失数；
 正常 history 入口可读取引用，私有 transport facts 不公开。这些是记录中的观测，
 不等于有效结算 Turn、独立试验或执行/收益证明；后者明确保持 unknown。缺失、
