@@ -229,6 +229,13 @@ def test_native_cli_refuses_a_reused_backup_id_and_keeps_original_data(tmp_path)
     assert retry.returncode == 1, retry.stdout
     assert json.loads(retry.stdout)["ok"] is False
     assert "backup-id" in json.loads(retry.stdout)["error"]
+    markdown_command = _backup_cli(tmp_path)
+    markdown_command[markdown_command.index("json")] = "markdown"
+    markdown = subprocess.run(markdown_command, cwd=tmp_path, capture_output=True, text=True)
+    assert markdown.returncode == 1
+    assert "backup output already exists" in markdown.stdout
+    assert "--backup-id" in markdown.stdout and archive.name in markdown.stdout
+    assert "None" not in markdown.stdout
     assert (archive.read_bytes(), manifest.read_bytes()) == original
     restore(payload, tmp_path / "readback")
     assert (tmp_path / "readback/runtime-root/progress.txt").read_text() == "accepted original"

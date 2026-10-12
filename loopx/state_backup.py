@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from . import __version__
 from .paths import _is_redirected_path, select_default_runtime_root
+from .presentation.markdown import markdown_scalar
 from .control_plane.effect_runtime import effect_runtime_result
 from .control_plane.runtime.document_io import fsync_state_directory
 
@@ -560,6 +561,12 @@ def _publish_backup_file(source: Path, destination: Path) -> None:
     fsync_state_directory(destination)
 
 
+def _backup_name_conflict(path: Path) -> FileExistsError:
+    return FileExistsError(errno.EEXIST,
+        "backup output already exists; preserve existing files and choose "
+        "a new --backup-id or --output-dir", str(path))
+
+
 def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
     archive_path = Path(str(payload["archive_path"])).expanduser()
     manifest_path = Path(str(payload["manifest_path"])).expanduser()
@@ -572,11 +579,9 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
         updated["recommended_action"] = "no backup targets found; nothing was written"
         return updated
 
-    if any(os.path.lexists(path) for path in (archive_path, manifest_path)):
-        raise FileExistsError(
-            "backup output already exists; preserve existing files and choose "
-            "a new --backup-id or --output-dir"
-        )
+    for path in (archive_path, manifest_path):
+        if os.path.lexists(path):
+            raise _backup_name_conflict(path)
     output_dir.mkdir(parents=True, exist_ok=True)
     exclude_roots = [_resolved(output_dir)]
     updated = dict(payload)
@@ -652,18 +657,21 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
         # exclusively. Publish the manifest first, then the archive.
         # A crash may leave an incomplete pair; never delete an output path
         # that another process could have replaced, or silently retry over it.
-        try:
-            _publish_backup_file(staged_manifest, manifest_path)
-            _publish_backup_file(staged_archive, archive_path)
-        except FileExistsError as exc:
-            raise FileExistsError(
-                "backup output already exists; preserve existing files and choose "
-                "a new --backup-id or --output-dir"
-            ) from exc
+        for staged, destination in ((staged_manifest, manifest_path), (staged_archive, archive_path)):
+            try:
+                _publish_backup_file(staged, destination)
+            except FileExistsError as exc:
+                raise _backup_name_conflict(destination) from exc
     return updated
 
 
 def render_state_backup_markdown(payload: dict[str, Any]) -> str:
+    if payload.get("error"):
+        return "\n".join([
+            "# LoopX State Backup", "", f"- OK: `{payload.get('ok')}`",
+            f"- Error: {markdown_scalar(payload['error'])}",
+            f"- Recommended action: {markdown_scalar(payload.get('recommended_action'))}",
+        ]) + "\n"
     summary = payload.get("summary")
     if not isinstance(summary, dict):
         summary = {}
