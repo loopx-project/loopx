@@ -358,6 +358,11 @@ export async function qualifyCoordinationShadowLineageUnderLocks(
     const store = dependencies.createStore?.(join(request.runtime_root, "authority-shadow", "file-v0"), request.goal_id) ??
       new FileAuthorityStore(join(request.runtime_root, "authority-shadow", "file-v0"), request.goal_id, { existingOnly: true });
     const initial = await store.loadAuthority();
+    // A failed read is not an absent baseline. Preserve the provider-owned
+    // refusal before lineage validation can mislabel it bootstrap_required.
+    if (initial.status === "failed" || initial.status === "unavailable") {
+      throw new ShadowLineageError(initial.reason_code);
+    }
     if (initial.status === "loaded" && initial.head.capture_profile !== "file_outbox_v1") throw new ShadowLineageError("legacy_lineage_ineligible");
     const binding = await requireShadowCaptureBinding(request.runtime_root, request.goal_id);
     const lineage = await loadValidatedShadowLineage(store, request.runtime_root, request.goal_id, binding);
