@@ -78,3 +78,22 @@ def test_public_imports_keep_same_owners():
     ):
         for name in names:
             assert getattr(historic, name) is getattr(owner, name)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_full_cli_status_loads_without_historic_consumers(tmp_path, provider, consumer_distribution):
+    from canonical_authority_fixture import promoted_create_fixture
+
+    registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
+    before = {str(p.relative_to(tmp_path)): p.read_bytes()
+              for root in (runtime, state.parent) for p in root.rglob("*") if p.is_file()}
+    result = subprocess.run(
+        [*consumer_distribution[1], "--registry", str(registry), "--runtime-root", str(runtime),
+         "--format", "json", "authority-shadow", "status", "--goal-id", "goal-a"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] and payload["candidate"]["status"] == "missing"
+    assert {str(p.relative_to(tmp_path)): p.read_bytes()
+            for root in (runtime, state.parent) for p in root.rglob("*") if p.is_file()} == before
