@@ -20,7 +20,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "notice_independent", "due_monitor", "independent", "no_retry", "earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"])
+@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "notice_existing_wait", "notice_independent", "due_monitor", "independent", "no_retry", "earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"])
 def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, scenario: str,
 ) -> None:
@@ -46,7 +46,14 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
             if scenario in {"independent", "notice_independent", "earlier_independent"} else ""
         ))
 
-    if scenario in {"notice_waiting", "notice_independent", "earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"}:
+    if scenario == "notice_existing_wait":
+        state.write_text(state.read_text() +
+            "\n- [ ] Wait for another prerequisite.\n"
+            f"  <!-- loopx:todo todo_id=todo_existing_wait status=open claimed_by={cli.AGENT_ID} "
+            "task_class=advancement_task action_kind=validate "
+            f"resume_when={quote('resume_at:2036-01-01T00:00:00Z', safe='')} -->\n")
+
+    if scenario in {"notice_waiting", "notice_existing_wait", "notice_independent", "earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"}:
         state.write_text(state.read_text() +
             "\n## User Todo\n\n- [ ] Review an independent draft.\n"
             f"  <!-- loopx:todo todo_id=todo_retry_notice status=open bound_agent={cli.AGENT_ID} "
@@ -102,10 +109,10 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
                           "--turn-instance-id", "turn-retry-next")
         assert code == 0 and guard["ok"], guard
         assert guard["heartbeat_receipt"]["status"] in {"committed", "replayed"}
-        if scenario in {"waiting", "notice_waiting", "earlier_notice", "equal_notice"}:
+        if scenario in {"waiting", "notice_waiting", "notice_existing_wait", "earlier_notice", "equal_notice"}:
             assert guard["effective_action"] == "monitor_quiet_skip"
             assert guard["execution_obligation"]["must_attempt_work"] is False
-            if scenario in {"notice_waiting", "earlier_notice", "equal_notice"}:
+            if scenario in {"notice_waiting", "notice_existing_wait", "earlier_notice", "equal_notice"}:
                 assert guard["execution_obligation"]["kind"] == "blocked_wait"
                 assert guard["interaction_contract"]["user_channel"]["non_gating_notice"] is True
                 assert guard["scheduler_hint"]["cadence_class"] == "quiet_wait"
@@ -131,4 +138,8 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
     assert watch["next_due_at"] == due
     assert watch["result_hash"] == "unchanged"
     assert watch["material_change_generation"] == 7
+    if scenario == "notice_existing_wait":
+        existing = next(todo for todo in after["todos"] if todo["todo_id"] == "todo_existing_wait")
+        assert existing["resume_when"] == "resume_at:2036-01-01T00:00:00Z"
+        assert existing["resume_ready"] is False
     assert cli._spend_run_count(runtime) == 0
