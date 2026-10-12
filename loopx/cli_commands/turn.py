@@ -5,6 +5,7 @@ import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from ..cli_runtime import PrintPayload
 
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
@@ -33,10 +34,6 @@ from .turn_selection import (
     resolve_turn_resume_session_binding,
 )
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 FormatSelector = Callable[..., str]
 
 
@@ -391,5 +388,8 @@ def handle_turn_command(
         if args.turn_command == "run-once"
         else _render_loopx_turn_plan_markdown
     )
-    print_payload(payload, output_format(args), renderer)
+    if args.turn_command == "plan" and not args.include_transaction_detail:
+        print_payload(payload, output_format(args), renderer)
+    else:
+        print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1

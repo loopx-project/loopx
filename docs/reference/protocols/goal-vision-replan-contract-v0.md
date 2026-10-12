@@ -971,11 +971,317 @@ must satisfy the checkpoint before terminal closeout; it neither re-authors the
 outcome nor spends a second time. Never invent an unchanged reason to clear a gap.
 Typed in-flight continuations keep their existing exemption.
 
+<a id="opt-in-first-delivery-freshness"></a>
+
+### Default result freshness and current-Agent checkpoint continuation
+
+Result freshness now belongs to ordinary new work admissions. Local-registry
+CLI `quota should-run`, MCP `should_run` and managed `turn run-once` persist the
+original Turn's complete result basis before exposing or dispatching work.
+An unbound observation carries no selected work basis. Choosing a Todo through
+its returned selection command upgrades that original receipt using the same
+typed freshness admission policy as a direct selection. Historical already-bound
+receipts retain their original policy; replay cannot silently enroll them.
+CLI allocates or restores a Turn when no Turn parameter is supplied; ordinary
+`todo complete` restores that Agent/Todo's original identity and read key.
+Ambiguous pending Turns fail closed instead of selecting the latest key.
+Automatic CLI/MCP identity acquisition serializes the existing selection,
+heartbeat append and work-input persistence under one scoped IO fence. Lock
+timeout remains a failure; it cannot allocate a second Turn. Explicit Turn
+callers retain their existing identity and lease rules; mixed explicit/automatic
+calls do not gain a global single-Turn guarantee. MCP completion and vision
+recovery restore the admitted identity; the older deterministic host identity
+remains a compatibility fallback when there is no default work admission.
+Legacy Markdown uses its existing writer locks; File/SQLite use their existing
+typed Todo head/CAS owner. PostgreSQL result-only reads use the provider head and
+identity, with the final check on the native Todo transaction head. Source-session
+remains a lifecycle-only profile under its existing runtime admission restriction.
+No capability, provider or actor write authority is added. Required checkpoints
+continue the current Agent after the durable result; typed exemptions add no
+direction call.
+Default entrypoint qualification currently covers local-registry Legacy Markdown,
+File and SQLite. PostgreSQL has native result transaction/head/CAS conformance;
+the ordinary Python CLI/MCP/managed runtime does not supply the existing
+service-owned PostgreSQL factory. A PostgreSQL selector therefore fails closed
+without legacy fallback; this slice does not add that product integration.
+Packaged frontend and Lark recovery journeys are also unqualified. These are delivery
+limits, not an option to silently bypass freshness on a protected admission.
+Manual Todo lifecycle operations without any work admission retain their existing
+permission and validation contract. They have not captured an Agent work basis
+and are not qualified result-freshness execution. Absence of an admission is not
+proof of a historical Turn. Once work is protected, manual omission of identity
+or read key cannot downgrade its result obligation.
+
+For ordinary admitted CLI work, neither command needs a first-delivery switch,
+Turn parameter or manually copied read key:
+
+```sh
+loopx --format json quota should-run --goal-id example --agent-id agent-a \
+  --todo-id todo_page --codex-app
+# Work and validate against the returned delivery_result_context.
+loopx --format json todo complete --goal-id example --agent-id agent-a \
+  --todo-id todo_page --note "Candidate verified against the original work basis."
+```
+
+Related Todo, transitive dependency, acceptance, source or lease changes reject
+the old candidate eligibility before result effects. Unrelated provider revisions
+and display-only changes do not require another judgment. Native command and
+acceptance validation retain their existing authority and bind the actual candidate
+and issued validation receipt to the original read identity. Managed validation
+also receives that work basis. A new read cannot relabel cached validation.
+
+Native Todo display loss does not erase native Todo authority. The Goal's
+frontmatter and non-Todo objective/acceptance prose still belong to the Goal
+document owner. Losing that whole document blocks full-basis execution; restoring
+Todo sections alone does not restore Goal intent. Such projections carry
+`goal_source_completeness=todo_projection_only`; the exact older unmarked
+recovery codec has the same meaning. Checkpoint admission rejects this state.
+Use the existing `loopx-project` recovery route to locate and restore actual
+owner source or backup, then retry the original Agent/Turn. Preserve an already
+admitted heartbeat receipt; failed basis reads do not dispatch work or spend.
+Native Todo read/write and lease operations keep their existing authority.
+No automatic reconstruction of missing Goal narrative is claimed.
+
+The initial default quota JSON packet grew because it carries the work basis
+consumed by the Agent. Matched fixed-fixture measurements against the pre-adoption
+checkpoint branch were 18,096 to 22,993 characters (small), 34,553 to 37,912
+(crowded), and 21,082 to 22,704 (multi-Agent). These are output costs, not model
+token, latency or outcome measurements. Disabled reward-memory recall keeps its
+decision/authority flags and a detail command; duplicate disabled-route diagnostics
+remain available through `--include-detail agent-todos`. Enabled, failed and actual
+recall contexts remain complete. Only the measured quota JSON regression budgets
+changed in that initial adoption; fixture populations remained unchanged.
+The later representation repair retains those frozen ceilings: default
+`quota should-run`, `turn plan` without transaction detail, `diagnose`, and
+non-full `heartbeat-prompt` JSON use compact whitespace. Explicit quota details,
+full heartbeat and transaction detail retain pretty JSON. All parsed fields,
+authoring constraints, evidence, read identities and routed actions remain
+complete; consumers must parse JSON rather than depend on indentation. Markdown
+remains readable. Brief and ordinary thin share the current-contract worker;
+captured TurnEnvelope execution retains its independent saved-observation rules.
+These representation changes do not reduce the work-basis obligation or prove
+model cost or utility.
+
+After a stale result, MCP calls `should_run(revalidate_todo_id=TODO)` and revalidates
+the retained candidate before retrying ordinary `complete_task`; keys travel
+automatically. CLI reads `checkpoint-context --purpose delivery_result` for the
+returned original Turn, revalidates, then retries ordinary completion. Managed
+`--resume-turn-key TURN --retry-failed-turn` retains the candidate and original
+session, rereads and invokes the current Agent to validate it. The retained
+candidate and revalidation instruction survive receipt/journal update and cold
+dispatch recovery. Exact successful Todo receipts take precedence over later
+basis changes, including loss of the result response before refresh/writeback.
+For historical result-only admissions, if a managed terminal Todo is rejected after refresh/spend,
+those receipts and the outer transaction prefix remain fixed. The original Turn
+records bounded Host/validator revalidation progress; retry resumes that progress
+and then only the pending Todo closeout. It cannot rewind or repeat settlement.
+Host or validation failure keeps the terminal result pending and preserves the
+settled receipts. This does not supply the remaining changed-frontier redirection
+or independent Goal acceptance contract.
+
+New supported admissions also persist `checkpoint_continuation=current_agent_v1`
+in the original heartbeat receipt. Ordinary completion commits the result before
+reading the complete post-result Goal frontier. The current Agent must author a
+new Vision patch or an unchanged reason bound to that read. An unchanged reason
+requires an existing Vision baseline. Pre-result judgments are not accepted as
+this judgment; a new key cannot relabel a cached response. The existing checkpoint
+owner retains cadence, material-trigger, in-flight and blocked-retry exemptions.
+
+MCP `complete_task` returns `direction_pending`, `completed=true` and
+`settlement_complete=false` with the actual context and original Turn identity.
+The current tool caller retains its original completion arguments, consumes that response and continues
+`complete_task` with its returned `read_context_id` and new decision, without
+`first_delivery=true`. `review_task_vision` rereads on stale direction. CLI callers
+use the equivalent checkpoint-context/refresh commands below for the original
+Turn; the CLI transports facts and cannot manufacture an Agent judgment.
+
+Managed `turn run-once` automatically dispatches `phase=checkpoint_direction`
+through the original Host after committing a completion result, or after retaining
+an original noncompletion outcome requiring a supplement. Generic adapters must
+consume `checkpoint_context` and echo its read ID with the decision; older adapters
+that only implement the work-result response remain pending until adapted.
+Codex resumes the exact original native session, including a fresh-per-Turn work
+session. Operation transport offers no operation tools during direction. DSH
+retains the original lineage/iteration session ID. No independent reviewer is
+required or invoked. Host failures use the existing retry policy; stop and
+permission failures retain the result without a fabricated judgment.
+
+Cold recovery uses `turn run-once --resume-turn-key TURN --retry-failed-turn`.
+Successful result, checkpoint and quota receipts win over a lost response. A
+stale direction invalidates only its judgment; implementation and validation stay
+cached. Ordinary no-followup completion preserves its original terminal intent,
+commits the result with an intermediate continuation, then uses the existing
+same-Turn terminal upgrade after checkpoint and spend. The Todo owner persists
+`completion_requested_continuation=no_followup` when deferring a stored closeout;
+this intent is not a terminal recovery receipt and applies only to its original
+completion identity. An explicit MCP `no_follow_up` request is replayed with its
+original completion arguments; the facade does not infer that intent from a new
+frontier or a replacement Agent. This does not certify Goal
+completion or supply the complete changed-frontier scheduling contract.
+
+Historical receipts without this mode retain their prior contract, including
+result-only and already-spent missing-checkpoint supplement recovery. Unknown
+modes and downgrade attempts fail closed. The explicit `first_delivery` v2
+protocol remains compatible, including its historical protected-terminal limit.
+Rolling back to an older writer while a new-mode Turn is pending is unsupported:
+retain the new writer to recover those Turns, or restore a consistent pre-admission
+snapshot through the existing owner procedure. Do not delete mode fields or
+rewrite receipts to disable protection. Packaged frontend/Lark operation, complete
+terminal redirection, mixed-version rollback and live-model utility remain
+separate acceptance. These defaults do not complete the maintainer's first stage.
+
+The stages are independent: prepare and validate the candidate, commit the
+allowed result operation, read the resulting state, judge the direction outside
+source/provider locks, commit that direction, then finish ordinary settlement.
+An independent reviewer
+requires its own registered input, result and recovery contract.
+Neither Todo completion nor a satisfied direction checkpoint certifies Goal
+completion.
+
+The ordinary quota guard returns the persisted basis before work. To explicitly
+reread after a stale rejection, or to enter the separate direction protocol:
+
+```sh
+loopx --format json checkpoint-context --goal-id example --agent-id agent-a \
+  --todo-id todo_page --turn-instance-id turn-1 --purpose delivery_result
+```
+
+Validate against that basis. Explicit protocol callers may pass its `read_context_id`
+as `--delivery-read-context`; default callers restore the persisted key. Retain the Goal, Agent, Todo, Turn and original
+candidate/validation options. The Todo owner checks historical receipts first,
+compares relevant facts against its current authority head, and commits an exact
+delta and receipt with revision CAS. Unrelated revisions may retry without
+another model decision. A related change requires rechecking the candidate.
+
+After the allowed result commit, read the direction:
+
+```sh
+loopx --format json checkpoint-context --goal-id example --agent-id agent-a \
+  --todo-id todo_page --turn-instance-id turn-1 --purpose first_delivery \
+  --decision-scope goal
+```
+
+Read the returned basis and produce a new Vision or unchanged reason. Submit it
+using the existing delivery fields plus `refresh-state --first-delivery
+--checkpoint-read-context ID --progress-scope goal`. Both `agent_lane` and `goal`
+scopes bind complete membership and dependency closure. Reading more work grants no authority to write another Agent's work.
+Final submission protects registry, Goal state, index and the real provider
+through append. It rejects `--next-action` and Codex session usage booking as
+compound effects; explicit usage observations can accompany the run. Lock order:
+index, registry, maintenance, Todo projection, state, then provider. Model calls
+and validation commands stay outside this section.
+
+MCP callers use `complete_task(first_delivery=true)`. The v2 protocol first
+returns `result_review_pending` with a result context. Validate, then call again
+with `delivery_read_context_id`; it commits the ordinary completion and returns
+`direction_pending`. Judge that context and call again with both
+`delivery_read_context_id` and `read_context_id`, plus the new Vision/reason.
+`review_task_vision(first_delivery=true)` can reread a rejected direction; it
+never attaches a new token automatically to an old Vision. Protected
+`no_follow_up=true` is rejected before any effects are admitted in that explicit
+direction protocol. Its native no-followup rejection applies after historical
+receipt recovery. Default result-only protection uses the existing legal terminal
+owner and adds no blanket no-followup rejection. Ordinary v0/v1 completion now
+checks default result freshness. Historical admissions retain their prior ordering;
+new current-Agent admissions use result → direction → refresh/spend → terminal.
+An indexed successful direction can settle its original owed quota slot once.
+A new terminal upgrade still checks the captured actual Goal source; a typed
+Todo-only projection cannot authorize that write. Restore the owner's document
+and resume the same Turn, retaining successful result and quota receipts. An
+exact already committed terminal receipt is recovered before this new admission
+check. This does not certify Goal acceptance or solve changed-frontier continuation.
+The remaining changed-frontier stage must provide the legal transition for a changed
+frontier after checkpoint or spend; retrying a refused terminal intent is not
+that transition.
+
+Status and quota readbacks expose `first_delivery_progress`: result and
+direction commits, quota spend, pending stage and recovery action. Shared and Agent-scoped
+status mirror recovery text into the existing next-action field used by the
+dashboard and channel projections. These receipt observations are neither new
+workflow authority nor a Goal completion signal.
+
+Malformed or unreadable historical receipts are reported as scoped
+`observation_errors`, never as proof that no recovery is pending. If the damaged
+receipt cannot be attributed to a Turn, `observation_unavailable` retains the
+Goal-scoped warning while leaving unrelated lanes' next actions intact. An
+enrolled Turn whose original readback is uncertain stays `operation_unknown`;
+recovery writes remain blocked until the original artifacts can be reconciled.
+Observation reuses one complete canonical Todo snapshot across the discovered
+identities; it does not truncate older pending work.
+
+Ordinary Todo completion recovers an exact terminal receipt before checking an
+unreadable optional enrollment source, without changing its request fingerprint.
+Managed recovery carries the original journal's work key after the Todo owner
+confirms the same Turn's successful result. A subsequently missing or damaged
+result read receipt cannot erase that commit or trigger another validation or
+settlement. The optional direction enrollment still requires its own receipt.
+For a new completion, the original Turn's verified ordinary writeback can prove
+that a damaged shared supplement is optional. Missing or inconsistent history,
+an enrolled writeback, or any result enrollment receipt remains
+`checkpoint_commit_unknown`; unreadable JSON alone never proves non-enrollment.
+
+After a lost response, retry the original request. `checkpoint-context` for its
+first-delivery identity verifies an indexed direction and artifacts before
+returning `committed`. A proved empty append can retry after freshness validation.
+JSON/Markdown without a complete consistent index remains
+`checkpoint_commit_unknown`: preserve the original identity and artifacts for
+operator reconciliation; another Turn cannot bypass that unresolved append.
+The files, provider, quota and Git are not one transaction.
+
+Omitting first-delivery leaves the historical explicit enrollment inactive; it
+does not disable default result freshness or a new admission's current-Agent
+checkpoint continuation. Historical admissions without these policies retain
+their original rules, including supplement recovery. New protected admissions cannot
+downgrade through omitted identity/key, false flags or an older Host schema.
+There is no per-command switch to disable an admitted result obligation. Before
+rolling back a runtime, finish or reconcile pending protected Turns with a
+compatible runtime; preserve original receipts and successful artifacts. This
+does not add cross-host atomicity, Goal certification or model-quality guarantees.
+
+### 中文：本阶段边界与恢复
+
+普通新执行默认保存结果依据并在 Todo owner 提交时检查新鲜度。
+CLI/MCP 自动携带原 Turn 和原 key；managed 在派发前持久保存依据。
+相关变化先保留候选、由当前 Agent 根据新依据重新验证，再提交原 Turn。
+重读及派发中途重启保留候选；成功结果的精确回执优先于当前依据变化。
+历史没有保护标记的准入继续使用原规则，不能靠省略参数降级新准入。
+新受支持准入默认采用 `checkpoint_continuation=current_agent_v1`；历史没有该
+模式的准入及显式 first_delivery 协议继续按原契约恢复。
+先读取结果依据并验证候选，由 Todo owner 检查原回执、当前依据及 CAS；
+结果提交后再读取方向依据，由调用方提交当前 Vision 或 unchanged reason，
+最后完成原 Turn 的 refresh/spend。共享机制不改变各 owner 的失败策略，
+也不改变 Post-Writeback optional hook 的 isolate 与 quota 结算定义。
+
+相关依据变化时，未提交结果必须重新验证候选；结果已经提交时只重新读取和
+判断方向。原 Turn、已提交结果和回执保持原身份，不能把旧判断贴上新 token。
+索引不完整或关键提交未知时保留原 artifacts，先协调原回执，不能换 Turn 绕过。
+明确的 `required=false/satisfied=true/decision=not_required` 沿用既有 checkpoint
+豁免；缺少 checkpoint 记录不能被观察器猜成无需判断。
+
+旧显式结果加方向协议仍不接纳 protected no-followup；新默认准入由既有
+terminal owner 先保留合法结果和原终结意图，完成当前 Agent 的方向判断与结算后
+沿同 Turn terminal upgrade 关闭。默认 managed 续接原 Host/session，required
+checkpoint 会增加一次方向调用；typed 豁免不增加该调用。方向 stale 只重判方向，
+不重复实施、验证或扣额。历史 refresh→spend→terminal 顺序保留。
+完整 changed-frontier 改向出口与混版本回退仍待独立验收；独立 reviewer
+另行登记完整契约，没有方向专用尝试预算或通用回滚协议。
+status/quota 的回执投影可供既有前端及 Lark 读取，但不代表默认产品旅程已交付，
+也不代表 Goal 已完成或模型效果已提升。
+
+Code publication remains a separate operation. Qualify ref CAS against an
+integration target that is not checked out; this protocol does not wrap direct
+Git writes or promise concurrent working-directory isolation. If publication
+responds ambiguously, read the integration status and exact current SHA, verify
+that combined candidate, then use the existing `integration-branch sync
+--candidate-ref SHA --execute` recovery. This can adopt the already published
+candidate without moving the branch again. A clean merge is not task acceptance:
+run the task verifier on that combined SHA before confirming its result.
+
 ### Read basis for checkpoint-only recovery
 
 Missing-checkpoint supplementation now requires an explicit read receipt. This is
 a default admission change for both legacy and newly committed Turn writebacks;
-normal first writebacks and non-Turn vision authoring retain their existing rules.
+non-opted-in first writebacks and non-Turn vision authoring retain their existing rules.
 From the original working directory and with the original registry/runtime/project/
 state-file options, read the basis for the exact settlement:
 

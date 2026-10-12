@@ -610,3 +610,25 @@ def test_projection_failure_cannot_replace_business_output(isolated, monkeypatch
     assert json.loads(capsys.readouterr().out) == payload
     assert 'result_facts' not in usage_ping._observation.get()
     usage_ping.finish(None, 'turn', 0)
+
+
+@pytest.mark.parametrize('compact', [False, True])
+@pytest.mark.parametrize('fmt', ['json', 'markdown'])
+def test_payload_formatting_preserves_values_and_one_capture(monkeypatch, capsys, compact, fmt):
+    from loopx.cli_runtime import print_payload
+    payload = {'ok': True, 'evidence': [{'summary': '依据', 'count': 3}],
+               'reason': None, 'must_attempt_work': False, 'command': 'loopx --goal-id test'}
+    captured = []
+    monkeypatch.setattr(usage_ping, 'capture_result', captured.append)
+    print_payload(payload, fmt, lambda value: f"# Result\n{value['evidence'][0]['summary']}",
+                  compact_json=compact)
+    text = capsys.readouterr().out
+    assert captured == [payload] and captured[0] is payload
+    if fmt == 'json':
+        assert json.loads(text) == payload
+        if compact:
+            assert len(text.splitlines()) == 1
+        else:
+            assert '\n  "evidence"' in text
+    else:
+        assert text == '# Result\n依据\n'

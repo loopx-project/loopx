@@ -63,6 +63,17 @@ for line in sys.stdin:
         text = row["params"]["input"][0]["text"]
         if os.environ.get("FAKE_OPERATION_PROMPT_FILE"):
             pathlib.Path(os.environ["FAKE_OPERATION_PROMPT_FILE"]).write_text(text)
+        if '"phase":"checkpoint_direction"' in text:
+            context = json.loads(text[text.index('{"'):])['checkpoint_context']
+            emit({"id": row["id"], "result": {"turn": {"id": turn}}})
+            if os.environ.get('FAKE_OPERATION_DIRECTION_TOOL'):
+                emit({"id": 52, "method": "item/tool/call", "params": {"threadId": thread, "turnId": turn, "tool": "loopx_operation", "arguments": {"action": "context"}}})
+            else:
+                answer = {'read_context_id': context['read_context_id'], 'agent_vision_json': '',
+                    'vision_unchanged_reason': 'The committed result and current obligations preserve the route.', 'stop_reason': ''}
+                emit({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": json.dumps(answer)}})
+                emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+            break
         # The actual native prompt must separate proposal preparation from
         # domain execution; otherwise approval can never get a proposal.
         assert "context/pending/inspect do not require consumption" in text
@@ -87,6 +98,7 @@ for line in sys.stdin:
         answer.update({"schema_version": "loopx_turn_result_v0", "turn_key": key, "result_kind": "wait", "completed_phases": ["host_execute", "typed_result"], "classification": "awaiting_operation_confirmation", "recommended_action": "Wait for actual human approval", "summary": "Owned native context retrieved; no approval or effect"})
         emit({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": json.dumps(answer)}})
         emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+        break
 """
 
 
@@ -107,9 +119,7 @@ def _claimed_native_fixture(tmp_path: Path):
     from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
 
     service, store = fixtures.service(tmp_path, goal_id="fixture-goal")
-    executable = tmp_path / "fake-codex-operation"
-    executable.write_text(FAKE_SERVER)
-    executable.chmod(0o700)
+    executable = _fake_server(tmp_path)
     request = _request()
     request["turn_envelope"]["agent_id"] = "finance-fixture-agent"
     request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo-managed"
@@ -396,6 +406,7 @@ def call_next():
             "threadId": thread, "turnId": turn, "delta": json.dumps({"results": results})}})
         emit({"method": "turn/completed", "params": {
             "threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+        raise SystemExit(0)
 for line in sys.stdin:
     row = json.loads(line)
     if row.get("method") == "initialize":
@@ -471,9 +482,7 @@ def test_registered_source_tokens_survive_owned_native_prepare_and_store_readbac
     value["normalized_parameters"]["projection"]["simulated"] = False
     arguments = {"action": "prepare", "request": value}
     monkeypatch.setenv("FAKE_SOURCE_TOOL_CALLS", json.dumps([arguments, arguments]))
-    executable = tmp_path / "fake-source-prepare-server"
-    executable.write_text(SOURCE_PREPARE_SERVER)
-    executable.chmod(0o700)
+    executable = _fake_server(tmp_path, SOURCE_PREPARE_SERVER)
     session = CodexChatAgentSession.start(
         codex_bin=str(executable),
         work_dir=tmp_path,
@@ -548,9 +557,7 @@ def test_registered_source_tokens_survive_owned_native_prepare_and_store_readbac
 def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(
     tmp_path: Path, deadline,
 ) -> None:
-    executable = tmp_path / "fake-codex-operation"
-    executable.write_text(FAKE_SERVER)
-    executable.chmod(0o700)
+    executable = _fake_server(tmp_path)
     options = {
         "runtime_root": tmp_path / "runtime",
         "registry_path": _registered_host_goal(tmp_path),
@@ -591,15 +598,42 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
         )
 
 
+@pytest.mark.parametrize('tool_attempt', [False, True])
+def test_checkpoint_direction_resumes_session_without_operation_or_child_adoption(tmp_path, monkeypatch, tool_attempt):
+    executable = _fake_server(tmp_path)
+    options = dict(runtime_root=tmp_path / 'runtime', registry_path=tmp_path / 'registry.json',
+                   project=tmp_path, codex_bin=str(executable), model='test-model',
+                   reasoning_effort='xhigh', timeout_seconds=5)
+    run_codex_operation_host(_request(), **options)
+    before = load_codex_cli_session(options['runtime_root'], lineage=_lineage(_request()))
+    actions = options['runtime_root'] / 'chat/actions/actions.json'
+    actions.parent.mkdir(parents=True)
+    actions.write_text('{}')
+    def forbidden(*args, **kwargs):
+        pytest.fail('Direction continuation must not adopt an operation or native child')
+    monkeypatch.setattr('loopx.control_plane.turn_driver.codex_operation_host.pending_operation_handoffs', forbidden)
+    monkeypatch.setattr('loopx.control_plane.turn_driver.codex_operation_host.native_child_observer', forbidden)
+    request = _request(session_action='resume')
+    request.update(phase='checkpoint_direction', checkpoint_context={'read_context_id': 'direction-read',
+        'basis': {'todo': {'status': 'done'}, 'frontier': {'scope': 'goal'}}})
+    if tool_attempt:
+        monkeypatch.setenv('FAKE_OPERATION_DIRECTION_TOOL', '1')
+        with pytest.raises(BuiltInHostError):
+            run_codex_operation_host(request, **options)
+    else:
+        result = run_codex_operation_host(request, **options)
+        assert result['read_context_id'] == 'direction-read'
+    assert load_codex_cli_session(options['runtime_root'], lineage=_lineage(request)) == before
+    assert actions.read_text() == '{}'
+
+
 def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from loopx.cli import main as cli_main
 
     project, runtime, registry = _write_live_fixture(tmp_path)
-    executable = tmp_path / "fake-codex-operation"
-    executable.write_text(FAKE_SERVER)
-    executable.chmod(0o700)
+    executable = _fake_server(tmp_path)
 
     def forbidden_plain_cli(*args, **kwargs):
         pytest.fail("Operation opt-in must not downgrade to plain Codex exec")
@@ -712,9 +746,7 @@ def test_operation_host_rejects_absent_goal_authority_before_native_start(
 def test_owned_operation_host_reaps_descendants_on_success_and_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hang: bool
 ) -> None:
-    executable = tmp_path / "fake-codex-operation"
-    executable.write_text(FAKE_SERVER)
-    executable.chmod(0o700)
+    executable = _fake_server(tmp_path)
     marker = tmp_path / "owned-child"
     monkeypatch.setenv("FAKE_OPERATION_CHILD_MARKER", str(marker))
     if hang:

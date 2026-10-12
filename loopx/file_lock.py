@@ -345,7 +345,20 @@ def _write_holder_sidecar(holder_path: Path, record: dict[str, object]) -> None:
             holder_file.write("\n")
             holder_file.flush()
             os.fsync(holder_file.fileno())
-        os.replace(temporary_path, holder_path)
+        # A Windows reader may briefly deny DELETE sharing. Keep the old
+        # complete diagnostic until atomic replacement succeeds; persistent
+        # access denial still propagates within this bounded IO window.
+        deadline = time.monotonic() + 0.5
+        while True:
+            try:
+                os.replace(temporary_path, holder_path)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
     finally:
         temporary_path.unlink(missing_ok=True)
 

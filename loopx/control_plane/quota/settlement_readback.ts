@@ -58,6 +58,7 @@ import {
   optionalHeartbeatString as optionalString,
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
+  resultFreshnessRequired,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -683,6 +684,10 @@ function terminalResult(
   identity: SettlementIdentity,
   event: JsonObject | null,
 ): SettlementResult<JsonObject> {
+  if (event?.status === "terminal_no_followup" && details(event).no_followup !== true) {
+    return settlementFailed<JsonObject>({kind: "effect_outcome_unknown", step_kind: "terminal_closeout",
+      reason: "Terminal event and its no-follow-up evidence contradict; reconcile the original Turn."});
+  }
   if (!event || details(event).no_followup !== true) {
     return settlementFailed<JsonObject>({
       kind: "receipt_missing",
@@ -1444,4 +1449,33 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       return result;
     },
   );
+}
+
+/** Default work resumes its original unfinished settlement, not the latest key. */
+export async function selectDefaultResultWorkTurn(value: unknown): Promise<JsonObject> {
+  const raw = requireJsonObject(value, "default result work selection");
+  const request = decodeRequest(raw);
+  return await withQuotaAccountingOwner(request.owner, async () => {
+    const snapshot = await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id);
+    const turns = new Map<string, JsonObject>();
+    const todo = jsonObject(raw.todo);
+    for (const event of snapshot.events) {
+      const fields = details(event);
+      if (event.event_kind !== "quota_should_run" || event.agent_id !== request.agent_id ||
+          !quotaOwnerOwnsProjection(request.owner, event.goal_ref) || !resultFreshnessRequired(event) ||
+          typeof fields.todo_id !== "string" || (request.todo_id !== null && fields.todo_id !== request.todo_id)) continue;
+      if (todo?.status === "done" && ![event.run_id, fields.settlement_effect_id].includes(todo.completion_turn_key)) continue;
+      const turn = String(event.run_id);
+      if (raw.pending_only === true) {
+        const readback = readQuotaSettlementFromRequest({...request, todo_id: fields.todo_id, turn_instance_id: turn}, snapshot);
+        if (readback.replay_phase === "settled") continue;
+      } else if (todo?.status !== "done" && snapshot.events.some(done => done.event_kind === "todo_complete" &&
+          done.agent_id === request.agent_id && done.run_id === event.run_id && done.todo_id === fields.todo_id &&
+          quotaOwnerOwnsProjection(request.owner, done.goal_ref))) continue;
+      turns.set(turn, event);
+    }
+    if (turns.size > 1) throw new EffectRuntimeRequestError(
+      "Several unfinished Turns match this work; resume an exact original Turn", "delivery_work_turn_ambiguous");
+    return {ok: true, turn_instance_id: [...turns.keys()][0] ?? null};
+  });
 }

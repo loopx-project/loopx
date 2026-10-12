@@ -121,7 +121,9 @@ def build_loopx_turn_command_validator(
             completed = subprocess.run(
                 normalized,
                 cwd=project,
-                input=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                input=json.dumps({**result, **({"delivery_result_context": _plan["delivery_result_context"]}
+                    if _plan.get("delivery_result_context") is not None else {})},
+                    ensure_ascii=False, separators=(",", ":")),
                 text=True, encoding="utf-8", errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,

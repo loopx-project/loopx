@@ -13,6 +13,7 @@ from ..control_plane.coordination.local_authority import (
     read_canonical_todo_fields_if_promoted,
 )
 from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.goals.checkpoint_context_io import checkpoint_continuation_required
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.todos.contract import (
     replan_successor_semantic_binding,
@@ -125,7 +126,8 @@ def _completion_settlement_error(
     # Todo acceptance and Turn settlement are distinct facts. Ordinary
     # completion can precede accounting (including controller validation).
     # Only terminal intent requires the full chain before closing out.
-    if not no_follow_up or settlement_readback.settlement.failure is None:
+    if (not no_follow_up or settlement_readback.settlement.failure is None
+            or checkpoint_continuation_required(settlement_readback)):
         return None
     return (
         "terminal no-follow-up closeout requires matching writeback and quota spend receipts: "
@@ -599,6 +601,17 @@ def handle_todo_command(
             completion_turn_key = None
             completion_identity_source = None
             completion_delivery_workspace = None
+            # An explicit lifecycle identity must reach its own typed owner;
+            # default Turn restoration applies only to an unscoped request.
+            if (not getattr(args, "turn_instance_id", None)
+                    and not getattr(args, "completion_identity_key", None)
+                    and args.agent_id and args.todo_id):
+                from ..control_plane.goals.checkpoint_context_io import restore_default_turn_id
+
+                args.turn_instance_id = restore_default_turn_id(
+                    runtime_root=resolve_runtime_root(load_registry(registry_path), runtime_root_arg),
+                    registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
+                    todo_id=args.todo_id, pending_only=False)
             if getattr(args, "turn_instance_id", None):
                 runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
                 settlement_readback = _read_todo_turn_settlement(
@@ -697,7 +710,12 @@ def handle_todo_command(
                     evidence=args.evidence,
                     completion_result_file=Path(args.result_file).expanduser() if args.result_file else None,
                     completion_turn_key=completion_turn_key,
+                    delivery_read_context_id=getattr(args, "delivery_read_context", None),
+                    delivery_settlement_identity=settlement_identity.as_dict() if settlement_identity else None,
                     completion_identity_source=completion_identity_source,
+                    defer_no_followup=(settlement_readback is not None
+                        and checkpoint_continuation_required(settlement_readback)
+                        and settlement_readback.settlement.failure is not None),
                     completion_delivery_workspace=completion_delivery_workspace,
                     completion_validation_workspace_path=Path.cwd(),
                     task_lease_idempotency_key=args.task_lease_idempotency_key,
@@ -822,7 +840,7 @@ def handle_todo_command(
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
         settlement_result = (
             settlement_readback.terminal_settlement
-            if args.no_follow_up and settlement_identity is not None
+            if payload.get("completion_continuation") == "no_followup" and settlement_identity is not None
             else settlement_readback.identity
         )
         payload["settlement_result"] = settlement_result_payload(

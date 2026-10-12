@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from ..cli_runtime import PrintPayload
 
 from .quota_presentation import (
     _project_quota_cli_payload as _project_quota_cli_payload,
@@ -55,6 +56,7 @@ from ..control_plane.quota.settlement_cli import (
     quota_rollout_details,
     quota_rollout_replan_obligation_id,
     quota_rollout_todo_id,
+    quota_result_work_admission_details,
     reconcile_existing_heartbeat_receipt_for_turn,
     render_existing_heartbeat_receipt_payload,
 )
@@ -105,10 +107,6 @@ from .quota_reward_memory import (
 )
 from .quota_scheduler_followup import build_scheduler_followup_payload
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 RolloutEventAppender = Callable[..., dict[str, object]]
 
 
@@ -464,6 +462,47 @@ def _record_non_guard_quota_event(
         )
 
 
+def _read_back_committed_heartbeat(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    runtime_root: Path,
+    turn_instance_id: str,
+    stall_observation: str,
+    requested_todo_id: str | None,
+    goal_ref: dict[str, str] | None,
+) -> None:
+    """Expose selection only after the original heartbeat receipt is read back."""
+    receipt = find_heartbeat_receipt(
+        runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+    )
+    if receipt:
+        rollout_event_value = payload.get("rollout_event")
+        rollout_event: Mapping[str, object] = (
+            rollout_event_value if isinstance(rollout_event_value, Mapping) else {}
+        )
+        payload["heartbeat_receipt"] = heartbeat_receipt_view(
+            receipt,
+            turn_instance_id=turn_instance_id,
+            status="committed" if rollout_event.get("appended") else "replayed",
+        )
+        commit_requested_action_selection(payload, requested_todo_id=requested_todo_id)
+    else:
+        fail_heartbeat_receipt(
+            payload,
+            turn_instance_id=turn_instance_id,
+            stall_observation=stall_observation,
+            reason=(
+                "heartbeat receipt append could not be read back; retry "
+                "quota should-run with the same --turn-instance-id"
+            ),
+        )
+
+
 def handle_quota_command(
     args: argparse.Namespace,
     *,
@@ -480,6 +519,46 @@ def handle_quota_command(
         return native_result
     if args.quota_command == "replan-view":
         return handle_replan_view(args, print_payload)
+    # Serialize only automatic identity acquisition. The typed quota owner
+    # decides which Turn is unfinished; this IO fence keeps that read, the
+    # existing heartbeat append and work-input persistence in one admission.
+    from contextlib import nullcontext
+    import hashlib
+    from ..file_lock import exclusive_cross_runtime_file_lock
+    from ..history import load_registry
+    from ..paths import resolve_runtime_root
+    from ..runtime import validate_goal_id_path_segment
+
+    try:
+        fence = nullcontext()
+        if (args.quota_command == "should-run" and args.agent_id
+                and not getattr(args, "turn_instance_id", None)
+                and not getattr(args, "begin_turn", False)
+                and not getattr(args, "dry_run", False)):
+            root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg, registry_path=registry_path)
+            goal_id = validate_goal_id_path_segment(args.goal_id)
+            agent_key = hashlib.sha256(args.agent_id.encode()).hexdigest()
+            fence = exclusive_cross_runtime_file_lock(root / "goals" / goal_id / "quota" /
+                f"default-work-{agent_key}", operation="default-work-admission")
+        with fence:
+            return _handle_quota_command(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
+                capture_directory=capture_directory)
+    except (ValueError, OSError, RuntimeError) as error:
+        payload = quota_failure_payload(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg, error=error)
+        print_payload(payload, args.format, _quota_renderer(args))
+        return 1
+
+
+def _handle_quota_command(
+    args: argparse.Namespace,
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+    print_payload: PrintPayload,
+    append_cli_rollout_event: RolloutEventAppender,
+    capture_directory: Path | None = None,
+) -> int:
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -634,6 +713,7 @@ def handle_quota_command(
                         runtime_root=runtime_root,
                         turn_instance_id=heartbeat_turn_id,
                         existing=heartbeat_receipt_existing,
+                        registry_path=registry_path,
                         goal_ref=goal_ref,
                     )
                 else:
@@ -833,6 +913,10 @@ def handle_quota_command(
                         ),
                     }
                 )
+                if settlement_identity is not None:
+                    rollout_details.update(quota_result_work_admission_details(
+                        registry_path=registry_path, runtime_root=runtime_root,
+                        goal_id=args.goal_id, todo_id=rollout_todo_id, goal_ref=goal_ref))
                 append_cli_rollout_event(
                     payload,
                     registry_path=registry_path,
@@ -860,45 +944,19 @@ def handle_quota_command(
                         *(["goal_ref"] if goal_ref is not None else []),
                     ],
                 )
-                receipt = find_heartbeat_receipt(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
+                _read_back_committed_heartbeat(
+                    payload,
+                    args,
+                    runtime_root=runtime_root,
                     turn_instance_id=heartbeat_turn_id,
+                    stall_observation=heartbeat_stall_observation,
+                    requested_todo_id=(
+                        action_selection.requested_todo_id
+                        if action_selection is not None
+                        else None
+                    ),
                     goal_ref=goal_ref,
                 )
-                if receipt:
-                    rollout_event_value = payload.get("rollout_event")
-                    rollout_event: Mapping[str, object] = (
-                        rollout_event_value
-                        if isinstance(rollout_event_value, Mapping)
-                        else {}
-                    )
-                    payload["heartbeat_receipt"] = heartbeat_receipt_view(
-                        receipt,
-                        turn_instance_id=heartbeat_turn_id,
-                        status="committed"
-                        if rollout_event.get("appended")
-                        else "replayed",
-                    )
-                    commit_requested_action_selection(
-                        payload,
-                        requested_todo_id=(
-                            action_selection.requested_todo_id
-                            if action_selection is not None
-                            else None
-                        ),
-                    )
-                else:
-                    fail_heartbeat_receipt(
-                        payload,
-                        turn_instance_id=heartbeat_turn_id,
-                        stall_observation=heartbeat_stall_observation,
-                        reason=(
-                            "heartbeat receipt append could not be read back; retry "
-                            "quota should-run with the same --turn-instance-id"
-                        ),
-                    )
         else:
             _record_non_guard_quota_event(
                 payload, args, registry_path=registry_path,
@@ -908,6 +966,38 @@ def handle_quota_command(
                 spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
+    if args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True:
+        from ..control_plane.goals.checkpoint_context_io import TurnResultWork, result_work_required, result_work_context, result_work_context_exists
+        from ..control_plane.quota.settlement import read_heartbeat_settlement
+
+        try:
+            work_readback = read_heartbeat_settlement(runtime_root, goal_id=args.goal_id,
+                agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None),
+                turn_instance_id=heartbeat_turn_id, registry_path=registry_path, goal_ref=goal_ref,
+                resolve_original_binding=True)
+            if (work_readback is not None and work_readback.identity.value is not None
+                    and result_work_required(work_readback)):
+                payload["work_input_restored"] = result_work_context_exists(runtime_root, work_readback.identity.value)
+                committed = heartbeat_receipt_existing is not None and TurnResultWork(
+                    registry_path, runtime_root, work_readback.identity.value, goal_ref).result_committed()
+                if committed:
+                    payload["result_committed"] = True
+                    progress = payload.get("first_delivery_progress")
+                    payload["recommended_action"] = (
+                        progress["next_action"] if isinstance(progress, dict)
+                        and progress.get("settlement_identity") == work_readback.identity.value.as_dict()
+                        else "Resume this original Turn's pending settlement; its Todo result is already committed."
+                    )
+                elif work_readback.writeback_run is None:
+                    payload["delivery_result_context"] = result_work_context(registry_path=registry_path,
+                        runtime_root=runtime_root, identity=work_readback.identity.value, goal_ref=goal_ref)
+        except (ValueError, OSError, RuntimeError) as error:
+            admitted_receipt = payload.get("heartbeat_receipt")
+            payload = quota_failure_payload(args, registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg, error=error)
+            payload.update(error_code=getattr(error, "code", "delivery_work_context_unknown"),
+                error=str(error),
+                status="delivery_work_context_unavailable", heartbeat_receipt=admitted_receipt)
     attach_reward_memory_recall_after_should_run(
         payload,
         quota_command=args.quota_command,

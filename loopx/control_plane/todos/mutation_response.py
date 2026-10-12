@@ -157,6 +157,9 @@ def serialize_todo_update_result(
         "completion_continuation": normalize_todo_completion_continuation(
             effective_metadata.get("completion_continuation")
         ),
+        "completion_requested_continuation": normalize_todo_completion_continuation(
+            effective_metadata.get("completion_requested_continuation")
+        ),
         "completion_recovery": normalize_todo_completion_recovery(
             effective_metadata.get("completion_recovery")
         ),

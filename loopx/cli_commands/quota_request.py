@@ -165,6 +165,10 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
         raise QuotaCommandValidationError(
             "`loopx quota should-run --todo-id` requires --turn-instance-id or --begin-turn"
         )
+    if command == "should-run" and args.todo_id and not args.agent_id:
+        raise QuotaCommandValidationError(
+            "`loopx quota should-run --todo-id` requires --agent-id"
+        )
     if begin_turn and command != "should-run":
         raise QuotaCommandValidationError(
             "--begin-turn is only valid with `loopx quota should-run`"

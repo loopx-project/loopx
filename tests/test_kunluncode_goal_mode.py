@@ -1246,8 +1246,10 @@ def test_strict_native_goal_requires_verification_passed_event() -> None:
     )
 
 
+@pytest.mark.parametrize("first_delivery", [False, True])
 def test_native_controller_blocks_model_visible_mcp_mutations(
     monkeypatch: pytest.MonkeyPatch,
+    first_delivery: bool,
 ) -> None:
     server, control = create_fastmcp_server(
         GoalModeMCPConfig(
@@ -1279,6 +1281,9 @@ def test_native_controller_blocks_model_visible_mcp_mutations(
                 "agent_id": "kunlun",
                 "evidence": "premature evidence",
                 "claim_operation_id": "claim-fixture",
+                "first_delivery": first_delivery,
+                "delivery_read_context_id": "original-result",
+                "read_context_id": "original-direction",
             },
         )
     )

@@ -24,6 +24,7 @@ from ..control_plane.quota.settlement import (
     read_heartbeat_settlement,
 )
 from ..control_plane.quota.spend_sources import quota_spend_source_for_execution_context
+from ..control_plane.effect_program import SettlementFailureKind
 from ..control_plane.work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
@@ -232,7 +233,14 @@ def execute_turn_run_once(
             # The host workspace is execution context, not state authority.
             state_project = None
             result_kind = str(result.get("result_kind") or "")
-            if result_kind in {"repair_required", "replan_required"}:
+            fresh_checkpoint = current_checkpoint.enabled()
+            pending_judgment = fresh_checkpoint and not result.get("checkpoint_read_context_id")
+            prior_checkpoint = read_heartbeat_settlement(runtime_root,
+                goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
+                registry_path=registry_path, goal_ref=goal_ref) if pending_judgment else None
+            if result_kind in {"repair_required", "replan_required"} and (not fresh_checkpoint or
+                    (pending_judgment and (prior_checkpoint is None or prior_checkpoint.writeback_run is None))):
                 todo_id = str(selected_todo.get("todo_id") or "")
                 if not todo_id and not settlement_identity.replan_obligation_id:
                     raise ValueError(
@@ -261,19 +269,20 @@ def execute_turn_run_once(
                 turn_instance_id=settlement_identity.turn_instance_id,
                 agent_id=args.agent_id,
                 progress_scope="goal",
-                autonomous_replan_recorded=result_kind == "replan_required",
+                autonomous_replan_recorded=result_kind == "replan_required" and pending_judgment if fresh_checkpoint else result_kind == "replan_required",
                 progress_observation=(
                     dict(progress_observation)
                     if isinstance(progress_observation, dict) else None
                 ),
                 agent_vision_packet=(
                     dict(result["agent_vision"])
-                    if isinstance(result.get("agent_vision"), dict)
+                    if isinstance(result.get("agent_vision"), dict) and not pending_judgment
                     else None
                 ),
                 vision_unchanged_reason=(
-                    str(result.get("vision_unchanged_reason") or "") or None
+                    (str(result.get("vision_unchanged_reason") or "") or None) if not pending_judgment else None
                 ),
+                checkpoint_read_context_id=result.get("checkpoint_read_context_id"),
                 completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key,
                 dry_run=dry_run,
@@ -315,6 +324,15 @@ def execute_turn_run_once(
                     status="appended",
                     details={"command": "turn run-once"},
                 )
+            if (pending_judgment and refresh.get("ok") and
+                    refresh.get("vision_checkpoint", {}).get("decision") == "missing_required"):
+                try:
+                    decided = current_checkpoint.continue_direction(result, purpose="supplement_checkpoint")
+                    return writeback(decided, completion_todo_id=completion_todo_id,
+                        completion_turn_key=completion_turn_key, effect_ref=effect_ref)
+                except ValueError as error:
+                    return {"ok": False, "appended": False, "reason": str(error),
+                        "checkpoint_stage": "direction_pending"}
             return refresh
 
         def completion_intent(_result: dict[str, object]) -> dict[str, object]:
@@ -346,6 +364,7 @@ def execute_turn_run_once(
             result: dict[str, object],
             *,
             effect_ref: str,
+            terminal: bool = False,
         ) -> dict[str, object]:
             todo_id = str(selected_todo.get("todo_id") or "")
             if not todo_id:
@@ -368,6 +387,10 @@ def execute_turn_run_once(
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
                 **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
+                delivery_read_context_id=(result.get("result_work_binding") or {}).get("read_context_id"),
+                delivery_settlement_identity=settlement_identity.as_dict(),
+                defer_no_followup=current_checkpoint.enabled() and not terminal,
+                no_followup=terminal,
             )
             if completion.get("ok") is not True:
                 return completion
@@ -460,13 +483,14 @@ def execute_turn_run_once(
                 completion = {"ok": True, "appended": True, "completion": prior}
             if not completion.get("ok"):
                 return completion
-            todo_id = str(selected_todo.get("todo_id") or "")
-            refresh = writeback(
-                result,
-                completion_todo_id=todo_id,
-                completion_turn_key=settlement_identity.turn_instance_id,
-                effect_ref=effect_ref,
-            )
+            try:
+                result = current_checkpoint.continue_direction(result)
+                todo_id = str(selected_todo.get("todo_id") or "")
+                refresh = writeback(result, completion_todo_id=todo_id,
+                    completion_turn_key=settlement_identity.turn_instance_id, effect_ref=effect_ref)
+            except ValueError as error:
+                return {"ok": False, "appended": False, "reason": str(error),
+                    "checkpoint_stage": "direction_pending", "completion": completion["completion"]}
             return {
                 "ok": bool(refresh.get("ok")),
                 "appended": bool(completion.get("appended"))
@@ -481,7 +505,7 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
-            return todo_completion(result, effect_ref=effect_ref)
+            return todo_completion(result, effect_ref=effect_ref, terminal=True)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -640,6 +664,8 @@ def execute_turn_run_once(
                         "kind": "unknown",
                         "reason": "refresh-state receipt has no durable run",
                     }
+                if current_checkpoint.enabled() and run.get("vision_checkpoint", {}).get("satisfied") is not True:
+                    return {"kind": "absent"}
                 if event is None:
                     append_settlement_event(
                         run,
@@ -725,6 +751,13 @@ def execute_turn_run_once(
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
                 event = readback.completion_event
                 completion = terminal_completion_readback()
+                # The Todo fence proves this original Turn's terminal upgrade
+                # absent; an ordinary result event is not a closeout receipt.
+                # Receipt classification remains with the TS settlement owner.
+                terminal_failure = readback.terminal_closeout.failure
+                if (completion is None and terminal_failure is not None and
+                        terminal_failure.kind is SettlementFailureKind.RECEIPT_MISSING):
+                    return {"kind": "absent"}
                 if event is None and completion is None:
                     return {"kind": "absent"}
                 if (
@@ -887,12 +920,14 @@ def execute_turn_run_once(
                         turn_envelope,
                         goal_admission=goal_admission,
                         session_scope=session_scope,
+                        exact_session=True,
                     )
                     if goal_admission is not None
                     else codex_cli_session_binding(
                         runtime_root,
                         turn_envelope,
                         session_scope=session_scope,
+                        exact_session=True,
                     )
                 )
 
@@ -928,6 +963,54 @@ def execute_turn_run_once(
                 return request_settlement_lifetime(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
 
+        def run_direction(context: dict[str, Any]) -> dict[str, Any]:
+            from ..control_plane.turn_driver.executor import build_loopx_turn_host_request, _run_host, _run_host_runner
+            from ..control_plane.turn_driver.journal_store import turn_journal_path
+            from ..usage_goal import observe_goal_execution
+            from ..control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+
+            if goal_admission is not None:
+                goal_admission.require_current()
+            with collaboration_goal_scope(registry_path, goal_id=args.goal_id,
+                    agents=(args.agent_id,), caller_goal_ref=goal_ref, require_active=True):
+                pass
+            request = build_loopx_turn_host_request(payload)
+            request.update(phase="checkpoint_direction", checkpoint_context=context)
+            request["session"] = {**request["session"], "action": "resume"}
+            if args.host == "codex-cli":
+                binding = session_binding_resolver(envelope)
+                journal = json.loads(turn_journal_path(runtime_root, goal_id=args.goal_id,
+                    turn_key=request["turn_key"]).read_text(encoding="utf-8"))
+                if not binding or binding != journal.get("checkpoint_host_binding"):
+                    raise ValueError("Original current-Agent session binding is unavailable; preserve the result and reconcile")
+                session = dict(request["session"])
+                session["action"] = "resume"
+                session["context_policy"] = {**session.get("context_policy", {}), "mode": "resume"}
+                request["session"] = session
+            with observe_goal_execution(runtime_root, args.goal_id, host=args.host):
+                observation = (_run_host_runner(request, runner=host_runner) if host_runner is not None else
+                    _run_host(request, argv=raw_argv, project=project, timeout_seconds=args.timeout_seconds))
+            if observation.get("ok") is not True:
+                from ..control_plane.turn_driver.host_failure import BuiltInHostError
+                raise BuiltInHostError(str(observation.get("reason") or "Current Agent direction continuation failed"),
+                    failure_kind=str(observation.get("failure_kind") or "unknown"))
+            decision = dict(observation["value"])
+            if decision.get("stop_reason"):
+                return {"result_kind": "user_action_required"}
+            if decision.get("result_kind") in {"wait", "user_action_required", "iteration_failed"}:
+                return decision
+            if decision.get("agent_vision_json"):
+                decision["agent_vision"] = json.loads(decision["agent_vision_json"])
+            return {"read_context_id": decision.get("read_context_id"),
+                "agent_vision": decision.get("agent_vision"),
+                "vision_unchanged_reason": decision.get("vision_unchanged_reason")}
+
+        from ..control_plane.turn_driver.checkpoint_continuation import CurrentAgentCheckpoint
+        _state_project, checkpoint_state = resolve_todo_state_path(registry_path=registry_path,
+            goal_id=args.goal_id, project=None, state_file=None)
+        current_checkpoint = CurrentAgentCheckpoint(registry_path, runtime_root, checkpoint_state,
+            settlement_identity, run_direction)
+
         def on_managed_start_admitted() -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
@@ -938,6 +1021,9 @@ def execute_turn_run_once(
                 if isinstance(replan_packet, Mapping)
                 else None
             )
+            from ..control_plane.goals.checkpoint_context_io import default_result_freshness_policy
+
+            policy = default_result_freshness_policy(runtime_root, args.goal_id, settlement_identity.todo_id, goal_ref)
             ensure_turn_heartbeat_settlement_receipt(
                 runtime_root,
                 settlement_identity,
@@ -945,6 +1031,8 @@ def execute_turn_run_once(
                 semantic_replan_obligation_id=replan_obligation_id,
                 semantic_replan_capability_guard=capability_guard,
                 goal_ref=goal_ref,
+                result_freshness=policy,
+                checkpoint_continuation="current_agent_v1" if policy is not None else None,
             )
 
         managed_cadence = managed_cadence_start(
@@ -957,6 +1045,8 @@ def execute_turn_run_once(
         )
 
         execution_started = bool(args.execute)
+        from ..control_plane.goals.checkpoint_context_io import TurnResultWork
+
         result = run_loopx_turn_once(
             payload,
             decision_capture_payload=decision,
@@ -974,6 +1064,7 @@ def execute_turn_run_once(
             settlement_admission=settlement_admission,
             writeback=writeback if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
+            post_result_checkpoint=current_checkpoint.enabled if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
             terminal_closeout=terminal_closeout if args.execute else None,
             spend=spend if args.execute else None,
@@ -989,6 +1080,7 @@ def execute_turn_run_once(
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
+            result_work=TurnResultWork(registry_path, runtime_root, settlement_identity, goal_ref),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(

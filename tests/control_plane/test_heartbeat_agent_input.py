@@ -112,6 +112,9 @@ def test_thin_agent_input_excludes_generator_and_embedded_command_duplicates() -
     }
     assert projected["schema_version"] == HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION
     assert projected["task_body"] == generated["task_body"]
+    assert "loopx-project" in projected["task_body"]
+    assert "loopx-self-repair" in projected["task_body"]
+    assert "Failed preflight/guard: no work/spend" in projected["task_body"]
     assert projected["interface_budget"] == {
         "mode": "thin",
         "budget_char_count": generated["interface_budget"]["budget_char_count"],

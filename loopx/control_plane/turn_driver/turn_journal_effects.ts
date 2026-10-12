@@ -141,6 +141,92 @@ function samePrefix(left: readonly string[], right: readonly string[]): boolean 
   return left.length <= right.length && left.every((phase, index) => phase === right[index]);
 }
 
+function resultValidationInvalidated(existing: JsonObject, incoming: JsonObject,
+  previous: JournalState, next: JournalState): boolean {
+  if (previous.status !== "in_progress" || next.status !== "failed" ||
+      previous.completedPhases.length !== 3 || next.completedPhases.length !== 2 ||
+      next.failedPhase !== "validation" || incoming.validation_stage !== "result_freshness") return false;
+  // Only a rejected, uncommitted result may invalidate its validation checkpoint.
+  // Prepared effects must already have been aborted by the settlement owner.
+  if ([existing, incoming].some(journal => ["writeback", "quota_spend", "terminal_closeout",
+      "effect_attempts", "source_effect_hold"].some(key => journal[key] !== undefined))) return false;
+  const context = asObject(existing.result_work_context);
+  const retry = asObject(incoming.result_revalidation);
+  const rejection = asObject(retry.rejection);
+  return rejection.ok === false &&
+    ["checkpoint_read_context_stale", "delivery_validation_binding_mismatch"].includes(String(rejection.error_code)) &&
+    typeof context.read_context_id === "string" && context.read_context_id.length > 0 &&
+    typeof existing.task_validation === "object" && existing.task_validation !== null &&
+    typeof existing.host_result === "object" && existing.host_result !== null &&
+    operationId(context) === operationId(asObject(incoming.result_work_context)) &&
+    operationId(context) === operationId(asObject(retry.original_context)) &&
+    operationId(asObject(existing.host_result)) === operationId(asObject(retry.candidate)) &&
+    incoming.task_validation === undefined && incoming.result_work_binding === undefined;
+}
+
+function requireTerminalResultRevalidation(existing: JsonObject, incoming: JsonObject,
+  previous: JournalState, next: JournalState): void {
+  const prior = asObject(existing.result_revalidation);
+  const retry = asObject(incoming.result_revalidation);
+  if (prior.phase !== "terminal_closeout" && retry.phase !== "terminal_closeout") return;
+  if (previous.completedPhases.length !== 5 || next.completedPhases.length !== 5 ||
+      [existing, incoming].some(journal => journal.terminal_closeout !== undefined || journal.effect_attempts !== undefined) ||
+      ["writeback", "quota_spend"].some(key => existing[key] == null || incoming[key] == null ||
+        operationId(asObject(existing[key])) !== operationId(asObject(incoming[key])))) {
+    conflict("Terminal result revalidation must retain the original settled effects");
+  }
+  if (retry.phase === "terminal_closeout") {
+    const rejection = asObject(retry.rejection);
+    if (rejection.ok !== false || !["checkpoint_read_context_stale", "delivery_validation_binding_mismatch"]
+      .includes(String(rejection.error_code))) conflict("Terminal result revalidation requires a known result rejection");
+    const original = prior.phase === "terminal_closeout" ? prior : {
+      candidate: existing.host_result, original_context: existing.result_work_context};
+    if (["candidate", "original_context"].some(key =>
+      operationId(asObject(retry[key])) !== operationId(asObject(original[key])))) {
+      conflict("Terminal result revalidation must retain its original candidate and basis");
+    }
+    if (typeof asObject(retry.original_context).read_context_id !== "string" ||
+        !String(asObject(retry.original_context).read_context_id)) {
+      conflict("Terminal result revalidation requires its original work key");
+    }
+    const view = asObject(retry.validation);
+    if (Object.keys(view).length) {
+      const viewPhases = view.completed_phases;
+      if (!Array.isArray(viewPhases) || viewPhases.length > 3 ||
+          typeof asObject(view.work_context).read_context_id !== "string" ||
+          !viewPhases.every((phase, index) => phase === transactionPhases[index]) ||
+          !["in_progress", "failed"].includes(String(view.status)) ||
+          ["writeback", "quota_spend", "terminal_closeout", "effect_attempts"].some(key => view[key] !== undefined) ||
+          journalPhaseViolation(String(view.status), viewPhases as string[],
+            typeof asObject(view.receipt).failed_phase === "string" ? String(asObject(view.receipt).failed_phase) : null)) {
+        conflict("Terminal result revalidation may execute only Host and validation stages");
+      }
+    }
+    if (["host_result", "task_validation"].some(key =>
+      operationId(asObject(existing[key])) !== operationId(asObject(incoming[key]))) &&
+        (!Array.isArray(view.completed_phases) || view.completed_phases.length !== 3 ||
+          asObject(view.task_validation).ok !== true ||
+          ["host_result", "task_validation"].some(key =>
+            operationId(asObject(view[key])) !== operationId(asObject(incoming[key]))))) {
+      // Clearing old validation when recording a rejection is allowed; publishing
+      // a replacement candidate requires the completed validation view.
+      if (incoming.task_validation !== undefined ||
+          operationId(asObject(existing.host_result)) !== operationId(asObject(incoming.host_result))) {
+        conflict("Terminal result revalidation cannot publish an unvalidated replacement");
+      }
+    }
+  } else {
+    const view = asObject(prior.validation);
+    if (!Array.isArray(view.completed_phases) || view.completed_phases.length !== 3 ||
+        asObject(view.task_validation).ok !== true || incoming.result_work_binding == null ||
+        operationId(asObject(view.work_context)) !== operationId(asObject(incoming.result_work_context)) ||
+        operationId(asObject(view.host_result)) !== operationId(asObject(incoming.host_result)) ||
+        operationId(asObject(view.task_validation)) !== operationId(asObject(incoming.task_validation))) {
+      conflict("Terminal result revalidation requires the newly validated candidate binding");
+    }
+  }
+}
+
 function requireJournalState(journal: JsonObject): JournalState {
   if (journal.schema_version !== "loopx_turn_journal_v0") {
     throw new EffectRuntimeRequestError(
@@ -303,6 +389,13 @@ function requireJournalTransition(
   if (operationId(asObject(existing.plan), previousNumbers) !== operationId(asObject(incoming.plan), nextNumbers)) {
     conflict("Turn journal transaction plan is immutable", "journal_plan_conflict");
   }
+  requireTerminalResultRevalidation(existing, incoming, previous, next);
+  for (const key of ["completion_intent", "checkpoint_host_binding"]) {
+    if (existing[key] !== undefined && operationId(asObject(existing[key])) !==
+      operationId(asObject(incoming[key]))) {
+      conflict(`Original Turn ${key} is immutable`);
+    }
+  }
   if (terminalStatuses.has(previous.status)) {
     const auditOnly =
       previous.status === next.status &&
@@ -329,7 +422,7 @@ function requireJournalTransition(
     samePrefix(next.completedPhases, previous.completedPhases);
   if (
     !samePrefix(previous.completedPhases, next.completedPhases) &&
-    !validationRetryRewind
+    !validationRetryRewind && !resultValidationInvalidated(existing, incoming, previous, next)
   ) {
     conflict("Turn journal completed phases cannot regress or fork");
   }

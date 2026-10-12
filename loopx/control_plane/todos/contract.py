@@ -1013,6 +1013,11 @@ _TODO_METADATA_FIELD_SCHEMA = (
         ),
     ),
     _TodoMetadataField(
+        "completion_requested_continuation",
+        normalize_todo_completion_continuation,
+        invalid_message="completion_requested_continuation must be active_goal, successor or no_followup",
+    ),
+    _TodoMetadataField(
         "completion_recovery",
         normalize_todo_completion_recovery,
         invalid_message=(
@@ -1209,6 +1214,7 @@ def format_todo_metadata_line(
     unblocks_todo_id: str | None = None,
     successor_todo_ids: Any = None,
     completion_continuation: str | None = None,
+    completion_requested_continuation: str | None = None,
     completion_recovery: str | None = None,
     completion_receipt_id: str | None = None,
     replan_obligation_id: str | None = None,
@@ -1276,7 +1282,7 @@ def todo_block_metadata(block: dict[str, Any]) -> dict[str, Any]:
             normalized = normalize_todo_decision_scope_outcomes(value)
         elif key == "no_followup":
             normalized = normalize_todo_no_followup(value)
-        elif key == "completion_continuation":
+        elif key in {"completion_continuation", "completion_requested_continuation"}:
             normalized = normalize_todo_completion_continuation(value)
         elif key == "completion_recovery":
             normalized = normalize_todo_completion_recovery(value)
@@ -1378,8 +1384,10 @@ def metadata_line_for_todo_block(
                 metadata[key] = normalized
             else:
                 metadata.pop(key, None)
-        elif key in {"completion_continuation", "completion_recovery"}:
-            normalized_completion = require_todo_completion_metadata(key, value)
+        elif key in {"completion_continuation", "completion_requested_continuation", "completion_recovery"}:
+            normalized_completion = require_todo_completion_metadata(
+                "completion_continuation" if key == "completion_requested_continuation" else key, value
+            )
             if normalized_completion:
                 metadata[key] = normalized_completion
             else:

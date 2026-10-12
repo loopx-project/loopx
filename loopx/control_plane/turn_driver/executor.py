@@ -24,6 +24,7 @@ from ..goals.first_party_host_admission import (
     FirstPartyHostRuntimeRejected,
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
+from ..goals.checkpoint_context_io import CheckpointReadContextRejected, TurnResultWork
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
 from ..work_items.delivery_outcome import (
     explain_turn_scoped_settlement_gap,
@@ -808,6 +809,27 @@ def _host_failure(
     }
 
 
+def _retain_result_for_revalidation(plan: Mapping[str, Any], journal: dict[str, Any],
+                                    result: Mapping[str, Any], error: CheckpointReadContextRejected) -> None:
+    terminal = len(journal.get("completed_phases") or []) == 5 and journal.get("quota_spend") is not None
+    phases = list(journal["completed_phases"] if terminal else TRANSACTION_PHASES[:2])
+    kind = LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED if terminal else LoopXTurnResultKind.VALIDATION_FAILED
+    failure = _host_failure(plan, kind=kind,
+        completed_phases=phases, failed_phase="terminal_closeout" if terminal else "validation", reason=str(error))
+    prior_retry = (journal.get("result_revalidation") or {}) if terminal else {}
+    journal.update(status="failed", receipt=failure["receipt"], reason=str(error),
+        result_kind=kind.value,
+        validation_stage="result_freshness", completed_phases=phases,
+        result_revalidation={"candidate": prior_retry.get("candidate", journal.get("host_result", result)),
+            "original_context": prior_retry.get("original_context", journal.get("result_work_context")),
+            "rejection": error.payload["checkpoint_read_context"],
+            **({"phase": "terminal_closeout", "validation": {}, "reread_required": True} if terminal else {}),
+            "changed_components": error.payload["checkpoint_read_context"].get("changed_components", []),
+            "instruction": "Recheck this retained candidate against the new work basis. Reuse valid artifacts; change implementation only where the new requirements demand it."})
+    journal.pop("task_validation", None)
+    journal.pop("result_work_binding", None)
+
+
 def _run_host(
     request: Mapping[str, Any],
     *,
@@ -845,6 +867,7 @@ def _run_host(
             "ok": False,
             "reason": "host process " + observed["outcome"],
             "returncode": observed["returncode"],
+            "failure_kind": "executor_timeout" if observed["outcome"] == "timeout" else "transport_lost",
         }
     if not observed["output_complete"]:
         return {
@@ -942,6 +965,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
+    session_binding_resolver: SessionBindingResolver | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -950,6 +974,7 @@ def _host_result_stage(
         if isinstance(journal.get("host_result"), dict)
         else None
     )
+    dispatched_result = "typed_result" not in completed_phases
     if "typed_result" not in completed_phases:
         journal["host_attempt_count"] = int(journal.get("host_attempt_count") or 0) + 1
         persist_journal(journal)
@@ -1057,6 +1082,13 @@ def _host_result_stage(
         )
 
     normalized = dict(validation["result"])
+    if dispatched_result and session_binding_resolver is not None and normalized.get("result_kind") in {
+        LoopXTurnResultKind.VALIDATED_COMPLETION.value,
+        LoopXTurnResultKind.VALIDATED_PROGRESS.value,
+        LoopXTurnResultKind.REPAIR_REQUIRED.value,
+        LoopXTurnResultKind.REPLAN_REQUIRED.value,
+    } and "checkpoint_host_binding" not in journal:
+        journal["checkpoint_host_binding"] = session_binding_resolver(request["turn_envelope"])
     if len(completed_phases) < 2:
         completed_phases = list(TRANSACTION_PHASES[:2])
     journal.update(
@@ -1158,6 +1190,74 @@ def _task_validation_stage(
     return completed_phases, None
 
 
+def _terminal_result_validation_failure(plan: Mapping[str, Any], journal: dict[str, Any],
+    reason: str, *, persist_journal: JournalPersist, effects: dict[str, bool]) -> dict[str, Any]:
+    failure = _host_failure(plan, kind=LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED,
+        completed_phases=list(journal["completed_phases"]), failed_phase="terminal_closeout", reason=reason)
+    journal.update(status="failed", receipt=failure["receipt"], reason=reason,
+        result_kind=LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED.value)
+    persist_journal(journal)
+    return execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+
+
+def _terminal_result_validation_stage(
+    plan: Mapping[str, Any], request: Mapping[str, Any], *, journal: dict[str, Any],
+    persist_journal: JournalPersist, effects: dict[str, bool], host_runner: HostRunner | None,
+    argv: Sequence[str] | None, project: Path, timeout_seconds: float | None,
+    task_validator: TaskValidator | None,
+    confirm_start: Callable[[], None] | None, runtime_root: Path, goal_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Revalidate an uncommitted terminal result while retaining settled phases."""
+    retry = journal["result_revalidation"]
+    view = {"schema_version": journal["schema_version"], "goal_id": journal["goal_id"],
+        "turn_key": journal["turn_key"], "plan": journal["plan"], "status": "in_progress",
+        "completed_phases": [], "host_attempt_count": journal.get("host_attempt_count", 0),
+        **retry.get("validation", {})}
+    if view.get("status") == "failed":
+        if (view.get("receipt") or {}).get("failed_phase") == "validation":
+            view["completed_phases"] = []
+            view.pop("host_result", None)
+            view.pop("task_validation", None)
+        for key in ("receipt", "reason", "host_recovery", "host_failure"):
+            view.pop(key, None)
+        view["status"] = "in_progress"
+    if view.get("work_context") != journal["result_work_context"]:
+        # A cold view must keep the facts actually supplied to its Host and
+        # validator. A replacement read requires both stages again.
+        view = {"schema_version": journal["schema_version"], "goal_id": journal["goal_id"],
+            "turn_key": journal["turn_key"], "plan": journal["plan"], "status": "in_progress",
+            "completed_phases": [], "host_attempt_count": journal.get("host_attempt_count", 0),
+            "work_context": journal["result_work_context"]}
+
+    def persist_view(snapshot):
+        retry["validation"] = {key: value for key, value in snapshot.items()
+            if key not in {"schema_version", "goal_id", "turn_key", "plan"}}
+        journal["host_attempt_count"] = snapshot.get("host_attempt_count", journal.get("host_attempt_count", 0))
+        persist_journal(journal)
+
+    failed = partial(_terminal_result_validation_failure, plan, journal,
+        persist_journal=persist_journal, effects=effects)
+
+    result, phases, terminal = _host_result_stage(plan, request, host_runner=host_runner,
+        argv=argv, completion_lifecycle_configured=True, project=project,
+        timeout_seconds=timeout_seconds, journal=view, persist_journal=persist_view,
+        effects=effects, confirm_start=confirm_start, usage_runtime_root=runtime_root, usage_goal_id=goal_id)
+    if terminal is not None:
+        return None, failed(str(view.get("reason") or "Terminal result revalidation failed"))
+    assert result is not None
+    if result.get("result_kind") != LoopXTurnResultKind.VALIDATED_COMPLETION.value:
+        return None, failed("Terminal result revalidation requires a validated completion; preserve the settled receipts.")
+    _, terminal = _task_validation_stage({**plan, "delivery_result_context": journal["result_work_context"]},
+        result, task_validator=task_validator, completed_phases=phases, journal=view,
+        persist_journal=persist_view, effects=effects)
+    if terminal is not None:
+        return None, failed(str(view.get("reason") or "Terminal candidate validation failed"))
+    journal["host_result"] = result
+    journal["task_validation"] = view["task_validation"]
+    persist_journal(journal)
+    return result, None
+
+
 def _ensure_turn_settlement_plan(
     plan: Mapping[str, Any],
     transaction_plan: dict[str, Any],
@@ -1215,6 +1315,7 @@ def _typed_settlement_stage(
     post_settlement: PostSettlement | None,
     source_effects: TurnSettlementEffectAdmission | None,
     persist_source_journal: SourceJournalPersist | None,
+    post_result_checkpoint: Callable[[], bool] | None,
 ) -> dict[str, Any]:
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), Mapping) else {}
@@ -1240,6 +1341,21 @@ def _typed_settlement_stage(
                 completion_intent=completion_intent,
             )
         )
+        persist_journal(journal)
+
+    freshness_error: CheckpointReadContextRejected | None = None
+
+    def completion_effect(callback: CompletionWriteback, effect_ref: str) -> Mapping[str, Any]:
+        nonlocal freshness_error
+        try:
+            return invoke_result_effect(callback, result, effect_ref)
+        except CheckpointReadContextRejected as error:
+            if error.code not in {"checkpoint_read_context_stale", "delivery_validation_binding_mismatch"}:
+                raise
+            # The Todo owner rejected before commit. Let the typed settlement
+            # owner abort its prepared effect before reopening validation.
+            freshness_error = error
+            return {"ok": False, "appended": False, "reason": str(error)}
 
     def writeback_effect(effect_ref: str) -> Mapping[str, Any]:
         if completion_intent_error:
@@ -1250,13 +1366,14 @@ def _typed_settlement_stage(
             }
         if (
             result.get("result_kind") == LoopXTurnResultKind.VALIDATED_COMPLETION.value
-            and not terminal_closeout_required
+            and (not terminal_closeout_required or
+                 (post_result_checkpoint is not None and post_result_checkpoint()))
         ):
             if completion_writeback is None:
                 raise ValueError(
                     "validated_completion requires a todo lifecycle adapter"
                 )
-            return invoke_result_effect(completion_writeback, result, effect_ref)
+            return completion_effect(completion_writeback, effect_ref)
         return invoke_result_effect(writeback, result, effect_ref)
 
     def spend_effect(effect_ref: str) -> Mapping[str, Any]:
@@ -1293,7 +1410,7 @@ def _typed_settlement_stage(
     terminal_checkpoint = None
     if terminal_closeout_required:
         assert terminal_closeout is not None
-        terminal_effect = partial(invoke_result_effect, terminal_closeout, result)
+        terminal_effect = partial(completion_effect, terminal_closeout)
         terminal_checkpoint = journal_adapter.checkpoint_terminal
 
     settlement_result = execute_turn_driver_settlement(
@@ -1333,6 +1450,10 @@ def _typed_settlement_stage(
 
     journal["settlement_result"] = settlement_result_payload(settlement_result)
     if settlement_result.failure is not None:
+        if freshness_error is not None:
+            _retain_result_for_revalidation(plan, journal, result, freshness_error)
+            persist_journal(journal)
+            return execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
         result_kind, completed_phases, failed_phase = turn_settlement_failure_outcome(
             settlement_result
         )
@@ -1463,6 +1584,8 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    result_work: TurnResultWork | None = None,
+    post_result_checkpoint: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
@@ -1610,10 +1733,25 @@ def run_loopx_turn_once(
             and receipt.get("failed_phase") == "validation"
             and journal.get("validation_stage") != "task_postcondition"
         )
+        terminal_retry = (journal or {}).get("result_revalidation") or {}
+        terminal_view = terminal_retry.get("validation", {})
+        if terminal_retry.get("phase") == "terminal_closeout" and terminal_view.get("status") == "failed":
+            assessment = assess_existing_turn_recovery({"schema_version": journal["schema_version"],
+                "goal_id": goal_id, "turn_key": turn_key, "plan": journal["plan"], **terminal_view}, request,
+                goal_id=goal_id, agent_id=str(plan["turn_envelope"]["agent_id"]), turn_key=turn_key,
+                retry_failed=True, session_binding_resolver=session_binding_resolver)
+            request = require_turn_recovery_continuation(assessment)
+        terminal_work_changed = (result_work is not None and terminal_retry.get("phase") == "terminal_closeout"
+            and terminal_retry.get("validation", {}).get("work_context") != result_work.read())
         needs_host = (
             validation_reinvokes_host
             or journal is None
             or "typed_result" not in list(journal.get("completed_phases") or [])
+            or terminal_work_changed
+            or isinstance(journal.get("result_revalidation"), dict) and
+                journal["result_revalidation"].get("phase") == "terminal_closeout" and
+                ("typed_result" not in journal["result_revalidation"].get("validation", {}).get("completed_phases", []) or
+                 journal["result_revalidation"].get("validation", {}).get("status") == "failed")
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
@@ -1695,6 +1833,27 @@ def run_loopx_turn_once(
             journal["admission"] = admission
             persist_journal(journal)
 
+        original_result_committed = (result_work is not None and
+            isinstance(journal.get("result_work_context"), Mapping) and (
+                ("durable_writeback" in journal.get("completed_phases", []) and
+                    post_result_checkpoint is not None and post_result_checkpoint()) or result_work.result_committed()))
+        if result_work is not None and not original_result_committed:
+            revalidation = journal.get("result_revalidation")
+            context = result_work.read()
+            if revalidation is not None and (context == revalidation.get("original_context") or revalidation.get("reread_required") is True):
+                context = result_work.read(reread=True)
+            if context is not None:
+                previous = journal.get("result_work_context")
+                if previous is not None and revalidation is None and previous != context:
+                    raise ValueError("Original Turn work input was replaced; preserve its candidate and reconcile")
+                journal["result_work_context"] = context
+                request["delivery_result_context"] = context
+                if revalidation is not None:
+                    request["result_revalidation"] = revalidation
+                    revalidation["reread_required"] = False
+                # Durable work input precedes dispatch, including cold retries.
+                persist_journal(journal)
+
         effects = dict(empty_effects)
 
         def finish_recovery(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1710,12 +1869,23 @@ def run_loopx_turn_once(
             payload["recovery"] = dict(journal["recovery_audit"])
             return payload
 
+        terminal_revalidation = (journal.get("result_revalidation") or {}).get("phase") == "terminal_closeout"
+        if terminal_revalidation:
+            _, terminal = _terminal_result_validation_stage(plan, request, journal=journal,
+                persist_journal=persist_journal, effects=effects, host_runner=host_runner, argv=argv,
+                project=project, timeout_seconds=timeout_seconds, task_validator=task_validator,
+                confirm_start=confirm_start if admission is not None and admission.get("reserved") is True else None,
+                runtime_root=runtime_root, goal_id=goal_id)
+            if terminal is not None:
+                return finish_recovery(terminal)
+
         result, completed_phases, terminal = _host_result_stage(
             plan,
             request,
             host_runner=host_runner,
             usage_runtime_root=runtime_root,
             usage_goal_id=goal_id,
+            session_binding_resolver=session_binding_resolver,
             argv=argv,
             completion_lifecycle_configured=all(
                 callback is not None
@@ -1740,8 +1910,24 @@ def run_loopx_turn_once(
             return finish_recovery(terminal)
         assert result is not None
 
+        context = journal.get("result_work_context")
+        def freshness_failure(error: CheckpointReadContextRejected) -> dict[str, Any]:
+            _retain_result_for_revalidation(plan, journal, result, error)
+            persist_journal(journal)
+            return finish_recovery(execution_payload(plan, journal, execute=True,
+                replayed=False, effects=effects))
+
+        protected_result = result_work is not None and not original_result_committed and isinstance(context, Mapping) and result.get("result_kind") == LoopXTurnResultKind.VALIDATED_COMPLETION.value
+        if protected_result:
+            try:
+                result_work.check(context)
+            except CheckpointReadContextRejected as error:
+                if error.code != "checkpoint_read_context_stale":
+                    raise
+                return freshness_failure(error)
+
         completed_phases, terminal = _task_validation_stage(
-            plan,
+            {**plan, "delivery_result_context": context} if context is not None else plan,
             result,
             task_validator=task_validator,
             completed_phases=completed_phases,
@@ -1751,6 +1937,26 @@ def run_loopx_turn_once(
         )
         if terminal is not None:
             return finish_recovery(terminal)
+
+        if protected_result:
+            try:
+                result_work.check(context)
+                binding = result_work.bind(context, result, journal["task_validation"],
+                    binding=journal.get("result_work_binding"))
+            except CheckpointReadContextRejected as error:
+                if error.code not in {"checkpoint_read_context_stale", "delivery_validation_binding_mismatch"}:
+                    raise
+                return freshness_failure(error)
+            journal["result_work_binding"] = binding.get("binding", journal.get("result_work_binding"))
+            if terminal_revalidation:
+                journal.pop("result_revalidation")
+            persist_journal(journal)
+
+        # Replay carries the same work key as the original successful request,
+        # even when the read receipt is no longer available. The Todo owner,
+        # not this transport field, decides whether that request is a replay.
+        if result.get("result_kind") == LoopXTurnResultKind.VALIDATED_COMPLETION.value and journal.get("result_work_binding") is not None:
+            result = {**result, "result_work_binding": journal["result_work_binding"]}
 
         with settlement_admission() if settlement_admission is not None else nullcontext():
             settled = _typed_settlement_stage(
@@ -1764,6 +1970,7 @@ def run_loopx_turn_once(
                 completion_writeback=completion_writeback,
                 completion_intent=completion_intent,
                 terminal_closeout=terminal_closeout,
+                post_result_checkpoint=post_result_checkpoint,
                 spend=spend,
                 effect_resolvers=turn_effect_resolvers(
                     writeback=writeback_resolver,

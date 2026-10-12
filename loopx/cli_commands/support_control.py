@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
+from ..cli_runtime import PrintPayload
 
 from ..agent_registry import (
     agent_profile_from_registry,
@@ -74,10 +75,6 @@ from .support_control_update import (
     register_update_command,
 )
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
@@ -491,11 +488,11 @@ def handle_support_control_command(
             and recurring_thin_surface
             else payload
         )
-        print_payload(
-            output_payload,
-            selected_output_format,
-            render_heartbeat_prompt_markdown,
-        )
+        if not args.full:
+            print_payload(output_payload, selected_output_format,
+                          render_heartbeat_prompt_markdown)
+        else:
+            print_payload(output_payload, selected_output_format, render_heartbeat_prompt_markdown)
         return 0 if payload.get("ok") else 1
 
     supervisor_result = handle_supervisor_control_command(

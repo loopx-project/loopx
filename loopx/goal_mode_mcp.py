@@ -14,6 +14,7 @@ from typing import Any
 
 from .control_plane.host_adapter_settlement import (
     HostTodoSettlementRequest,
+    classify_host_guard_snapshot,
     host_vision_request,
     project_host_interaction,
     refresh_host_todo_vision,
@@ -174,15 +175,74 @@ class GoalModeMCPControlPlane:
             ],
         )
 
-    def should_run(self) -> str:
+    def should_run(self, revalidate_todo_id: str = "") -> str:
         goal_id, _ = self.context()
         if not goal_id:
             return self.no_goal_message()
         args, legacy_args = self.should_run_args(goal_id, self.bound_agent_id())
-        return project_host_interaction(self.run_cli(args, legacy_args=legacy_args))
+        suffix = ["--todo-id", revalidate_todo_id] if revalidate_todo_id else []
+        output = self.run_cli([*args, *suffix], legacy_args=[*legacy_args, *suffix])
+        if revalidate_todo_id:
+            guard = json.loads(output)
+            if guard.get("ok") is True and guard.get("delivery_result_context"):
+                identity = guard["delivery_result_context"]["settlement_identity"]
+                refreshed = json.loads(self.run_cli(["checkpoint-context", "--goal-id", goal_id,
+                    "--agent-id", self.bound_agent_id(), *suffix,
+                    "--turn-instance-id", identity["turn_instance_id"], "--purpose", "delivery_result"]))
+                if refreshed.get("ok") is not True:
+                    return json.dumps(refreshed)
+                guard["delivery_result_context"] = {key: refreshed[key] for key in
+                    ("ok", "basis", "read_context_id", "settlement_identity")}
+                guard["result_revalidation_required"] = True
+                guard["next_action"] = "Revalidate the retained candidate against this basis, then call complete_task for the same Todo. The original Turn key is carried automatically."
+                output = json.dumps(guard)
+        return project_host_interaction(output)
+
+    def _original_work_turn(self, todo_id: str) -> str | None:
+        """Resolve installed admission through the same owner used by the CLI."""
+        from pathlib import Path
+        from .history import load_registry
+        from .paths import resolve_runtime_root
+        from .control_plane.goals.checkpoint_context_io import restore_default_turn_id
+
+        goal_id, registry = self.context()
+        if not registry or not Path(registry).is_file():
+            return None  # Older host contracts retain their deterministic identity.
+        path = Path(registry)
+        return restore_default_turn_id(runtime_root=resolve_runtime_root(load_registry(path), None, registry_path=path),
+            registry_path=path, goal_id=goal_id, agent_id=self.bound_agent_id(), todo_id=todo_id, pending_only=False)
 
     def list_todos(self) -> str:
         return self.should_run()
+
+    def _checkpoint_continuation(self, todo_id: str, turn_id: str | None) -> bool:
+        if turn_id is None:
+            return False
+        from pathlib import Path
+        from .history import load_registry
+        from .paths import resolve_runtime_root
+        from .control_plane.quota.settlement import read_heartbeat_settlement
+        from .control_plane.goals.checkpoint_context_io import checkpoint_continuation_required
+
+        goal_id, registry = self.context()
+        path = Path(registry)
+        root = resolve_runtime_root(load_registry(path), None, registry_path=path)
+        readback = read_heartbeat_settlement(root, goal_id=goal_id, agent_id=self.bound_agent_id(),
+            todo_id=todo_id, turn_instance_id=turn_id, registry_path=path, goal_ref=self.goal_ref())
+        return readback is not None and checkpoint_continuation_required(readback)
+
+    def _stored_terminal_intent(self, todo_id: str, turn_id: str) -> bool:
+        from pathlib import Path
+        from .todos import list_goal_todos
+        from .control_plane.quota.settlement import SettlementIdentity
+        from .control_plane.goals.checkpoint_context_io import _checkpoint_effect
+
+        goal_id, registry = self.context()
+        todo = list_goal_todos(registry_path=Path(registry), goal_id=goal_id, todo_id=todo_id).get("todo")
+        identity = SettlementIdentity(goal_id=goal_id, agent_id=self.bound_agent_id(),
+            todo_id=todo_id, turn_instance_id=turn_id)
+        return _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
+            "phase": "direction_terminal_intent", "todo": todo, "identity": identity.as_dict()})["no_followup"]
 
     def host_prompt(self) -> str:
         from .claude_goal_mode.scripts.goalmode_cmd import loop_execution_content
@@ -226,6 +286,9 @@ class GoalModeMCPControlPlane:
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
+        first_delivery: bool = False,
+        delivery_read_context_id: str = "",
+        read_context_id: str = "",
     ) -> str:
         goal_id, _ = self.context()
         if not goal_id:
@@ -233,6 +296,10 @@ class GoalModeMCPControlPlane:
         identity_error = self._identity_error(agent_id)
         if identity_error:
             return identity_error
+        turn_id = self._original_work_turn(todo_id)
+        current_checkpoint = self._checkpoint_continuation(todo_id, turn_id)
+        if current_checkpoint and not no_follow_up:
+            no_follow_up = self._stored_terminal_intent(todo_id, turn_id)
         if next_agent_todo and no_follow_up:
             return json.dumps(
                 {
@@ -278,8 +345,13 @@ class GoalModeMCPControlPlane:
             scheduler_owner=self.config.scheduler_owner,
             execution_mode=self.config.execution_mode,
             completion_args=tuple(args),
+            first_delivery=first_delivery,
+            delivery_read_context_id=delivery_read_context_id or None,
+            checkpoint_read_context_id=read_context_id or None,
             no_follow_up=no_follow_up,
             goal_ref=self.goal_ref(),
+            turn_instance_id=turn_id,
+            current_agent_checkpoint=current_checkpoint,
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason,
                                  allow_terminal_stride_path=self._allow_terminal_stride_path(goal_id, agent_vision)) as authored:
@@ -289,6 +361,7 @@ class GoalModeMCPControlPlane:
         self, todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
         read_context_id: str = "",
+        first_delivery: bool = False,
     ) -> str:
         goal_id, _ = self.context()
         if not goal_id:
@@ -296,6 +369,7 @@ class GoalModeMCPControlPlane:
         identity_error = self._identity_error(agent_id)
         if identity_error:
             return identity_error
+        turn_id = self._original_work_turn(todo_id)
         request = HostTodoSettlementRequest(
             goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
             runtime_profile=self.config.runtime_profile,
@@ -303,7 +377,10 @@ class GoalModeMCPControlPlane:
             scheduler_owner=self.config.scheduler_owner, execution_mode=self.config.execution_mode,
             completion_args=(),
             checkpoint_read_context_id=read_context_id or None,
+            first_delivery=first_delivery,
             goal_ref=self.goal_ref(),
+            turn_instance_id=turn_id,
+            current_agent_checkpoint=self._checkpoint_continuation(todo_id, turn_id),
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason,
                                  allow_terminal_stride_path=self._allow_terminal_stride_path(goal_id, agent_vision)) as authored:
@@ -343,9 +420,13 @@ def create_fastmcp_server(
             return control.host_prompt()
 
     @server.tool()
-    def should_run() -> str:
-        """Whether the bound goal and agent should run now."""
-        return control.should_run()
+    def should_run(revalidate_todo_id: str = "") -> str:
+        """Read admitted work and its original result basis. After a stale result,
+        pass its Todo as revalidate_todo_id to read new facts on the same Turn.
+        Revalidate the retained candidate before complete_task; no token copying
+        is needed. Ordinary calls preserve the original basis across restarts.
+        """
+        return control.should_run(revalidate_todo_id)
 
     @server.tool()
     def list_todos() -> str:
@@ -362,6 +443,7 @@ def create_fastmcp_server(
         todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
         read_context_id: str = "",
+        first_delivery: bool = False,
     ) -> str:
         """Supply a missing vision decision for a previously completed MCP Todo.
         First call with only todo_id and agent_id to read the current basis.
@@ -375,7 +457,7 @@ def create_fastmcp_server(
         An unchanged reason requires an existing valid vision. Recheck should_run;
         checkpoint success alone does not certify Goal completion or clear gates.
         """
-        return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason, read_context_id)
+        return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason, read_context_id, first_delivery)
 
     @server.tool()
     def complete_task(
@@ -388,9 +470,21 @@ def create_fastmcp_server(
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
+        first_delivery: bool = False,
+        delivery_read_context_id: str = "",
+        read_context_id: str = "",
     ) -> str:
         """Complete verified work and settle once using claim_operation_id from claim_task.
         Reuse that reference on retries; ownership and expiry are checked internally.
+        Ordinary work uses the result
+        basis returned by should_run; completion carries its original key. After
+        stale rejection call should_run(revalidate_todo_id=todo_id), revalidate
+        the retained candidate, then retry with the same completion intent.
+        With first_delivery=true, first
+        call without Vision to read the result basis; verify it and echo its
+        delivery_read_context_id. Read the returned post-result direction basis,
+        then call with both original read identities and a newly judged Vision.
+        An interrupted call retains the same Todo/Turn; do not repeat work.
         Link existing planned successors
         with successor_todo_ids; next_agent_todo creates a NEW Todo, not an id link.
         no_follow_up closes this Todo's continuation, NOT the Goal's vision.
@@ -412,6 +506,9 @@ def create_fastmcp_server(
             successor_todo_ids=successor_todo_ids,
             agent_vision=agent_vision,
             vision_unchanged_reason=vision_unchanged_reason,
+            first_delivery=first_delivery,
+            delivery_read_context_id=delivery_read_context_id,
+            read_context_id=read_context_id,
         )
 
     return server, control

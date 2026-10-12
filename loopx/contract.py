@@ -74,7 +74,7 @@ class LeakRule:
     blocking: bool = True
 
     def is_candidate(self, folded_text: str) -> bool:
-        return any(literal in folded_text for literal in self.required_literals)
+        return any(map(folded_text.__contains__, self.required_literals))
 
 
 # Python's Unicode re.IGNORECASE matches ASCII I/i against both dotted and

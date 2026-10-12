@@ -23,6 +23,7 @@ import {
 } from "./completion_fence.ts";
 import {
   buildTodoCompletionMetadataUpdates,
+  normalizeTodoNoFollowup,
   selectTodoCompletionState,
   type TodoCompletionRecovery,
   type TodoCompletionContinuation,
@@ -144,6 +145,7 @@ interface DecodedTransactionRequest {
   projection_source: TodoCompletionProjectionSource;
   todo: JsonObject;
   requested_no_followup: boolean;
+  defer_no_followup: boolean;
   requested_completion_turn_key: string | null;
   requested_completion_identity_source: TodoCompletionIdentitySource | null;
   requested_has_successor: boolean;
@@ -263,6 +265,8 @@ function decodeRequest(value: unknown): DecodedTransactionRequest {
       request.requested_no_followup,
       "requested_no_followup",
     ),
+    defer_no_followup: request.defer_no_followup === undefined ? false :
+      requireBoolean(request.defer_no_followup, "defer_no_followup"),
     requested_completion_turn_key: optionalNonEmptyString(
       request.requested_completion_turn_key,
       "requested_completion_turn_key",
@@ -375,7 +379,7 @@ export function reduceTodoCompletionTransaction(
     schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
     projection_source: request.projection_source,
     todo: request.todo,
-    requested_no_followup: request.requested_no_followup,
+    requested_no_followup: request.requested_no_followup && !request.defer_no_followup,
     requested_completion_turn_key: identity.key,
     requested_completion_identity_source: identity.source,
     goal_id: request.goal_id,
@@ -385,7 +389,7 @@ export function reduceTodoCompletionTransaction(
     schema_version: TODO_COMPLETION_VALIDATION_PLAN_REQUEST_SCHEMA,
     projection_source: request.projection_source,
     todo: request.todo,
-    requested_no_followup: request.requested_no_followup,
+    requested_no_followup: request.requested_no_followup && !request.defer_no_followup,
     requested_completion_turn_key: identity.key,
     requested_completion_identity_source: identity.source,
     goal_id: request.goal_id,
@@ -483,6 +487,7 @@ export function reduceTodoCompletionTransaction(
     schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
     todo: request.todo,
     requested_no_followup: request.requested_no_followup,
+    defer_no_followup: request.defer_no_followup,
     has_successor:
       request.requested_has_successor ||
       fenceRequest.todo.successor_todo_ids.length > 0,
@@ -495,13 +500,22 @@ export function reduceTodoCompletionTransaction(
     normalized_status: "done",
     completion_continuation: completionStateResult.continuation,
     completion_recovery: completionStateResult.recovery,
-    no_followup: request.requested_no_followup,
+    no_followup: request.requested_no_followup && !request.defer_no_followup,
     successor_todo_ids: null,
   });
   const updates = requireJsonObject(
     metadataResult.updates,
     "completion metadata updates",
   );
+  // Keep the original closeout intent while the required checkpoint is pending.
+  // This is intent, not a terminal recovery or a completed closeout receipt.
+  if (request.defer_no_followup === true &&
+      (request.requested_no_followup || normalizeTodoNoFollowup(request.todo.no_followup) === true)) {
+    if (completionStateResult.continuation !== "active_goal") {
+      throw new EffectRuntimeRequestError("Deferred no_followup cannot introduce a successor");
+    }
+    updates.completion_requested_continuation = "no_followup";
+  }
   // Checkpoint the committed phase, not its clock tick. Persisting this id
   // lets crash recovery and later reads retain the original hook identity.
   updates.completion_receipt_id = `tcw_${canonicalAuthoritySha256({

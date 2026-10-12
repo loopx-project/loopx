@@ -4,6 +4,24 @@ import {mkdtemp, writeFile, chmod, symlink, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {test} from "node:test";
+import {execFile, spawnSync} from "node:child_process";
+import {fileURLToPath} from "node:url";
+
+async function windowsFixture(directory: string, path: string): Promise<void> {
+  if (process.platform !== "win32") return;
+  const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN ??
+    spawnSync("python", ["-c", "import sys;print(sys.executable)"],
+      {encoding: "utf8", windowsHide: true, timeout: 5000}).stdout?.trim();
+  assert.ok(python, "Windows fixture needs its selected Python interpreter");
+  process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN = python;
+  const helper = fileURLToPath(new URL("../../loopx/control_plane/runtime/private_permissions.py", import.meta.url));
+  await command(python, ["-c", "import runpy,sys;from pathlib import Path;m=runpy.run_path(sys.argv[1]);m['protect_private_path'](Path(sys.argv[2]),directory=True);m['protect_private_path'](Path(sys.argv[3]))", helper, directory, path]);
+}
+
+function command(exe: string, args: string[], env = process.env): Promise<void> {
+  return new Promise((resolve, reject) => execFile(exe, args,
+    {env, windowsHide: true, timeout: 30000}, error => error ? reject(error) : resolve()));
+}
 import {
   openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse,
   MAX_LOCAL_SNAPSHOT_BYTES,
@@ -15,6 +33,7 @@ test("local snapshot accepts exact private bytes and rejects altered or unsafe r
     const path = join(directory, "params.json");
     const bytes = Buffer.from(JSON.stringify({context: "x".repeat(2_200_000)}));
     await writeFile(path, bytes, {mode: 0o600});
+    await windowsFixture(directory, path);
     const ref = {path, byte_count: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex")};
     assert.deepEqual(await readPrivateJsonSnapshot(ref), JSON.parse(bytes.toString()));
@@ -24,14 +43,19 @@ test("local snapshot accepts exact private bytes and rejects altered or unsafe r
       /snapshot unavailable or invalid/);
     await assert.rejects(readPrivateJsonSnapshot({...ref, byte_count: MAX_LOCAL_SNAPSHOT_BYTES + 1}),
       /snapshot unavailable or invalid/);
-    // Windows has no POSIX mode denial: the private-mode rejection is only
-    // observable where process.getuid exists.
-    if (process.getuid) {
-      await chmod(path, 0o644);
-      await assert.rejects(readPrivateJsonSnapshot(ref), /snapshot unavailable or invalid/);
-    }
-    // File symlink creation needs Developer Mode or admin on Windows.
-    if (process.platform !== "win32") {
+    if (process.platform === "win32") {
+      await command("icacls.exe", [path, "/grant", "*S-1-1-0:F"]);
+    } else await chmod(path, 0o644);
+    await assert.rejects(readPrivateJsonSnapshot(ref), /snapshot unavailable or invalid/);
+    if (process.platform === "win32") {
+      const link = join(directory, "loopx-effect-junction");
+      await command("pwsh", ["-NoLogo", "-NoProfile", "-Command",
+        "New-Item -ItemType Junction -Path $env:LX_LINK -Target $env:LX_TARGET | Out-Null"],
+        {...process.env, LX_LINK: link, LX_TARGET: directory});
+      // A real Windows junction is the reparse-path analogue; no symlink privilege needed.
+      await assert.rejects(readPrivateJsonSnapshot({...ref, path: join(link, "params.json")}),
+        /snapshot unavailable or invalid/);
+    } else {
       const link = join(directory, "link.json");
       await symlink(path, link);
       await assert.rejects(readPrivateJsonSnapshot({...ref, path: link}),
@@ -47,6 +71,7 @@ test("large response sink is private and digest-bound", async () => {
   try {
     const path = join(directory, "response.json");
     await writeFile(path, "", {mode: 0o600});
+    await windowsFixture(directory, path);
     const file = await openPrivateResponseSink(path);
     const bytes = Buffer.from(JSON.stringify({result: "a".repeat(2_200_000)}));
     try {

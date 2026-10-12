@@ -1,3 +1,4 @@
+import { verifyReentrySettlement } from "../../loopx/control_plane/coordination/todo_terminal_reentry.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
@@ -446,6 +447,26 @@ async function appendHistory(targetRoot: string, sourceRoot: string): Promise<vo
     );
   }
 }
+
+test("ordinary result receipt is absent terminal evidence; contradictory terminal evidence stays unknown", async () => {
+  const root = await fixture({writeback: true, spend: true, completion: true});
+  try {
+    const ordinary = await readQuotaSettlement(request(root));
+    const terminal = requireJsonObject(ordinary.terminal_closeout, "terminal result");
+    assert.equal(requireJsonObject(requireJsonObject(terminal.result, "terminal result payload").failure,
+      "terminal failure").kind, "receipt_missing");
+    const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const rows = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const completion = rows.find(row => row.event_kind === "todo_complete");
+    completion.status = "terminal_no_followup";
+    delete completion.details.no_followup;
+    await writeFile(path, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    const conflicting = await readQuotaSettlement(request(root));
+    const rejected = requireJsonObject(conflicting.terminal_closeout, "terminal result");
+    assert.equal(requireJsonObject(requireJsonObject(rejected.result, "terminal result payload").failure,
+      "terminal failure").kind, "effect_outcome_unknown");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
 
 function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -2144,4 +2165,26 @@ test("history retry qualification preserves its original aware clock and exact e
     assert.deepEqual((await read([bounded], "2026-01-01T00:00:30Z")).active_retry_indexes, expected);
   }
   await assert.rejects(read([run], 123), /observation clock/);
+});
+
+test("terminal reentry resolves original opaque Turn and full effect identities", async () => {
+  const root = await fixture({writeback: true, spend: true});
+  const request = {goal_id: goalId, todo_id: todoId, actor_agent_id: agentId};
+  for (const key of [turnId, identity.effect_id]) {
+    await verifyReentrySettlement(root, {...request, requested_completion_turn_key: key});
+  }
+  for (const changed of [{todo_id: "todo_other"}, {actor_agent_id: "other"}, {goal_id: "other"}]) {
+    await assert.rejects(verifyReentrySettlement(root, {...request, ...changed,
+      requested_completion_turn_key: turnId}));
+  }
+  await assert.rejects(verifyReentrySettlement(root, {...request,
+    requested_completion_turn_key: "unrecorded-opaque-turn"}));
+});
+
+test("opaque Turn reentry still requires original writeback and spend", async () => {
+  for (const options of [{writeback: true}, {spend: true}, {}]) {
+    const root = await fixture(options);
+    await assert.rejects(verifyReentrySettlement(root, {goal_id: goalId,
+      todo_id: todoId, actor_agent_id: agentId, requested_completion_turn_key: turnId}));
+  }
 });

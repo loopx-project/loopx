@@ -439,23 +439,24 @@ def goal_boundary(
             if repository_identity and repository_identity.startswith("git:"):
                 boundary["task_repository"] = repository_identity
     project_asset_source = item if item is not None else goal
-    if isinstance(project_asset_source, dict) and project_asset_source.get(
-        "project_asset"
-    ):
-        project_asset = project_asset_source.get("project_asset")
-        if isinstance(project_asset, dict):
-            if project_asset.get("stop_condition"):
-                boundary["stop_condition"] = project_asset.get("stop_condition")
-            if isinstance(project_asset.get("execution_profile"), dict):
-                boundary["execution_profile"] = (
-                    quota_execution_profile_boundary_summary(
-                        project_asset["execution_profile"]
-                    )
+    project_asset = (
+        project_asset_source.get("project_asset")
+        if isinstance(project_asset_source, dict)
+        else None
+    )
+    if isinstance(project_asset, dict):
+        if project_asset.get("stop_condition"):
+            boundary["stop_condition"] = project_asset.get("stop_condition")
+        if isinstance(project_asset.get("execution_profile"), dict):
+            boundary["execution_profile"] = (
+                quota_execution_profile_boundary_summary(
+                    project_asset["execution_profile"]
                 )
-            if isinstance(project_asset.get("orchestration"), dict):
-                boundary["orchestration"] = compact_orchestration_policy(
-                    project_asset["orchestration"]
-                )
+            )
+        if isinstance(project_asset.get("orchestration"), dict):
+            boundary["orchestration"] = compact_orchestration_policy(
+                project_asset["orchestration"]
+            )
     # Model preferences belong to the current registry, not a stale asset snapshot.
     if spawn_policy is not None and "orchestration" in boundary:
         model_config = compact_orchestration_policy(spawn_policy).get("model_config")

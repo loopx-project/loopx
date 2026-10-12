@@ -305,6 +305,23 @@ def _items(count: int, *, prefix: str) -> list[dict[str, object]]:
     ]
 
 
+def test_disabled_recall_compacts_configuration_only_and_keeps_authority_flags() -> None:
+    recall = {"status": "disabled", "context": None, "provider_call_count": 0,
+        "grants_new_action_authority": False, "fail_open": True,
+        "experiment": {"enabled": False, "automatic_ingest": False,
+            "config_runtime_route": {"runtime_scope": "project_runtime"}, "host_coverage": ["fixture"]}}
+    payload = {"goal_id": "fixture", "reward_memory_recall": recall}
+    compact = compact_quota_should_run_cli_payload(payload)["reward_memory_recall"]
+    assert compact["provider_call_count"] == 0 and compact["grants_new_action_authority"] is False
+    assert compact["experiment"]["automatic_ingest"] is False
+    assert compact["experiment"]["detail_ref"] == "reward-memory experiment-status --goal-id fixture"
+    assert "host_coverage" not in compact["experiment"]
+    assert compact_quota_should_run_cli_payload(payload, include_todo_summary_detail=True)["reward_memory_recall"] == recall
+    for status, enabled in (("provider_unavailable", False), ("disabled", True), ("recalled", True)):
+        complete = {**recall, "status": status, "experiment": {**recall["experiment"], "enabled": enabled}}
+        assert compact_quota_should_run_cli_payload({**payload, "reward_memory_recall": complete})["reward_memory_recall"] == complete
+
+
 def test_markdown_distinguishes_peer_blockers_from_native_admission() -> None:
     peer = {"mode": "task_scoped_peer", "execution_scope": "peer_agent_activation",
             "execution_state": "blocked", "task_selection": "canonical_claimed_candidates",

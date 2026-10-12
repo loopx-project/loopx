@@ -86,11 +86,11 @@ def register_refresh_state_command(
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     context_parser = subparsers.add_parser(
-        "checkpoint-context", help="Recover a missing checkpoint after a committed Turn writeback.",
+        "checkpoint-context", help="Read the original Turn's result or checkpoint basis.",
         description=(
-            "Recovery only: requires the original committed refresh-state writeback. "
-            "For the first writeback, supply the vision with refresh-state directly. "
-            "Use this command only when recovery requests a fresh checkpoint context; "
+            "New supported Turns read direction after result completion, before settlement. "
+            "Historical supplement recovery requires the original committed writeback. "
+            "Judge the returned basis and echo its read identity with the new decision; "
             "reuse the original Turn identity."
         ),
     )
@@ -101,6 +101,11 @@ def register_refresh_state_command(
     binding.add_argument("--todo-id")
     binding.add_argument("--replan-obligation-id")
     context_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    context_parser.add_argument("--purpose", choices=("supplement_checkpoint", "first_delivery", "delivery_result"),
+        default="supplement_checkpoint",
+        help="Read result requirements, post-result direction, or the original missing checkpoint; new supported Turns are protected by default.")
+    context_parser.add_argument("--decision-scope", choices=("agent_lane", "goal"), default=None,
+        help="Complete work collection used by the first direction judgment; reading grants no write authority.")
     context_parser.add_argument("--project")
     context_parser.add_argument("--state-file")
     context_parser.add_argument("--dependency-todo-id", action="append", default=[],
@@ -109,6 +114,8 @@ def register_refresh_state_command(
         "refresh-state",
         help="Append a read-only run from active goal state after state-only updates.",
     )
+    refresh_state_parser.add_argument("--first-delivery", action="store_true",
+        help="Commit an explicitly enrolled first direction using its fresh checkpoint-context receipt.")
     add_subcommand_format(refresh_state_parser)
     refresh_state_parser.add_argument("--goal-outcome-update-json", type=Path,
         help="Optional changed outcome/Agent review envelope (operation_id, expected_provider_revision, refinement). Apply once before normal writeback; unchanged work needs no update. Independent checks remain separate.")
@@ -463,6 +470,7 @@ def handle_refresh_state_command(
                 project=Path(args.project).expanduser() if args.project else None,
                 state_file=Path(args.state_file).expanduser() if args.state_file else None,
                 dependency_todo_ids=args.dependency_todo_id,
+                purpose=args.purpose, decision_scope=args.decision_scope,
                 goal_ref=goal_ref,
             )
         except Exception as exc:
@@ -630,6 +638,7 @@ def handle_refresh_state_command(
             merge_agent_vision_patch=merge_agent_vision_patch,
             vision_unchanged_reason=args.vision_unchanged_reason,
             checkpoint_read_context_id=getattr(args, "checkpoint_read_context", None),
+            first_delivery=bool(getattr(args, "first_delivery", False)),
             progress_observation=progress_observation,
             explore_result=explore_result,
             usage_measurement=usage_measurement,

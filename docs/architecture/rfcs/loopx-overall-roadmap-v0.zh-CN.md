@@ -940,6 +940,22 @@ lifecycle。
 见[验收合同](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)。
 这修复局部恢复缺口，不代表 R1/R2 协同整体验收完成。
 
+**R1 首次交付检查点。** 新的普通 CLI/MCP/managed 工作准入在执行前持久化原始结果依据，
+并由既有 Todo owner 强制验证其新鲜度。默认身份获取恢复未完成的原 Turn；
+已结算工作释放后才获取新的工作身份。相关 Todo、依赖、验收及来源变化要求重新验证候选，
+无关 revision 不触发失效。原成功回执在响应丢失和冷恢复后保留。legacy Markdown 复用原锁；
+File/SQLite 与 PostgreSQL 结果事务保留其类型化 head/CAS owner。见
+[操作协议](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness)。
+新的已支持准入同时持久化默认的当前 Agent 检查点续跑合同。必需检查点读取真实的提交后
+完整 frontier；MCP 将其交给当前工具调用者，managed 执行则恢复原 Host/session。
+未完成结果保留原回执并复用既有 supplement owner。相关方向变化只要求重新判断方向，
+保留成功结果和一次扣额。普通终态完成在检查点及扣额后复用原 Turn 的既有升级路径。
+历史 result-only、显式 first-delivery 和 supplement Turn 保留各自已持久化的合同。
+完整的 frontier 变化恢复、打包 frontend/Lark 旅程、混合版本回滚和真实模型效用，仍是未完成的
+首阶段验收。source-session 仍只支持生命周期操作，普通 Python PostgreSQL 执行仍缺少
+服务 owner 提供的 factory。独立 reviewer 需要另行注册的可选合同。这些默认行为不关闭 R1，
+不认证 Goal 已完成，不建立分布式原子性，也不证明模型结果收益。
+
 **R1 事务检查点。** 团队计划准入与整批规划现在归 `work_items/team_plan.ts`。确认后，全部已准入 lane 与持久操作回执一次提交；身份由 proposal + lane 决定，不再由 Todo 文本决定。File/SQLite 权威复用现有 CAS 与回执 owner；legacy Markdown 在原有 fence 和锁内同时写入任务和不可变回执。同一操作重试只读历史结果，接收者后来修改、完成或删除任务也不会触发重建。提交前失败不会留下部分 lane；canonical 展示投递仍 pending 时，Chat 必须恢复后才能报告验证成功。卡片列出部分分配及缺口；quota/stop 是参考，显式强制声明会被拒绝。Agent 发起的结算在 journal 首次写入时绑定同一状态基线并在结算时重读；基线缺失或已变动、或全部 lane 均为缺口的计划，记录为类型化的失败回执，不创建 Todo，重放结果不变。
 
 这完成 F4 的本地分配/重试部分，不等于 R1 协同验收。注册接收者可以被分配任务，但不会被冒充为作者；Agent 发起的结算未经业主确认不能给另一 peer 分配任务。分配不证明接收者采纳、lease、执行、依赖消费或独立验收。普通已授权工作不应普遍增加第二次确认。解决缺口需要明确的新意图；重放不能静默扩展原确认子集。fingerprint 绑定当前本地状态与 canonical revision，不是完整共享 Goal 意图事务。本地 registry 与活动状态锁现在持续保护到类型化提交结束：native token claim 在调用进程退出后仍有效；源字节变化拒绝新分配；失效交接只能重放精确匹配的已提交回执。registry 竞争返回可重试失败，不创建任务；canonical 展示恢复在源锁释放后执行。允许安全重试的失败 Team Plan 提案在 Goal 或管家工作区刷新后仍保留原评审身份；重试重新核验当前源事实，并恢复已有分配，不生成新提案。stale、gated 和不允许安全重试的失败仍不提供此恢复入口，已打开的抽屉也遵循同一判定。Chat 恢复在查找回执前解析当前注册 Goal 与源绑定；Goal 被移除或绑定源不可读时可能阻断恢复。canonical 展示恢复使用当前注册源，本次修复不恢复已删除的源绑定。R2/R3/R4 仍负责执行器资格、接收者采纳/结果返回及共享意图/授权；跨主机 Turn lease 不是计划屏障。

@@ -205,6 +205,8 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    result_freshness: str | None = None,
+    checkpoint_continuation: str | None = None,
 ) -> dict[str, object]:
     """Idempotently bind a Turn-created quota guard to its settlement identity.
 
@@ -297,6 +299,10 @@ def ensure_turn_heartbeat_settlement_receipt(
             "stall_observation": "not_applicable",
             "source": "loopx_turn_run_once",
         }
+        if result_freshness is not None:
+            details["result_freshness"] = result_freshness
+        if checkpoint_continuation is not None:
+            details["checkpoint_continuation"] = checkpoint_continuation
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
@@ -611,6 +617,8 @@ def heartbeat_receipt_view(
         "event_id": event.get("event_id"),
         "recorded_at": event.get("recorded_at"),
     }
+    if "result_freshness" in details:
+        receipt["result_freshness"] = details["result_freshness"]
     if details.get("closeout_required") is True:
         receipt["closeout_required"] = True
     todo_id = str(details.get("todo_id") or "").strip()

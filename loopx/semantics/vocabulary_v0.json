@@ -224,6 +224,8 @@
         "loopx/control_plane/turn_driver/executor.py::_run_task_validator",
         "loopx/control_plane/turn_driver/executor.py::_task_validation_receipt",
         "loopx/control_plane/turn_driver/executor.py::_task_validation_stage",
+        "loopx/control_plane/turn_driver/executor.py::_retain_result_for_revalidation",
+        "loopx/control_plane/turn_driver/executor.py::_terminal_result_validation_failure",
         "loopx/control_plane/turn_driver/transaction.py::_result_kind"
       ],
       "call_producers": {
@@ -534,11 +536,11 @@
       }
     },
     "host_adapter_settlement_step_kind": {
-      "meaning": "Ordered provider steps of one host-adapter settlement plan. The TypeScript owner authors the plan and the Python transport validates the plan it receives against the same sequence, so the two runtimes must carry the same order. Distinct from settlement_step_kind: that vocabulary names the turn settlement phases, whose validation phase is never executed, while every kind here is a command the host adapter runs.",
+      "meaning": "Provider step kinds used by host-adapter settlement plans. TypeScript authors each phase's ordered plan and Python validates that phase's sequence before execution. Ordinary settlement uses guard, lifecycle_completion, durable_writeback, quota_spend and optional terminal_closeout; first-delivery preparation uses delivery_context or direction_context in its phase-specific sequence. Distinct from settlement_step_kind, which names the turn settlement phases including seeded validation.",
       "tier": "cross_runtime",
       "status": "canonical",
       "owners": {
-        "python": "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE",
+        "python": "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_KINDS",
         "typescript": "loopx/control_plane/turn_driver/host_todo_completion.ts::HOST_ADAPTER_SETTLEMENT_STEP_KINDS"
       },
       "values": [
@@ -546,14 +548,18 @@
         "lifecycle_completion",
         "durable_writeback",
         "quota_spend",
-        "terminal_closeout"
+        "terminal_closeout",
+        "delivery_context",
+        "direction_context"
       ],
       "value_notes": {
         "guard": "The admission step: it runs the real quota should-run command with the turn instance id, and its continue_when decides whether the later steps run at all.",
         "lifecycle_completion": "The completion step: it runs the Todo completion arguments before anything is written back.",
         "durable_writeback": "The writeback step: it persists the completed work, conditioned on the completion result.",
         "quota_spend": "The quota step: it debits the slot, conditioned on the writeback result, and accepts an idempotent replay of an already committed spend.",
-        "terminal_closeout": "The optional last step, emitted only when the Todo needs a terminal closeout; it carries no continue_when because nothing follows it."
+        "terminal_closeout": "The optional last step, emitted only when the Todo needs a terminal closeout; it carries no continue_when because nothing follows it.",
+        "delivery_context": "The last step of the first-delivery preparation plan after guard; it reads the retained result basis before lifecycle completion and does not settle or spend.",
+        "direction_context": "The last step after guard and lifecycle_completion when first-delivery direction input is required; it reads the post-result basis without inventing a new Turn or quota debit."
       }
     },
     "settlement_binding_kind": {

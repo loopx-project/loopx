@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import test from "node:test";
-import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
+import type {AuthorityStore, AuthorityStoreHead} from "../../loopx/control_plane/coordination/authority_store.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {executeCoordinationTodoTerminalLifecycle as execute,
   type CoordinationTodoTerminalLifecycleInput} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
@@ -14,6 +14,9 @@ import type {AuthorityStoreConformanceFactory} from "./authority_store_conforman
 import {authorityProjectionFixture, projectionFixtureAsSchema} from "./authority_projection_fixture.ts";
 import {productionScaleCoordinationFixture,
   PRODUCTION_SCALE_VALIDATION_DECLARATION as declaration} from "./production_scale_coordination_fixture.ts";
+import {checkpointProviderFacts} from "../../loopx/control_plane/goals/checkpoint_authority.ts";
+import {evaluateCheckpointReadContext as evaluate} from "../../loopx/control_plane/goals/checkpoint_read_context.ts";
+import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
 
 async function loaded(store: AuthorityStore) {
   const head = await store.loadAuthority();
@@ -27,6 +30,210 @@ const validation = {schema_version: "issue_fix_validation_command_v0", command_l
   stdout_captured: false, stderr_captured: false, local_path_captured: false};
 
 export function registerTerminalSourceConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
+  test(`${provider}: default result freshness rejects related head changes and replays original receipt`, async t => {
+    const {store, contender} = await factory(t);
+    const goal = "default-result-freshness";
+    const fixture = productionScaleCoordinationFixture(goal, "native");
+    await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+      next_projection: fixture.projection, events: [], receipts: []});
+    const before = await loaded(store);
+    const identity = settlementIdentityPayload(settlementIdentity({goal_id: goal, agent_id: "agent-a",
+      todo_id: fixture.completion_todo_id, turn_instance_id: "original-turn"}));
+    const sourceId = await store.storeIdentity();
+    assert.equal(sourceId.status, "available");
+    if (sourceId.status !== "available") return;
+    const facts = (head: AuthorityStoreHead) => checkpointProviderFacts(goal,
+      {checkpoint_identity: identity, frontmatter: {objective: "Verify the selected work"},
+        goal_prose: "Acceptance applies", agent_vision: null, source: {state_file: "synthetic-state"}},
+      head, sourceId.store_identity, provider, true);
+    const read = (head: AuthorityStoreHead, key: string) => evaluate({phase: "read", purpose: "delivery_result",
+      admitted_turn: true, prior: null, result_only: true, identity, facts: facts(head), read_context_id: key});
+    const original = read(before, "original-read");
+    assert.equal(original.ok, true);
+    const request: CoordinationTodoTerminalLifecycleInput = {goal_id: goal, todo_id: fixture.completion_todo_id,
+      expected_role: "agent", command: "complete", actor_agent_id: "agent-a", registered_agents: fixture.registered_agents,
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_identity: {kind: "completion_turn"},
+      lease_idempotency_key: fixture.completion_lease_idempotency_key,
+      lease_expected_version: fixture.completion_lease_expected_version, allow_user_gate_auto_acquire: false,
+      requested_no_followup: false, requested_completion_turn_key: "original-turn", requested_completion_identity_source: "turn_settlement",
+      linked_successor_todo_ids: [], successor_intents: [], note: "Verified retained candidate", evidence: "Validation passed",
+      reason: null, clear_claim: false, validation_declaration: declaration, validation_receipt: validation,
+      validation_declaration_sha256: canonicalAuthoritySha256(declaration), completion_policy_request: null,
+      dry_run: false, now: new Date(String(fixture.semantic_cases.terminal_source!.observed_at)),
+      delivery_read_context_id: "original-read", validation_source_provider_revision: before.provider_revision};
+    const selected = (before.head.todos as JsonObject[]).find(todo => todo.todo_id === request.todo_id)!;
+    await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+      operation_id: "related-change", expected_provider_revision: before.provider_revision, projection: before.head,
+      mutations: [{kind: "todo_upsert", todo: {...selected, text: "Verify the revised requirement"}}]}));
+    const current = await loaded(store);
+    const check = (receipt: unknown, key: string) => async (head: AuthorityStoreHead) => evaluate({phase: "check",
+      purpose: "delivery_result", identity, facts: facts(head), receipt, read_context_id: key});
+    const rejected = await execute(store, request, async () => true, undefined, check(original.receipt, "original-read"));
+    assert.equal(rejected.reason_code, "checkpoint_read_context_stale", JSON.stringify(rejected));
+    assert.deepEqual(await loaded(store), current);
+    const fresh = read(current, "revalidated-read");
+    const revalidated = {...request, delivery_read_context_id: "revalidated-read", validation_source_provider_revision: current.provider_revision};
+    assert.equal((await execute(store, revalidated, async () => true, undefined, check(fresh.receipt, "revalidated-read"))).status, "applied");
+    const saved = await loaded(store);
+    assert.equal((await execute(contender, revalidated, async () => {throw new Error("receipt before authority");},
+      async () => {throw new Error("receipt before lifecycle settlement");},
+      async () => {throw new Error("receipt before freshness");})).status, "replayed");
+    const withoutReadKey = {...revalidated, delivery_read_context_id: undefined};
+    assert.equal((await execute(contender, withoutReadKey, async () => {throw new Error("receipt before authority");},
+      async () => {throw new Error("receipt before lifecycle settlement");},
+      async () => {throw new Error("receipt before freshness");})).status, "replayed");
+    assert.equal((await execute(contender, {...withoutReadKey, evidence: "Different intended result"},
+      async () => true, undefined, check(fresh.receipt, "revalidated-read"))).reason_code,
+      "coordination_operation_identity_mismatch");
+    assert.deepEqual(await loaded(store), saved);
+  });
+  for (const closeoutSource of ["turn", "lifecycle"] as const) {
+  test(`${provider}: deferred original no-followup upgrades once without new validation (${closeoutSource})`, async t => {
+    const {store, contender} = await factory(t);
+    const goal = "deferred-terminal";
+    const fixture = productionScaleCoordinationFixture(goal, "native");
+    await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+      next_projection: fixture.projection, events: [], receipts: []});
+    const before = await loaded(store);
+    const source = await store.storeIdentity();
+    assert.equal(source.status, "available");
+    if (source.status !== "available") return;
+    const identity = settlementIdentityPayload(settlementIdentity({goal_id: goal,
+      agent_id: "agent-a", todo_id: fixture.completion_todo_id, turn_instance_id: "original-turn"}));
+    const facts = (head: AuthorityStoreHead) => checkpointProviderFacts(goal,
+      {checkpoint_identity: identity, frontmatter: {objective: "Verify scoped work"},
+        goal_prose: "Acceptance applies", agent_vision: null, source: {state_file: "synthetic-state"}},
+      head, source.store_identity, provider, true);
+    const basis = evaluate({phase: "read", purpose: "delivery_result", admitted_turn: true,
+      prior: null, result_only: true, identity, facts: facts(before), read_context_id: "result-read"});
+    const check = async (head: AuthorityStoreHead) => evaluate({phase: "check", purpose: "delivery_result",
+      identity, facts: facts(head), receipt: basis.receipt, read_context_id: "result-read"});
+
+    const request: CoordinationTodoTerminalLifecycleInput = {goal_id: goal, todo_id: fixture.completion_todo_id,
+      expected_role: "agent", command: "complete", actor_agent_id: "agent-a", registered_agents: fixture.registered_agents,
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_identity: {kind: "completion_turn"},
+      lease_idempotency_key: fixture.completion_lease_idempotency_key,
+      lease_expected_version: fixture.completion_lease_expected_version, allow_user_gate_auto_acquire: false,
+      requested_no_followup: true, defer_no_followup: true,
+      requested_completion_turn_key: "original-turn", requested_completion_identity_source: "turn_settlement",
+      linked_successor_todo_ids: [], successor_intents: [], note: "Verified candidate", evidence: "Validation passed",
+      reason: null, clear_claim: false, validation_declaration: declaration, validation_receipt: validation,
+      validation_declaration_sha256: canonicalAuthoritySha256(declaration), completion_policy_request: null,
+      dry_run: false, now: new Date(String(fixture.semantic_cases.terminal_source!.observed_at)),
+      delivery_read_context_id: "result-read", validation_source_provider_revision: before.provider_revision};
+    const result = await execute(store, request, async () => true, undefined, check);
+    assert.equal(result.status, "applied", JSON.stringify(result));
+    const committed = await loaded(store);
+    const todo = (committed.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+    assert.equal(todo.status, "done");
+    assert.equal(todo.completion_continuation, "active_goal");
+    assert.equal(todo.completion_recovery ?? null, null);
+    assert.equal(todo.completion_requested_continuation, "no_followup");
+    assert.equal(todo.no_followup, false);
+    assert.equal((await execute(contender, request, async () => true, undefined, check)).status, "replayed");
+    const closeout = {...request, defer_no_followup: false, validation_receipt: null,
+      validation_source_provider_revision: committed.provider_revision};
+    const changed = await execute(store, {...closeout, evidence: "Changed result"}, async () => true, undefined, check);
+    assert.equal(changed.reason_code, "coordination_operation_identity_mismatch", JSON.stringify(changed));
+    assert.deepEqual(await loaded(store), committed);
+    const lifecycle: CoordinationTodoTerminalLifecycleInput = {...closeout,
+      operation_identity: {kind: "explicit", operation_id: "cold-lifecycle"},
+      requested_completion_identity_source: "lifecycle_reentry",
+      lease_idempotency_key: null, lease_expected_version: null,
+      validation_declaration: null, delivery_read_context_id: undefined};
+    const closedRequest = closeoutSource === "turn" ? closeout : lifecycle;
+    let settlementChecks = 0;
+    const settlement = async () => {settlementChecks++;};
+    const lifecycleBasis = async () => {throw new Error("Reentry must not admit new RESULT work");};
+    if (closeoutSource === "lifecycle") {
+      const rejected = await execute(store, lifecycle, async () => true,
+        async () => {throw new Error("Original writeback/spend not settled");}, lifecycleBasis);
+      assert.equal(rejected.status, "failed");
+      assert.deepEqual(await loaded(store), committed);
+    }
+    const closed = await execute(contender, closedRequest, async () => true, settlement,
+      closeoutSource === "turn" ? check : lifecycleBasis);
+    assert.equal(closed.status, "applied", JSON.stringify(closed));
+    assert.deepEqual(closed.validation_receipt, closeoutSource === "turn" ? validation : null);
+    assert.equal(settlementChecks, closeoutSource === "turn" ? 0 : 1);
+    const after = await loaded(store);
+    const terminal = (after.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+    assert.equal(terminal.completion_continuation, "no_followup");
+    assert.equal(terminal.completion_recovery, closeoutSource === "turn"
+      ? "same_turn_terminal_closeout" : "lifecycle_reentry_terminal_closeout");
+    assert.equal(terminal.no_followup, true);
+    assert.equal((await execute(store, closedRequest, async () => {throw new Error("Historical closeout");},
+      async () => {throw new Error("No repeated settlement verification");}, check)).status, "replayed");
+    // After lifecycle closeout the exact accepted Turn RESULT remains historical;
+    // changing its actor, evidence or lease cannot borrow that receipt.
+    assert.equal((await execute(store, closeout, async () => {throw new Error("Historical RESULT");},
+      undefined, check)).status, "replayed");
+    for (const patch of [{evidence: "Changed result"}, {actor_agent_id: "agent-b"},
+      {lease_expected_version: 999}]) {
+      assert.equal((await execute(store, {...closeout, ...patch}, async () => true, undefined, check)).status, "failed");
+      assert.deepEqual(await loaded(store), after);
+    }
+    assert.deepEqual(await loaded(store), after);
+  });
+  }
+  test(`${provider}: protected completion final CAS preserves a racing peer and historical recovery`, async t => {
+    const {store, contender} = await factory(t);
+    const goal = "protected-terminal-cas";
+    const fixture = productionScaleCoordinationFixture(goal, "native");
+    const scenario = fixture.semantic_cases.terminal_source!;
+    assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+      next_projection: fixture.projection, events: [], receipts: []})).status, "applied");
+    const before = await loaded(store);
+    const request: CoordinationTodoTerminalLifecycleInput = {goal_id: goal, todo_id: fixture.completion_todo_id,
+      expected_role: "agent", command: "complete", actor_agent_id: "agent-a", registered_agents: fixture.registered_agents,
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      operation_identity: {kind: "completion_turn"},
+      lease_idempotency_key: fixture.completion_lease_idempotency_key,
+      lease_expected_version: fixture.completion_lease_expected_version,
+      allow_user_gate_auto_acquire: false, requested_no_followup: false,
+      requested_completion_turn_key: "protected-turn", requested_completion_identity_source: "turn_settlement",
+      linked_successor_todo_ids: [], successor_intents: [], note: "Reviewed result", evidence: "Verified result", reason: null,
+      clear_claim: false, validation_declaration: declaration, validation_receipt: validation,
+      validation_declaration_sha256: canonicalAuthoritySha256(declaration),
+      completion_policy_request: null, dry_run: false, now: new Date(String(scenario.observed_at)),
+      delivery_read_context_id: "result-read", validation_source_provider_revision: before.provider_revision};
+    const missingCheck = await execute(store, request);
+    assert.equal(missingCheck.reason_code, "delivery_basis_check_required", JSON.stringify(missingCheck));
+    const checkedHeads: string[] = [];
+    const checkBasis = async (head: AuthorityStoreHead) => {
+      checkedHeads.push(head.provider_revision);
+      return {ok: true}; // The peer is unrelated; basis construction has separate integration coverage.
+    };
+    const peer = (before.head.todos as JsonObject[]).find(todo => todo.todo_id !== request.todo_id)!;
+    let attemptedId = "";
+    const racing = new Proxy(store, {get(target, key) {
+      if (key === "commitAuthority") return async (...args: Parameters<AuthorityStore["commitAuthority"]>) => {
+        attemptedId = args[0].operation_id;
+        assert.equal((await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+          operation_id: "racing-peer", expected_provider_revision: before.provider_revision, projection: before.head,
+          mutations: [{kind: "todo_upsert", todo: {...peer, note: "Peer update survives"}}]}))).status, "applied");
+        return target.commitAuthority(...args);
+      };
+      const member = Reflect.get(target, key);
+      return typeof member === "function" ? member.bind(target) : member;
+    }});
+    const rejected = await execute(racing, request, async () => true, undefined, checkBasis);
+    assert.equal(rejected.conflict_kind, "provider_revision_mismatch", JSON.stringify(rejected));
+    assert.ok(attemptedId);
+    assert.equal((await store.readReceipt(attemptedId)).status, "missing");
+    const current = await loaded(store);
+    assert.equal((current.head.todos as JsonObject[]).find(todo => todo.todo_id === request.todo_id)!.status, "open");
+    const completed = await execute(store, request, async () => true, undefined, checkBasis);
+    assert.equal(completed.status, "applied", JSON.stringify(completed));
+    assert.deepEqual([...new Set(checkedHeads)], [before.provider_revision, current.provider_revision]);
+    const after = await loaded(store);
+    assert.equal((after.head.todos as JsonObject[]).find(todo => todo.todo_id === peer.todo_id)!.note, "Peer update survives");
+    const replay = await execute(contender, request, async () => {throw new Error("history before authority");},
+      async () => {throw new Error("history before lifecycle settlement");},
+      async () => {throw new Error("history before freshness");});
+    assert.equal(replay.status, "replayed");
+    assert.deepEqual(await loaded(store), after);
+  });
   for (const schema of ["legacy", "native"] as const) {
     test(`${provider}: Turn completion binds exact task text through CAS and historical recovery (${schema})`, async t => {
       const {store, contender} = await factory(t);

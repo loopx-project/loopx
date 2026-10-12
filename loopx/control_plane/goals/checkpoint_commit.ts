@@ -1,7 +1,7 @@
 /** Missing-checkpoint commit. Index/source claims survive the requesting CLI;
  * the real provider fence lasts through the synchronous durable append. */
 import {createHash} from "node:crypto";
-import {closeSync, fsyncSync, lstatSync, openSync, readFileSync, writeFileSync} from "node:fs";
+import {closeSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync} from "node:fs";
 import {dirname, join, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../effect_program.ts";
@@ -24,17 +24,31 @@ import {
   quotaAccountingOwnerLocks,
   requireCurrentQuotaAccountingOwner,
 } from "../quota/source_admission.ts";
-import {evaluateCheckpointReadContext} from "./checkpoint_read_context.ts";
+import {checkpointBasisSnapshot, evaluateCheckpointReadContext} from "./checkpoint_read_context.ts";
 import {withCheckpointAuthority} from "./checkpoint_authority.ts";
 import {goalPathSegment} from "../rollout_receipt_log.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {checkpointContinuationRequired} from "../quota/heartbeat_receipt_identity.ts";
 
 const digest = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+function readReceiptValue(path: string): unknown {
+  try { return JSON.parse(readFileSync(path, "utf8")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
+}
 function unknown(message: string): never {
   throw new EffectRuntimeRequestError(`${message}; read back the original Turn before retrying`, "checkpoint_commit_unknown");
 }
 
 function indexBytes(path: string): Buffer {
-  const bytes = readFileSync(path);
+  let bytes: Buffer;
+  try { bytes = readFileSync(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return Buffer.alloc(0);
+  }
   // The ordinary history reader tolerates damaged rows. A commit cannot infer
   // absence from that reader or append behind a torn (even JSON-valid) tail.
   if (bytes.length && bytes[bytes.length - 1] !== 10) unknown("checkpoint index has an incomplete tail");
@@ -106,6 +120,89 @@ function writeSynced(path: string, text: string): void {
   finally { closeSync(fd); }
 }
 
+function writeReceipt(path: string, receipt: JsonObject): void {
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeSynced(temporary, JSON.stringify(receipt) + "\n");
+  renameSync(temporary, path);
+}
+
+/** Caller holds the index lock. Unindexed artifacts never prove a committed
+ * direction. A completely absent attempt may be retried; torn writes stay held. */
+export function inspectCheckpointAttempt(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "checkpoint attempt inspection");
+  const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
+  const identity = requireJsonObject(request.identity, "settlement identity");
+  const runsDir = join(root, "goals", goalPathSegment(identity.goal_id), "runs");
+  const rows = indexBytes(join(runsDir, "index.jsonl")).toString("utf8").split(/\r?\n/)
+    .filter(line => line.trim()).map(line => requireJsonObject(JSON.parse(line), "run index row"));
+  const matching = rows.filter(row => jsonObject(row.settlement_identity)?.effect_id === identity.effect_id &&
+    jsonObject(row.vision_checkpoint)?.satisfied === true && jsonObject(row.vision_checkpoint)?.read_context != null);
+  const path = join(root, "goals", goalPathSegment(identity.goal_id), "checkpoint-contexts",
+    `${createHash("sha256").update(requireNonEmptyString(identity.effect_id, "effect_id")).digest("hex")}.json`);
+  let receipt: JsonObject | null = null;
+  let receiptError: unknown;
+  try { receipt = requireJsonObject(JSON.parse(readFileSync(path, "utf8")), "read receipt"); }
+  catch (error) { receiptError = error; }
+  // An exact indexed decision and its matching artifacts are stronger than a
+  // disposable read receipt. Recover the original decision without reauthoring.
+  if (matching.length) {
+    if (matching.length !== 1 || canonicalAuthoritySha256(matching[0].settlement_identity) !== canonicalAuthoritySha256(identity)) {
+      unknown("checkpoint attempt conflicts with its index identity");
+    }
+    if (receipt !== null) {
+      if (canonicalAuthoritySha256(receipt.identity) !== canonicalAuthoritySha256(identity)) unknown("checkpoint receipt identity differs");
+      const attempt = jsonObject(receipt.commit_attempt);
+      if (attempt && canonicalAuthoritySha256(matching[0]) !== canonicalAuthoritySha256(attempt.index_record)) {
+        unknown("checkpoint attempt conflicts with its index");
+      }
+    }
+    return {...committedArtifacts(matching[0], runsDir), status: "committed"};
+  }
+  if (request.check_other_attempts === true) {
+    const contexts = join(root, "goals", goalPathSegment(identity.goal_id), "checkpoint-contexts");
+    let names: string[] = [];
+    try { names = readdirSync(contexts); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const indexed = new Set(indexBytes(join(runsDir, "index.jsonl")).toString("utf8").split(/\r?\n/)
+      .filter(line => line.trim()).map(line => jsonObject(JSON.parse(line).settlement_identity)?.effect_id));
+    const resultReadName = `${createHash("sha256").update(requireNonEmptyString(identity.effect_id, "effect_id") + ":delivery_result").digest("hex")}.json`;
+    for (const name of names.filter(name => name.endsWith(".json") && BARE_SHA256_PATTERN.test(name.slice(0, -5)))) {
+      // This disjoint path can hold only the original work read, never a direction append.
+      // Losing it cannot erase the successful result or create direction uncertainty.
+      if (name === resultReadName) continue;
+      let other: JsonObject;
+      try { other = requireJsonObject(JSON.parse(readFileSync(join(contexts, name), "utf8")), "read receipt"); }
+      catch { unknown("checkpoint read receipt is unavailable; preserve original Turn artifacts before retrying"); }
+      const owner = jsonObject(other.identity);
+      if (other.purpose === "first_delivery" && other.commit_attempt != null && owner?.effect_id !== identity.effect_id &&
+          owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id && !indexed.has(owner?.effect_id)) {
+        unknown("another original Turn has an unresolved direction append for this Todo");
+      }
+    }
+  }
+  if (receipt === null) {
+    if ((receiptError as NodeJS.ErrnoException)?.code === "ENOENT") return {ok: true, status: "absent"};
+    unknown("checkpoint read receipt is unavailable");
+  }
+  if (canonicalAuthoritySha256(receipt.identity) !== canonicalAuthoritySha256(identity)) unknown("checkpoint receipt identity differs");
+  const attempt = jsonObject(receipt.commit_attempt);
+  if (attempt == null) return {ok: true, status: "not_started"};
+  for (const [field, extension] of [["json_path", ".json"], ["markdown_path", ".md"]]) {
+    const artifact = runPath(attempt[field], runsDir, extension);
+    try {
+      const stat = lstatSync(artifact);
+      // The caller reserves empty paths before persisting the attempt marker.
+      // Both empty regular files are an absent effect; any bytes remain unknown.
+      if (!stat.isFile() || stat.size !== 0) unknown("checkpoint append has unindexed artifacts");
+    }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  // No content and no row: there was no visible effect. Clear only the marker,
+  // preserving the original read identity; a subsequent basis check still runs.
+  const {commit_attempt: _attempt, ...unstarted} = receipt;
+  return {ok: true, status: "absent", read_context_id: receipt.read_context_id, receipt: unstarted};
+}
+
 export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint commit");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
@@ -120,7 +217,9 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
   const runsDir = join(root, "goals", identity.goal_id, "runs");
   const indexPath = join(runsDir, "index.jsonl");
   const statePath = resolve(requireNonEmptyString(request.state_file, "state_file"));
-  const targets = [indexPath, shadowMaintenanceLockPath(root, identity.goal_id),
+  const firstDelivery = request.purpose === "first_delivery";
+  const registryPath = firstDelivery ? resolve(requireNonEmptyString(request.registry_path, "registry_path")) : null;
+  const targets = [indexPath, ...(registryPath ? [registryPath] : []), shadowMaintenanceLockPath(root, identity.goal_id),
     legacyCoordinationTodoLockPath(root, identity.goal_id), statePath].map(path => resolve(path));
   const owner = parseQuotaAccountingOwner({
     goalRefValue: request.goal_ref,
@@ -148,7 +247,7 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
   }
   function replay(readback: JsonObject): JsonObject | null {
     const recovery = requireJsonObject(readback.refresh_recovery, "refresh recovery");
-    if (recovery.decision !== "replay") return null;
+    if (recovery.decision !== "replay" && recovery.decision !== "repair_receipt") return null;
     const prior = requireJsonObject(readback.writeback_run, "committed checkpoint");
     if (jsonObject(prior.vision_checkpoint)?.satisfied !== true ||
         jsonObject(prior.refresh_recovery)?.vision_request_digest !== recovery.vision_request_digest) {
@@ -240,7 +339,7 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
     const repeated = replay(readback);
     if (repeated) return repeated;
     const recovery = requireJsonObject(readback.refresh_recovery, "refresh recovery");
-    if (recovery.decision !== "supplement_checkpoint") {
+    if (recovery.decision !== (firstDelivery ? "append" : "supplement_checkpoint")) {
       throw new EffectRuntimeRequestError(String(recovery.reason ?? "checkpoint supplement rejected"), "checkpoint_commit_rejected");
     }
     await requireShadowPrimaryWriteAllowed(root, identity.goal_id);
@@ -256,10 +355,15 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
       if (digest(indexBytes(indexPath)) !== expectedIndex || digest(readFileSync(statePath)) !== expectedState) {
         unknown("checkpoint sources changed during lock handoff");
       }
-      let receipt: unknown = null;
-      try { receipt = JSON.parse(readFileSync(receiptPath, "utf8")); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      // Format-neutral byte guard under the adopted source lock, not a JSON
+      // decoder. Keep it synchronous with the final head read and durable append.
+      if (registryPath && digest(readFileSync(registryPath)) !== request.registry_sha256) {
+        unknown("checkpoint registry changed during lock handoff");
+      }
+      const receipt = readReceiptValue(receiptPath);
       const context = evaluateCheckpointReadContext({phase: "check", identity: binding,
+        checkpoint_continuation: checkpointContinuationRequired(jsonObject(readback.heartbeat_receipt)),
+        purpose: request.purpose, decision_scope: request.decision_scope,
         read_context_id: retry.checkpoint_read_context_id, receipt, facts: current});
       if (context.ok !== true) return context;
       const record = requireJsonObject(request.record, "checkpoint record");
@@ -275,12 +379,21 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
       const jsonPath = runPath(row.json_path, runsDir, ".json");
       const markdownPath = runPath(row.markdown_path, runsDir, ".md");
       try {
+        if (firstDelivery) {
+          // Persist uncertainty before the first run artifact. A replacement
+          // read cannot discard this attempt after a crash or a lost response.
+          writeReceipt(receiptPath, {...requireJsonObject(receipt, "first delivery receipt"),
+            commit_attempt: {vision_request_digest: recovery.vision_request_digest,
+              mutation_digest: recovery.mutation_digest, json_path: jsonPath, markdown_path: markdownPath,
+              index_record: row}});
+        }
         writeSynced(jsonPath, JSON.stringify(record, null, 2) + "\n");
         writeSynced(markdownPath, requireNonEmptyString(request.markdown, "checkpoint Markdown"));
         appendJsonLineSync(indexPath, row);
       } catch { unknown("checkpoint append outcome is uncertain"); }
       return {ok: true, replayed: false, context, json_path: jsonPath, markdown_path: markdownPath};
-    });
+    }, firstDelivery && !checkpointContinuationRequired(jsonObject(readback.heartbeat_receipt)), false,
+      firstDelivery || checkpointContinuationRequired(jsonObject(readback.heartbeat_receipt)));
   } finally {
     // The effect owns the end of the handed-off critical section. Releasing the
     // markers here also handles a caller that timed out but is still alive.

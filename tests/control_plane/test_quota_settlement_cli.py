@@ -745,6 +745,33 @@ def _initialize_git_checkout(project: Path) -> None:
     )
 
 
+def _default_checkpoint_args(registry: Path, runtime: Path, binding: tuple[str, ...], root: Path,
+                             *, purpose: str = "first_delivery") -> tuple[str, ...]:
+    """The fixture Agent consumes a real post-result read before authoring."""
+    from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", purpose)
+    assert rc == 0, context
+    decision = checkpoint_decision(context)
+    args = ("--checkpoint-read-context", context["read_context_id"])
+    if decision.get("agent_vision"):
+        path = root / "checkpoint-vision.json"
+        path.write_text(json.dumps(decision["agent_vision"]), encoding="utf-8")
+        return (*args, "--agent-vision-json", str(path))
+    return (*args, "--vision-unchanged-reason", decision["vision_unchanged_reason"])
+
+
+def _historical_turn(runtime: Path, turn_id: str = TURN_ID) -> None:
+    """Seed the persisted pre-default contract for historical recovery cases."""
+    path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for row in rows:
+        if row.get("event_kind") == "quota_should_run" and row.get("run_id") == turn_id:
+            for field in ("result_freshness", "checkpoint_continuation"):
+                row.get("details", {}).pop(field, None)
+    path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
 def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     events = [
@@ -799,6 +826,7 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
             encoding="utf-8",
         )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
     for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
@@ -1023,6 +1051,7 @@ def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
     )
     assert complete_rc == 0, complete
 
+    checkpoint_args = _default_checkpoint_args(registry_path, runtime, binding, tmp_path)
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
@@ -1031,6 +1060,7 @@ def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
         GOAL_ID,
         "--classification",
         "reward_memory_app_progress",
+        *checkpoint_args,
         "--delivery-batch-scale",
         "single_surface",
         "--delivery-outcome",
@@ -1262,7 +1292,7 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         "turn-after-typed-blocker-settlement",
         cwd=project,
     )
-    assert next_rc == 0, next_turn
+    assert next_rc == 0, json.dumps(next_turn, indent=2)
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
 
@@ -3049,6 +3079,7 @@ def test_prior_turn_with_several_receipts_recovers_once(tmp_path: Path) -> None:
     )
     assert prior_rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
+    _historical_turn(runtime, prior_turn_id)
 
     # A real goal persists more than one guard per Turn: an identity upgrade
     # append and an older guard that never carried a binding.  The newest bound
@@ -3324,6 +3355,7 @@ def test_prior_host_closeout_reads_archived_exact_todo(
     )
     assert rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
+    _historical_turn(runtime, prior_turn_id)
 
 
     rc, complete = _run_cli(
@@ -3472,12 +3504,14 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert complete_replay["idempotent_replay"] is True
     assert complete_replay["settlement_result"]["ok"] is True
 
+    checkpoint_args = _default_checkpoint_args(registry_path, runtime, binding, tmp_path)
     refresh_args = (
         "refresh-state",
         "--goal-id",
         GOAL_ID,
         "--classification",
         "validated_progress",
+        *checkpoint_args,
         "--delivery-batch-scale",
         "single_surface",
         "--delivery-outcome",
@@ -3520,8 +3554,9 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         "turn-settlement-cli-successor",
     )
     assert fresh_guard_rc == 0, fresh_guard
-    assert fresh_guard["selected_todo"]["todo_id"] == successor_id
-    assert fresh_guard["heartbeat_receipt"]["turn_instance_id"] == "turn-settlement-cli-successor"
+    assert fresh_guard["first_delivery_progress"]["stage"] == "settlement_pending"
+    assert fresh_guard["first_delivery_progress"]["settlement_identity"] == identity
+    assert fresh_guard["recommended_action"] == fresh_guard["first_delivery_progress"]["next_action"]
 
     spend_args = (
         "quota",
@@ -3592,19 +3627,16 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         runtime,
         *original_ack_hint["cli_args"],
     )
-    # The intervening fresh_guard superseded this Turn for host writeback,
-    # even though its original delivery settlement still replays correctly.
-    assert ack_rc == 1, ack
-    assert ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
-    assert ack["scheduler_state_mutated"] is False
-    assert ack["write_performed"] is False
+    # A pending original Turn was recovered rather than superseded by successor selection.
+    assert ack_rc == 0, ack
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["scheduler_commit"]["written"] is True
     assert ack["appended"] is False
-    assert load_scheduler_state(
-        runtime,
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
-        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
-    ) is None
+    scheduler_path = Path(ack["scheduler_state_path"])
+    saved = scheduler_path.read_bytes()
+    rc, replay_ack = _run_cli(registry_path, runtime, *original_ack_hint["cli_args"])
+    assert rc == 0 and replay_ack["scheduler_commit"]["replayed"] is True, replay_ack
+    assert scheduler_path.read_bytes() == saved
     assert _spend_run_count(runtime) == 1
 
     # Use the admitted successor Turn's hint. Another new Turn would compete
@@ -3920,7 +3952,23 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
         "network",
     )
     assert successor_guard_rc == 0, successor_guard
-    assert successor_guard["selected_todo"]["todo_id"] == successor_id
+    # Completing the Todo does not discharge the original Turn's checkpoint or
+    # spend. An identityless wake resumes that Turn before selecting new work.
+    assert successor_guard["heartbeat_receipt"]["settlement_identity"] == identity
+    assert not successor_guard.get("selected_todo")
+    assert _spend_run_count(runtime) == 0
+    checkpoint_args = _default_checkpoint_args(
+        registry_path, runtime, binding, tmp_path, purpose="supplement_checkpoint",
+    )
+    checkpoint_rc, checkpoint = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "identity_upgrade_validated",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", *binding, *checkpoint_args,
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert checkpoint_rc == 0, checkpoint
+    assert checkpoint["vision_checkpoint"]["satisfied"] is True
 
     spend_args = (
         "quota",
@@ -3944,6 +3992,13 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
     assert spend_replay["appended"] is False
     assert _spend_run_count(runtime) == 1
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+    successor_guard_rc, successor_guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--available-capability", "network", "--scan-path", str(project),
+    )
+    assert successor_guard_rc == 0, successor_guard
+    assert successor_guard["selected_todo"]["todo_id"] == successor_id
 
 
 def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
@@ -4690,7 +4745,7 @@ def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
 
 
 @pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
-def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
+def test_default_visible_goal_admission_still_rejects_unbound_manual_spend(
     tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -4710,13 +4765,11 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     )
     assert guard_rc == 0, guard
     actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    assert len(actions) == 1
-    if profile == "codex_app_ssh_goal":
-        assert actions[0].endswith("--begin-turn")
-    else:
-        assert "--turn-instance-id" in actions[0]
-        assert "--begin-turn" not in actions[0]
-    assert all("spend-slot" not in action for action in actions)
+    assert len(actions) == 2
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert "refresh-state" in actions[0] and "quota spend-slot" in actions[1]
+    assert all(f"--turn-instance-id {identity['turn_instance_id']}" in action for action in actions)
+    # Default admission does not authorize an unbound manual spend.
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -4740,17 +4793,15 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     assert spend["delivery_workspace_causality"] is None
     assert _spend_run_count(runtime) == 0
 
-    # Execute the projected re-entry, filling only the host-owned identity.
-    command = actions[0].replace(
-        "<unique-work-iteration-id-reuse-on-retry>", TURN_ID,
-    )
-    bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
+    # Re-observe the automatically admitted binding; do not execute placeholder
+    # work or mint a different Turn during identity qualification.
+    bound_rc, bound = _run_cli(registry_path, runtime, "quota", "should-run",
+        "--runtime-profile", profile, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", identity["turn_instance_id"],
+        "--scan-path", str(project))
     assert bound_rc == 0, bound
     plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
-    assert plan["identity"]["todo_id"] == TODO_ID
-    assert plan["identity"]["agent_id"] == AGENT_ID
-    if profile != "codex_app_ssh_goal":
-        assert plan["identity"]["turn_instance_id"] == TURN_ID
+    assert plan["identity"] == identity
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",
     ]
@@ -6859,7 +6910,7 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
     assert replay.get("unsettled_host_turn_recovery") is None
 
 
-def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
+def test_default_visible_goal_todoless_replan_replays_original_admission(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -6883,15 +6934,14 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert unbound["decision"] == "autonomous_replan_required", unbound
     assert unbound.get("selected_todo") is None, unbound
     actions = unbound["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    assert len(actions) == 1
-    assert actions[0].endswith("--begin-turn")
-    assert "refresh-state" not in actions[0]
-    assert "spend-slot" not in actions[0]
-
-    bound_rc, bound = _run_generated_cli(
-        actions[0],
-        registry_path=registry_path,
-    )
+    assert len(actions) == 2
+    original = unbound["heartbeat_receipt"]["settlement_identity"]
+    assert "refresh-state" in actions[0] and "quota spend-slot" in actions[1]
+    assert all(f"--turn-instance-id {original['turn_instance_id']}" in action for action in actions)
+    bound_rc, bound = _run_cli(registry_path, runtime, "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--scan-path", str(project),
+        "--turn-instance-id", original["turn_instance_id"])
 
     assert bound_rc == 0, bound
     assert bound["decision"] == "autonomous_replan_required", bound
@@ -6900,7 +6950,8 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     assert identity["replan_obligation_id"] == obligation_id
-    assert identity["turn_instance_id"].startswith("guided-start:")
+    assert identity == original
+    assert bound["heartbeat_receipt"]["status"] == "replayed"
     cli_channel = bound["interaction_contract"]["cli_channel"]
     assert cli_channel["settlement_plan"]["identity"] == identity
     assert len(cli_channel["next_cli_actions"]) == 2
@@ -7900,6 +7951,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         TURN_ID,
     )
     assert guard_rc == 0, guard
+    _historical_turn(runtime)
     assert guard["heartbeat_receipt"]["delivery_workspace_causality"] == {
         "schema_version": "delivery_workspace_causality_v0",
         "todo_id": TODO_ID,
@@ -8082,7 +8134,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     sidecars = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
     terminal_sidecars = [
         path for path in sidecars.glob("*.json")
-        if json.loads(path.read_text())["source_receipt_id"]
+        if not path.name.endswith(".lock.holder.json") and json.loads(path.read_text())["source_receipt_id"]
         == trigger_intent["source_receipt_id"]
     ]
     assert len(terminal_sidecars) == 1

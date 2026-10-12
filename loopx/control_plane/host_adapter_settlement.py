@@ -24,12 +24,14 @@ HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION = (
     "loopx_host_todo_completion_reduction_v0"
 )
 _RUNTIME_METHOD = "turn.host_todo_completion.evaluate"
-HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE = (
+HOST_ADAPTER_SETTLEMENT_STEP_KINDS = (
     "guard",
     "lifecycle_completion",
     "durable_writeback",
     "quota_spend",
     "terminal_closeout",
+    "delivery_context",
+    "direction_context",
 )
 _MISSING = object()
 
@@ -62,7 +64,11 @@ class HostTodoSettlementRequest:
     vision_path: str | None = None
     vision_unchanged_reason: str | None = None
     checkpoint_read_context_id: str | None = None
+    first_delivery: bool = False
+    delivery_read_context_id: str | None = None
     goal_ref: Mapping[str, str] | None = None
+    turn_instance_id: str | None = None
+    current_agent_checkpoint: bool = False
 
 
 class HostCliRunner(Protocol):
@@ -105,13 +111,21 @@ def _request_payload(
         payload["provider_outcomes"] = provider_outcomes
     if request.goal_ref is not None:
         payload["goal_ref"] = dict(request.goal_ref)
-    if request.vision_path or request.vision_unchanged_reason or phase in {"vision_refresh", "vision_context"}:
+    if request.turn_instance_id is not None:
+        payload["turn_instance_id"] = request.turn_instance_id
+    if request.vision_path or request.vision_unchanged_reason or request.checkpoint_read_context_id or phase in {"vision_refresh", "vision_context"} or request.first_delivery:
         payload.update(
             schema_version="loopx_host_todo_completion_transaction_v1",
             vision_path=request.vision_path,
             vision_unchanged_reason=request.vision_unchanged_reason,
             checkpoint_read_context_id=request.checkpoint_read_context_id,
         )
+    if request.first_delivery or request.current_agent_checkpoint:
+        payload.update(schema_version="loopx_host_todo_completion_transaction_v2", first_delivery=True,
+            delivery_read_context_id=request.delivery_read_context_id,
+            current_agent_checkpoint=request.current_agent_checkpoint)
+    elif request.delivery_read_context_id:
+        payload["delivery_read_context_id"] = request.delivery_read_context_id
     return payload
 
 
@@ -276,10 +290,12 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         value.get("provider_id") != "loopx_cli"
         or value.get("kind") != "ordered_cli_sequence"
         or not isinstance(raw_steps, list)
-        or len(raw_steps) not in {4, 5}
+        or len(raw_steps) not in {2, 3, 4, 5}
     ):
         raise RuntimeError("TypeScript host provider plan shape mismatch")
-    expected = HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE[: len(raw_steps)]
+    expected = (("guard", "delivery_context") if len(raw_steps) == 2 else
+        ("guard", "lifecycle_completion", "direction_context") if len(raw_steps) == 3 else
+        HOST_ADAPTER_SETTLEMENT_STEP_KINDS[: len(raw_steps)])
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:
@@ -404,6 +420,15 @@ def settle_host_todo_completion(
         ),
         phase="finalize",
     )
+    if finalized.get("decision") == "execute":
+        token = finalized.get("resume_checkpoint_read_context_id")
+        if (not request.current_agent_checkpoint or request.checkpoint_read_context_id is not None
+                or not isinstance(token, str) or not token
+                or finalized.get("identity") != prepared["identity"]):
+            raise RuntimeError("Committed direction recovery binding is invalid")
+        request = replace(request, checkpoint_read_context_id=token)
+        outcomes = _run_provider_plan(_decode_provider_steps(finalized["provider_effect"]), run_cli=run_cli)
+        finalized = _runtime_reduction(_request_payload(request, phase="finalize", provider_outcomes=outcomes), phase="finalize")
     result = finalized.get("result")
     if (
         finalized.get("decision") not in {"complete", "blocked", "provider_result"}

@@ -5,6 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..cli_runtime import PrintPayload
+
 from ..contract import check_contract, render_contract_markdown
 from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..control_plane.runtime.status_projection_cache import (
@@ -39,10 +41,6 @@ from ..review_packet import (
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from .status_registration import register_status_commands as register_status_commands
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 FormatSelector = Callable[..., str]
 
 
@@ -754,6 +752,19 @@ def attach_agent_lane_next_actions(
                 guard=guard,
             )
         latest_action = guard.get("latest_run_recommended_action")
+        delivery_progress = guard.get("first_delivery_progress")
+        if isinstance(delivery_progress, dict):
+            item["first_delivery_progress"] = delivery_progress
+        if (
+            isinstance(delivery_progress, dict)
+            and guard.get("recommended_action") == delivery_progress["next_action"]
+        ):
+            item["recommended_action"] = delivery_progress["next_action"]
+            if isinstance(project_asset, dict):
+                project_asset["next_action"] = delivery_progress["next_action"]
+            goal_channel = item.get("goal_channel_projection")
+            if isinstance(goal_channel, dict):
+                goal_channel["next_action"] = delivery_progress["next_action"]
         for target in (item, project_asset):
             if not isinstance(target, dict):
                 continue
@@ -885,6 +896,8 @@ def handle_diagnose_command(
                 ],
             },
         }
+    # Preserve the full reasoning evidence packet; JSON indentation carries no
+    # decision information and grows with every diagnosis collection row.
     print_payload(payload, output_format(args), render_diagnosis_markdown)
     return 0 if payload.get("ok") else 1
 

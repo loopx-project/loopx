@@ -7,15 +7,23 @@ they neither choose an authority provider nor authorize a mutation.
 from __future__ import annotations
 
 import os
+import json
+from typing import Any
+
+from .private_permissions import protect_private_path
 import stat
 import tempfile
 from pathlib import Path
 
 
-def atomic_write_state_text(path: Path, text: str, *, create_only: bool = False) -> None:
+def atomic_write_state_text(
+    path: Path, text: str, *, create_only: bool = False, private: bool = False,
+) -> None:
     """Persist complete UTF-8 state while the caller holds its sibling lock."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    if private:
+        protect_private_path(path.parent, directory=True)
     mode = stat.S_IMODE(path.stat().st_mode) if not create_only and path.exists() else 0o600
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
@@ -23,7 +31,10 @@ def atomic_write_state_text(path: Path, text: str, *, create_only: bool = False)
     temporary_path = Path(temporary)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            os.chmod(temporary_path, mode)
+            if private:
+                protect_private_path(temporary_path)
+            else:
+                os.chmod(temporary_path, mode)
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -56,3 +67,9 @@ def verify_state_text_durable(path: Path, text: str) -> None:
             raise RuntimeError("Todo Markdown projection readback mismatch")
         os.fsync(handle.fileno())
     fsync_state_directory(path)
+
+
+def atomic_write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    """Publish private complete JSON after enforcing platform access controls."""
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    atomic_write_state_text(path, text, private=True)

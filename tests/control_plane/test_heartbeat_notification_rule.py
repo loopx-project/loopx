@@ -49,14 +49,14 @@ def test_short_rule_qualifies_dont_notify_as_output_only() -> None:
     assert "OUTPUT only" in rule
     # The old ambiguous mapping must be gone.
     assert "DONT_NOTIFY=quiet." not in rule
-    assert "heartbeat_recommendation.agent_must_attempt" in rule
     assert "execution_obligation.must_attempt_work" in rule
+    # Guidance mirrors the obligation in quota but is not another authority.
+    assert "heartbeat_recommendation.agent_must_attempt" not in rule
 
 
 def test_shared_rule_keeps_projection_repair_and_quiet_boundary() -> None:
     rule = HEARTBEAT_NOTIFICATION_RULE_SHORT
-    assert "Missing NOTIFY action: user Todo unprojected" in rule
-    assert "repair LoopX state projection" in rule
+    assert "Missing NOTIFY action: repair unprojected user Todo" in rule
     assert "under DONT_NOTIFY repair internally" in rule
     assert "true=work+writeback" in rule
     assert "only false permits no-op" in rule
@@ -83,14 +83,13 @@ def test_rendered_task_bodies_keep_execution_obligation_authority() -> None:
     )
     for renderer in (render_thin_heartbeat_task_body, render_brief_heartbeat_task_body):
         body = renderer(**kwargs)
-        assert "heartbeat_recommendation.agent_must_attempt" in body
         assert "execution_obligation.must_attempt_work" in body
         assert "OUTPUT only" in body
-        assert "repair LoopX state projection" in body
+        assert "repair unprojected user Todo" in body
         assert "under DONT_NOTIFY repair internally" in body
         # A bare "DONT_NOTIFY=quiet" no-op mapping must never appear in the prompt.
         assert "DONT_NOTIFY=quiet." not in body
-        assert "After committed writeback: same-turn checkpoint-context" in body
+        assert "Committed writeback lacks vision: same-turn checkpoint-context+evidence" in body
         assert "Missing vision: same-turn checkpoint-context" not in body
 
 
@@ -104,10 +103,10 @@ def test_all_heartbeat_modes_scope_no_spend_to_observation() -> None:
         )
         body = payload["task_body"]
         assert "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work." in body
-        assert "Admitted work: settlement_plan" in body
-        assert "settlement_plan even if artifacts unchanged" in body
+        assert "Admitted work, even if artifacts unchanged" in body
+        assert "cli_channel.settlement_plan.ordered_steps" in body
         assert "no-change=surface_only/no spend" not in body
-        assert "After committed writeback: same-turn checkpoint-context" in body
+        assert "Committed writeback lacks vision: same-turn checkpoint-context+evidence" in body
 
 
 def test_todo_closeout_does_not_invent_successors_or_skip_turn_settlement(tmp_path) -> None:

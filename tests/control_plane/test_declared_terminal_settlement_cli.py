@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 import test_quota_settlement_cli as cli
@@ -16,10 +18,11 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+from host_checkpoint_fixture import checkpoint_decision
 from loopx.control_plane.todos.markdown import render_todo_markdown
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, historical_terminals: int = 0):
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, historical_terminals: int = 0, renew_during_validation: bool = False):
     # Scope managed Effect discovery as well as provider data for both arms.
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = cli._write_fixture(tmp_path)
@@ -45,6 +48,10 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     registry = json.loads(registry_path.read_text())
     registry["goals"][0]["coordination"]["write_scope"] = ["src/**"]
     registry_path.write_text(json.dumps(registry))
+    if provider == "legacy":
+        state.write_text(state.read_text().replace(
+            "status: active-read-only", "handoff_mode: hard_lease\nstatus: active-read-only", 1,
+        ))
     cli._initialize_git_checkout(project)
     # The private registry must not be tracked or made push-allowed just to
     # admit the synthetic Goal. Only the public-safe state fixture is committed.
@@ -60,18 +67,19 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     def run(*args: str) -> tuple[int, dict[str, Any]]:
         return cli._run_cli(registry_path, runtime, *args, cwd=workspace)
 
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=cli.GOAL_ID, todos=read_fixture_todos(state), handoff_mode="hard_lease", leases=[],
-    )
-    # Actor audit is canonical-only; legacy Markdown import cannot author it.
-    historical = [row for row in projection["todos"] if row["todo_id"].startswith("todo_historical_")]
-    assert len(historical) == historical_terminals
-    for row in historical:
-        row["last_actor_agent_id"] = cli.AGENT_ID
-    projection["todo_read_model"]["records_sha256"] = sha256(canonical_bytes(projection["todos"])).hexdigest()
-    initialize_canonical_authority(
-        runtime, cli.GOAL_ID, projection, state_path=state, provider=provider,
-    )
+    if provider != "legacy":
+        projection = build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(state), handoff_mode="hard_lease", leases=[],
+        )
+        # Actor audit is canonical-only; legacy Markdown import cannot author it.
+        historical = [row for row in projection["todos"] if row["todo_id"].startswith("todo_historical_")]
+        assert len(historical) == historical_terminals
+        for row in historical:
+            row["last_actor_agent_id"] = cli.AGENT_ID
+        projection["todo_read_model"]["records_sha256"] = sha256(canonical_bytes(projection["todos"])).hexdigest()
+        initialize_canonical_authority(
+            runtime, cli.GOAL_ID, projection, state_path=state, provider=provider,
+        )
     code, acquired = run(
         "task-lease", "acquire", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--owner", cli.AGENT_ID, "--idempotency-key", "declared-terminal-fixture",
@@ -81,19 +89,36 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     lease_args = ("--task-lease-idempotency-key", acquired["lease"]["idempotency_key"],
                   "--task-lease-expected-version", str(acquired["lease"]["version"]))
     marker, fail = tmp_path / "validator-runs", tmp_path / "validator-fails"
+    renew_script = ""
+    if renew_during_validation:
+        renew_argv = [sys.executable, "-m", "loopx.cli", "--format", "json",
+            "--registry", str(registry_path), "--runtime-root", str(runtime),
+            "task-lease", "renew", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
+            "--owner", cli.AGENT_ID, "--idempotency-key", acquired["lease"]["idempotency_key"],
+            "--expected-version", str(acquired["lease"]["version"]), "--ttl-seconds", "600"]
+        renew_script = f"import subprocess; from pathlib import Path; r=subprocess.run({renew_argv!r}, cwd={str(workspace)!r}, capture_output=True, text=True); Path({str(tmp_path / 'renew-output')!r}).write_text(r.stdout+r.stderr); assert r.returncode == 0; "
     argv = [sys.executable, "-c", (
-        "from pathlib import Path; "
+        renew_script + "from pathlib import Path; "
         f"p=Path({str(marker)!r}); p.write_text((p.read_text() if p.exists() else '')+'run\\n'); "
         f"raise SystemExit(4 if Path({str(fail)!r}).exists() else 0)"
     )]
-    code, bound = run(
-        "todo", "update", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
-        "--agent-id", cli.AGENT_ID, "--validation-command-json", json.dumps(argv),
-        "--validation-label", "Original declared deliverable check", *lease_args,
-        "--update-operation-id", "original-declaration-fixture",
-        "--update-expected-provider-revision", acquired["provider_revision"],
-    )
-    assert code == 0, bound.get("error") or bound
+    if provider == "legacy":
+        # Establish the original declaration before Turn admission. Legacy
+        # Markdown has no canonical revision transaction to bind afterwards.
+        encoded = quote(json.dumps(argv, separators=(",", ":")), safe="")
+        state.write_text(state.read_text().replace(
+            "required_write_scopes=src/**",
+            "required_write_scopes=src/** validation_command_argv=" + encoded,
+        ))
+    else:
+        code, bound = run(
+            "todo", "update", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
+            "--agent-id", cli.AGENT_ID, "--validation-command-json", json.dumps(argv),
+            "--validation-label", "Original declared deliverable check", *lease_args,
+            "--update-operation-id", "original-declaration-fixture",
+            "--update-expected-provider-revision", acquired["provider_revision"],
+        )
+        assert code == 0, bound.get("error") or bound
     code, original = run("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
     assert code == 0, original
     return project, workspace, runtime, registry_path, run, lease_args, marker, fail, original["todo"]
@@ -113,7 +138,10 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
                    *binding,
                   "--available-capability", "shell", "--available-capability", "filesystem_write")
     code, guard = run(*guard_args)
-    assert code == 0, guard.get("error") or guard.get("reason") or guard
+    assert code == 0, guard.get("error") or guard.get("reason")
+    # Preserve the original pre-default settlement contract and all assertions.
+    # Default RESULT/direction ordering has its own regression below.
+    cli._historical_turn(runtime) or guard
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
     complete_args = ("todo", "complete", "--goal-id", cli.GOAL_ID, *binding, *lease,
                      "--project", str(project), "--state-file", str(project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
@@ -220,7 +248,7 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     assert settled["effective_action"] == "heartbeat_settled_skip"
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_original_lease_and_failed_validator_remain_required_before_accounting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
@@ -243,7 +271,8 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
     code, state = run("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
     assert code == 0, state
     assert state["todo"]["status"] == "open"
-    assert state["todo"]["completion_validation_sha256"] == original["completion_validation_sha256"]
+    assert state["todo"].get("completion_validation_sha256") == original.get("completion_validation_sha256")
+    assert state["todo"].get("validation_command_argv") == original.get("validation_command_argv")
     code, no_spend = run("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding,
                          "--source", "heartbeat", "--slots", "1", "--execute", )
     assert code == 1, no_spend
@@ -251,10 +280,405 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
     fail.unlink()
     code, accepted = run(*command, *lease)
     assert code == 0, accepted
-    assert accepted["validation_receipt"]["passed"] is True
-    assert accepted["validation_receipt"]["validation_declaration_sha256"] == original["completion_validation_sha256"]
+    assert accepted["completed"] is True
+    if provider != "legacy":
+        assert accepted["validation_receipt"]["passed"] is True
+    if provider != "legacy":
+        assert accepted["validation_receipt"]["validation_declaration_sha256"] == original["completion_validation_sha256"]
     assert marker.read_text() == "run\nrun\n", "one failed attempt, then one actual successful check"
     assert cli._spend_run_count(runtime) == 0
+
+    code, replay = run(*command, *lease)
+    assert code == 0, replay
+    assert marker.read_text() == "run\nrun\n", "terminal replay must not repeat validation"
+    assert cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_lease_change_during_validator_still_blocks_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    project, _, runtime, _, run, lease, marker, _, _ = _fixture(
+        tmp_path, monkeypatch, provider, renew_during_validation=True,
+    )
+    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+               "--turn-instance-id", cli.TURN_ID)
+    code, guard = run("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
+                      "--scan-path", str(project), *binding)
+    assert code == 0, guard
+    code, rejected = run("todo", "complete", "--goal-id", cli.GOAL_ID, *binding, *lease,
+                         "--evidence", "Validator renews the lease before final completion.")
+    assert code == 1, rejected
+    assert marker.exists(), rejected
+    assert marker.read_text() == "run\n", "validation ran outside the short lease fence"
+    code, state = run("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+    assert code == 0, state
+    assert state["todo"]["status"] == "open", "commit must reject the changed lease version"
+    assert cli._spend_run_count(runtime) == 0
+
+@pytest.mark.parametrize('provider',['file','sqlite'])
+@pytest.mark.parametrize('closeout_source',['turn','lifecycle'])
+def test_default_declared_terminal_intent_recovers_original_result(tmp_path,monkeypatch,provider,closeout_source):
+    project,workspace,runtime,registry,run,lease,marker,_,original=_fixture(tmp_path,monkeypatch,provider)
+    binding=('--agent-id',cli.AGENT_ID,'--todo-id',cli.TODO_ID,'--turn-instance-id',cli.TURN_ID)
+    code,guard=run('quota','should-run','--codex-app','--goal-id',cli.GOAL_ID,'--scan-path',str(project),*binding,
+                   '--available-capability','shell','--available-capability','filesystem_write')
+    assert code==0,guard
+    identity=guard['heartbeat_receipt']['settlement_identity']
+    complete=('todo','complete','--goal-id',cli.GOAL_ID,*binding,*lease,'--no-follow-up',
+              '--evidence','Original declared deliverable, then current post-result direction.')
+    code,result=run(*complete)
+    assert code==0,result
+    assert result['completed'] is True and result['completion_continuation']=='active_goal',result
+    assert marker.read_text()=='run\n','RESULT must run exactly one original validator'
+    assert cli._spend_run_count(runtime)==0
+    code,listed=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0,listed
+    saved=listed['todo']
+    assert saved['status']=='done' and saved['completion_continuation']=='active_goal'
+    assert saved['completion_requested_continuation']=='no_followup',saved
+    assert not saved.get('successor_todo_ids')
+    assert saved.get('completion_validation_sha256')==original.get('completion_validation_sha256')
+    assert saved['completion_turn_key']==identity['effect_id'],saved
+    assert result['settlement_identity']==identity,result
+    assert result['completion_identity_key']==identity['effect_id']
+    # A fresh original request must recover RESULT without revalidation.
+    code,replay=run(*complete)
+    assert code==0 and replay['idempotent_replay'] is True,replay
+    assert marker.read_text()=='run\n'
+    lifecycle=('todo','complete','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID,'--agent-id',cli.AGENT_ID,
+               '--completion-identity-key',identity['effect_id'],'--no-follow-up','--evidence',complete[-1])
+    code,early=run(*lifecycle)
+    assert code==1,early
+    code,after=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and after['todo']==saved,after
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==0
+    # New direction is authored only after the CLI returns actual committed RESULT.
+    code,context=run('checkpoint-context','--goal-id',cli.GOAL_ID,*binding,'--purpose','first_delivery')
+    assert code==0,context
+    assert context['settlement_identity']==identity and context['basis']['todo']['status']=='done'
+    decision=checkpoint_decision(context)
+    direction=('--checkpoint-read-context',context['read_context_id'])
+    if decision.get('agent_vision'):
+        vision=tmp_path/'direction.json'
+        vision.write_text(json.dumps(decision['agent_vision']))
+        direction+=('--agent-vision-json',str(vision))
+    else:
+        direction+=('--vision-unchanged-reason',decision['vision_unchanged_reason'])
+    refresh=('refresh-state','--goal-id',cli.GOAL_ID,*binding,*direction,
+             '--classification','declared_deliverable_complete','--delivery-batch-scale','implementation',
+             '--delivery-outcome','outcome_progress','--no-global-sync','--suppress-external-sinks')
+    code,refreshed=run(*refresh)
+    assert code==0,refreshed
+    spend=('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--slots','1','--source','heartbeat','--execute',
+           '--scan-path',str(project))
+    code,spent=run(*spend)
+    assert code==0,spent
+    assert cli._spend_run_count(runtime)==1
+    code,before_reentry=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0,before_reentry
+    for field,replacement in (('--completion-identity-key',identity['effect_id']+'-wrong'),
+                              ('--evidence','Replacement evidence must be rejected.'),
+                              ('--agent-id','unregistered-cold-actor')):
+        rejected=list(lifecycle)
+        rejected[rejected.index(field)+1]=replacement
+        code,failure=run(*rejected)
+        assert code==1,failure
+        code,unchanged=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+        assert code==0 and unchanged['todo']==before_reentry['todo'],unchanged
+        assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+    terminal=complete if closeout_source=='turn' else lifecycle
+    code,closed=run(*terminal)
+    assert code==0 and closed['completion_continuation']=='no_followup',closed
+    for args in (complete,refresh,spend,terminal):
+        code,replay=run(*args)
+        assert code==0 and replay['idempotent_replay'] is True,replay
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+    code,final=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and final['todo']['completion_continuation']=='no_followup',final
+    assert final['todo'].get('completion_validation_sha256')==original.get('completion_validation_sha256')
+
+    # A retry with changed accepted work must not borrow the historical RESULT.
+    for field,replacement in (('--evidence','Changed accepted evidence'),
+                              ('--task-lease-expected-version','999')):
+        rejected=list(complete)
+        rejected[rejected.index(field)+1]=replacement
+        code,failure=run(*rejected)
+        assert code==1,failure
+        code,unchanged=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+        assert code==0 and unchanged['todo']==final['todo'],unchanged
+        assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('fault', ['rename', 'crash'])
+def test_declared_validation_survives_pre_result_failure(tmp_path, monkeypatch, provider, fault):
+    project, workspace, runtime, registry, run, lease, marker, _, original = _fixture(tmp_path, monkeypatch, provider)
+    binding = ('--agent-id', cli.AGENT_ID, '--todo-id', cli.TODO_ID, '--turn-instance-id', cli.TURN_ID)
+    code, guard = run('quota', 'should-run', '--codex-app', '--goal-id', cli.GOAL_ID, '--scan-path', str(project), *binding,
+                      '--available-capability', 'shell', '--available-capability', 'filesystem_write')
+    assert code == 0, guard
+    complete = ('todo', 'complete', '--goal-id', cli.GOAL_ID, *binding, *lease, '--no-follow-up', '--evidence', 'Original candidate and original validation effect.')
+    launcher = tmp_path / 'fault_cli.py'
+    fault_seen = tmp_path / 'fault-seen'
+    launcher.write_text('import os, sys\nfrom pathlib import Path\n'
+        + f'marker = Path({str(marker)!r})\nseen = Path({str(fault_seen)!r})\n'
+        + ('original = os.replace\ndef replace(source, target, *args, **kwargs):\n'
+           '    if Path(target).name == "index.jsonl.lock.holder.json" and marker.exists() and not seen.exists():\n'
+           '        seen.write_text("post-validation holder publication rejected")\n'
+           '        raise PermissionError(13, "Injected original Windows holder publication failure", str(target))\n'
+           '    return original(source, target, *args, **kwargs)\nos.replace = replace\n' if fault == 'rename' else
+           'import loopx.control_plane.todos.completion_validation as validation\n'
+           'original = validation.run_declared_completion_validation_effect\n'
+           'def run_effect(**kwargs):\n'
+           '    result = original(**kwargs)\n'
+           '    if not seen.exists():\n'
+           '        seen.write_text("process lost after validator effect before outcome publication")\n'
+           '        os._exit(93)\n'
+           '    return result\nvalidation.run_declared_completion_validation_effect = run_effect\n')
+        + 'from loopx.cli import main\nraise SystemExit(main(sys.argv[1:]))\n', encoding='utf-8')
+    argv = [sys.executable, str(launcher), '--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json', *complete]
+    lost = subprocess.run(argv, cwd=workspace, capture_output=True, text=True, env={**os.environ, 'PYTHONPATH': str(cli.REPO_ROOT)}, timeout=90)
+    assert lost.returncode != 0 and fault_seen.exists(), (lost.stdout, lost.stderr)
+    assert marker.read_text() == 'run\n'
+    code, before = run('todo', 'list', '--goal-id', cli.GOAL_ID, '--todo-id', cli.TODO_ID)
+    assert code == 0 and not before['todo']['done'], before
+    assert before['todo']['completion_validation_sha256'] == original['completion_validation_sha256']
+    assert cli._spend_run_count(runtime) == 0
+    if fault == 'rename':
+        for flag, replacement in (('--evidence', 'Replaced candidate.'), ('--agent-id', 'unregistered-agent'), ('--task-lease-expected-version', '999')):
+            changed = list(complete)
+            changed[changed.index(flag) + 1] = replacement
+            code, rejection = run(*changed)
+            assert code == 1, rejection
+            assert marker.read_text() == 'run\n', 'Rejected replacement must not execute another validator'
+            code, unchanged = run('todo', 'list', '--goal-id', cli.GOAL_ID, '--todo-id', cli.TODO_ID)
+            assert code == 0 and unchanged['todo'] == before['todo'], unchanged
+    code, restored = run(*complete)
+    assert marker.read_text() == 'run\n', 'Original validation must never execute twice after lost RESULT'
+    if fault == 'rename':
+        assert code == 0 and restored['completed'] is True, restored
+        assert restored['completion_continuation'] == 'active_goal'
+        assert restored['validation_receipt']['passed'] is True
+        assert restored['validation_receipt']['validation_declaration_sha256'] == original['completion_validation_sha256']
+        assert restored['completion_identity_key'] == guard['heartbeat_receipt']['settlement_identity']['effect_id']
+        code, replay = run(*complete)
+        assert code == 0 and replay['idempotent_replay'] is True, replay
+    else:
+        assert code == 1, restored
+        assert 'delivery_validation_outcome_unknown' in json.dumps(restored), restored
+        code, replaced_read = run('checkpoint-context', '--goal-id', cli.GOAL_ID, *binding, '--purpose', 'delivery_result')
+        assert code == 1 and 'delivery_validation_outcome_unknown' in json.dumps(replaced_read), replaced_read
+        code, after = run('todo', 'list', '--goal-id', cli.GOAL_ID, '--todo-id', cli.TODO_ID)
+        assert code == 0 and after['todo'] == before['todo'], after
+    assert marker.read_text() == 'run\n' and cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize('provider',['legacy'])
+@pytest.mark.parametrize('closeout_source',['turn','lifecycle'])
+def test_legacy_default_terminal_recovers_original_result(tmp_path,monkeypatch,provider,closeout_source):
+    project,workspace,runtime,registry,run,lease,marker,_,original=_fixture(tmp_path,monkeypatch,provider)
+    binding=('--agent-id',cli.AGENT_ID,'--todo-id',cli.TODO_ID,'--turn-instance-id',cli.TURN_ID)
+    code,guard=run('quota','should-run','--codex-app','--goal-id',cli.GOAL_ID,'--scan-path',str(project),*binding,
+                   '--available-capability','shell','--available-capability','filesystem_write')
+    assert code==0,guard
+    identity=guard['heartbeat_receipt']['settlement_identity']
+    complete=('todo','complete','--goal-id',cli.GOAL_ID,*binding,*lease,'--no-follow-up',
+              '--evidence','Original declared deliverable, then current post-result direction.')
+    code,result=run(*complete)
+    assert code==0,result
+    code,result_lease=run('task-lease','inspect','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and result_lease['lease']['status']=='released' and result_lease['lease']['version']==int(lease[-1]) and result_lease['lease']['idempotency_key']==lease[1] and result_lease['lease']['lease_epoch']==1,result_lease
+    assert result['completed'] is True and result['completion_continuation']=='active_goal',result
+    assert marker.read_text()=='run\n','RESULT must run exactly one original validator'
+    assert cli._spend_run_count(runtime)==0
+    code,listed=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0,listed
+    saved=listed['todo']
+    assert saved['status']=='done' and saved['completion_continuation']=='active_goal'
+    assert saved['completion_requested_continuation']=='no_followup',saved
+    assert not saved.get('successor_todo_ids')
+    assert saved.get('completion_validation_sha256')==original.get('completion_validation_sha256')
+    assert saved['completion_turn_key']==identity['effect_id'],saved
+    assert result['settlement_identity']==identity,result
+    if provider!='legacy':
+        assert result['completion_identity_key']==identity['effect_id']
+    # A fresh original request must recover RESULT without revalidation.
+    code,replay=run(*complete)
+    assert code==0 and replay['idempotent_replay'] is True,replay
+    assert marker.read_text()=='run\n'
+    lifecycle=('todo','complete','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID,'--agent-id',cli.AGENT_ID,
+               '--completion-identity-key',identity['effect_id'],'--no-follow-up','--evidence',complete[-1])
+    code,early=run(*lifecycle)
+    if provider=='legacy' and code==0:
+        # A historical RESULT replay is legal; it must neither represent nor
+        # mutate a terminal closeout. The frozen condition is no early close.
+        assert early['idempotent_replay'] is True and early['changed'] is False,early
+        assert early['completion_continuation']=='active_goal',early
+    else:
+        assert code==1,early
+    code,after=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and after['todo']==saved,after
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==0
+    # New direction is authored only after the CLI returns actual committed RESULT.
+    code,context=run('checkpoint-context','--goal-id',cli.GOAL_ID,*binding,'--purpose','first_delivery')
+    assert code==0,context
+    assert context['settlement_identity']==identity and context['basis']['todo']['status']=='done'
+    decision=checkpoint_decision(context)
+    direction=('--checkpoint-read-context',context['read_context_id'])
+    if decision.get('agent_vision'):
+        vision=tmp_path/'direction.json'
+        vision.write_text(json.dumps(decision['agent_vision']))
+        direction+=('--agent-vision-json',str(vision))
+    else:
+        direction+=('--vision-unchanged-reason',decision['vision_unchanged_reason'])
+    refresh=('refresh-state','--goal-id',cli.GOAL_ID,*binding,*direction,
+             '--classification','declared_deliverable_complete','--delivery-batch-scale','implementation',
+             '--delivery-outcome','outcome_progress','--no-global-sync','--suppress-external-sinks')
+    code,refreshed=run(*refresh)
+    assert code==0,refreshed
+    spend=('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--slots','1','--source','heartbeat','--execute',
+           '--scan-path',str(project))
+    code,spent=run(*spend)
+    assert code==0,spent
+    assert cli._spend_run_count(runtime)==1
+    code,before_reentry=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0,before_reentry
+    for field,replacement in (('--completion-identity-key',identity['effect_id']+'-wrong'),
+                              ('--evidence','Replacement evidence must be rejected.'),
+                              ('--agent-id','unregistered-cold-actor')):
+        rejected=list(lifecycle)
+        rejected[rejected.index(field)+1]=replacement
+        code,failure=run(*rejected)
+        assert code==1,failure
+        code,unchanged=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+        assert code==0 and unchanged['todo']==before_reentry['todo'],unchanged
+        assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+    terminal=complete if closeout_source=='turn' else lifecycle
+    code,closed=run(*terminal)
+    assert code==0 and closed['completion_continuation']=='no_followup',closed
+    for args in (complete,refresh,spend,terminal):
+        code,replay=run(*args)
+        assert code==0 and replay['idempotent_replay'] is True,replay
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+    code,final=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and final['todo']['completion_continuation']=='no_followup',final
+    code, retired=run('task-lease','inspect','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and retired['lease']['status']=='released' and retired['lease']['version']==int(lease[-1]),retired
+    assert retired['lease']['idempotency_key']==lease[1] and retired['lease']['lease_epoch']==1,retired
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1,'Original validator and spend stay exactly once'
+    assert final['todo'].get('completion_validation_sha256')==original.get('completion_validation_sha256')
+
+
+
+@pytest.mark.parametrize('provider',['legacy'])
+@pytest.mark.parametrize('fault',['before_release','after_release'])
+@pytest.mark.parametrize('closeout_source',['turn','lifecycle'])
+def test_legacy_committed_result_survives_release_process_loss(tmp_path,monkeypatch,provider,closeout_source,fault):
+    project,workspace,runtime,registry,run,lease,marker,_,original=_fixture(tmp_path,monkeypatch,provider)
+    actual_run=run
+    injected=False
+    launcher=tmp_path/'lost_legacy_cli.py'
+    seen=tmp_path/'fault-seen'
+    launcher.write_text('import os,sys\nfrom pathlib import Path\nimport loopx.control_plane.todos.legacy_mutation as legacy\noriginal=legacy.release_verified_task_lease_fence\ndef release(fence,**kwargs):\n'
+        + ('    original(fence,**kwargs)\n' if fault=='after_release' else '')
+        + '    if kwargs.get("committed"):\n        Path('+repr(str(seen))+').write_text("Todo committed, process lost '+fault+'")\n        os._exit(93)\n'
+        + ('    original(fence,**kwargs)\n' if fault=='before_release' else '')
+        + 'legacy.release_verified_task_lease_fence=release\nfrom loopx.cli import main\nraise SystemExit(main(sys.argv[1:]))\n')
+    def run(*args):
+        nonlocal injected
+        if not injected and args[:2]==('todo','complete'):
+            injected=True
+            lost=subprocess.run([sys.executable,str(launcher),'--registry',str(registry),'--runtime-root',str(runtime),'--format','json',*args],cwd=workspace,capture_output=True,text=True,env={**os.environ,'PYTHONPATH':str(cli.REPO_ROOT)},timeout=90)
+            assert lost.returncode==93 and seen.exists(),(lost.stdout,lost.stderr)
+            assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==0
+        return actual_run(*args)
+    binding=('--agent-id',cli.AGENT_ID,'--todo-id',cli.TODO_ID,'--turn-instance-id',cli.TURN_ID)
+    code,guard=run('quota','should-run','--codex-app','--goal-id',cli.GOAL_ID,'--scan-path',str(project),*binding,
+                   '--available-capability','shell','--available-capability','filesystem_write')
+    assert code==0,guard
+    identity=guard['heartbeat_receipt']['settlement_identity']
+    complete=('todo','complete','--goal-id',cli.GOAL_ID,*binding,*lease,'--no-follow-up',
+              '--evidence','Original declared deliverable, then current post-result direction.')
+    code,result=run(*complete)
+    assert code==0,result
+    assert result['completed'] is True and result['completion_continuation']=='active_goal',result
+    assert marker.read_text()=='run\n','RESULT must run exactly one original validator'
+    assert cli._spend_run_count(runtime)==0
+    code,listed=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0,listed
+    saved=listed['todo']
+    assert saved['status']=='done' and saved['completion_continuation']=='active_goal'
+    assert saved['completion_requested_continuation']=='no_followup',saved
+    assert not saved.get('successor_todo_ids')
+    assert saved.get('completion_validation_sha256')==original.get('completion_validation_sha256')
+    assert saved['completion_turn_key']==identity['effect_id'],saved
+    assert result['settlement_identity']==identity,result
+    if provider!='legacy':
+        assert result['completion_identity_key']==identity['effect_id']
+    # A fresh original request must recover RESULT without revalidation.
+    code,replay=run(*complete)
+    assert code==0 and replay['idempotent_replay'] is True,replay
+    assert marker.read_text()=='run\n'
+    lifecycle=('todo','complete','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID,'--agent-id',cli.AGENT_ID,
+               '--completion-identity-key',identity['effect_id'],'--no-follow-up','--evidence',complete[-1])
+    code,early=run(*lifecycle)
+    if provider=='legacy' and code==0:
+        # A historical RESULT replay is legal; it must neither represent nor
+        # mutate a terminal closeout. The frozen condition is no early close.
+        assert early['idempotent_replay'] is True and early['changed'] is False,early
+        assert early['completion_continuation']=='active_goal',early
+    else:
+        assert code==1,early
+    code,after=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and after['todo']==saved,after
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==0
+    # New direction is authored only after the CLI returns actual committed RESULT.
+    code,context=run('checkpoint-context','--goal-id',cli.GOAL_ID,*binding,'--purpose','first_delivery')
+    assert code==0,context
+    assert context['settlement_identity']==identity and context['basis']['todo']['status']=='done'
+    decision=checkpoint_decision(context)
+    direction=('--checkpoint-read-context',context['read_context_id'])
+    if decision.get('agent_vision'):
+        vision=tmp_path/'direction.json'
+        vision.write_text(json.dumps(decision['agent_vision']))
+        direction+=('--agent-vision-json',str(vision))
+    else:
+        direction+=('--vision-unchanged-reason',decision['vision_unchanged_reason'])
+    refresh=('refresh-state','--goal-id',cli.GOAL_ID,*binding,*direction,
+             '--classification','declared_deliverable_complete','--delivery-batch-scale','implementation',
+             '--delivery-outcome','outcome_progress','--no-global-sync','--suppress-external-sinks')
+    code,refreshed=run(*refresh)
+    assert code==0,refreshed
+    spend=('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--slots','1','--source','heartbeat','--execute',
+           '--scan-path',str(project))
+    code,spent=run(*spend)
+    assert code==0,spent
+    assert cli._spend_run_count(runtime)==1
+    code,before_reentry=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0,before_reentry
+    for field,replacement in (('--completion-identity-key',identity['effect_id']+'-wrong'),
+                              ('--evidence','Replacement evidence must be rejected.'),
+                              ('--agent-id','unregistered-cold-actor')):
+        rejected=list(lifecycle)
+        rejected[rejected.index(field)+1]=replacement
+        code,failure=run(*rejected)
+        assert code==1,failure
+        code,unchanged=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+        assert code==0 and unchanged['todo']==before_reentry['todo'],unchanged
+        assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+    terminal=complete if closeout_source=='turn' else lifecycle
+    code,closed=run(*terminal)
+    assert code==0 and closed['completion_continuation']=='no_followup',closed
+    for args in (complete,refresh,spend,terminal):
+        code,replay=run(*args)
+        assert code==0 and replay['idempotent_replay'] is True,replay
+    assert marker.read_text()=='run\n' and cli._spend_run_count(runtime)==1
+    code,final=run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and final['todo']['completion_continuation']=='no_followup',final
+    code,retired=run('task-lease','inspect','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert code==0 and retired['lease']['status']=='released' and retired['lease']['idempotency_key']==lease[1] and retired['lease']['version']==int(lease[-1]) and retired['lease']['lease_epoch']==1,retired
+    assert final['todo'].get('completion_validation_sha256')==original.get('completion_validation_sha256')
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

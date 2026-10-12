@@ -24,6 +24,7 @@ import type { JsonObject } from "../effect_program.ts";
 import type {
   AuthorityStore,
   AuthorityStoreCommit,
+  AuthorityStoreHead,
 } from "./authority_store.ts";
 import {
   AuthorityStoreProtocolError,
@@ -100,6 +101,8 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   /** Captured task digest. Null refuses fresh completion without source proof;
    * omission preserves unscoped callers. Historical receipts recover first. */
   readonly expected_todo_text_sha256?: string | null;
+  /** Immutable read identity, included in the operation payload commitment. */
+  readonly delivery_read_context_id?: string;
   readonly review_basis?: {readonly provider_revision: string; readonly registry_sha256: string};
   /** Presence selects source-bound validation; null means no effect issued yet. */
   readonly validation_source_provider_revision?: string | null;
@@ -119,6 +122,7 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly lease_expected_version: number | null;
   readonly allow_user_gate_auto_acquire: boolean;
   readonly requested_no_followup: boolean;
+  readonly defer_no_followup?: boolean;
   readonly requested_completion_identity_source: CompletionIdentitySource | null;
   readonly linked_successor_todo_ids: readonly string[];
   readonly successor_intents: readonly JsonObject[];
@@ -377,6 +381,12 @@ function normalizeTerminalInput(
       (typeof raw.expected_todo_text_sha256 !== "string" || !BARE_SHA256_PATTERN.test(raw.expected_todo_text_sha256))) {
     throw new AuthorityStoreProtocolError("expected Todo text commitment must be a SHA-256 digest");
   }
+  if (raw.delivery_read_context_id !== undefined) {
+    requireAuthorityStoreId(raw.delivery_read_context_id, "delivery read context id");
+    if (raw.operation_identity.kind !== "completion_turn" || raw.user_update !== undefined || raw.review_basis !== undefined) {
+      throw new AuthorityStoreProtocolError("delivery basis requires an ordinary Turn completion");
+    }
+  }
   if (raw.review_basis !== undefined) {
     const basis = canonicalAuthorityObject(raw.review_basis, "terminal review basis");
     if (Object.keys(basis).some(key => !["provider_revision", "registry_sha256"].includes(key)) ||
@@ -431,6 +441,8 @@ function normalizeTerminalInput(
       "allow_user_gate_auto_acquire",
     ),
     requested_no_followup: requireBoolean(raw.requested_no_followup, "requested_no_followup"),
+    ...(raw.defer_no_followup === undefined ? {} : {
+      defer_no_followup: requireBoolean(raw.defer_no_followup, "defer_no_followup")}),
     requested_completion_identity_source:
       raw.requested_completion_identity_source === null
         ? null
@@ -506,6 +518,10 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
       validation_receipt: input.validation_receipt,
       goal_acceptance_source_binding: input.goal_acceptance_source_binding ?? null,
       goal_acceptance_validation_receipts: input.goal_acceptance_validation_receipts ?? null} : {}),
+    ...(input.delivery_read_context_id === undefined ? {} : {
+      delivery_read_context_id: input.delivery_read_context_id,
+      note: input.note, evidence: input.evidence, reason: input.reason,
+    }),
     // Older receipts deliberately retain their original fingerprint. A reviewed
     // command binds both its approved snapshot and its complete prose intent.
     ...(input.review_basis === undefined ? {} : {review_basis: input.review_basis,
@@ -529,6 +545,7 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     lease_expected_version: input.lease_expected_version,
     allow_user_gate_auto_acquire: input.allow_user_gate_auto_acquire,
     requested_no_followup: input.requested_no_followup,
+    ...(input.defer_no_followup === true ? {defer_no_followup: true} : {}),
     requested_completion_turn_key: input.requested_completion_turn_key,
     requested_completion_identity_source: input.requested_completion_identity_source,
     linked_successor_todo_ids: input.linked_successor_todo_ids,
@@ -843,6 +860,9 @@ async function commitTerminalResult(
     todo_id: input.todo_id,
     command: input.command,
     request_sha256: requestSha,
+    ...(input.delivery_read_context_id === undefined ? {} : {
+      delivery_read_context_id: input.delivery_read_context_id,
+    }),
     result,
   }];
   return terminalReceipt(input, requestSha).commit(store, commit);
@@ -1013,7 +1033,7 @@ function terminalTarget(
     ...(input.evidence === null ? {} : {evidence: input.evidence}),
     ...(input.reason === null ? {} : {reason: input.reason}),
     ...(input.decision_outcome === null ? {} : {decision_outcome: input.decision_outcome}),
-    ...(input.requested_no_followup ? {no_followup: true} : {}),
+    ...(input.defer_no_followup === true ? {no_followup: false} : input.requested_no_followup ? {no_followup: true} : {}),
     ...(successorIds.length === 0 ? {} : {successor_todo_ids: successorIds}),
     ...(acceptedResult === null ? {} : {completion_result: acceptedResult}),
   };
@@ -1200,6 +1220,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
   terminalEvidenceGuard: TodoTerminalEvidenceGuard | null = null,
   verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<void>,
+  deliveryBasisCheck?: (head: AuthorityStoreHead) => Promise<JsonObject>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1209,6 +1230,21 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "invalid_coordination_todo_terminal_lifecycle",
       error instanceof Error ? error.message : "invalid Todo terminal lifecycle request",
     );
+  }
+  if (normalized.operation_identity.kind === "completion_turn" &&
+      normalized.delivery_read_context_id === undefined && deliveryBasisCheck !== undefined) {
+    const operationId = completionTurnOperationId(normalized, normalized.requested_no_followup && normalized.defer_no_followup !== true);
+    const historical = await store.readReceipt(operationId);
+    const original = historical.status === "found" && historical.receipts.length === 1
+      ? historical.receipts[0] : null;
+    if (original?.schema_version === COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA &&
+        original.operation_id === operationId && original.goal_id === normalized.goal_id &&
+        original.todo_id === normalized.todo_id && original.command === normalized.command &&
+        typeof original.delivery_read_context_id === "string") {
+      // Recover only a committed request's own key. The complete request hash
+      // below must still match; this cannot authorize a new or changed intent.
+      normalized = {...normalized, delivery_read_context_id: original.delivery_read_context_id};
+    }
   }
   const requestSha = terminalRequestSha(normalized);
   let input: ResolvedCoordinationTodoTerminalLifecycleInput;
@@ -1224,13 +1260,25 @@ export async function executeCoordinationTodoTerminalLifecycle(
     head = observation.authority;
   } else {
     input = {...normalized, operation_id: normalized.operation_identity.kind === "completion_turn" || isLifecycleCloseout(normalized)
-      ? completionTurnOperationId(normalized, normalized.requested_no_followup)
+      ? completionTurnOperationId(normalized, normalized.requested_no_followup && normalized.defer_no_followup !== true)
       : normalized.operation_identity.operation_id};
     // Named operation recovery reports history, not present execution authority.
     const receipt = terminalReceipt(input, requestSha);
     const replay = await receipt.read(store);
+    if (replay?.reason_code === "coordination_operation_identity_mismatch" &&
+        normalized.operation_identity.kind === "completion_turn" &&
+        normalized.requested_no_followup && normalized.defer_no_followup !== true) {
+      // Lifecycle reentry may already own the closeout phase. Recover an exact
+      // deferred RESULT request as history, never reinterpret the other route's
+      // closeout receipt or authorize another terminal mutation. The parent
+      // fingerprint still binds its actor, lease, evidence and validation.
+      const parent = {...input, operation_id: completionTurnOperationId(input, false),
+        defer_no_followup: true};
+      const original = await terminalReceipt(parent, terminalRequestSha(parent)).read(store);
+      if (original?.status === "replayed") return original;
+    }
     if (replay !== null) return replay;
-    if (normalized.operation_identity.kind === "completion_turn" && normalized.requested_no_followup) {
+    if (normalized.operation_identity.kind === "completion_turn" && normalized.requested_no_followup && normalized.defer_no_followup !== true) {
       // Older adapters used the ordinary id for an already accepted closeout.
       // Recover that exact historical request before reading current authority.
       // An ordinary receipt has a different hash and is checked below as the
@@ -1258,6 +1306,17 @@ export async function executeCoordinationTodoTerminalLifecycle(
     try { input = {...input, ...await claimExecutionProof(store, head.head, input, input.claim_operation_id, input.requested_no_followup), claim_operation_id: undefined}; }
     catch (error) { return terminalFailure("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"); }
   }
+  // Lifecycle reentry can only alter a previously accepted continuation. Its
+  // original quota settlement is verified below; delivery-result admission
+  // governs new work and cannot require this route to become a replacement Turn.
+  if (!isLifecycleCloseout(input) &&
+      (input.delivery_read_context_id !== undefined || deliveryBasisCheck !== undefined)) {
+    if (deliveryBasisCheck === undefined) return terminalFailure("delivery_basis_check_required",
+      "Protected completion requires its source and provider basis check.", {}, "decision_rejection");
+    const basis = await deliveryBasisCheck(head);
+    if (basis.ok !== true) return terminalFailure(String(basis.error_code), String(basis.error),
+      {delivery_read_context: basis}, "decision_rejection");
+  }
   let update: NormalizedCoordinationTodoUpdateInput | undefined;
   if (input.user_update !== undefined) {
     try {
@@ -1284,7 +1343,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   const reviewedRevision = input.review_basis?.provider_revision ?? update?.expected_provider_revision;
   const validationRevision = input.user_update?.validation_source_provider_revision ?? input.validation_source_provider_revision;
   if ((reviewedRevision !== undefined && reviewedRevision !== head.provider_revision) ||
-      (validationRevision != null && validationRevision !== head.provider_revision)) {
+      (input.delivery_read_context_id === undefined && validationRevision != null && validationRevision !== head.provider_revision)) {
     return terminalFailure("provider_revision_mismatch", "Todo changed during completion review or validation; reread and retry");
   }
   if ((update !== undefined || input.validation_source_provider_revision !== undefined) &&
@@ -1509,7 +1568,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
       : canonicalAuthorityObject(evidenceGuard.evidence, "capability completion evidence");
   }
   const acceptanceBinding = acceptanceRequirements === null ? null
-    : acceptanceSourceBinding(input, acceptanceRequirements, head.provider_revision);
+    : acceptanceSourceBinding(input, acceptanceRequirements,
+      input.delivery_read_context_id !== undefined && validationRevision != null ? validationRevision : head.provider_revision);
   let acceptanceEvidence: JsonObject | null = null;
   if (acceptanceRequirements !== null && acceptanceBinding !== null &&
       input.goal_acceptance_validation_receipts != null) {
@@ -1548,7 +1608,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   if (input.command === "complete") {
     const validationRequired = todo.completion_validation_required === true;
     const validationSha256 = todo.completion_validation_sha256;
-    if (normalized.operation_identity.kind === "completion_turn" && input.requested_no_followup) {
+    if (normalized.operation_identity.kind === "completion_turn" && input.requested_no_followup && input.defer_no_followup !== true) {
       let fence;
       try {
         fence = evaluateTodoCompletionFence({schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
@@ -1566,7 +1626,22 @@ export async function executeCoordinationTodoTerminalLifecycle(
             lease_idempotency_key: normalized.lease_idempotency_key, lease_expected_version: normalized.lease_expected_version}),
           requested_no_followup: false,
           operation_id: completionTurnOperationId(input, false)};
-        const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
+        let original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
+        // The result phase may have durably deferred the original closeout.
+        // Recover only an exact parent fingerprint, including actor, evidence,
+        // validation and lease; the pending marker alone grants no authority.
+        if (todo.completion_requested_continuation === "no_followup" &&
+            (original === null || original.reason_code === "coordination_operation_identity_mismatch")) {
+          for (const requestedNoFollowup of [false, true]) {
+            const deferred = {...originalInput, requested_no_followup: requestedNoFollowup,
+              defer_no_followup: true};
+            const candidate = await terminalReceipt(deferred, terminalRequestSha(deferred)).read(store);
+            if (candidate?.status === "replayed") {
+              original = candidate;
+              break;
+            }
+          }
+        }
         if (original === null) return terminalFailure("terminal_completion_receipt_required",
           "Same-Turn closeout requires the original accepted ordinary completion receipt.", {}, "decision_rejection");
         if (original.status !== "replayed") return original;
@@ -1635,6 +1710,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
           ? todo : {...todo, ...input.validation_declaration},
         requested_no_followup: input.requested_no_followup,
         requested_completion_turn_key: input.requested_completion_turn_key,
+        defer_no_followup: input.defer_no_followup,
         requested_completion_identity_source: input.requested_completion_identity_source,
         requested_has_successor:
           input.successor_intents.length > 0 || input.linked_successor_todo_ids.length > 0,

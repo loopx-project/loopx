@@ -332,6 +332,23 @@ def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
     return payload
 
 
+def _admit_quota_comparison(command: list[str]) -> list[str]:
+    """Compare display selectors in one admitted Turn, not admission vs replay.
+
+    First automatic admission is exercised separately on real providers. Do not
+    strip identity, receipt or binding fields from the comparisons below.
+    """
+    command = command + ["--turn-instance-id", "detail-parity-turn"]
+    code, text = _invoke_cli(command)
+    payload = json.loads(text)
+    assert code == (0 if payload["ok"] else 1), text
+    assert payload["heartbeat_receipt"]["status"] == "committed", text
+    assert payload["heartbeat_receipt"]["turn_instance_id"] == "detail-parity-turn"
+    if not payload["status_health_ok"]:
+        assert payload["should_run"] is False and payload["effective_action"] == "quota_skip"
+    return command
+
+
 def _surface_commands(
     *,
     project: Path,
@@ -449,7 +466,7 @@ def _surface_commands(
     }
 
 
-def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dict]]:
+def _measure_scenario(root: Path, scenario: Scenario, *, surface_ids: tuple[str, ...] | None = None) -> dict[str, dict[str, dict]]:
     with _stable_budget_fixture_root(root) as stable_root:
         project, runtime, registry_path, state_file = _write_fixture(
             stable_root,
@@ -466,6 +483,8 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                 output_format=output_format,
             )
             for surface_id, command in commands.items():
+                if surface_ids is not None and surface_id not in surface_ids:
+                    continue
                 exit_code, text = _invoke_cli(command)
                 assert exit_code == 0, (surface_id, output_format, text)
                 measurement = measure_cli_output(  # type: ignore[arg-type]
@@ -486,6 +505,16 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                 )
                 results.setdefault(surface_id, {})[output_format] = measurement
     return results
+
+
+def test_default_quota_work_basis_preserves_output_contract(tmp_path: Path) -> None:
+    # Same full populations and command path as the complete interface matrix.
+    for scenario in SCENARIOS:
+        measured = _measure_scenario(tmp_path / scenario.name, scenario, surface_ids=("quota_should_run",))
+        payload = measured["quota_should_run"]["json"]["payload"]
+        assert payload["heartbeat_receipt"]["turn_instance_id"]
+        if scenario.name == "small":
+            assert payload["delivery_result_context"]["basis"]["todo"]["todo_id"] == "todo_fixture_000"
 
 
 def _assert_turn_plan_writeback_routes(
@@ -1043,6 +1072,9 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_todo_summary_detail"]
 
+        default_command = _admit_quota_comparison(default_command)
+        detail_command += ["--turn-instance-id", "detail-parity-turn"]
+
         default_exit_code, default_text = _invoke_cli(default_command)
         detail_exit_code, detail_text = _invoke_cli(detail_command)
 
@@ -1146,6 +1178,9 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
             state_file=state_file,
             output_format="json",
         )["quota_should_run_vision_detail"]
+
+        default_command = _admit_quota_comparison(default_command)
+        detail_command += ["--turn-instance-id", "detail-parity-turn"]
 
         default_exit_code, default_text = _invoke_cli(default_command)
         detail_exit_code, detail_text = _invoke_cli(detail_command)
@@ -1258,9 +1293,16 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
     assert writeback["vision_authoring"]["schema_version"] == (
         "goal_vision_replan_contract_v0"
     )
+    # The full authoring contract must survive compact JSON transport. Its size
+    # is not a lower bound on whitespace in the emitted representation.
+    assert writeback["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] > 0
+    delta = writeback["vision_authoring"]["path_delta"]
+    assert {"continue", "replan", "no_change"} <= set(delta["outcomes"])
+    assert {"outcome", "prior_assumption", "observed_reality"} <= set(delta["required"])
+    assert delta["list_limits"]["evidence_refs"]["max_items"] > 0
     # This fixed executable schema legitimately crosses the old 12k/320
     # ceiling; retain bounded headroom without relaxing Todo-scale growth.
-    assert 12_000 < len(text) <= CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_chars["crowded"]["json"]
+    assert len(text) <= CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_chars["crowded"]["json"]
     assert len(text.splitlines()) <= CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_lines["crowded"]["json"]
 
 
@@ -1320,6 +1362,9 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_user_todo_summary_detail"]
 
+        default_command = _admit_quota_comparison(default_command)
+        detail_command += ["--turn-instance-id", "detail-parity-turn"]
+
         default_exit_code, default_text = _invoke_cli(default_command)
         detail_exit_code, detail_text = _invoke_cli(detail_command)
 
@@ -1375,6 +1420,9 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             state_file=state_file,
             output_format="json",
         )["quota_should_run_goal_boundary_detail"]
+
+        default_command = _admit_quota_comparison(default_command)
+        detail_command += ["--turn-instance-id", "detail-parity-turn"]
 
         default_exit_code, default_text = _invoke_cli(default_command)
         detail_exit_code, detail_text = _invoke_cli(detail_command)
@@ -1434,6 +1482,7 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
             state_file=state_file,
             output_format="json",
         )["quota_should_run"]
+        default_command = _admit_quota_comparison(default_command)
         canonical_exit_code, canonical_text = _invoke_cli(
             default_command + ["--include-detail", "scheduler"]
         )
@@ -1472,6 +1521,7 @@ def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
             state_file=state_file,
             output_format="json",
         )["quota_should_run"]
+        default_command = _admit_quota_comparison(default_command)
         repeated_command = list(default_command)
         for section in ("scheduler", "agent-todos", "user-todos", "goal-boundary"):
             repeated_command.extend(["--include-detail", section])
@@ -1553,6 +1603,8 @@ def test_status_and_quota_json_ignore_compatibility_reexport_bindings(
             state_file=state_file,
             output_format="json",
         )
+
+        commands["quota_should_run"] = _admit_quota_comparison(commands["quota_should_run"])
 
         def semantic_receipts() -> dict[str, dict[str, object]]:
             receipts: dict[str, dict[str, object]] = {}

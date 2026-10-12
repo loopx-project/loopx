@@ -100,7 +100,8 @@
     "resume_when",
     "no_followup",
     "successor_todo_ids",
-    "completion_continuation"
+    "completion_continuation",
+    "completion_requested_continuation"
   ],
   "list_constants": {
     "_ITEM_FIELDS": [
@@ -132,6 +133,7 @@
       "unblocks_todo_id",
       "successor_todo_ids",
       "completion_continuation",
+      "completion_requested_continuation",
       "completion_recovery",
       "resume_when",
       "resume_monitor_generation",
@@ -214,6 +216,7 @@
     "unblocks_todo_id",
     "successor_todo_ids",
     "completion_continuation",
+    "completion_requested_continuation",
     "completion_recovery",
     "superseded_by",
     "resume_when",

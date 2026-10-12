@@ -50,7 +50,7 @@ DIRECT_WRITE_APIS = frozenset(
 )
 DIRECT_WRITE_METHODS = frozenset({"write_bytes", "write_text"})
 ALLOWED_DIRECT_CLASSIFICATIONS = frozenset(
-    {"codec_internal", "global_registry_io", "legacy_registry_source"}
+    {"codec_internal", "global_registry_io", "legacy_registry_source", "source_digest_guard"}
 )
 
 
@@ -561,6 +561,12 @@ def validate_project_registry_io_manifest(
         elif kind in {"direct_json_read", "direct_json_write"}:
             if classification not in ALLOWED_DIRECT_CLASSIFICATIONS:
                 errors.append(f"unclassified direct project registry I/O: {site}")
+            elif classification == "source_digest_guard" and (
+                kind != "direct_json_read" or row.get("api") != "readFileSync"
+            ):
+                # A synchronous byte comparison is not a registry decoder or
+                # writer. This census-local classification cannot exempt either.
+                errors.append(f"source digest guard must be a synchronous byte read: {site}")
         else:
             errors.append(f"project registry I/O site has unknown kind: {site}")
     return errors

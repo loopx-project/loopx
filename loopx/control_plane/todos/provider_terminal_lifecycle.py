@@ -128,6 +128,8 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
         review_basis=call.get("terminal_review_basis"),
         expected_todo_text_sha256=call.get("expected_todo_text_sha256"),
         require_captured_todo_text=call.get("require_captured_todo_text") is True,
+        delivery_read_context_id=call.get("delivery_read_context_id"),
+        delivery_settlement_identity=call.get("delivery_settlement_identity"),
         completion_delivery_workspace=(
             call.get("completion_delivery_workspace") if complete else None
         ),
@@ -142,6 +144,7 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
             optional=True,
         ),
         no_followup=bool(call.get("no_followup")) if complete else False,
+        defer_no_followup=bool(call.get("defer_no_followup")) if complete else False,
         successor_todo_ids=require_completion_successor_todo_ids(call.get("successor_todo_ids")),
         claimed_by=call.get("claimed_by") if complete else None,
         clear_claim=bool(call.get("clear_claim")) if complete else False,
@@ -282,6 +285,9 @@ def terminal_canonical_todo_if_promoted(
     review_basis: Mapping[str, Any] | None = None,
     expected_todo_text_sha256: str | None = None,
     require_captured_todo_text: bool = False,
+    delivery_read_context_id: str | None = None,
+    delivery_settlement_identity: Mapping[str, Any] | None = None,
+    defer_no_followup: bool = False,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any] | None:
@@ -397,6 +403,7 @@ def terminal_canonical_todo_if_promoted(
             "lease_expected_version": task_lease_expected_version,
             "allow_user_gate_auto_acquire": command == "complete",
             "requested_no_followup": no_followup,
+            **({"defer_no_followup": True} if defer_no_followup else {}),
             "requested_completion_turn_key": completion_turn_key,
             "requested_completion_identity_source": completion_identity_source,
             "linked_successor_todo_ids": successor_todo_ids,
@@ -413,10 +420,40 @@ def terminal_canonical_todo_if_promoted(
             "dry_run": dry_run,
             "observed_at": now_local(),
         }
-    result = effect_runtime_result(
-        "coordination.local_authority.todo_terminal", request,
-        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-    )
+    def invoke() -> Any:
+        nonlocal delivery_read_context_id
+        if delivery_read_context_id is not None and delivery_settlement_identity is None:
+            raise ValueError("delivery read context requires the original settlement identity")
+        if delivery_settlement_identity is not None:
+            from ..goals.checkpoint_context_io import delivery_result_context_input
+            from ..quota.settlement import SettlementIdentity
+
+            if state_file is None:
+                raise ValueError("delivery freshness requires the registered state file")
+            context = delivery_result_context_input(
+                runtime_root=runtime_root, registry_path=registry_path, state_file=state_file,
+                identity=SettlementIdentity.from_runtime_payload(delivery_settlement_identity),
+                read_context_id=delivery_read_context_id,
+            )
+            if context is not None:
+                request["delivery_context"] = context
+                # Freeze the actual work key before native validation. Recapture
+                # source facts on retries, never a newly issued decision key.
+                if delivery_read_context_id is None:
+                    delivery_read_context_id = context.get("read_context_id")
+        for capture_attempt in range(3):
+            outcome = effect_runtime_result("coordination.local_authority.todo_terminal", request,
+                timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+            if not isinstance(outcome, Mapping) or outcome.get("reason_code") != "delivery_source_capture_changed" or capture_attempt == 2:
+                return outcome
+            # Recapture IO, retaining the original Agent decision and read ID.
+            request["delivery_context"] = delivery_result_context_input(
+                runtime_root=runtime_root, registry_path=registry_path, state_file=state_file,
+                identity=SettlementIdentity.from_runtime_payload(delivery_settlement_identity),
+                read_context_id=delivery_read_context_id,
+            )
+
+    result = invoke()
     if isinstance(result, Mapping) and result.get("status") == "resolve_validation":
         # Admission and receipt recovery precede host-local declaration IO.
         # Resolving private argv grants no authority to run it; re-enter the
@@ -429,29 +466,46 @@ def terminal_canonical_todo_if_promoted(
             registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
             persist_if_resolved=not dry_run,
         )
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
+        result = invoke()
     completion_validation_executed = False
     if isinstance(result, Mapping) and result.get("status") == "execute_validation":
         request["validation_source_provider_revision"] = result["provider_revision"]
-        request.update(execute_completion_validation_effects(
-            result, registry_path=registry_path, goal_id=goal_id,
-            delivery_workspace=completion_delivery_workspace,
-            validation_workspace_path=completion_validation_workspace_path,
-        ))
+        context = request.get("delivery_context")
+        recovery = None
+        if isinstance(context, Mapping) and context.get("read_context_id"):
+            from ..goals.checkpoint_context_io import terminal_validation_effect_io
+
+            recovery = terminal_validation_effect_io(
+                runtime_root=runtime_root, request=request, context=context, execution_result=result,
+            )
+        if recovery is not None and recovery["effect"] == "replay":
+            updates = recovery["updates"]
+        else:
+            updates = execute_completion_validation_effects(
+                result, registry_path=registry_path, goal_id=goal_id,
+                delivery_workspace=completion_delivery_workspace,
+                validation_workspace_path=completion_validation_workspace_path,
+            )
+            if recovery is not None:
+                terminal_validation_effect_io(
+                    runtime_root=runtime_root, request=request, context=context,
+                    execution_result=result, updates=updates,
+                )
+        request.update(updates)
+        if isinstance(context, Mapping) and context.get("read_context_id"):
+            from ..goals.checkpoint_context_io import bind_terminal_result_validation
+
+            request["result_validation_binding"] = bind_terminal_result_validation(
+                runtime_root=runtime_root, request=request, context=context,
+            )
         if completion_result_file is not None and not dry_run:
             _persist_validated_completion_result(
                 request=request, source=completion_result_file, runtime_root=runtime_root,
                 goal_id=goal_id, expected_descriptor=result_descriptor,
             )
-        completion_validation_executed = True
+        completion_validation_executed = recovery is None or recovery["effect"] == "run"
         request["observed_at"] = now_local()
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
+        result = invoke()
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
             "canonical Todo terminal transaction returned an invalid result",
@@ -470,6 +524,11 @@ def terminal_canonical_todo_if_promoted(
         payload.get("status") == "failed"
         and payload.get("failure_kind") == "decision_rejection"
     ):
+        basis = payload.get("delivery_read_context")
+        if isinstance(basis, Mapping) and basis.get("error_code") == "checkpoint_read_context_stale":
+            from ..goals.checkpoint_context_io import CheckpointReadContextRejected
+
+            raise CheckpointReadContextRejected(dict(basis))
         raise LocalCoordinationAuthorityRejection(
             str(payload.get("reason") or "canonical Todo terminal request was rejected"),
             code=str(payload.get("reason_code") or "todo_terminal_rejected"),

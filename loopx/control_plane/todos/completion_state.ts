@@ -137,6 +137,15 @@ export function completionContinuationForWrite(
   return "active_goal";
 }
 
+/** Original closeout intent is distinct from a committed terminal transition. */
+export function originalTurnRequestsNoFollowup(todo: JsonObject, identity: JsonObject): boolean {
+  const requested = todo.completion_requested_continuation == null ? null :
+    requireTodoCompletionMetadata("completion_continuation", todo.completion_requested_continuation);
+  return normalizeTodoNoFollowup(todo.no_followup) === true ||
+    (todo.status === "done" && todo.completion_continuation === "active_goal" && requested === "no_followup" &&
+      [identity.effect_id, identity.turn_instance_id].includes(todo.completion_turn_key));
+}
+
 export function selectTodoCompletionState(value: unknown): TodoCompletionStateResult {
   const request = requestObject(value, "evaluate");
   const todo = requiredObject(request.todo, "todo");
@@ -144,8 +153,13 @@ export function selectTodoCompletionState(value: unknown): TodoCompletionStateRe
     request.requested_no_followup,
     "requested_no_followup",
   );
-  const effectiveNoFollowup = requestedNoFollowup ||
-    normalizeTodoNoFollowup(todo.no_followup) === true;
+  const deferNoFollowup = request.defer_no_followup === undefined ? false :
+    requiredBoolean(request.defer_no_followup, "defer_no_followup");
+  if (deferNoFollowup && request.completion_identity_source !== "turn_settlement") {
+    throw new EffectRuntimeRequestError("Deferred closeout requires the original Turn settlement identity");
+  }
+  const effectiveNoFollowup = !deferNoFollowup &&
+    (requestedNoFollowup || normalizeTodoNoFollowup(todo.no_followup) === true);
   const continuation = completionContinuationForWrite(
     effectiveNoFollowup,
     requiredBoolean(request.has_successor, "has_successor"),
@@ -163,7 +177,7 @@ export function selectTodoCompletionState(value: unknown): TodoCompletionStateRe
     throw new EffectRuntimeRequestError("completion_identity_source is unsupported");
   }
   const recovery = String(todo.status ?? "") === "done" &&
-      requestedNoFollowup &&
+      requestedNoFollowup && !deferNoFollowup &&
       normalizeTodoCompletionContinuation(todo.completion_continuation) ===
         "active_goal"
     ? completionIdentitySource === "lifecycle_reentry"

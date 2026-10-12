@@ -9,6 +9,7 @@ import { normalizeTodoAgent, stripPythonWhitespace } from "../coordination/todo_
 import { AuthorityStoreProtocolError } from "../coordination/authority_store_codec.ts";
 import {
   buildTodoCompletionMetadataUpdates,
+  requireTodoCompletionMetadata,
   TODO_COMPLETION_STATE_REQUEST_SCHEMA,
 } from "./completion_state.ts";
 import { validateLegacyContinuationPolicyRepair } from "./legacy_continuation_policy_migration.ts";
@@ -124,8 +125,11 @@ function completionUpdates(block: JsonObject, intent: JsonObject, targetStatus: 
   if (present(intent.completion_metadata_updates_override)) {
     const updates = requireJsonObject(intent.completion_metadata_updates_override, "completion metadata override");
     if (Object.entries(updates).some(([key, value]) =>
-      !["completion_continuation", "completion_recovery", "completion_receipt_id"].includes(key) || typeof value !== "string")) {
+      !["completion_continuation", "completion_requested_continuation", "completion_recovery", "completion_receipt_id"].includes(key) || typeof value !== "string")) {
       throw new EffectRuntimeRequestError("TypeScript Todo completion metadata updates shape mismatch");
+    }
+    if (updates.completion_requested_continuation !== undefined) {
+      requireTodoCompletionMetadata("completion_continuation", updates.completion_requested_continuation);
     }
     if (updates.completion_receipt_id !== undefined &&
         !/^tcw_[0-9a-f]{64}$/u.test(String(updates.completion_receipt_id))) {
@@ -237,6 +241,7 @@ export function planTodoFieldUpdate(value: unknown): TodoFieldUpdatePlan {
     // state. Historical operation receipts retain the original completion.
     updates.no_followup = null;
     updates.completion_continuation = null;
+    updates.completion_requested_continuation = null;
     updates.completion_recovery = null;
     updates.completion_turn_key = null;
   }

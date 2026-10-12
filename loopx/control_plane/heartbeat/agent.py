@@ -156,9 +156,11 @@ def render_peer_agent_scope_instruction(
         )
     if compact:
         return (
-            f"Agent identity and scope: agent_id `{identity}`; model: peer_v1; "
-            f"scope: {scope_text}. {peer_rule} Claim: `{claim_command}`. "
-            "Do not write scope into todo metadata."
+            f"Equal peer `{identity}` (peer_v1); scope: {scope_text}. "
+            "Obey quota claim/lease, workspace/repository and Todo continuation. "
+            "Quota-claim open in-scope work; peer-owned->another/no-work. "
+            "PR review=user_action+runnable successor; gate exact merge/release/launch only. "
+            "No peer authority from coordination. Scope=prompt, not Todo metadata."
         )
     return f"""Agent identity and scope:
 

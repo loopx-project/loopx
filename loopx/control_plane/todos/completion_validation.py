@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from json import loads as json_loads
 from pathlib import Path
 from typing import Any, cast
@@ -495,6 +495,7 @@ def run_completion_validation_gate_with_source(
     goal_id: str,
     dry_run: bool,
     no_followup: bool = False,
+    defer_no_followup: bool = False,
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     requested_has_successor: bool = False,
@@ -502,6 +503,7 @@ def run_completion_validation_gate_with_source(
     requested_successor_todo_ids: list[str] | None = None,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
+    admit_validation: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the caller-approved completion validation gate, OUTSIDE the mutation lock.
 
@@ -543,6 +545,7 @@ def run_completion_validation_gate_with_source(
         projection_source=projection_source,
         completion_turn_key=completion_turn_key,
         no_followup=no_followup,
+        defer_no_followup=defer_no_followup,
         dry_run=dry_run,
         completion_identity_source=completion_identity_source,
         goal_id=goal_id,
@@ -556,6 +559,8 @@ def run_completion_validation_gate_with_source(
     )
     completion_validation = None
     if transaction["decision"] == "execute_validation":
+        if admit_validation is not None:
+            admit_validation(transaction)
         effect = transaction["validation_effect"]
         completion_validation = run_declared_completion_validation_effect(
             effect=effect,
@@ -571,6 +576,7 @@ def run_completion_validation_gate_with_source(
             projection_source=projection_source,
             completion_turn_key=completion_turn_key,
             no_followup=no_followup,
+            defer_no_followup=defer_no_followup,
             dry_run=dry_run,
             completion_identity_source=completion_identity_source,
             goal_id=goal_id,
