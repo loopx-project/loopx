@@ -126,7 +126,7 @@ def test_pending_source_outbox_survives_producer_retirement(
 
     def history():
         result = subprocess.run(
-            [sys.executable, "-c",
+            [sys.executable, "-S", "-c",
              "import json,sys;from pathlib import Path;"
              "from loopx.control_plane.coordination.local_authority_shadow_adapter "
              "import read_local_authority_shadow;"
@@ -257,7 +257,7 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
 
     def cli(*args, succeeds=True, override=False):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            [*without_source_todo_writers, "--format", "json", "--registry", str(registry),
              *(["--runtime-root", str(runtime)] if override else []), *args, "--goal-id", "goal-a"],
             cwd=caller, capture_output=True, text=True, timeout=45,
         )

@@ -64,6 +64,7 @@ from .funding_event import (
     FINANCE_FUNDING_EVENT_INPUT_SCHEMA_VERSION,
     assess_funding_event_pair,
 )
+from .funding_presentation import FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION
 
 FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION = "finance_research_dashboard_input_v0"
 
@@ -254,7 +255,10 @@ def run(argv: Sequence[str] | None = None) -> int:
                 packet = build_finance_beta_attribution(payload)
             elif schema_version == FINANCE_METRIC_PACK_INPUT_SCHEMA_VERSION:
                 packet = build_finance_metric_pack_evaluation(payload)
-            elif schema_version == FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION:
+            elif schema_version in {
+                FINANCE_RESEARCH_DASHBOARD_INPUT_SCHEMA_VERSION,
+                FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION,
+            }:
                 from .dashboard import build_finance_research_dashboard_packet
 
                 packet = build_finance_research_dashboard_packet(payload)

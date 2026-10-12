@@ -233,6 +233,7 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     assert "provisional agent-created candidate rules" in guidance[3]
     assert "Do not relax frozen acceptance, authority, budget or stops" in guidance[3]
     assert "or rewrite criteria after failure" in guidance[3]
+    assert "Compare expected goal/information gain with full marginal cost" in guidance[4]
     assert "executed path and current artifact" in guidance[4]
     assert "probe that distinguishes remaining explanations" in guidance[4]
     assert "scope negative results to tested conditions and local proxies to their coverage" in guidance[4]
