@@ -492,6 +492,7 @@ def build_replan_context(
         goal_id=goal_id, agent_id=agent_id or obligation.get("agent_id"),
         runs=newest_first_runs, obligation=obligation, source_status=source_status,
         goal_acceptance_contract=goal_acceptance_contract, stride_strategy=stride_strategy,
+        history_newest_first=True,
     )
 
 

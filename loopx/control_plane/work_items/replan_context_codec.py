@@ -29,9 +29,22 @@ def replan_history_from_status(status: Mapping[str, Any], goal_id: str) -> list[
     return snapshot
 
 
-def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, agent_id: str | None, include_decisions: bool = False) -> list[dict[str, Any]]:
+def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, agent_id: str | None,
+    include_decisions: bool = False, history_newest_first: bool | None = None,
+) -> list[dict[str, Any]]:
     from .progress_observation import normalize_progress_observation
 
+    if history_newest_first is not None and not isinstance(history_newest_first, bool):
+        raise ValueError("history_newest_first must be a boolean or unknown")
+    # Carrier order is an IO fact, not a timestamp-based policy. Keep the wire
+    # rows in their original order so ordinary evidence/reference parity holds.
+    # Arbitrary iterables supply no causal positions unless the caller knows
+    # their order; real indexes are append ordered, compact history is newest first.
+    if include_decisions and history_newest_first is True:
+        runs = list(runs)
+        newest_position = len(runs) - 1
+    else:
+        newest_position = None
     rows = []
     for position, run in enumerate(runs):
         if not isinstance(run, Mapping):
@@ -73,7 +86,8 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             # and orders subsequent observations. Do not classify research
             # progress or infer adoption from prose in this transport codec.
             if include_decisions:
-                source["history_position"] = position
+                if history_newest_first is not None:
+                    source["history_position"] = newest_position - position if newest_position is not None else position
                 source["goal_ref"] = run.get("goal_ref")
                 source["agent_vision"] = run.get("agent_vision")
                 source["autonomous_replan_ack"] = run.get("autonomous_replan_ack")
@@ -130,6 +144,7 @@ def project_replan_context(
     source_status: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
     stride_strategy: str = "off",
+    history_newest_first: bool | None = None,
 ) -> dict[str, Any]:
     from .replan_history_codec import project_replan_request
     from .stride_policy_codec import normalize_stride_strategy
@@ -139,6 +154,7 @@ def project_replan_context(
     prefix = ["loopx"]
     if source_status is not None:
         runs = replan_history_from_status(source_status, goal_id)
+        history_newest_first = not bool(source_status.get("registry") and source_status.get("runtime_root"))
         for field, option in (("registry", "--registry"), ("runtime_root", "--runtime-root")):
             if source_status.get(field):
                 prefix.extend([option, str(source_status[field])])
@@ -148,7 +164,8 @@ def project_replan_context(
             "goal_id": goal_id, "agent_id": agent_id,
             "obligation": dict(obligation) if obligation is not None else None,
             "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id,
-                include_decisions=strategy != "off" or bool(evidence_ref and evidence_ref.startswith("replan-decision-"))),
+                include_decisions=strategy != "off" or bool(evidence_ref and evidence_ref.startswith("replan-decision-")),
+                history_newest_first=history_newest_first),
             "stride_strategy": strategy,
             "evidence_ref": evidence_ref,
             "read_prefix": shlex.join(prefix),
