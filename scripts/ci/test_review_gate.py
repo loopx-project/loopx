@@ -269,6 +269,9 @@ class PythonShardAdmissionTests(unittest.TestCase):
         self.assertEqual(len(groups), 4)
         self.assertEqual(job["strategy"]["matrix"]["shard"], ["1", "2", "3", "4"])
         self.assertEqual(job["strategy"]["fail-fast"], "false")
+        # GateTests executes the current workflow's PR lifecycle expressions,
+        # including closed events whose ref changes to main. Keep that semantic
+        # qualification instead of requiring the superseded ref-only spelling.
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
         self.assertNotIn("secrets.", json.dumps(job))
 
