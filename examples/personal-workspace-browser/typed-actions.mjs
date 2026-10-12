@@ -1074,7 +1074,7 @@ export const typedActionsScenario = {
       }
       if (await page.locator(".personal-capability-editor-status").count()) throw new Error("Editable Goal settings must not show internal editor-contract notices");
       const expectedGoalCapabilities = [
-        "变更质量验证", "Goal 复核周期", "探索图谱", "探索 Harness", "飞书事件收件箱",
+        "变更质量验证", "Goal 复盘与步幅", "探索图谱", "探索 Harness", "飞书事件收件箱",
         "飞书看板心跳同步", "已退役的 Authority 观测", "自适应子 Agent 容量",
         "已注册 Peer 任务协调", "周期报告", "Reward Memory 实验",
       ];
@@ -1294,7 +1294,7 @@ export const typedActionsScenario = {
           || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
-      await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
+      await machineCatalog.getByRole("button", { name: /^Goal 复盘与步幅/ }).click();
       const reviewUnit = page.getByLabel(/^复核计数依据/u);
       const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
       await reviewUnit.waitFor({ state: "visible" });

@@ -149,7 +149,7 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
   return [
     goalCapability({
       capabilityId: "todo_replan_cadence",
-      displayName: "Goal review cadence",
+      displayName: "Goal review and stride",
       editorScopes: ["machine", "goal"],
       defaultConfiguration: { count_unit: "effective_turns", count: 5 },
       fields: [
@@ -1043,7 +1043,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           },
           {
             namespace: "todo_replan_cadence",
-            title: "Goal review cadence",
+            title: "Goal review and stride",
             description: "Live review threshold without added turns, quota, or authority.",
             schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,
