@@ -493,6 +493,13 @@ similarity 自行选择模块或 corpus，也不会扫描全部 corpus、调度�
 memory ref、模型给出的 reasoning summary 和 current-artifact verification，不保存原始
 provider content。
 
+对于 `revision_bound` corpus，每条返回 envelope 的 `scope.revision_ref` 也必须等于
+corpus 的 `freshness.source_revision`，与现有激活和请求门禁保持一致。记录版本缺失或
+不匹配计入 `scope_filtered`；recall 不会改写或退役这些记录。此检查不应用于其他
+freshness mode，也不比较经验中的历史 evidence ref。`source_truth_bound` 经验仍可跨
+artifact 版本召回，但须通过既有来源、质量与应用校验。另行针对新版本验证并激活的
+经验可以保留原始证据。
+
 Recall packet 还会区分“provider 没有返回 item”和“provider 返回 item，但被精确记录门禁
 过滤”。`provider_item_count`、`filtered_item_count` 与
 `filtered_reason_counts` 只暴露 contract、scope、lifecycle、expiry、quality 和旧契约过滤的

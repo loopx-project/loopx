@@ -344,6 +344,49 @@ def test_cli_single_registry_submit_and_list_positive_control(
     assert list_payload["rows"][0]["proposal_id"] == "gap_stage2_001"
 
 
+def test_cli_legacy_work_change_requires_rebase_and_preserves_original_receipt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths = _write_fixture(tmp_path)
+    proposal = _proposal(paths)
+
+    def submit(value):
+        proposal_json = _write_submit_inputs(tmp_path, value)
+        code, payload, _ = _run_amendment_cli(
+            capsys, paths["registry"], "goal-amendment-proposal",
+            *_submit_argv(paths, proposal_json), "--format", "json",
+        )
+        assert code == 0, payload
+        assert payload["canonical_effect"] == "none"
+        return payload
+
+    first = submit(proposal)
+    assert first["admission"] == "admitted"
+    state = paths["state_file"].read_text(encoding="utf-8")
+    needle = "todo_id=todo_stage2_b "
+    assert needle in state
+    paths["state_file"].write_text(state.replace(needle, needle + "claimed_by=agent-b "),
+                                   encoding="utf-8")
+    journal = paths["runtime"] / "goals" / GOAL_ID / "amendment-proposals" / "journal.jsonl"
+    original_bytes = journal.read_bytes()
+    assert submit(proposal) == first
+    assert journal.read_bytes() == original_bytes
+
+    stale = submit({**proposal, "proposal_id": "gap_after_peer_claim"})
+    assert stale["admission"] == "needs_rebase"
+    assert stale["admission_facts"] == ["base_source_basis_digest_mismatch"]
+    refreshed = _proposal(paths, {"proposal_id": "gap_refreshed_peer_claim"})
+    assert refreshed["base_source_basis_digest"] != proposal["base_source_basis_digest"]
+    assert submit(refreshed)["admission"] == "admitted"
+    code, listed, _ = _run_amendment_cli(
+        capsys, paths["registry"], "goal-amendment-proposal", "--list",
+        "--goal-id", GOAL_ID, "--format", "json",
+    )
+    assert code == 0
+    assert [row["admission"] for row in listed["rows"]] == ["admitted", "needs_rebase", "admitted"]
+    assert listed["rows"][0] == {key: value for key, value in first.items() if key != "ok"}
+
+
 def test_cli_submits_proposal_markdown(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

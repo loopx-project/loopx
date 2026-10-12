@@ -125,6 +125,59 @@ def main() -> int:
     assert decision("Bash", True, command="make test") == "allow", "non-destructive bash allowed"
     assert decision("Read", True, file_path="/anywhere") == "allow", "read-only allowed"
 
+    # An event with no session cwd (what an unreadable event becomes in main)
+    # cannot be attributed to an armed project, so the gate must refuse it
+    # rather than defer: rc=1 with no decision is a non-blocking hook error to
+    # Claude Code, which then runs the tool with no gate at all.
+    assert goal_policy.decide({}).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a cwd-less/unreadable event must be DENIED, not deferred"
+
+    # A non-read-only tool whose tool_input is not an object is unreadable the
+    # same way: decide must refuse it rather than crash on `ti.get` (rc=1 with
+    # no decision, which Claude Code reports and then runs the tool ungated).
+    goal_policy.active_context = lambda cwd: CTX
+    goal_policy.should_run = lambda *a, **k: True
+    non_object_input = goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Bash", "tool_input": "not-an-object"})
+    assert non_object_input.get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a non-object tool_input must be DENIED, not crash the gate (rc=1 fail-open)"
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Read", "tool_input": "not-an-object"}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "allow", \
+        "read-only tools keep their unconditional allow"
+
+    # A decoded cwd can still be unusable as a path: an embedded NUL raises
+    # ValueError inside active_context, which would escape decide as the same
+    # rc=1/no-decision fail-open. The gate must refuse it instead.
+    assert goal_policy.decide(
+        {"cwd": "/bad\u0000cwd", "tool_name": "Bash", "tool_input": {"command": "ls"}}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a session cwd that cannot be resolved as a path must be DENIED"
+
+    # `tool_input` is type-checked before any default: only absent/null gets {};
+    # a present falsy non-object (`[]`, `false`, `0`, `""`) is unreadable and
+    # refused, so an open gate cannot allow it as if it carried no input.
+    for falsy_input in ([], False, 0, ""):
+        assert goal_policy.decide(
+            {"cwd": "/proj", "tool_name": "Bash", "tool_input": falsy_input}
+        ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+            f"falsy non-object tool_input {falsy_input!r} must be DENIED, not coerced"
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Bash"}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "allow", \
+        "an absent tool_input keeps the documented empty-input default"
+
+    # A decoded value the gate cannot use is refused the same way instead of
+    # crashing on `.lower()` / set membership or silently matching the scope.
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": ["Bash"], "tool_input": {}}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a non-string tool_name must be DENIED, not crash the gate"
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Bash", "tool_input": {"command": ["rm", "-rf", "/"]}}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a non-string command must be DENIED, not crash the gate"
+
     print("claude-goalmode-hook-policy-smoke ok")
     return 0
 

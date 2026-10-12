@@ -377,6 +377,61 @@ def test_next_action_prose_never_changes_the_source_basis_digest(
     )
 
 
+def test_legacy_work_claim_changes_basis_without_a_timestamp_change(tmp_path):
+    paths = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)
+    state = paths["state_file"].read_text(encoding="utf-8")
+    needle = "todo_id=todo_unclaimed "
+    assert needle in state
+    paths["state_file"].write_text(state.replace(needle, needle + "claimed_by=agent-b "),
+                                   encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)
+    assert before["unclaimed_eligible_work"]
+    assert after["unclaimed_eligible_work"] == []
+    assert before["source_basis"]["state_updated_at"] == after["source_basis"]["state_updated_at"]
+    assert before["source_basis"]["state_event_basis_sequence"] == after["source_basis"]["state_event_basis_sequence"] == 0
+    assert before["source_basis"]["source_basis_digest"] != after["source_basis"]["source_basis_digest"]
+
+
+def test_legacy_basis_binds_lease_epoch_but_not_observation_time(tmp_path):
+    from loopx.control_plane.work_items.task_lease import task_lease_path
+
+    lease = {"schema_version": "task_lease_v0", "status": "active",
+             "expires_at": "2099-01-01T00:00:00Z", "owner": "agent-a",
+             "lease_epoch": 1, "version": 1}
+    paths = _write_fixture(tmp_path, todo_specs=_default_todo_specs(),
+                           leases={"todo_lane_a": lease})
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)["source_basis"]
+    assert project_shared_goal_alignment(**arguments)["source_basis"] == before
+    state_bytes = paths["state_file"].read_bytes()
+    path = task_lease_path(runtime_root=paths["runtime"], goal_id=GOAL_ID, todo_id="todo_lane_a")
+    path.write_text(json.dumps({**lease, "lease_epoch": 2}), encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)["source_basis"]
+    assert before["source_basis_digest"] != after["source_basis_digest"]
+    assert before["state_updated_at"] == after["state_updated_at"]
+    assert paths["state_file"].read_bytes() == state_bytes
+
+
+def test_legacy_basis_ignores_display_order_of_identical_work(tmp_path):
+    specs = _default_todo_specs()
+    paths = _write_fixture(tmp_path, todo_specs=specs)
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)
+    state = paths["state_file"].read_text(encoding="utf-8")
+    blocks = state.split("\n- [")
+    assert len(blocks) == len(specs) + 1
+    paths["state_file"].write_text(blocks[0] + "\n- [" + "\n- [".join(reversed(blocks[1:])),
+                                   encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)
+    assert before["frontier_counts"] == after["frontier_counts"]
+    assert before["source_basis"] == after["source_basis"]
+
+
 def test_blocked_and_monitor_todos_stay_out_of_unclaimed_work(
     tmp_path: Path,
 ) -> None:

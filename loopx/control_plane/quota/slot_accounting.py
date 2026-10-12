@@ -861,6 +861,10 @@ def build_quota_slot_preview_for_decision(
             "appended": False,
             "registry_mutated": False,
             "reason": before.get("reason") or "goal is not eligible for quota accounting preview",
+            # Transport the actual rejecting action, not an incidental quota
+            # snapshot on an earlier validation/workspace refusal. TS owns the
+            # mapping to settlement failure kinds; prose carries no such rule.
+            "quota_rejection_action": before.get("effective_action") if before.get("ok") is True else None,
             "before": before,
             "after": None,
         }

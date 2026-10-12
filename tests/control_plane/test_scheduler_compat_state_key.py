@@ -5,12 +5,14 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
 from examples.control_plane.quota_plan_fixtures import (
     SCOPED_AGENT_ID,
     write_cli_fixture,
+    write_codex_heartbeat_fixture,
 )
 from loopx.control_plane.quota.scheduler_ack import (
     record_quota_scheduler_ack_for_decision,
@@ -43,8 +45,9 @@ def test_compat_followup_preserves_the_read_authority_through_public_entry_point
     registry, runtime, project = write_cli_fixture(
         tmp_path / "fixture", scoped_agents=True
     )
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
     turn_id = "scheduler-compat-turn"
 
     def guard() -> dict:
@@ -118,21 +121,50 @@ def test_compat_followup_preserves_the_read_authority_through_public_entry_point
     assert app["stateful_backoff"]["progression_index"] == 1
     assert app["stateful_backoff"]["state_key"] == selected_key
     hint = compat["ack_hint" if operation == "ack" else "failure_hint"]
-    if caller == "native_cli":
-        completed = subprocess.run(
-            [
-                str(REPO_ROOT / "scripts" / "loopx"),
-                "--format",
-                "json",
-                *hint["cli_args"],
-            ],
-            cwd=project,
-            check=False,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "LOOPX_PYTHON": str(tmp_path / "python-must-not-run")},
-            timeout=30,
+    if operation == "ack":
+        write_codex_heartbeat_fixture(
+            codex_home, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID,
+            rrule="FREQ=MINUTELY;INTERVAL=60",
         )
+    if caller == "native_cli":
+        def invoke_launcher() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(REPO_ROOT / "scripts" / "loopx"), "--format", "json", *hint["cli_args"]],
+                cwd=project, check=False, capture_output=True, text=True,
+                env={**os.environ, "LOOPX_PYTHON": (
+                    sys.executable if operation == "ack" else str(tmp_path / "python-must-not-run")
+                )},
+                timeout=30,
+            )
+
+        if operation == "ack":
+            # Current Host readback belongs to the Python entrypoint; failure
+            # hints still prove the exact native route with Python unavailable.
+            manifest = codex_home / "automations/scheduler-fixture/automation.toml"
+            selected_path = scheduler_state_path(
+                runtime, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=selected_key,
+            )
+            selected_bytes = selected_path.read_bytes()
+            for observed in (None, "FREQ=MINUTELY;INTERVAL=30"):
+                if observed is None:
+                    manifest.unlink()
+                else:
+                    write_codex_heartbeat_fixture(
+                        codex_home, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, rrule=observed,
+                    )
+                refused = invoke_launcher()
+                assert refused.returncode == 1, refused.stdout + refused.stderr
+                refused_result = json.loads(refused.stdout)
+                assert refused_result["scheduler_commit"]["reason_code"] == "rrule_mismatch"
+                assert refused_result["scheduler_commit"]["written"] is False
+                assert selected_path.read_bytes() == selected_bytes
+                if state_layout == "coexisting":
+                    assert old_path.read_bytes() == old_bytes
+            write_codex_heartbeat_fixture(
+                codex_home, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID,
+                rrule="FREQ=MINUTELY;INTERVAL=60",
+            )
+        completed = invoke_launcher()
         assert completed.returncode == 0, completed.stdout + completed.stderr
         result = json.loads(completed.stdout)
     elif caller == "python_cli":

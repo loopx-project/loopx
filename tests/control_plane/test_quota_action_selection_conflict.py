@@ -123,7 +123,7 @@ def test_failure_payload_reports_the_conflict_instead_of_collection_failure() ->
     }
 
 
-def test_requested_todo_that_is_the_projection_selection_is_not_a_conflict() -> None:
+def test_missing_delivery_permission_is_unknown_on_same_selection_refusal() -> None:
     """The projection already selects the requested Todo, so name the refusal."""
 
     error = _raise(
@@ -142,7 +142,7 @@ def test_requested_todo_that_is_the_projection_selection_is_not_a_conflict() -> 
     assert "neither the projection's current selection" not in str(error)
     assert "not admitted to settle" in str(error)
     assert error.admission_must_attempt is True
-    assert error.admission_delivery_allowed is True
+    assert error.admission_delivery_allowed is None
 
 
 def test_unsettled_prior_turn_is_named_instead_of_a_selection_conflict() -> None:
@@ -189,7 +189,7 @@ def test_unsettled_prior_turn_is_named_instead_of_a_selection_conflict() -> None
         "qualification_state": "qualified",
         "unsettled_prior_turn_instance_id": prior_turn_id,
         "unsettled_repair": "resume_prior_turn",
-        "admission": {"agent_must_attempt": True, "delivery_allowed": True},
+        "admission": {"agent_must_attempt": True, "delivery_allowed": None},
     }
 
 

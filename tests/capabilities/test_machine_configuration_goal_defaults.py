@@ -366,10 +366,23 @@ def test_stride_version_inherits_as_one_review_configuration_and_rolls_back(tmp_
     configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
         execution_stride_strategy="off", execute=True)
     assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "off"
+    clear_options = _goal_capability_options("todo_replan_cadence", None)
+    before = registry_path.read_bytes()
+    preview = configure_goal(registry_path=registry_path, goal_id=GOAL_ID, **clear_options)
+    assert preview["changed"] is True
+    assert registry_path.read_bytes() == before
     configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
-        clear_execution_replan_after_turns=True, execute=True)
+        execute=True, **clear_options)
     assert "stride_strategy" not in json.loads(registry_path.read_text())["goals"][0]["execution_profile"]
     assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "evidence_conditioned_v1"
+    inspected = inspect_goal_capabilities(registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=GOAL_ID)["configuration"]
+    review = next(item for item in inspected["capability_catalog"]["capabilities"]
+        if item["capability_id"] == "todo_replan_cadence")
+    assert "current" not in review
+    assert review["effective_configuration"]["source"] == "machine_default"
+    assert review["effective_configuration"]["inherited"] is True
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 6
     # Unsupported versions fail before any registry mutation.
     before = registry_path.read_bytes()
     with pytest.raises(ValueError, match="stride_strategy"):

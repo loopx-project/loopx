@@ -88,6 +88,51 @@ def delivery(base, items):
         "reasoning_summary": "Delivered qualified context; semantic assessment is separate."}
 
 
+@pytest.mark.parametrize("record_revision", ["revision:previous", None])
+def test_revision_bound_record_cannot_reach_decision_context(tmp_path, record_revision):
+    config, arguments, records = context(tmp_path)
+    record = next(iter(records.values()))
+    if record_revision is None:
+        record["scope"].pop("revision_ref")
+    else:
+        record["scope"]["revision_ref"] = record_revision
+    provider = Provider(records)
+
+    def unexpected_delivery(base, items):
+        pytest.fail("An unqualified revision reached the application callback")
+
+    result = run_reward_memory_decision(
+        config, query_ready=True, application_kind="context_delivery",
+        apply_memory=unexpected_delivery, provider=provider, **arguments,
+    )
+
+    assert result.public_packet["status"] == "empty"
+    assert result.public_packet["filtered_count"] == 1
+    assert result.public_packet["context_delivery_verified"] is False
+    assert result.public_packet["research_may_continue"] is True
+    assert result.output == arguments["base_output"]
+    assert provider.calls == 1
+
+
+def test_revision_filter_continues_to_the_next_configured_corpus(tmp_path):
+    config, arguments, records = context(tmp_path, two_corpora=True)
+    primary, overlay = records.values()
+    primary["scope"]["revision_ref"] = "revision:previous"
+    overlay["content_summary"] = "Current reviewed guidance."
+    provider = Provider(records)
+
+    result = run_reward_memory_decision(
+        config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, provider=provider, **arguments,
+    )
+
+    assert result.public_packet["status"] == "context_delivered"
+    assert result.public_packet["filtered_count"] == 1
+    assert result.public_packet["context_delivery_verified"] is True
+    assert result.output["private_context"] == [overlay["content_summary"]]
+    assert provider.calls == 2
+
+
 def test_disabled_adds_no_packet_transport_or_provider(tmp_path, monkeypatch):
     config, arguments, records = context(tmp_path)
     config["automation"]["automatic_recall"] = False

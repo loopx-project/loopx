@@ -380,10 +380,42 @@ test("commit reduction advances one phase only after a committed payload", () =>
     identity: identityInput,
     step_kind: "quota_spend",
     transaction_phases: ["validation", "durable_writeback", "quota_spend"],
-    payload: { ok: false, error: "budget exhausted" },
+    payload: { ok: false, quota_rejection_action: "throttled_skip", error: "quota exhausted" },
   });
   assert.equal(rejected.completed_phases, null);
   assert.equal(rejected.result.failure?.kind, "budget_rejected");
+});
+
+test("callback failure classification follows the rejecting action, never explanatory prose", () => {
+  const cases = [
+    [{quota_rejection_action: "throttled_skip", reason: "额度已用尽"}, "budget_rejected"],
+    [{quota_rejection_action: "throttled_skip", reason: "budget was exhausted"}, "budget_rejected"],
+    [{reason: "transport failed; budget was not exhausted"}, "quota_spend_rejected"],
+    [{reason: "budget exhausted"}, "quota_spend_rejected"],
+    [{quota_rejection_action: "blocked_wait", reason: "waiting for a budget report"}, "quota_spend_rejected"],
+    [{quota_rejection_action: "future_action", reason: "budget"}, "quota_spend_rejected"],
+    [{quota_rejection_action: 1, reason: "budget"}, "quota_spend_rejected"],
+    [{before: {effective_action: "throttled_skip"}, reason: "workspace refused"}, "quota_spend_rejected"],
+  ] as const;
+  for (const [fields, expected] of cases) {
+    const rejected = commitStepPayload({
+      identity: identityInput, step_kind: "quota_spend",
+      transaction_phases: ["validation", "durable_writeback", "quota_spend"],
+      payload: {ok: false, appended: false, ...fields},
+    });
+    assert.equal(rejected.result.failure?.kind, expected, JSON.stringify(fields));
+    assert.equal(rejected.completed_phases, null);
+    assert.deepEqual(rejected.result.receipts, []);
+  }
+  for (const [step_kind, expected] of [
+    ["durable_writeback", "writeback_rejected"],
+    ["terminal_closeout", "terminal_closeout_rejected"],
+  ] as const) {
+    assert.equal(commitStepPayload({
+      identity: identityInput, step_kind, transaction_phases: [step_kind],
+      payload: {ok: false, quota_rejection_action: "throttled_skip", reason: "budget"},
+    }).result.failure?.kind, expected);
+  }
 });
 
 test("runtime selects the next uncommitted effect instead of Python orchestration", () => {

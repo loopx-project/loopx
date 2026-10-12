@@ -715,20 +715,14 @@ function admissionOutcome(
       facts: ["base_revision_basis_superseded"],
     };
   }
-  if (derived.revision_basis === "canonical_todo_snapshot") {
+  if (derived.revision_basis !== "state_event_log") {
+    // Sequence zero cannot prove ordering. A different source digest still
+    // proves a different observed work basis, including legacy Markdown.
     const facts: GoalAmendmentAdmissionFact[] = [];
     if (proposal.base_revision_basis !== derived.revision_basis) facts.push("base_revision_basis_superseded");
     if (proposal.base_source_basis_digest !== derived.source_basis_digest) facts.push("base_source_basis_digest_mismatch");
     return facts.length ? {admission: "needs_rebase", facts}
       : {admission: "admitted", facts: ["base_source_basis_unverifiable"]};
-  }
-  if (derived.revision_basis === "markdown_active_state") {
-    // No event log to compare against: report unverifiable, never a
-    // fabricated stale verdict (same policy as Stage 1).
-    return {
-      admission: "admitted",
-      facts: ["base_source_basis_unverifiable"],
-    };
   }
   const facts: GoalAmendmentAdmissionFact[] = [];
   if (proposal.base_state_event_basis_sequence < derived.state_event_basis_sequence) {

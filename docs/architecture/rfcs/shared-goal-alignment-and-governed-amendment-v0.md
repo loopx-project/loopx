@@ -31,7 +31,16 @@ The source digest binds the canonical provider revision in `source_basis.todo_ba
 With a state event log, `revision_basis=state_event_log` still names only that
 event axis. Without one, promoted reads use `canonical_todo_snapshot` with
 event sequence 0 and an unbound Agent frontier. A changed canonical digest
-requires `needs_rebase` even at sequence 0. This does not version the full Goal
+requires `needs_rebase` even at sequence 0. Legacy Markdown now also binds the
+parsed Todo/lease facts used by the typed reader, ordered by stable Todo id and
+excluding compatibility prose and observation time. A peer claim therefore changes the basis even when
+`updated_at` does not change. Previously this path omitted those facts and
+admitted any digest at sequence 0; a new submission with a different observed
+digest now requires `needs_rebase`. Re-read alignment and submit revised content
+under a new proposal id; an exact replay still returns the original historical
+admission unchanged, not a fresh current-basis decision. Pending proposals made
+by the older producer may therefore need a fresh basis after upgrade.
+This does not version the full Goal
 intent envelope, infer Agent acknowledgement, or turn admission into an approval
 or CAS commit; Stage 3 must still revalidate its own exact commit-time basis.
 

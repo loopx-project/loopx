@@ -129,7 +129,7 @@ def _turn(identity, **overrides):
                 "quota_spend_payload": None,
                 "failed_provider_attempt": {
                     "step_kind": "quota_spend",
-                    "payload": {"ok": False, "reason": "budget exhausted"},
+                    "payload": {"ok": False, "quota_rejection_action": "throttled_skip", "reason": "quota exhausted"},
                 },
             },
             "budget_rejected",

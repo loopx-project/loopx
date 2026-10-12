@@ -188,15 +188,18 @@ def binding() -> dict[str, Any]:
     }
 
 
-def recall_request() -> dict[str, Any]:
+def recall_request(
+    *, selected_corpus: dict[str, Any] | None = None,
+    revision_ref: str = "revision:near-postmortem-v1",
+) -> dict[str, Any]:
     return build_reward_memory_recall_request(
-        corpus(),
+        selected_corpus if selected_corpus is not None else corpus(),
         {
             "workspace_ref": WORKSPACE,
             "project_ref": PROJECT,
             "peer_ref": "agent:finance-research-explorer",
             "surface_id": SURFACE,
-            "revision_ref": "revision:near-postmortem-v1",
+            "revision_ref": revision_ref,
             "mode": "function_boundary",
             "queries": [
                 {
@@ -208,7 +211,7 @@ def recall_request() -> dict[str, Any]:
             "observed_at": OBSERVED_AT,
             "freshness_context": {
                 "source_truth_current": True,
-                "source_revision": "revision:near-postmortem-v1",
+                "source_revision": revision_ref,
                 "age_seconds": 0,
             },
             "conflict_state": "clear",
@@ -326,6 +329,64 @@ def test_qualified_experience_is_preserved_and_exactly_read_back() -> None:
     stored = json.loads(next(iter(provider.resources.values())))
     assert stored["experience"] == experience()
     assert stored["experience_quality"] == receipt["experience_quality"]
+
+
+@pytest.mark.parametrize("mode", ["revision_bound", "source_truth_bound"])
+def test_recall_respects_revision_policy_after_corpus_update(mode) -> None:
+    provider = FakeProvider()
+    selected = corpus()
+    old_event = event()
+    old_revision = old_event["revision_ref"]
+    old_event["experience"]["evidence_refs"].append(old_revision)
+    selected["freshness"] = {"mode": mode, "source_revision": old_revision}
+    activated = ingest_scoped_feedback_reward_memory_event(
+        old_event, corpus=selected, standing_policy=policy(),
+        provider_binding=binding(), observed_at=OBSERVED_AT,
+        execute=True, provider=provider,
+    )
+    assert activated["status"] == "activated"
+    original_resources = dict(provider.resources)
+    original_writes = provider.sync_calls
+    same_revision = execute_reward_memory_recall(
+        recall_request(selected_corpus=selected), provider_binding=binding(), provider=provider,
+    )
+    assert len(same_revision.items) == 1
+
+    next_revision = "revision:next-artifact"
+    selected["freshness"]["source_revision"] = next_revision
+    request = recall_request(selected_corpus=selected, revision_ref=next_revision)
+    assert request["guard"]["passed"] is True
+    recalled = execute_reward_memory_recall(request, provider_binding=binding(), provider=provider)
+    expected_count = 0 if mode == "revision_bound" else 1
+    assert len(recalled.items) == expected_count
+    assert recalled.public_packet["filtered_reason_counts"] == (
+        {"scope_filtered": 1} if mode == "revision_bound" else {}
+    )
+    assert provider.resources == original_resources
+    assert provider.sync_calls == original_writes
+    if mode == "source_truth_bound":
+        assert recalled.items[0].experience == old_event["experience"]
+        return
+
+    # Separately verified new-version activation may retain historical evidence.
+    new_event = event()
+    new_event["revision_ref"] = next_revision
+    new_event["experience"] = old_event["experience"]
+    activated = ingest_scoped_feedback_reward_memory_event(
+        new_event, corpus=selected, standing_policy=policy(),
+        provider_binding=binding(), observed_at=OBSERVED_AT,
+        execute=True, provider=provider,
+    )
+    assert activated["status"] == "activated"
+    assert len(provider.resources) == 2
+    writes_after_activation = provider.sync_calls
+    recalled = execute_reward_memory_recall(request, provider_binding=binding(), provider=provider)
+    assert len(recalled.items) == 1
+    assert recalled.items[0].candidate_ref != same_revision.items[0].candidate_ref
+    assert recalled.items[0].experience == old_event["experience"]
+    assert recalled.public_packet["provider_item_count"] == 2
+    assert recalled.public_packet["filtered_reason_counts"] == {"scope_filtered": 1}
+    assert provider.sync_calls == writes_after_activation
 
 
 def test_exact_readback_without_destination_recall_is_not_available() -> None:
