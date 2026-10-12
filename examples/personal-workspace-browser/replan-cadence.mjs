@@ -34,15 +34,25 @@ export const replanCadenceScenario = {
         },
       });
       const { page } = context;
+      async function applyGoalPreview(name = "应用此预览") {
+        const response = page.waitForResponse((value) =>
+          value.url().includes("/api/chat/goal-configuration/apply") && value.request().method() === "POST");
+        await page.getByRole("button", { name, exact: true }).click();
+        const settled = await response;
+        if (!settled.ok()) throw new Error(await settled.text());
+      }
+
       async function openMachineCadence() {
         await page.getByRole("button", { name: "设置", exact: true }).click();
         await page.locator(".personal-settings-tabs").getByRole("button", { name: "能力中心", exact: true }).click();
-        await page.getByRole("navigation", { name: "机器能力目录" }).getByRole("button", { name: /Goal 复核周期/ }).click();
+        await page.getByRole("navigation", { name: "机器能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
       }
       await openMachineCadence();
       const unit = page.getByLabel(/^复核计数依据/);
       const count = page.getByLabel("两次复核间的数量", { exact: true });
+      const strategy = page.getByLabel(/^步幅策略/);
       await waitForInputValue(count, "6");
+      if (await strategy.inputValue() !== "off") throw new Error("Stride must default off");
       if (await unit.inputValue() !== "effective_turns") throw new Error("Product default is not settled work Turns");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-product-default.png"), animations: "disabled" });
       const preview = await request(base + "/preview", legacy);
@@ -60,34 +70,48 @@ export const replanCadenceScenario = {
       stored = (await request(base)).machine_configuration.namespaces.todo_replan_cadence;
       if (stored.completed_todos !== 2) throw new Error("Invalid preview mutated state");
       await count.fill("3");
+      await strategy.selectOption("evidence_conditioned_v1");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await page.getByRole("button", { name: "应用已审阅预览", exact: true }).click();
       await page.getByRole("button", { name: "预览回滚", exact: true }).waitFor();
       stored = (await request(base)).machine_configuration.namespaces.todo_replan_cadence;
       if (stored.count_unit !== "effective_turns" || stored.count !== 3 || "completed_todos" in stored) throw new Error("Migration did not persist the selected unit");
+      if (stored.stride_strategy !== "evidence_conditioned_v1" || stored.schema_version !== "todo_replan_cadence_machine_defaults_v2") throw new Error("Machine stride version not recorded");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-machine.png"), animations: "disabled" });
       await page.getByRole("radio", { name: "单个 Goal", exact: true }).check();
       await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("multi-agent-projection");
-      await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复核周期/ }).click();
+      await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
       await waitForInputValue(count, "3");
       if (await unit.inputValue() !== "effective_turns" || await count.inputValue() !== "3") throw new Error("Goal did not inherit effective-Turn device policy");
       async function readGoalCadence() {
         const packet = await request("/api/chat/goal-configuration?goal_id=multi-agent-projection");
         return packet.capability_catalog.capabilities.find((row) => row.capability_id === "todo_replan_cadence");
       }
+      if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Goal did not inherit strategy version");
       await count.fill("2");
+      await strategy.selectOption("off");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
-      await page.getByRole("button", { name: "应用此预览", exact: true }).click();
+      await applyGoalPreview();
       await page.getByRole("button", { name: "恢复沿用设备默认", exact: true }).waitFor();
       let goalCadence = await readGoalCadence();
       if (goalCadence.effective_configuration.source !== "goal_override" || goalCadence.current.count !== 2) throw new Error("Goal override readback failed");
+      if (goalCadence.current.stride_strategy !== "off") throw new Error("Goal stride opt-out failed");
+      if ((await request(base)).machine_configuration.namespaces.todo_replan_cadence.stride_strategy !== "evidence_conditioned_v1") throw new Error("Goal override changed machine strategy");
+      await strategy.selectOption("evidence_conditioned_v1");
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      await page.getByRole("button", { name: "恢复沿用设备默认", exact: true }).waitFor();
+      if ((await readGoalCadence()).current.stride_strategy !== "evidence_conditioned_v1") throw new Error("Goal strategy activation failed");
       await page.getByRole("button", { name: "恢复沿用设备默认", exact: true }).click();
-      await page.getByRole("button", { name: "应用此预览", exact: true }).click();
+      await applyGoalPreview();
       await page.getByRole("button", { name: "恢复沿用设备默认", exact: true }).waitFor({ state: "detached" });
       goalCadence = await readGoalCadence();
       if (goalCadence.effective_configuration.source !== "machine_default" || goalCadence.effective_configuration.configuration.count !== 3) throw new Error("Goal clear did not restore device policy");
       await page.setViewportSize({ width: 390, height: 844 });
       await unit.focus();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      if (!(await strategy.evaluate((element) => element === document.activeElement))) throw new Error("Strategy is not keyboard reachable");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-goal-mobile.png"), animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("Cadence editor overflowed");
       await page.setViewportSize({ width: 1512, height: 982 });
@@ -97,19 +121,20 @@ export const replanCadenceScenario = {
       await page.locator(".personal-settings-tabs").getByRole("button", { name: "Capability Center", exact: true }).click();
       await page.getByRole("radio", { name: "One Goal", exact: true }).check();
       await page.getByRole("combobox", { name: "Target Goal", exact: true }).selectOption("multi-agent-projection");
-      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review cadence/ }).click();
+      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
       const englishUnit = page.getByLabel(/^Review after/);
       const englishCount = page.getByLabel("Number between reviews", { exact: true });
+      const englishStrategy = page.getByLabel(/^Stride strategy/);
       await waitForInputValue(englishCount, "3");
-      if (await englishUnit.inputValue() !== "effective_turns") throw new Error("English editor lost the persisted unit");
+      if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "evidence_conditioned_v1") throw new Error("English editor lost the unit or strategy");
       await englishCount.fill("1");
       await page.getByRole("button", { name: "Preview changes", exact: true }).click();
-      await page.getByRole("button", { name: "Apply preview", exact: true }).click();
+      await applyGoalPreview("Apply preview");
       await page.getByRole("button", { name: "Use device defaults", exact: true }).waitFor();
       if ((await readGoalCadence()).current.count !== 1) throw new Error("English override was not applied");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-goal-english.png"), animations: "disabled" });
       await page.getByRole("button", { name: "Use device defaults", exact: true }).click();
-      await page.getByRole("button", { name: "Apply preview", exact: true }).click();
+      await applyGoalPreview("Apply preview");
       await page.getByRole("button", { name: "Use device defaults", exact: true }).waitFor({ state: "detached" });
       if ((await readGoalCadence()).effective_configuration.configuration.count !== 3) throw new Error("English clear did not restore device policy");
       const remove = { namespace: "todo_replan_cadence", operation: "remove" };
@@ -122,10 +147,10 @@ export const replanCadenceScenario = {
       await page.locator(".personal-settings-tabs").getByRole("button", { name: "Capability Center", exact: true }).click();
       await page.getByRole("radio", { name: "One Goal", exact: true }).check();
       await page.getByRole("combobox", { name: "Target Goal", exact: true }).selectOption("multi-agent-projection");
-      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review cadence/ }).click();
+      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
       await waitForInputValue(englishCount, "6");
-      if (await englishUnit.inputValue() !== "effective_turns") throw new Error("Goal editor did not restore product unit");
-      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v1 migration, invalid preview, Goal override/clear and device removal through real handlers." };
+      if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "off") throw new Error("Goal editor did not restore product defaults");
+      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration and default-off/versioned stride activation/Goal opt-out, invalid preview, Goal override/clear and device removal through real handlers." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "replan-cadence-failure.png"), animations: "disabled" });

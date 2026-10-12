@@ -662,6 +662,19 @@ bundled provider 的[就绪指南](../../../loopx/extensions/lark/docs/realtime-
 记录有界跨会话处理和仍待完成的替代验收；私聊开通、普通非 Goal 对话、流式回显与媒体输入，
 须等固定版本的已安装旅程通过后才能宣称就绪。
 
+**模型容量失败（S5/S10）：** Codex adapter 把 typed `serverOverloaded` 终结错误保留为
+`server_overloaded`，上游任意 prose 不能建立该分类。启用后的 Codex app-server Chat Turn
+现在默认对这个精确 typed 过载做有界同请求续接：同一 worker 内，Session、Turn、请求、
+grant、配置与 active claim 均未变，且完整最新 Turn 与 item 读回证明本轮没有执行工具或
+效果后，LoopX 可以用线性退避重新投递原请求，最多三次重试，每次续接前再读回一次。每次
+重试都在退避前先写入 Turn 事件账本，因此剩余额度可跨重启/压缩保留，新 worker 不会重开
+starting/terminal Turn 来重置它。未知 provider code、任何工具或效果证据、额外输入或
+steering、停止、权限/配置/claim 变化，以及不可读或不确定的历史都失败关闭：保留既有
+typed 失败与繁忙/连接说明，耗尽时同样保留终结结果，不重放不确定的尝试。原 Session、
+Turn 与投递回执仍是权威；这不新增模型 fallback、provider 替换或线程替换，也不证明
+provider 可用性或此前无副作用。Lark 私聊与管家回复仍显示安全的模型繁忙说明，并要求
+用户先核对已有结果再决定稍后重试；可重试通知仍等待真实终结结果。
+
 **产品边界：** Bot 是实时会话入口，不是另一个管家。普通项目对话和与选定既有 Agent
 直接交流，无需团队拆解或新增 Goal/Todo；需要长期承诺、协调和验收时，管家是显式接收者。
 共享认证入口、Session/Turn、执行/进度/附件、operation 决策与恢复；接收者职责、受众、

@@ -83,6 +83,12 @@ STEERING_NOT_DELIVERED_CODES = frozenset({
 # module-level `Any`.
 AttachmentPayload = dict[str, Any]
 
+# Bounded overload continuation: one original dispatch plus at most this many
+# effect-free retries, each reserved in the Turn event ledger before its backoff
+# so the remaining budget survives restart/compaction.
+TRANSPORT_RETRY_MAX_RETRIES = 3
+TRANSPORT_RETRY_BACKOFF_SECONDS = 2.0
+
 
 class ChatTurnAcceptanceUnavailableError(Exception):
     """The durable acceptance attempt can be retried with the same request."""
@@ -1734,7 +1740,7 @@ class ChatRuntimeController:
                 return
             if (not loopx_execution and parse_native_goal_command(message) is None
                     and isinstance(adapter, CodexAppServerAdapter)
-                    and exc.error_code in {"host_gate", "upstream_transport_failure"}
+                    and exc.error_code in {"host_gate", "upstream_transport_failure", "server_overloaded"}
                     and self._prepare_transport_retry(
                         session_id, turn_id, adapter, retry_binding, exc.native_error_info,
                     )):
@@ -1799,12 +1805,12 @@ class ChatRuntimeController:
         self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
         retry_binding: dict[str, str], native_error_info: dict[str, Any] | str | None,
     ) -> bool:
-        """One same-worker retry, reserved durably before backoff/dispatch.
+        """A bounded same-worker retry chain, reserved durably before each backoff.
 
         The existing queued CAS and Core active claim own execution. The event
-        ledger retains the attempt across restart/compaction; a new worker never
-        reopens starting/terminal Turns or resets this allowance. Lark delivery
-        and other adapters do not decide whether to replay a model request.
+        ledger retains every attempt and fixes the remaining budget; a new worker
+        never reopens starting/terminal Turns or resets this allowance, and other
+        adapters never decide whether to replay a model request.
         """
         from .control_plane.chat_turn_acceptance import managed_turn_execution_allowed
 
@@ -1819,24 +1825,25 @@ class ChatRuntimeController:
                                 for row in self.store.events_after(session_id, turn_id, None)))
 
         try:
-            if not isinstance(native_error_info, dict):
-                return False
-            if retry_binding.get("attempt") or not current() or any(row.get("kind") == "transport.retry_planned"
-                                    for row in self.store.events_after(session_id, turn_id, None)):
+            events = self.store.events_after(session_id, turn_id, None)
+            attempt = len([row for row in events if row.get("kind") == "transport.retry_planned"]) + 1
+            if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded")
+                    or attempt > TRANSPORT_RETRY_MAX_RETRIES or not current()):
                 return False
             original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
             proof = adapter.session.transport_retry_readback(original) if original else None
             if proof is None or proof["codex_error_info"] != native_error_info or not current():
                 return False
-            delay = 2.0
-            retry_binding["attempt"] = "1"
+            delay = TRANSPORT_RETRY_BACKOFF_SECONDS * attempt
             self.store.append_event(session_id, turn_id, kind="transport.retry_planned", payload={
-                "attempt": 1, "upstream_turn_id": original,
+                "attempt": attempt, "upstream_turn_id": original,
                 "binding_sha256": retry_binding["sha256"], "readback": proof,
                 "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
             })
+            label = "模型暂时繁忙" if native_error_info == "serverOverloaded" else "连接暂时中断"
             self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
-                "phase": "retrying", "label": "连接暂时中断，已核验本轮未执行工具；正在原会话继续。",
+                "phase": "retrying",
+                "label": f"{label}，已核验本轮未执行工具；正在原会话继续（第 {attempt}/{TRANSPORT_RETRY_MAX_RETRIES} 次重试）。",
             })
             if self.closed.wait(delay) or not current():
                 return False

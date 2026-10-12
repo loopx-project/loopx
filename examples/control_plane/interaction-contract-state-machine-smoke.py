@@ -602,7 +602,8 @@ def assert_required_reads_have_one_agent_execution_carrier() -> None:
             "command": "  loopx evidence-log --goal-id interaction-state-machine-goal  ",
         }
     ]
-    # Reads have one authoritative execution carrier; commands remain lossless.
+    # Reads have one authoritative execution carrier. Commands stay verbatim;
+    # display compaction must not change quoted arguments.
     payload["required_reads"] = expected
     payload = finalize(payload)
     contract = payload["interaction_contract"]

@@ -873,12 +873,25 @@ a persisted stop must prevent dispatch even if startup later succeeds.
 
 **Model capacity failures (S5/S10):** the Codex adapter preserves the typed
 `serverOverloaded` terminal error as `server_overloaded`; arbitrary upstream
-prose cannot establish that category. Lark private conversations and manager
-replies show a safe busy-model explanation and ask users to check existing
-results before choosing a later retry. The original Session, Turn and delivery
-receipt remain authoritative. This adds no automatic replay, model fallback or
-replacement thread, and does not prove availability or absence of earlier
-effects. Retryable notifications still wait for the actual terminal outcome.
+prose cannot establish that category. An enabled Codex app-server Chat Turn now
+defaults to a bounded same-request continuation of that exact typed overload:
+within one worker, the unchanged Session, Turn, request, grant, configuration
+and active claim, and after a full latest-Turn and item readback proves the
+attempt was effect-free, LoopX may re-dispatch the original request up to three
+times with a linear backoff and a final readback before each continuation. Each
+attempt is reserved in the Turn event ledger before its backoff, so the budget
+survives restart or compaction and a new worker never reopens a starting or
+terminal Turn to reset it. Unknown provider codes, any tool or effect evidence,
+extra input or steering, stop, changed authority, configuration or claim, and
+unreadable or uncertain history fail closed: those keep the existing typed
+failure and its busy-model or connection explanation, and exhaustion keeps the
+same terminal outcome rather than replaying an uncertain attempt. The original
+Session, Turn and delivery receipt remain authoritative; this adds no model
+fallback, provider substitution or replacement thread, and it does not prove
+provider availability or the absence of earlier effects. Lark private
+conversations and manager replies still show the safe busy-model explanation and
+ask users to check existing results before choosing a later retry, and retryable
+notifications still wait for the actual terminal outcome.
 
 **Stopped workers returning late (A23, GQ08):** context preparation and provider
 reads can outlive the bounded interrupt wait. Before dispatch and when a provider

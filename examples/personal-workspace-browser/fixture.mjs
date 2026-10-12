@@ -149,7 +149,7 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
   return [
     goalCapability({
       capabilityId: "todo_replan_cadence",
-      displayName: "Goal review cadence",
+      displayName: "Goal review and stride",
       editorScopes: ["machine", "goal"],
       defaultConfiguration: { count_unit: "effective_turns", count: 5 },
       fields: [
@@ -172,9 +172,12 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
     goalCapability({
       capabilityId: "explore_harness",
       displayName: "Explore Harness",
+      defaultConfiguration: { mode: "off", profile: "generic", composition_mode: "disabled", composition_scope_id: null },
       fields: [
-        { key: "enabled", label: "Enabled", description: "", input_kind: "boolean", required: false },
+        { key: "mode", label: "Exploration mode", description: "Evidence only, or evidence with planning. Spawn authority is separate.", input_kind: "select", required: false, options: ["off", "evidence", "planning"] },
         { key: "profile", label: "Planner profile", description: "", input_kind: "select", required: false, options: ["generic"] },
+        { key: "composition_mode", label: "Composition policy", description: "Replan accepts an exact experiment successor or typed result.", input_kind: "select", required: false, options: ["disabled", "explicit_only"] },
+        { key: "composition_scope_id", label: "Research coverage scope", description: "An opaque coverage scope.", input_kind: "text", required: false, nullable: true },
       ],
     }),
     goalCapability({ capabilityId: "lark_kanban_heartbeat_sync", displayName: "Lark Kanban heartbeat sync" }),
@@ -396,7 +399,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
 
 export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null, userActionAttention = false, presentationApi = false } = {}) {
   let turnCounter = 0;
-  const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
+  const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), goalExploreConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
   const sessions = runtime.sessions;
   const messages = runtime.messages;
@@ -960,6 +963,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }
+    if (url.pathname === "/api/chat/explore-results") {
+      await route.fulfill({json: {ok: true, goal_id: url.searchParams.get("goal_id"), items: [], total: 0, next_cursor: null}});
+      return;
+    }
     if (url.pathname === "/api/chat/goal-results") {
       await route.fulfill({ json: { ok: true, items: [], total: 0, next_cursor: null, unavailable_count: 0, unavailable_todo_ids: [] } });
       return;
@@ -1043,7 +1050,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           },
           {
             namespace: "todo_replan_cadence",
-            title: "Goal review cadence",
+            title: "Goal review and stride",
             description: "Live review threshold without added turns, quota, or authority.",
             schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,
@@ -1309,7 +1316,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
                 machine_default_present: true,
                 effective_revision: "sha256:periodic-effective",
               },
-            }) : capability)],
+            }) : capability.capability_id === "explore_harness" && runtime.goalExploreConfigurations.has(goalId)
+              ? { ...capability, current: runtime.goalExploreConfigurations.get(goalId) } : capability)],
         },
       }, status: 200 });
       return;
@@ -1330,6 +1338,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (url.pathname === "/api/chat/goal-configuration/apply" && request.method() === "POST") {
       const body = request.postDataJSON();
       state.goalConfigurationRequests.push({ phase: "apply", ...body });
+      if (body.capability_id === "explore_harness") {
+        runtime.goalExploreConfigurations.set(body.goal_id, body.configuration);
+        await route.fulfill({ contentType: "application/json", json: {
+          ok: true, schema_version: "goal_configuration_transaction_v0", status: "applied",
+          goal_id: body.goal_id, capability_id: body.capability_id,
+          plan_revision: body.expected_plan_revision, applied_revision: "sha256:goal-explore-applied",
+          readback_verified: true, changed_fields: ["explore_harness"], goal_configuration: body.configuration,
+          capability_catalog: { schema_version: "capability_configuration_catalog_v0", capabilities: [] },
+        }, status: 200 });
+        return;
+      }
       if (body.capability_id === "multi_subagent") {
         runtime.goalSubagentConfigurations.set(body.goal_id, body.configuration.enabled ? {
           mode: "multi_subagent",
@@ -1888,7 +1907,12 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (apply) {
       state.actionApplies.push(apply[1]);
       if (actionKinds.get(apply[1]) === "heartbeat.bind" && !state.allowNextHeartbeatApply) {
-        await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate: { kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。" }, write_attempted: false }, status: 409 });
+        const gate = {kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。"};
+        // The real owner persists a discovered gate. A later list read must
+        // not resurrect preview_ready and erase the guarded apply result.
+        const proposal = {...actionProposals.get(apply[1]), status: "gated", gate};
+        actionProposals.set(apply[1], proposal);
+        await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate, proposal, write_attempted: false }, status: 409 });
         return;
       }
       if (actionKinds.get(apply[1]) === "heartbeat.bind") state.allowNextHeartbeatApply = false;

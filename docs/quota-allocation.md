@@ -122,10 +122,14 @@ loopx configure-goal --goal-id example
 loopx configure-goal --goal-id example --clear-execution-replan-after-turns --execute
 ```
 
-The Dashboard exposes **Goal review cadence** in the Capability Center for
+The Dashboard exposes **Goal review and stride** in the Capability Center for
 both the device and selected Goal. The existing machine namespace
-`todo_replan_cadence_machine_defaults_v1` stores `count_unit` (`effective_turns`
-or `completed_todos`) and `count`. It is built into the control plane and needs
+`todo_replan_cadence_machine_defaults_v2` stores `count_unit` (`effective_turns`
+or `completed_todos`), `count` and optional strategy selection. Existing v0/v1
+configurations remain readable without migrating them on inspection. The
+strategy defaults off; `evidence_conditioned_v1` adds evidence-conditioned scope
+and route advice, with unchanged admission and semantic exits. See the
+[versioned strategy configuration and rollback](reference/protocols/goal-vision-replan-contract-v0.md#configure-and-roll-back-the-stride-strategy). It is built into the control plane and needs
 no provider installation. The CLI, settings readback, quota decision and
 writeback validation use the same effective configuration.
 
@@ -461,6 +465,10 @@ monitor clock, genuine gate and independent runnable work keep their own rules.
 This corrects the automatic notice explanation without adding configuration or
 persisted state. The pending retry is a recheck deadline, not execution authority:
 current gates and the configured cadence floor still apply at and after due time.
+Receipt waits added after stored resume lanes were built are read from the same
+claim-scoped full selection source. An existing wait lane or its display limit
+cannot hide a new retry; foreign, excluded, mismatched and replaced waits do not
+qualify through this path.
 
 类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
 缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。同一个 typed batch
@@ -470,6 +478,9 @@ current gates and the configured cadence floor still apply at and after due time
 时钟、真实 gate 和独立可执行工作各自保持。这是自动通知解释的修正，不新增
 配置或持久化状态。重试到期仅要求重新检查，不授予执行权限；当前 gate 和
 已配置的调度周期下限仍然有效。
+stored resume lane 建立后新增的 receipt wait，沿同一个 claim-scoped 完整
+selection 来源读回。已有等待列表及其显示上限不能隐藏新重试；其它 Agent、
+被排除的执行者、身份不匹配或已被替换的等待不能由这条路径取得资格。
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a

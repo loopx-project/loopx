@@ -618,9 +618,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           <section className="personal-detail-card" role="status">
             <p>{t("drawer.taskReadbackUnavailable")}</p>
           </section>
-        ) : selection.item.detailMode === "request_only" ? (
+        ) : selection.item.detailMode ? (
           <section className="personal-task-inspector-summary">
-            <p className="personal-proposal-explainer">{t("drawer.taskRequestOnly")}</p>
+            <p className="personal-proposal-explainer">{t(selection.item.detailMode === "missing_current" ? "drawer.taskReadbackUnavailable" : "drawer.taskRequestOnly")}</p>
             <TaskRequest todo={selection.item} local={!readOnly} />
           </section>
         ) : (

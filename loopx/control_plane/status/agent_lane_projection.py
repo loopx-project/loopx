@@ -30,6 +30,7 @@ _PROJECT_ASSET_CANONICAL_FIELDS = (
     "agent_reward_memory",
     "autonomous_replan_ack",
     "autonomous_replan_obligation",
+    "bounded_research_frontier",
     "completed_todo_archive_warning",
     "control_plane",
     "external_progress_review",

@@ -33,7 +33,9 @@ def test_current_repository_debt_is_reviewed_without_line_count_pins() -> None:
     ]
     assert report["unreviewed_count"] == 0
     assert report["stale_exception_count"] == 0
-    assert set(report["category_counts"]) == {"compatibility_facade"}
+    # The legacy Todo writer's Explore guard moved with that writer. Its
+    # exact dependency remains reviewed until the legacy path is retired.
+    assert report["category_counts"] == {"compatibility_facade": 2, "dependency_debt": 1}
     assert report["category_counts"].get("oversized_decision_function", 0) == 0
     assert report["reviewed_exception_count"] == report["finding_count"]
     # One scan of the immutable checkout owns both debt and metric assertions.

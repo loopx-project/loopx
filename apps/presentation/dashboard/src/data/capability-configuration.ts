@@ -56,9 +56,9 @@ export function parseEditableCapabilityJson(
 export function replanCadenceEditorValue(value: unknown): unknown {
   const record = configurationObject(value);
   if (Object.hasOwn(record, "completed_todos") && !Object.hasOwn(record, "count_unit")) {
-    return { count_unit: "completed_todos", count: record.completed_todos };
+    return { count_unit: "completed_todos", count: record.completed_todos, stride_strategy: "off" };
   }
-  return value;
+  return { ...record, stride_strategy: record.stride_strategy ?? "off" };
 }
 
 /** A v0 storage selector did not enable creation; opening Settings must not. */

@@ -22,7 +22,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "Model and executor",
       description: "Guides the steward executor, model, and selection boundary for this machine. A pinned route blocks substitution; a flexible pool permits only authorized fallback.",
     },
-    todo_replan_cadence: { displayName: "Goal review cadence", description: "Configures the Goal review cadence." },
+    todo_replan_cadence: { displayName: "Goal review and stride", description: "Set review frequency and optionally choose a versioned stride strategy for work scope and route changes." },
     change_quality_qualification: {
       displayName: "Change quality qualification",
       description: "Prepares a provider-neutral review packet, allows at most one policy-authorized safe-fix pass, and can require an exact-diff receipt.",
@@ -37,7 +37,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "Explore Harness",
-      description: "Keeps an evidence graph of exploration, with optional branch planning. Planning includes evidence; worker permissions remain separate.",
+      description: "Keeps an exploration evidence graph with optional branch planning. Explicit composition replans require a bound experiment or typed result; worker permissions and task completion remain separate.",
     },
     lark_event_inbox: {
       displayName: "Lark event inbox",
@@ -89,7 +89,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "模型与执行器",
       description: "配置本机管家的执行器、模型与选择边界；锁定路径禁止替代，灵活池只允许在已授权范围内回退。",
     },
-    todo_replan_cadence: { displayName: "Goal 复核周期", description: "配置 Goal 的复核周期。" },
+    todo_replan_cadence: { displayName: "Goal 复盘与步幅", description: "设置复盘周期，可选用带版本的步幅策略，调节工作大小与路线变化。" },
     change_quality_qualification: {
       displayName: "变更质量验证",
       description: "生成与 Provider 无关的审阅包，最多允许一次策略授权的安全修复，并可要求精确 diff 回执。",
@@ -104,7 +104,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "探索 Harness",
-      description: "记录探索证据图谱，可选开启分支规划；规划自动配套证据层，派生 Agent 权限独立。",
+      description: "记录探索证据图谱，可选开启分支规划。显式组合的重新规划需绑定实验或类型化结果；派生 Agent 权限与任务完成独立判断。",
     },
     lark_event_inbox: {
       displayName: "飞书事件收件箱",
@@ -159,6 +159,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_model: { label: "Model", description: "Optional model for the selected executor. Leave blank to keep the executor's own default." },
     executor_reasoning_effort: { label: "Reasoning effort", description: "Optional reasoning effort for the selected executor. Leave blank to keep the executor's own default." },
     count_unit: { label: "Review after", description: "Work Turns require accepted settlement; polls and retries do not count.", options: { completed_todos: "Completed Todos", effective_turns: "Settled work Turns" } },
+    stride_strategy: { label: "Stride strategy", description: "Structured work scope, route and validation proposals are required for enabled fresh Vision reviews. Does not grant execution authority.", options: { off: "Off", evidence_conditioned_v1: "Evidence-conditioned · v1" } },
     count: { label: "Number between reviews", description: "Settled work Turns: 1–6; completed Todos: 1–5. Goal overrides take precedence over device defaults." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
     coordinator_agent_id: { label: "Coordinator Agent", description: "Use an already registered Agent id; leave blank to disable coordination." },
@@ -167,6 +168,8 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     reasoning_effort: { label: "Child reasoning effort", description: "For example max; the host must support this model and effort." },
     max_children: { label: "Maximum children", description: "Hard upper bound for concurrently delegated child work." },
     profile: { label: "Planner profile", description: "Select one registered Explore Harness profile." },
+    composition_mode: { label: "Composition policy", description: "Replan requires an exact experiment successor or typed result; it grants no execution authority.", options: {disabled: "Off", explicit_only: "Explicit candidates"} },
+    composition_scope_id: { label: "Research coverage scope", description: "An opaque scope id required by the explicit-only composition policy." },
     profile_preset: { label: "Report profile", description: "Capability-owned report profile, such as weekly-progress." },
     wait_for_ci: { label: "Wait for CI", description: "Disable to use local validation without querying or waiting for CI. Merge authority is unchanged." },
     review_order: { label: "Review direction", description: "Forward visits other authors first and oldest first. Reverse inverts the whole actionable queue." },
@@ -191,6 +194,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_model: { label: "模型", description: "所选执行器使用的模型，可留空；留空表示沿用执行器自身的默认模型。" },
     executor_reasoning_effort: { label: "推理档位", description: "所选执行器使用的推理档位，可留空；留空表示沿用执行器自身的默认档位。" },
     count_unit: { label: "复核计数依据", description: "有效工作 Turn 须完成结算；轮询和重复重试不计数。", options: { completed_todos: "已完成 Todo", effective_turns: "已结算工作 Turn" } },
+    stride_strategy: { label: "步幅策略", description: "启用后，新的 Vision 路线复盘须提交工作大小、路线及验证范围的结构化提案，不授予执行权限。", options: { off: "关闭", evidence_conditioned_v1: "依据证据调整 · v1" } },
     count: { label: "两次复核间的数量", description: "已结算工作 Turn 为 1–6，已完成 Todo 为 1–5；Goal 显式设置优先于设备默认值。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
     coordinator_agent_id: { label: "协调 Agent", description: "填写一个已经注册的 Agent ID；留空表示关闭协调。" },
@@ -199,6 +203,8 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     reasoning_effort: { label: "子 Agent 推理档位", description: "例如 max；宿主须支持所选模型与档位。" },
     max_children: { label: "最大子 Agent 数", description: "可同时委派的子任务硬上限。" },
     profile: { label: "规划 Profile", description: "选择一个已注册的 Explore Harness profile。" },
+    composition_mode: { label: "组合策略", description: "重新规划需要精确的实验后继或类型化结果；它不授予执行权限。", options: {disabled: "关闭", explicit_only: "仅显式候选"} },
+    composition_scope_id: { label: "研究覆盖范围", description: "显式组合策略要求填写不含私有内容的范围标识。" },
     profile_preset: { label: "报告 Profile", description: "由该能力管理的报告 profile，例如 weekly-progress。" },
     wait_for_ci: { label: "等待 CI", description: "关闭后使用本地验证，不查询或等待 CI；不改变合并权限。" },
     review_order: { label: "审阅方向", description: "正向先审其他作者，同层先审较早就绪的 PR；反向将整个可执行队列倒序。" },

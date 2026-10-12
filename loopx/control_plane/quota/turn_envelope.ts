@@ -237,7 +237,7 @@ function replanActionPacket(payload: JsonObject): JsonObject | null {
   if (Object.keys(source).length === 0) return null;
   const compact = compactFields(source, [
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
-    "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id",
+    "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id", "stride_control",
   ]);
   // The typed replan owner supplies bounded instructions; do not truncate their
   // authority/stop qualifiers through generic diagnostic compaction.

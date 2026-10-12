@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
+import {goalWorkspaceM2Scenario} from "./personal-workspace-browser/goal-workspace-m2.mjs";
 import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-workspace-selection.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
@@ -8,6 +10,7 @@ import {attentionUserActionScenario} from "./personal-workspace-browser/attentio
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
+import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/explore-composition-owner.mjs";
 // Isolated browser acceptance scenarios for the personal Agent workspace.
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -93,11 +96,14 @@ scenarioCatalog.push(nativeChildActivityScenario);
 scenarioCatalog.push(privateStewardScopeScenario);
 scenarioCatalog.push(externalEvidenceReadbackScenario);
 scenarioCatalog.push(configurationBackupScenario);
+scenarioCatalog.push(exploreCompositionOwnerScenario);
 scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(goalWorkspaceM2Scenario);
+scenarioCatalog.push(goalWorkspaceCreateScenario);
 scenarioCatalog.push(goalWorkspaceSelectionScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario

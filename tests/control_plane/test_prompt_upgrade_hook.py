@@ -157,11 +157,15 @@ def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch,
     baseline = build_live_quota_should_run_decision(status, **kwargs)
     receipt.write_bytes(contents)
     pending = build_live_quota_should_run_decision(status, **kwargs)
-    assert any(x.get("kind") == "automation_prompt_upgrade"
-        for x in pending["interaction_contract"]["agent_channel"]["required_reads"])
+    assert "turn_start_capability_hook_dispatch" not in baseline
     assert "required_reads" not in pending
-    hint = next(x for x in pending["interaction_contract"]["agent_channel"]["required_reads"]
-        if x.get("kind") == "automation_prompt_upgrade")
+    reads = pending["interaction_contract"]["agent_channel"]["required_reads"]
+    hint = next(x for x in reads if x.get("kind") == "automation_prompt_upgrade")
+    dispatch = pending["turn_start_capability_hook_dispatch"]
+    assert set(dispatch) == {"required_reads"}
+    assert len(dispatch["required_reads"]) == 1
+    assert dispatch["required_reads"][0]["command"] == hint["command"]
+    assert hint["source"] == "turn_start_capability_hook"
     assert len(hint["command"]) > 360
     assert hint in compact_quota_should_run_cli_payload(pending)["interaction_contract"]["agent_channel"]["required_reads"]
     envelope = build_turn_envelope(pending)

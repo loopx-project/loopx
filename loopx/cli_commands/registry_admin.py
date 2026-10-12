@@ -452,6 +452,8 @@ def handle_registry_admin_command(
                 execution_turn_granularity=args.execution_turn_granularity,
                 execution_replan_after_todos=args.execution_replan_after_todos,
                 execution_replan_after_turns=args.execution_replan_after_turns,
+                execution_stride_strategy=args.execution_stride_strategy,
+                clear_execution_stride_strategy=args.clear_execution_stride_strategy,
                 clear_execution_replan_after_turns=args.clear_execution_replan_after_turns,
                 clear_execution_replan_after_todos=bool(
                     args.clear_execution_replan_after_todos
@@ -509,6 +511,8 @@ def handle_registry_admin_command(
                 explore_harness_enabled=args.explore_harness_enabled,
                 explore_harness_profile=args.explore_harness_profile,
                 clear_explore_harness_profile=bool(args.clear_explore_harness_profile),
+                explore_composition_mode=args.explore_composition_mode,
+                explore_composition_scope_id=args.explore_composition_scope_id,
                 explore_graph_enabled=args.explore_graph_enabled,
                 explore_mode=args.explore_mode,
                 lark_kanban_heartbeat_sync=args.lark_kanban_heartbeat_sync,

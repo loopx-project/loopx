@@ -70,6 +70,15 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-execution-replan-after-turns", action="store_true",
         help="Remove the Goal effective-Turn override and restore device/default inheritance.",
     )
+    from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
+    configure_goal_parser.add_argument(
+        "--execution-stride-strategy", choices=stride_strategy_options(),
+        help="Choose a versioned Agent stride strategy. Off preserves ordinary review; no automatic execution or authority change.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-stride-strategy", action="store_true",
+        help="Remove the strategy from the Goal review override (off). Clear the review cadence too to restore device defaults.",
+    )
     configure_goal_parser.add_argument(
         "--quota-compute",
         type=float,
@@ -274,6 +283,14 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-explore-harness-profile",
         action="store_true",
         help="Remove the goal-pinned explore profile while preserving the opt-in bit.",
+    )
+    configure_goal_parser.add_argument(
+        "--explore-composition-mode", choices=["disabled", "explicit_only"],
+        help="Opt in to typed composition obligations for this Goal; disabled preserves existing planning behavior.",
+    )
+    configure_goal_parser.add_argument(
+        "--explore-composition-scope-id",
+        help="Opaque research coverage scope required by explicit_only composition; grants no execution authority.",
     )
     configure_goal_parser.add_argument(
         "--registered-agent",

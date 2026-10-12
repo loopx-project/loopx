@@ -114,6 +114,9 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     return session, state
 
 
+@pytest.mark.parametrize("info", [
+    {"responseStreamDisconnected": {"httpStatusCode": None}}, "serverOverloaded",
+])
 @pytest.mark.parametrize("fault", [
     None, "other", "cyberPolicy", "unauthorized", "usageLimitExceeded", "rateLimitExceeded",
     "http401", "http429", "bad-status", "commandExecution", "fileChange", "dynamicToolCall",
@@ -121,7 +124,7 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     "wrong-turn", "missing-data", "cursor-cycle", "new-turn", "late-tool", "changed-error",
     "native-error-before-terminal", "pending-terminal", "interrupted", "completed",
 ])
-def test_transport_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault):
+def test_transient_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault, info):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="recovery-thread", work_dir=tmp_path,
         response_timeout_sec=.2)
@@ -135,17 +138,17 @@ def test_transport_recovery_requires_complete_native_terminal_and_effect_readbac
         assert params["threadId"] == "recovery-thread"
         if method == "thread/turns/list":
             reads += 1
-            info = {"responseStreamDisconnected": {"httpStatusCode": None}}
+            observed_info = info
             if fault in {"other", "cyberPolicy", "unauthorized", "usageLimitExceeded", "rateLimitExceeded"}:
-                info = fault
+                observed_info = fault
             if fault in {"http401", "http429", "bad-status"}:
-                info = {"responseStreamDisconnected": {"httpStatusCode": {
+                observed_info = {"responseStreamDisconnected": {"httpStatusCode": {
                     "http401": 401, "http429": 429, "bad-status": True,
                 }[fault]}}
             if fault == "changed-error" and reads > 1:
-                info = "other"
+                observed_info = "other"
             result = {"data": [{"id": "failed-turn", "status": "failed", "error": {
-                "codexErrorInfo": info, "message": "private fixture detail",
+                "codexErrorInfo": observed_info, "message": "private fixture detail",
             }}]}
             if fault == "new-turn":
                 result["data"].insert(0, {"id": "new-turn", "status": "inProgress"})
@@ -177,7 +180,7 @@ def test_transport_recovery_requires_complete_native_terminal_and_effect_readbac
     proof = session.transport_retry_readback("failed-turn")
     if fault in {None, "native-error-before-terminal"}:
         assert proof == {"thread_id": "recovery-thread", "turn_id": "failed-turn", "item_count": 2,
-                         "codex_error_info": {"responseStreamDisconnected": {"httpStatusCode": None}}}
+                         "codex_error_info": info}
         assert reads == (3 if fault else 2) and len(calls) == reads + 2
         assert "private fixture" not in json.dumps(proof)
     else:

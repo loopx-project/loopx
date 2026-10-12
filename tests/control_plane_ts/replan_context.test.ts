@@ -107,6 +107,134 @@ function pair(time = 1): [JsonObject, JsonObject] {
   return [work, accounting];
 }
 
+function reviewed(position = 0): JsonObject {
+  const [work] = pair(position + 1);
+  return {...work, _source_facts: {...work._source_facts, history_position: position,
+    agent_vision: {schema_version: "goal_vision_replan_contract_v0", agent_id: "agent-a",
+      path_delta: {schema_version: "goal_path_delta_v0", outcome: "replan",
+        prior_assumption: "The current method could explain the remaining gap.",
+        observed_reality: "Local validation improved but target quality remains uncertain.",
+        changed: ["Test an alternative mechanism on a bounded comparison."],
+        evidence_refs: ["evidence:review-basis"]}},
+    autonomous_replan_ack: {schema_version: "autonomous_replan_ack_v0", recorded: true,
+      semantic_delta: {schema_version: "replan_semantic_delta_v0", accepted: true,
+        satisfying_outcomes: ["fresh_vision_path_outcome"]}}}};
+}
+
+function subsequent(position: number): JsonObject {
+  const [work] = pair(position + 1);
+  return {...work, progress_observation: {...progress, result_class: "advanced",
+    fingerprint: "probe-" + position, hypothesis_id: "hypothesis-local"},
+    _source_facts: {...work._source_facts, history_position: position}};
+}
+
+const strideRequest = {...request, stride_strategy: "evidence_conditioned_v1"};
+
+test("a prior accepted path returns with attributable later observations, never a utility verdict", () => {
+  const decision = reviewed();
+  const later = subsequent(1);
+  const context = projectReplanContext({...strideRequest, from_full_index: true, rows: [decision, later]});
+  const follow = context.decision_followthrough as JsonObject;
+  assert.equal(follow.recorded_progress_count, 1);
+  assert.equal(follow.execution_and_goal_gain, "unknown");
+  assert.equal(follow.source_history_complete, true);
+  assert.equal(follow.unsequenced_progress_count, 0);
+  const previous = follow.previous_decision as JsonObject;
+  assert.equal(previous.todo_id, "todo-a");
+  const resolve = projectReplanContext({...strideRequest, operation: "resolve", rows: [decision, later],
+    evidence_ref: previous.evidence_ref});
+  assert.deepEqual((resolve.evidence as JsonObject).path_delta, previous.path_delta);
+  assert.ok(!("_source_facts" in (resolve.evidence as JsonObject)));
+  const changed = {...decision, _source_facts: {...decision._source_facts,
+    agent_vision: {schema_version: "goal_vision_replan_contract_v0", agent_id: "agent-a",
+      path_delta: {...previous.path_delta as JsonObject, changed: ["A replaced decision"]}}}};
+  assert.throws(() => projectReplanContext({...strideRequest, operation: "resolve", rows: [changed, later],
+    evidence_ref: previous.evidence_ref}), /unavailable/);
+
+  assert.deepEqual((follow.observations as JsonObject[])[0].coverage_ref, "probe-1");
+  assert.ok(!("progress_observation" in (follow.observations as JsonObject[])[0]));
+  assert.deepEqual(context.uncovered_frontier,
+    projectReplanContext({...strideRequest, rows: [decision, later]}).uncovered_frontier);
+});
+
+test("append order survives clock skew; replay and accounting do not add research observations", () => {
+  const older = reviewed();
+  const latest = {...reviewed(2), generated_at: row(0).generated_at, observed_at: 0};
+  const before = subsequent(1);
+  const after = {...subsequent(3), generated_at: row(-1).generated_at, observed_at: -1};
+  const [, accounting] = pair(5);
+  const context = projectReplanContext({...strideRequest, rows: [older, before, latest, after, after, accounting]});
+  const follow = context.decision_followthrough as JsonObject;
+  assert.equal((follow.previous_decision as JsonObject).turn_instance_id, "turn-3");
+  assert.equal(follow.recorded_progress_count, 1);
+  assert.equal((follow.observations as JsonObject[])[0].coverage_ref, "probe-3");
+});
+
+test("bounded detail retains the full denominator and missing order remains visible", () => {
+  const context = projectReplanContext({...strideRequest,
+    rows: [reviewed(), ...Array.from({length: 9}, (_, i) => subsequent(i + 1)), row(12)]});
+  const follow = context.decision_followthrough as JsonObject;
+  assert.equal(follow.recorded_progress_count, 9);
+  assert.equal((follow.observations as JsonObject[]).length, 6);
+  assert.equal(follow.omitted_observation_count, 3);
+  assert.equal(follow.unsequenced_progress_count, 1);
+  assert.equal(follow.source_history_complete, false);
+});
+
+test("missing, unaccepted or corrupt latest decision cannot impersonate an evidenced review", () => {
+  const valid = reviewed();
+  const facts = valid._source_facts as JsonObject;
+  for (const patch of [{agent_vision: null}, {autonomous_replan_ack: null},
+    {settlement_identity: null}, {turn_instance_id: "unrelated"}]) {
+    const context = projectReplanContext({...strideRequest, rows: [{...valid, _source_facts: {...facts, ...patch}}]});
+    assert.equal(context.decision_followthrough, undefined);
+  }
+  const newer = reviewed(2);
+  const corrupt = {...newer, _source_facts: {...newer._source_facts,
+    agent_vision: {schema_version: "goal_vision_replan_contract_v0", agent_id: "agent-a",
+      path_delta: {outcome: "replan"}}}};
+  assert.equal(projectReplanContext({...strideRequest, rows: [valid, corrupt]}).decision_followthrough, undefined);
+});
+
+test("another lane or retired Goal instance never supplies current decision evidence", () => {
+  const valid = reviewed();
+  const other = {...valid, agent_id: "agent-b"};
+  assert.equal(projectReplanContext({...strideRequest, rows: [other]}).decision_followthrough, undefined);
+  const oldRef = {goal_id: "goal-a", goal_instance_id: "instance-old"};
+  const currentRef = {...oldRef, goal_instance_id: "instance-current"};
+  const old = {...valid, _source_facts: {...valid._source_facts, goal_ref: oldRef}};
+  assert.equal(projectReplanContext({...strideRequest, goal_facts: {goal_ref: currentRef}, rows: [old]})
+    .decision_followthrough, undefined);
+  const current = {...valid, _source_facts: {...valid._source_facts, goal_ref: currentRef}};
+  assert.deepEqual(((projectReplanContext({...strideRequest, goal_facts: {goal_ref: currentRef}, rows: [current]})
+    .decision_followthrough as JsonObject).previous_decision as JsonObject).goal_ref, currentRef);
+});
+
+test("strategy off preserves context identity and selection despite decision transport facts", () => {
+  const rows = [reviewed(), subsequent(1)];
+  const ordinary = projectReplanContext({...request, rows});
+  const off = projectReplanContext({...request, rows, stride_strategy: "off"});
+  assert.deepEqual(off, ordinary);
+  assert.equal(off.decision_followthrough, undefined);
+  const enabled = projectReplanContext({...strideRequest, rows});
+  assert.equal(enabled.stride_strategy, "evidence_conditioned_v1");
+  assert.deepEqual(validateReplanContext(enabled), enabled);
+  for (const patch of [{execution_and_goal_gain: "advanced"}, {recorded_progress_count: -1},
+    {omitted_observation_count: 10}, {source_history_complete: null}]) {
+    assert.throws(() => validateReplanContext({...enabled, decision_followthrough: {
+      ...enabled.decision_followthrough as JsonObject, ...patch}}), /followthrough/);
+  }
+  assert.throws(() => validateReplanContext({...enabled, stride_strategy: "off"}), /enabled strategy/);
+
+  assert.notEqual(enabled.context_id, off.context_id);
+  for (const field of ["evidence", "coverage_ledger", "uncovered_frontier", "evidence_count"]) {
+    assert.deepEqual(enabled[field], off[field]);
+  }
+  for (const version of ["future_v2", null, 1]) {
+    assert.throws(() => projectReplanContext({...request, rows, stride_strategy: version}), /stride_strategy/);
+  }
+});
+
 test("reduction preserves raw counts, negative coverage, obligation and immutable resolution", () => {
   const [work, accounting] = pair();
   const legacy = [work, accounting].map(({_source_facts: _source, ...row}) => row);

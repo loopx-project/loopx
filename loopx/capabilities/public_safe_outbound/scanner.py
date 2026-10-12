@@ -27,8 +27,17 @@ RULES: tuple[dict[str, str], ...] = (
     {"id": "aklt_access_key", "label": "AK/SK access key", "pattern": r"\b" + "AKLT" + r"[A-Za-z0-9]{10,}\b"},
     {"id": "private_key_block", "label": "private key block", "pattern": r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"},
     {"id": "api_key_assignment", "label": "api key assignment", "pattern": r"(?i)\b(api[_-]?key|access[_-]?key|secret)\b\s*[=:]\s*['\"][^'\"]{8,}['\"]"},
-    # private absolute paths
-    {"id": "private_abs_path", "label": "private absolute path", "pattern": r"/(Users|home|data00|root)/([A-Za-z0-9_.-]+)/"},
+    # Private absolute paths: the private roots under whatever separator the
+    # host or a serialized string chose. A separator run at every junction
+    # covers the POSIX spelling (/Users/alice/), the native Windows spellings
+    # (\Users\alice\ and C:\Users\alice\) and the mixed or escaped spellings of
+    # serialized text (\\Users\\alice\\), matching the boundary scan's
+    # separator-run class (#6161).
+    {
+        "id": "private_abs_path",
+        "label": "private absolute path",
+        "pattern": r"[\\/]+(?:Users|home|data00|root)[\\/]+[A-Za-z0-9_.-]+[\\/]+",
+    },
 )
 
 

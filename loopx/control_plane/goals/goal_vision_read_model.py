@@ -83,6 +83,8 @@ def latest_agent_vision_from_runs(
             else None,
             "generated_at": run.get("generated_at"),
         }
+        if isinstance(vision.get("stride_decision"), dict):
+            result["stride_decision"] = vision["stride_decision"]
         if isinstance(vision.get("path_delta"), dict):
             result["path_delta"] = vision["path_delta"]
         if isinstance(vision.get("fallback_declarations"), list):

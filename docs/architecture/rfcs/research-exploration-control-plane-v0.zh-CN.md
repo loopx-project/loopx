@@ -132,11 +132,11 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 
 | 缺口 | 后果 |
 |---|---|
-| 没有 shared research write-time gate | Cold evidence codec 不能解除或强制 live composition obligation。 |
-| 没有精确 obligation/Todo/result lineage | Research receipt 不证明已授权 Todo transition 或已接受 Goal closure。 |
-| Cold shadow 未接入 hot status/frontier | 既有 #3173 投影保持行为兼容；canonical research obligation 仍需 M3 集成。 |
-| 没有 dismissal/deferral contract | Evidence invalidation 可见，但类型化 candidate retirement/resumption 尚未实现。 |
-| 没有 experiment-result adoption gate | 负证据可被记录，但不能证明下一绑定决策使用了其 scope、validity 与 uncertainty。§11.5 提议 single-experiment 集成；当前 cold receipt 不强制执行该提案。 |
+| Mainline 尚未集成 M3 写入门禁与精确 lineage | 开放的 PR #5280 提议精确 obligation/Todo/experiment/input 门禁；本地 receipt 测试不证明 Goal 已接受关闭，当前 head 的 CI、可合并性与维护者效果验收仍未完成。 |
+| Cold shadow 尚未在 main 接入 hot status/frontier | 既有 #3173 投影保持行为兼容；提议中的 M3 消费端仍需集成后的入口资格验证。 |
+| Dismissal 与 deferral 尚未集成 | PR #5280 在本地实现 typed candidate dismissal、blocker wait 与精确 invalidated-duty retirement；review 和主干回读仍是独立门槛。 |
+| 尚无 experiment-result adoption gate | 负证据可被记录，但不能证明下一绑定决策使用了其 scope、validity 与 uncertainty。§11.5 提议 single-experiment 集成；当前 cold receipt 与 PR #5280 均未强制执行。 |
+| 执行 attribution 不是 effect 权限 | 精确 Todo/experiment/input receipt 不授予 task lease、effect 权限或已接受的 Goal closure。 |
 | Live qualification 不完整 | Deterministic 与真实 CLI/file-log 测试证明状态语义，不证明 model selection 质量或科学结论；projection 测试不构成 live Lark sync 资格。 |
 | inferred combination 没有 promotion evidence | 共享 constraint 的精度还不足以直接触发 obligation。 |
 
@@ -211,8 +211,8 @@ A、B 之间的 `joint_probe` 直连边会把 candidate、execution 和 result �
 
 Research envelope 与 closure basis 已有真实 CLI caller 和
 [版本化证据协议](../../reference/protocols/research-observation-v0.zh-CN.md)。
-下文 action signature、shared write gate 和 model selection 仍为设计目标；
-cold shadow 不会将其 promotion 为当前行为。
+Opt-in M3 开发路径已实现精确 execution lineage 和共享 write gate。下文 model
+selection 仍为设计目标；有界 retirement 已实现，cold shadow 不会激活门禁。
 
 ### 7.1 组合，而不是静默修改 v0
 
@@ -650,6 +650,33 @@ input 改变后重开 scope、合法同 family probe 与 default-off parity。�
 matched 总预算下独立验证模型 adoption 和科学效用；降低控制成本不能靠隐藏
 有效负证据。
 
+### 11.6 共享 replan 边界的研究范围复盘
+
+[步幅控制闭环](hierarchical-agent-stride-control-v0.zh-CN.md#76-研究范围与证据驱动控制)
+补充结果采用：下一实验应改变机制、验证覆盖，还是需要解决的不确定性？更多
+正确测试和更多命名假设不证明研究更广。原生/provider outcome、噪声与收益空间
+仍是领域证据，不成为 kernel 分类。在原目标内改变方法不要求新的 user gate；
+题目、验收、权限、反馈与预算变更仍由既有 owner 决定。
+
+有界源码前置切片复用已接受的 `goal_path_delta_v0` 与后续 typed progress，在既有
+复盘入口投递 `replan_context.decision_followthrough`。不增加强制 Explore 附件或
+capture，独立于 Explore 是否启用，也不能满足或解除额外义务。Progress 是记录
+证据，不是执行/采用或科学创新的裁决。§11.5 的 opt-in 结果采用门禁与 composition
+lineage 仍是独立、未资格化的工作。
+
+Agent 应保留已资格化 incumbent、指出未解释的目标缺口，并比较判别性替代、
+原路线接续与有理由的重复测量。所选探针的预测、采用条件及成本绑定正常 task/
+Vision continuation，下次复盘检查实际候选执行与结果。输入变化可重新打开有范围
+负 finding；不变条件下重复要说明理由。没有按已过小时数或退步分数强制转向、
+退休 family 的规则。
+
+通过[同起点接续实验](hierarchical-agent-stride-control-v0.zh-CN.md#77-研究状态分支与匹配接续)
+资格化干预，保留会话、负证据、代码/incumbent 与反馈机会。观察下一探针是否
+解决不确定性、结果是否进入实际采用的产物，再比较原生目标结果和完整成本。
+打开 session、path 写回与 context 送达都是前置事实，不证明研究效果。自动排序/
+enforcement 在特定 profile 验证前保持 default-off；此输入切片或 blog 声明都不
+闭合 M3/M4。
+
 ## 12. 写时强制
 
 Write gate 必须复用 quota 所用的同一 current goal-frontier 与 Explore gap
@@ -839,7 +866,7 @@ rule，以及 model variance 与 control-plane failure 的分离。
 | M0 | RFC、current-state inventory 与显式 ownership decision | Maintainer review；无 runtime behavior | 已接受的设计 |
 | M1 | Characterization fixture，以及 Explore 中的 typed research observation 与 closure contract | Deterministic normalization、privacy、compatibility 与 negative test | Evidence/CLI 切片已实现；真实研究 qualification 独立保留 |
 | M2 | Explicit-only composition candidate、canonical gap projection 与 read-only status shadow | 不做 pairwise inference；packet 有界；projection parity | 部分实现：#3173 legacy quota/successor；CLI/Lark projection 的 canonical binary cold shadow；hot status adoption 与 live Lark qualification 仍未完成 |
-| M3 | Goal-frontier obligation、精确 Todo/experiment lineage、共享 write-time gate；§11.5 提议 single-experiment result/adoption prerequisite | State/replay matrix、真实 provider/state readback、default-off parity；enforcement 前验证 packaged journey | 未开始；§11.5 是设计提案，不是已交付 runtime |
+| M3 | Goal-frontier obligation、精确 Todo/experiment lineage、共享 write-time gate；§11.5 提议 single-experiment result/adoption prerequisite | State/replay matrix、真实 provider/state readback、default-off parity；enforcement 前验证 packaged journey | 开放 PR #5280 提案，尚未集成：已有本地 state/replay 与 premerge 检查，但当前 head 的 CI、主干冲突、公开效果案例与维护者验收仍未闭合。§11.5 是设计提案，不是已交付 runtime |
 | M4 | 有界 multi-candidate card、`composition_selection_v0`、真实 model-tool behavior qualification 与重复 live shadow | 模型从交付 candidate set 中自主选择合法 semantic action；选择质量不劣于 declared fallback；只保留 compact receipt | 未开始 |
 | M5 | Shared-constraint candidate 在 shadow mode 中排序 | 有 precision/cost evidence；不自动触发 | 未开始 |
 | M6 | 可选 inferred trigger | 显式 maintainer decision 与量化 promotion threshold | 延后 |
@@ -871,6 +898,27 @@ milestone gap，不另建平行 task tree。
 
 M3 是第一个 behavior-changing slice。它应单独成 PR，使 obligation 与 write gate
 能够独立于 evidence schema 评审和回滚。
+
+M3 开发边界在 typed Explore owner 中连接当前同一 Agent 的 Todo、experiment
+和 input 事实。Goal policy 显式限定范围且默认关闭；既有能力编辑器与 CLI 共享
+配置 owner。Quota 与 refresh 复用同一 live frontier，原 duty 通过 rollout 标量
+字段和两端 receipt adapter 固定。真实 CLI 测试拒绝无关/延期 successor 与失效
+writeback，再通过精确 successor 结算原 Turn。File/SQLite 测试区分 canonical
+Todo 与陈旧显示行；打包 UI 验证策略预览、启用、关闭、读回和窄屏。Native actor/lease 与 CAS admission
+仍强制执行；固定 IO host 锁定图，typed owner 校验并持久化 completion evidence。
+真实 File/SQLite 与 legacy 测试覆盖缺少证据、direct IPC 自报 approval、terminal
+verb 绕过、保留 archive lineage 和不可变 completion 回放。Agent 范围的 status、
+Explore 与既有 Lark Summary 字段使用同一 live fact。Typed candidate dismissal
+允许 scoped terminal retirement；新 canonical blocker 与通用 Todo resume condition
+使 gap 暂缓，但不关闭。真实 CLI 通过原 Turn 校验 observed/dismissed/blocked 的
+精确 progress source；File/SQLite 独立验证 lease-safe wait/resume。
+输入/scope/activation 失效时，为原 duty 生成 source-qualified retirement。
+通用 readback 保留原 guard 与历史 debit，无支出关闭该 Turn，同时保持当前
+frontier 与 runnable/paused work 可见。IO 装配保留在既有 CLI/refresh composition
+root；共享门禁消费传入的 capability fact，typed owner 始终只有一个。
+本地 state/replay matrix 与 19 项 standard 风险验证通过。两个既有 scheduler ACK
+测试在相同本地 runtime、未修改 base 上也以相同方式失败；保留为 baseline 限制，
+不称为 green。Maintainer review 集成与独立 live qualification 仍未完成。
 
 ## 17. 被拒绝的替代方案
 

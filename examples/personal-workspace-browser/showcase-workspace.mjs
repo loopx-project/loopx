@@ -149,5 +149,5 @@ export async function openShowcaseGoal(page) {
   await page.locator(".personal-goal-row").filter({ has: page.locator("strong", { hasText: title }) }).first().locator(".personal-goal-link").click();
   await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
   await page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
-  await page.locator(".work-map, .delivery-review [role=alert]").first().waitFor({ timeout: 15_000 });
+  await page.locator(".goal-now, .work-map, .delivery-review [role=alert]").first().waitFor({ timeout: 15_000 });
 }

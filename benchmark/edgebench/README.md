@@ -439,6 +439,25 @@ other replan reasons may trigger sooner. Both runtime and worker-profile receipt
 record the resolved cadence. Only newly launched attempts use the new default;
 keep existing runs and archived settings pinned.
 
+### Optional structured stride strategy
+
+Add `--stride-strategy evidence_conditioned_v1` to a new `heartbeat-resume`
+or `heartbeat-explore` trial to opt into the existing Goal review strategy.
+The runner writes the option together with the resolved cadence and checks
+the real Goal configuration before planning or execution. The install,
+worker-profile and runtime receipts record an explicitly selected version.
+Omitting the option preserves ordinary off commands and receipt shapes;
+`--stride-strategy off` explicitly selects the disabled treatment. Plain and
+native-goal profiles reject this option before creating a trial. Unknown
+versions also fail before registration or execution.
+
+The [Goal review contract](../../docs/reference/protocols/goal-vision-replan-contract-v0.md)
+defines structured proposals and the three independently controlled axes.
+Strategy configuration grants no new execution authority, evaluator feedback,
+budget or submissions. Freeze it with exact sources under a new run ID; do not
+change live workers. Receipts qualify requested configuration, while actual
+review, proposal adoption and task gains require trajectory evidence.
+
 ## Optional short-context treatment
 
 Add `--turn-envelope` to an otherwise identical `heartbeat-resume` or

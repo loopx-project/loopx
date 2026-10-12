@@ -483,6 +483,7 @@ def build_replan_context(
     obligation: Mapping[str, Any], *, goal_id: str, agent_id: str | None,
     newest_first_runs: Iterable[Mapping[str, Any]],
     source_status: Mapping[str, Any] | None = None,
+    stride_strategy: str = "off",
     goal_acceptance_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .replan_context_codec import project_replan_context
@@ -490,7 +491,8 @@ def build_replan_context(
     return project_replan_context(
         goal_id=goal_id, agent_id=agent_id or obligation.get("agent_id"),
         runs=newest_first_runs, obligation=obligation, source_status=source_status,
-        goal_acceptance_contract=goal_acceptance_contract,
+        goal_acceptance_contract=goal_acceptance_contract, stride_strategy=stride_strategy,
+        history_newest_first=True,
     )
 
 
@@ -602,6 +604,11 @@ def build_replan_action_packet(
             ProgressResultClass.NO_FOLLOWUP.value,
         ],
     }
+    if "stride_control" in requirements:
+        packet["stride_control"] = requirements["stride_control"]
+    if isinstance(obligation.get("capability_guard"), Mapping):
+        packet["capability_guard"] = dict(obligation["capability_guard"])
+        packet["allowed_terminal"] = []
     if isinstance(selected_gap, Mapping):
         packet["bounded_frontier"] = {
             key: selected_gap[key]
@@ -611,6 +618,8 @@ def build_replan_action_packet(
                 "experiment_node_ref",
                 "input_node_refs",
                 "required_outcome",
+                "input_observations",
+                "frontier_revision",
             )
             if key in selected_gap
         }

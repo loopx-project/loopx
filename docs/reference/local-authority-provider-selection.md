@@ -276,10 +276,10 @@ to qualify each last caller family independently.
 
 | Retained boundary | Current value and owner | Evidence needed before removal |
 | --- | --- | --- |
-| `todos.py`, `bootstrap.py`, `todos/line_update.py` | Unmigrated source creation and Todo edits still use Markdown writes. Canonical lifecycle decisions belong to the typed provider transactions. | Migrate the corresponding supported callers; run creation, update and recovery with the old writer physically absent. Keep Markdown display projection and supported import/export. |
+| `todos/mutation_api.py` → `todos/legacy_mutation.py`; `bootstrap.py`, `work_items/team_plan_adapter.py`, `scheduler/legacy_monitor_poll.py` | These are still reachable unpromoted mutation families. Production callers have left the historic `todos.py` re-export; canonical transactions use their concrete typed owners. | Qualify the import-first cutoff for every family below, then delete its normal source-write dispatch and implementation together. Keep Markdown display, historical imports where supported, and import/export recovery. |
 | `runtime_shadow_writer_adapter.py`, `local_authority_shadow_outbox.py` | Source writers prepare capture before the primary write and record commit afterward; outbox records preserve interrupted operations. Typed coordination owners interpret the captured mutations. | Stop the corresponding source producers, classify every pending prepared/committed entry against its source and exact receipt, and prove recovery after producer removal. Clearing configuration cannot cancel an active capture obligation. |
 | `local_authority_shadow_projection.py` | Python transports full source artifacts, rejects floats and unsafe integers before Python/JS digest comparison, and checks identity, size, digest and regular-file readback. `coordination.source.project` remains the typed projection owner. | Preserve exact-byte and malformed-input behavior in the replacement, including symlink rejection, bounded transfer and ambiguous-operation errors. A language-only rewrite is insufficient. |
-| `runtime_shadow.py`, `local_authority_shadow_adapter.py` | Explicit bootstrap, inspect, candidate read, drain and recovery still consume full source snapshots, cursor history and digest comparison. | Qualify the replacement management/recovery entrypoints and supported historical evidence; a canonical write passing does not establish these readers are unused. |
+| `runtime_shadow.py`, `local_authority_shadow_adapter.py`; retained `configuration.py`, `authority_source_capture.py`, `local_authority_shadow_history.py`, `local_authority_shadow_readback.py` | Configuration, cold-source capture and read-only diagnostics now have concrete owners independent of producers. Explicit shadow bootstrap/drain/promotion and recovery still have live callers. | Retire obsolete producer aliases only after their supported callers exit. Preserve the retained import/history/readback owners and outbox recovery; inspect or cold import succeeding without producers does not make a live drain unused. |
 | `authority_core.py` | Live Todo adapters delegate to typed mutation/ownership rules; scope overlap delegates to the typed lease owner. The lease-mode input compatibility contract is explicitly retained. | Trace direct, internal, dynamic and exported callers separately. Review registered historical input support before retiring its vocabulary; do not infer a fresh grant from old `legacy` inputs. |
 
 Paths in the table are under `loopx/` or its `control_plane/coordination/` and
@@ -332,12 +332,15 @@ promotion requires an enabled, bootstrapped shadow qualified by **real source
 mutations**, with the saved operation/event policy. An empty shadow cannot pass.
 If the major release first blocks the writer that produces those mutations, a
 cold Goal cannot manufacture its own migration qualification. The selected
-upgrade path is a separately qualified **reviewed import of the existing
-source**, without requiring a compatible 1.x writer to create new captures.
+upgrade path is **reviewed import of the existing source**, implemented by the
+existing typed transaction and CLI/App storage settings described below,
+without requiring a compatible 1.x writer to create new captures.
 Do not lower operation counts, fabricate capture history or bypass source and
-receipt verification to hide this dependency. A direct importer is a remaining
-acceptance item, not a capability established by canonical create or isolated
-archive restore. Keep the compatible installer available for recovery until
+receipt verification to hide this dependency. Implementation and bounded
+source/normal-wheel recovery evidence do not close installed adoption, complete
+Goal backup or every supported historical source. Keep those acceptance rows
+open; canonical create and isolated archive restore cannot substitute for them.
+Keep the compatible installer available for recovery until
 the declared historical support matrix has been qualified.
 
 The import package must close one installed user journey through the existing
@@ -504,9 +507,26 @@ used by the source witness, including registries outside conventional Goal folde
 App 备份使用与 source witness 一致的 registry 实际路径，也覆盖位于常规 Goal
 目录之外的 registry。
 
+The last-writer inventory at `38cb407ed` names the next implementation frontier:
+
+| Caller family | Existing owner and cutoff proof |
+| --- | --- |
+| Ordinary Todo add/update/claim/complete/supersede/archive | `todos/mutation_api.py`, `provider_create.py`, `provider_update.py`, `provider_terminal_lifecycle.py`. Five legacy mutation dispatches remain; claim uses the update route. Require canonical authority before a fresh mutation, then remove `legacy_mutation.py` and writer-only line editing after tracing public imports. Preserve validators, display publication and original receipt recovery. |
+| Bootstrap/reconnect and explicit creation opt-out | `bootstrap.py` and the typed creation/default owner. Preserve existing canonical selection and interrupted initialization; an unmigrated source or disabled creation setting receives the reviewed import/configuration route before source replacement. Do not turn an old Goal into an empty new store. |
+| Confirmed team-plan commit | `work_items/team_plan_adapter.py` and `work_items.team_plan.commit`. Remove the unpromoted batch writer after canonical-required admission; recover historical confirmation receipts without applying the plan again or losing later work. |
+| Monitor observation and succession | `scheduler/monitor_poll_writeback.py`, `provider_monitor_poll.py`, `monitor_batch.ts`. Remove fresh `legacy_monitor_poll.py` writes, retaining `monitor_batch_receipts.py` recovery and exact generation/successor/once-only identity. A promoted historical replay must leave old outbox bytes inert. |
+| Ownership-policy/source lease entrypoints | `todos/handoff_mode.py`, `provider_handoff_mode.py` and the existing lease owners. Keep source inspection and settled lease history for import; refuse fresh unmigrated execution grants. An expired but unreleased lease still blocks import. This is separate from File/SQLite provider selection. |
+| Capture and active binding | `runtime_shadow_writer_adapter.py` and the existing typed source/outbox owners. Removing a configuration switch does not cancel an active binding. Classify prepared, committed and ambiguous entries against source bytes and original receipts before removing the last producer; retain recovery readers for the declared support window. |
+
+These are live call sites, not modules approved for immediate deletion. The
+implementation PR must join their shared typed admission boundary and exercise
+both fresh refusal **before any effect** and original-operation recovery. Do not
+deliver one PR per fallback. Use one cohesive normal-writer cutoff package,
+then a separate producer cleanup when its last callers and outboxes are settled.
+
 Deliver complete, reversible PR packages in this order:
 
-1. **Direct source import and support boundary.** Implement and qualify the
+1. **Direct source import and support boundary.** Qualify the existing
    reviewed cold-source import on the installed CLI and packaged App, alongside
    existing new-Goal creation/retry and provider migration. Cover both
    qualified and cold unpromoted sources, target-only settings, stopped writers,
@@ -515,7 +535,14 @@ Deliver complete, reversible PR packages in this order:
    its writer. An additive 1.x release may ship the importer and deprecation
    guidance first; using the old writer is not a prerequisite for import.
    New SQLite creation is already implemented.
-2. **Normal writer family cutoff.** In the major-release implementation, enforce
+2. **Core-developer SQLite trial.** Between import qualification and the breaking
+   cutoff, use the existing [reversible trial procedure](sqlite-authority-store.md#reversible-developer-trial--可逆开发者试用).
+   Record actual installed source, CLI/App/Host adoption, ordinary use and recovery
+   outcomes for the declared small cohort. Use disposable copies for conversion
+   drills when an existing Goal is already canonical. Rollback/export starts at
+   the current head and retains new writes. A local conversion exercise is not
+   natural cohort observation; keep formal D2 results separately visible.
+3. **Normal writer family cutoff.** In the major-release implementation, enforce
    that boundary through the existing typed admission owner and remove the
    corresponding Markdown create/update/claim/complete/supersede/archive paths
    together with their private dispatch and writer-only tests. Trace CLI,
@@ -524,7 +551,7 @@ Deliver complete, reversible PR packages in this order:
    packaged user journey with the retired paths physically absent, including
    refusal and recovery for an unmigrated Goal. Do not land the breaking package
    into an otherwise compatible 1.x release line.
-3. **Capture producer and duplicate decision retirement.** After the writer
+4. **Capture producer and duplicate decision retirement.** After the writer
    family exits, remove only producers and bridges without supported callers.
    Reconcile each prepared/committed outbox entry against source bytes and its
    original receipt first. Retain the codecs/readers needed by supported old
@@ -576,9 +603,17 @@ writer/Host、结算 lease 并逐项对账 outbox，再预览、明确确认、f
 导入并读回。未支持或歧义内容明确拒绝，旧 lease/回执不转为新授权；导入新回执
 与历史原回执分别保存。中断、失响应、重启须恢复同一操作，不重复副作用、不丢
 后续 canonical 新写入。此旅程与既有 canonical File/SQLite 切换及新身份 archive
-restore 分别验收；实现尚未完成。历史支持矩阵验收前保留兼容安装包用于恢复。
+restore 分别验收。typed transaction、CLI 和 App 存储设置已实现，已有有界源码/
+正常 wheel 恢复证据；安装采用、完整 Goal 备份和全部历史源支持仍须各自验收，
+不能沿用“尚未实现”作为等待理由。历史支持矩阵验收前保留兼容安装包用于恢复。
 
-按上面的三个完整 PR 包推进：安装态 CLI/App 直接导入与支持边界 → 同边界
+当前真实调用族包括五处 mutation dispatch（claim 走 update）、bootstrap/
+creation opt-out、team-plan batch、Monitor、ownership/source lease 和 active
+binding/capture。上述表格逐族指定现有 owner、正常写入截止及历史恢复义务；
+消费者离开 `todos.py` 或 canonical 测试通过，不代表这些 writer 已无调用。
+
+按上面的四个完整阶段推进：安装态 CLI/App 直接导入与支持边界 → 核心开发者
+SQLite 可逆试用 → 同边界
 create/update/claim/complete/supersede/archive 旧 writer 及私有 dispatch 删除 →
 逐项对账 outbox 后删除无调用的 capture producer/重复决策。大版本实现须有原生
 拒绝与恢复、旧路径物理缺席的真实入口验证；不要求所有外部用户已迁移。2.0

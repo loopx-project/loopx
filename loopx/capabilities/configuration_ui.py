@@ -6,6 +6,7 @@ from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
 from ..control_plane.goals.goal_vision_policy import MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
+from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
 
 from .progress_review.policy import (
     PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
@@ -114,6 +115,9 @@ def capability_configuration_editor(
                 _field("count", "Review interval", "number", minimum=1,
                        maximum=MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD, required=True,
                        description="Effective Turns: 1–6; completed Todos: 1–5. Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
+                _field("stride_strategy", "Stride strategy", "select",
+                       options=list(stride_strategy_options()),
+                       description="Off retains ordinary review. Evidence-conditioned v1 independently reviews work-slice size, route changes and validation scope; fresh Vision path reviews require a structured proposal, without automatic execution."),
             ],
         },
         "periodic_report": {
@@ -299,6 +303,10 @@ def capability_configuration_editor(
                     "select",
                     options=explore_harness_profiles,
                 ),
+                _field("composition_mode", "Composition policy", "select", options=["disabled", "explicit_only"],
+                       description="Replan requires an exact experiment successor or typed result; it grants no execution authority."),
+                _field("composition_scope_id", "Research coverage scope", "text", nullable=True,
+                       description="An opaque scope id required by the explicit-only composition policy."),
             ],
         },
         "change_quality_qualification": {
