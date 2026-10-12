@@ -47,11 +47,87 @@ arguments, so they are no longer projected.
 
 Agent configs (`~/.kiro/agents/<name>.json` or `.kiro/agents/<name>.json`)
 carry `hooks` for `agentSpawn`, `userPromptSubmit`, `preToolUse`,
-`postToolUse`, and `stop`; a `preToolUse` hook can block a tool call by exiting
-`2`. That is a real machine-enforceable seam, but **LoopX installs no Kiro
-hook today**, so this surface does not claim enforcement. The trigger list is
-recorded in `__init__.py` so a future enforced-quota binding has one place to
-start from rather than rediscovering it from host docs.
+`postToolUse`, and `stop`. Checked on 2.24.1 with a probe agent:
+
+- the hook receives `hook_event_name`, `cwd`, `session_id`, `tool_name` and
+  `tool_input` as JSON on stdin; tool names are `read`, `write` (`path`),
+  `shell` (`command`) and `@<server>/<tool>` for MCP tools;
+- **only exit status `2` blocks** a `preToolUse` call, and its stderr reaches
+  the model as `PreToolHook blocked the tool execution: …`; exit `1` lets the
+  tool run;
+- a hook that outlives the entry's `timeout_ms` is abandoned and **the tool
+  runs** — a timeout fails open;
+- the CLI 3.0 `.kiro/hooks/*.json` format did not fire on 2.24.1.
+
+The default agent gets no LoopX hook. Enforcement is the opt-in agent below.
+
+## Enforced gate: the `loopx` agent
+
+**Supported host versions: Kiro CLI 2.x** (verified on 2.24.1). The gate relies
+on the agent config's embedded `hooks`, which 2.24.1 loads and which Kiro CLI
+3.0 documents as moving to `.kiro/hooks/*.json`. On a host that did not load
+the embedded hook, the agent would run every tool ungated while looking gated,
+so the installer reads `kiro-cli --version` and refuses a major it has not
+verified (`blocked_unverified_kiro_cli_version`, no file written). When the
+version cannot be read (the CLI is not on `PATH` yet) the file is written, and
+this range is the contract.
+
+```bash
+loopx slash-commands --install --surface kiro-cli --with-gated-agent
+kiro-cli chat --agent loopx
+```
+
+`--with-gated-agent` writes `<KIRO_HOME>/agents/loopx.json`. The agent keeps the
+default agent's reach (all tools, `includeMcpJson` for the `loopx` MCP server,
+the installed skills) and adds one `preToolUse` hook,
+`loopx/kiro_cli_goal_mode/pretooluse_hook.py`, that sends every tool call
+through the host-neutral rule in `loopx/control_plane/goal_mode_tool_policy.py` — the same
+rule Claude Code's opt-in `--harden` hook uses:
+
+- read-only tools (`read`, `glob`, `grep`, web search/fetch, `introspect`,
+  `todo`, the host's own `goal` tool, and `@loopx/should_run` /
+  `@loopx/list_todos`) are always allowed, so a closed gate stays inspectable
+  and a host goal can still be ended;
+- every other tool is denied while `quota should-run` is false for the agent
+  this session's `KIRO_SESSION_ID` is bound to, and also when the probe cannot
+  answer — the gate fails closed;
+- with the gate open, `write` is confined to the goal's write scope (relative
+  paths resolve against the session's cwd), `shell` is screened by a
+  destructive-command denylist, and anything else goes to Kiro's own
+  permission flow.
+
+Because a timeout fails open in the host, the probe deadline (20 s) sits inside
+the entry's `timeout_ms` (30000); a slow control plane is refused by the hook
+rather than waved through by Kiro. A gated call costs about one `quota
+should-run` (≈1 s on a local fixture); read-only calls skip the probe.
+
+The session binding resolves to a typed state, and the gate treats the states
+differently:
+
+- **bound** — the Goal's `quota should-run` decides as above, and the gate
+  records the session as engaged under `<KIRO_HOME>/loopx-gate/armed-sessions/`
+  (outside the project, so the record survives the project registry going
+  away);
+- **pre-binding** — no LoopX registry in the project, or a registry with no
+  binding for this session yet, in a session the gate has never engaged: the
+  gate stays out of the way, which is what lets `/loopx` run `start-goal`;
+- **lost or faulty** — an engaged session whose binding can no longer be
+  resolved (registry removed or unreadable, binding deleted, ambiguous, or
+  naming a Goal or agent the registry no longer holds), any of those faults in
+  a session that was never engaged except the two pre-binding states, an event
+  without a session id, or an engagement record that cannot be written: every
+  state-changing call is denied. Re-binding the session with
+  `bind-agent-thread`, or starting a new Kiro session, restores progress;
+  retiring the agent clears the records.
+
+Read-only calls pass in every state. This is a
+deterministic policy layer, not a sandbox: `shell` inside an open gate can
+still write outside the scope or reach the network, so run untrusted work in a
+container or VM. The agent file carries a managed marker in `description`; a
+`loopx.json` without it is the user's and is never replaced or removed, and
+`loopx slash-commands --uninstall --surface kiro-cli` retires the managed agent
+even without the flag, because an agent left pointing at a removed hook would
+run every tool ungated.
 
 ## What this surface is
 
@@ -66,9 +142,10 @@ activation binds the objective with the native
 
 Three honest limits, stated in the activation packet:
 
-- **Quota pacing is advisory.** LoopX installs no Kiro hook that intercepts a
-  native goal iteration, so `quota should-run` entry is facade guidance the
-  agent is instructed to follow — not a host-enforced gate.
+- **Quota pacing is advisory under the default agent.** LoopX installs no Kiro
+  hook into it, so `quota should-run` entry is facade guidance the agent is
+  instructed to follow. Only a session started with `kiro-cli chat --agent
+  loopx` gets the [enforced gate](#enforced-gate-the-loopx-agent).
 - **The loop lives and dies with the session.** The `/goal` loop runs only
   while the CLI session is alive; there is no cross-session daemon, so it
   bounds a live session's segments, not an unattended host loop.
@@ -149,7 +226,8 @@ session that runs `/loopx` also gets the typed `should_run`, `list_todos`,
   file is reported as `blocked_invalid_kiro_cli_mcp_json`. Provenance lives in
   the sidecar `<KIRO_HOME>/settings/.loopx-managed-mcp.json`.
 - **Not an enforcement hook.** The tools make the control plane typed; they do
-  not stop Kiro from running other tools, so quota pacing stays advisory.
+  not stop Kiro from running other tools. Enforcement is the opt-in
+  [`loopx` agent](#enforced-gate-the-loopx-agent).
 
 Check it with `kiro-cli mcp list` (the `loopx` server appears under the
 default agent), and remove it with
@@ -212,4 +290,9 @@ a host by identity, and each one needs Kiro CLI in its table:
   config location, and the Chat/ACP launch facts the dashboard's built-in Agent
   row is built from.
 - `mcp_server.py` — the stdio MCP entrypoint: the shared control plane under
-  the `kiro_cli` profile, with identity resolved from the session binding.
+  the `kiro_cli` profile.
+- `session_context.py` — the one session-binding identity rule the MCP server
+  and the gate share.
+- `pretooluse_hook.py` — the gate: maps Kiro's event and exit-code contract onto
+  `loopx/control_plane/goal_mode_tool_policy.py`.
+- `gated_agent.py` — builds, refreshes and retires the opt-in `loopx` agent.

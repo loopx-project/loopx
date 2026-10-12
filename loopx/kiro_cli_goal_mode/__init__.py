@@ -83,9 +83,21 @@ def mcp_server_script() -> Path:
     return Path(__file__).resolve().with_name("mcp_server.py")
 
 # The host ships a real hook seam, and `preToolUse` can block a tool call by
-# exiting 2. LoopX installs no hook today, so quota pacing stays advisory; the
-# seam is recorded here so the honest claim and the future binding point stay
-# in one place instead of being rediscovered from host docs.
+# exiting 2. The default agent gets no LoopX hook, so its quota pacing stays
+# advisory; enforcement is the opt-in `loopx` agent (see gated_agent.py).
+# Checked on 2.24.1: only exit status 2 blocks a preToolUse call (the hook
+# owns that constant), and a hook that outlives its entry's `timeout_ms` is
+# abandoned and the tool runs. The gate's own probe deadline therefore sits
+# well inside the entry timeout.
+KIRO_CLI_HOOK_TIMEOUT_MS = 30_000
+KIRO_CLI_HOOK_PROBE_TIMEOUT_SECONDS = 20
+# The opt-in agent whose preToolUse hook is the enforced gate.
+KIRO_CLI_GATED_AGENT_NAME = "loopx"
+KIRO_CLI_GATED_AGENT_LAUNCH = f"{KIRO_CLI_BIN} chat --agent {KIRO_CLI_GATED_AGENT_NAME}"
+KIRO_CLI_GATED_AGENT_SETUP = (
+    "loopx slash-commands --install --surface kiro-cli --with-gated-agent"
+)
+
 KIRO_CLI_HOOK_TRIGGERS = (
     "agentSpawn",
     "userPromptSubmit",
@@ -110,7 +122,7 @@ KIRO_CLI_NATIVE_GOAL_FACTS = (
     "rather than read back through a status subcommand",
     "`hooks` in the agent config expose agentSpawn/userPromptSubmit/"
     "preToolUse/postToolUse/stop, and preToolUse can block a tool call with "
-    "exit code 2",
+    "exit code 2; any other failure, including a timeout, lets the tool run",
 )
 
 KIRO_CLI_AGENT_TYPE_CATALOG_ENTRY: dict[str, Any] = {
@@ -165,15 +177,26 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
     [--max N] <description> | clear`` whose host-side loop re-dispatches turns
     until the ``goal`` tool proves completion — and a bounded iteration budget
     the host itself enforces (default 5). What it does not ship is a
-    cross-session daemon, and LoopX installs no hook, so quota pacing is
-    instructed rather than enforced.
+    cross-session daemon. Under the default agent LoopX installs no hook, so
+    quota pacing is instructed rather than enforced; the opt-in ``loopx`` agent
+    adds the enforced preToolUse gate.
     """
     return {
         "activation_method": "bind_native_goal_with_advisory_quota_entry",
         "extra_host_mutation": {
             "host_loop_primitive": "kiro-cli-/goal-iteration-loop",
             "loop_driver": "kiro_cli_native_goal_loop",
+            # Under the default agent. The session's agent is chosen at
+            # launch, so the packet states both paths instead of guessing.
             "quota_gate_enforcement": "advisory_only",
+            "opt_in_enforced_gate": {
+                "agent": KIRO_CLI_GATED_AGENT_NAME,
+                "setup_command": KIRO_CLI_GATED_AGENT_SETUP,
+                "launch_command": KIRO_CLI_GATED_AGENT_LAUNCH,
+                "hook_trigger": "preToolUse",
+                "decision_source": "quota should-run for the session-bound agent",
+                "failure_mode": "fail_closed",
+            },
             "native_goal_command": KIRO_CLI_GOAL_COMMAND,
             "native_goal_cancel_command": KIRO_CLI_GOAL_CLEAR_COMMAND,
             "native_goal_max_flag": KIRO_CLI_GOAL_MAX_FLAG,
@@ -192,10 +215,12 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
                 "Kiro CLI's /goal loop runs only while the CLI session is "
                 "alive; there is no cross-session daemon, and the host stops "
                 "the loop on its own turn and context limits rather than a "
-                "LoopX-declared iteration ceiling. LoopX "
+                "LoopX-declared iteration ceiling. Under the default agent LoopX "
                 "installs no Kiro hook, so no host hook intercepts a native "
                 "iteration and quota pacing is advisory: the facade instructs, "
-                "it cannot enforce. If the loop stops with work remaining, "
+                "it cannot enforce. Enforcement needs the opt-in "
+                f"`{KIRO_CLI_GATED_AGENT_NAME}` agent "
+                f"(`{KIRO_CLI_GATED_AGENT_LAUNCH}`). If the loop stops with work remaining, "
                 "show the exact "
                 "heartbeat-prompt command for the user to run and do not "
                 "claim unattended heartbeat support."
@@ -220,7 +245,11 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
             "not a goal status subcommand.",
             "Start every turn and native goal iteration with `quota "
             "should-run` and honor a stop/throttle decision before any "
-            "delivery work — instructed pacing, not a host-enforced gate.",
+            "delivery work — instructed pacing, not a host-enforced gate, "
+            "unless this session runs under the opt-in "
+            f"`{KIRO_CLI_GATED_AGENT_NAME}` agent (`{KIRO_CLI_GATED_AGENT_SETUP}`, "
+            f"then `{KIRO_CLI_GATED_AGENT_LAUNCH}`), whose preToolUse hook "
+            "denies state-changing tool calls while should_run is false.",
             f"Settle the goal through the built-in `{KIRO_CLI_GOAL_COMPLETION_TOOL}` "
             "tool only after LoopX writeback: its completion contract wants "
             "the same cited evidence LoopX records, so cite the validated "

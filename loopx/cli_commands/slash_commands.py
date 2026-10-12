@@ -91,6 +91,16 @@ def register_slash_commands_command(
         ),
     )
     parser.add_argument(
+        "--with-gated-agent",
+        action="store_true",
+        help=(
+            "Also install the opt-in Kiro CLI `loopx` agent whose preToolUse hook "
+            "denies state-changing tool calls unless LoopX quota should-run allows "
+            "them. Requires the kiro-cli surface; run it with "
+            "`kiro-cli chat --agent loopx`."
+        ),
+    )
+    parser.add_argument(
         "--codex-home",
         help="Codex home for skill installation. Defaults to CODEX_HOME or ~/.codex.",
     )
@@ -159,6 +169,7 @@ def handle_slash_commands_command(
             execute=bool((args.install or args.uninstall) and not args.dry_run),
             uninstall=bool(args.uninstall),
             with_goal_bridge=bool(args.with_goal_bridge),
+            with_gated_agent=bool(getattr(args, "with_gated_agent", False)),
             surfaces=args.surface,
             cli_bin=args.cli_bin,
             include_legacy_aliases=not bool(args.no_legacy_aliases),
