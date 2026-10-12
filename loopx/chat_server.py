@@ -1589,7 +1589,10 @@ def serve_chat(
     resolved_registry_path = registry_path or (Path.home() / ".loopx" / "registry.json")
     resolved_runtime_root_override = str(runtime_root_override) if runtime_root_override else None
     resolved_scan_roots = scan_roots if scan_roots is not None else [Path.cwd()]
-    registry = load_registry(resolved_registry_path) if resolved_registry_path.exists() else {}
+    # Startup needs routing metadata only. Source-session Goals may use named
+    # settings owners; generic status/turn paths retain their profile refusal.
+    from .control_plane.projects.registry_codec import load_project_registry
+    registry = load_project_registry(resolved_registry_path) if resolved_registry_path.exists() else {}
     runtime_root = resolve_runtime_root(
         registry,
         resolved_runtime_root_override,

@@ -37,6 +37,7 @@ from .control_plane.todos.contract import (
 from .control_plane.work_items.task_graph import build_goal_task_map
 from .feedback import validate_goal_id
 from .history import load_registry
+from .control_plane.projects.registry_codec import load_project_registry
 from .registry import registry_goals
 from .status import collect_status
 from .status_server import (
@@ -155,7 +156,10 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
             return
         try:
             if views is not None or requested_goals is not None or delivery_review:
-                registry = load_registry(self.server.registry_path)
+                # Discovery reads only metadata. Full status/runtime reads keep
+                # their existing lifecycle-only profile refusal.
+                registry = (load_project_registry(self.server.registry_path) if views == ["workspace-directory"]
+                    else load_registry(self.server.registry_path))
                 if goal_id and goal_id not in {
                     str(g.get("id")) for g in registry_goals(registry)
                 }:

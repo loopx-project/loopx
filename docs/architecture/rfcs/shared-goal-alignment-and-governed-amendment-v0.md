@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Tracking issue: [#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - Date: 2026-09-02
-- Last updated: 2026-10-08
+- Last updated: 2026-10-13
 - Scope: peer Agents collaborating around one shared Goal while preserving
   canonical intent, per-Agent execution frontiers, claim/lease ownership, and
   auditable replan/amendment decisions
@@ -21,7 +21,11 @@
 
 ## 1. Summary and decision
 
-Implementation checkpoint (Stages 1/2 only): alignment and amendment admission
+The explicit local profile in §9.3 implements immutable root intent, fixed-template
+commit, original-operation recovery and peer/replan readback. Generic runtime
+and automatic adoption remain separate; this does not close all Stages 3–5.
+
+Existing Stage 1/2 read and admission path: alignment and amendment admission
 share one full Todo/lease source snapshot. Before promotion this remains a
 legacy read; afterwards canonical empty state and provider failures never fall
 back to Markdown or per-Todo lease files. Typed selection excludes non-open,
@@ -754,11 +758,11 @@ lane/proposal/stale-basis negatives and later qualifies the supported commit
 path. This RFC retains Stage 3–5 implementation and promotion ownership;
 manager readiness cannot silently mark those stages done.
 
-### 9.2 Proposed first commit transaction: one policy-bound work item
+### 9.2 First commit transaction: one policy-bound work item
 
-This is the concrete transaction mapping required by §9.1, for review before
-runtime implementation. It is not a shipped commit API, a new authority
-profile, or approval to activate one. Stage 1/2 remain proposal-only. The first
+This is the concrete transaction mapping required by §9.1. The bounded local
+implementation and its activation boundary are recorded in §9.3. It does not
+activate a general runtime profile. Stage 1/2 remain proposal-only. The first
 Stage 3 operation adds **one unclaimed Agent Todo from an owner-preauthorized
 fixed template**, inside `shared_work_graph`. It does not edit acceptance,
 permissions, existing Todo meaning, dependencies or another Agent's work.
@@ -889,7 +893,98 @@ not evidence that those milestones or G1's two real cycles have completed.
 
 [Roadmap](loopx-overall-roadmap-v0.md) R1 repairs team-plan source-basis preconditions; R4 supplies the product continuation for Stage 3–5. The current team receipt `intent_basis` only reuses `source_basis_digest`, a source-facts summary that does not cover the full objective/non-goals/acceptance/permissions/stop envelope. It may be absent and is not a CAS precondition. Do not claim full canonical intent binding.
 
-First connect existing commitments/work basis to commit-time validation. Then version intent in this owner and implement one intent-preserving work-graph amendment class with policy/verifier, lease impact, conflicts and receipt recovery. Ordinary Todo edits retain their writer rather than being forced into amendments. A steward may organize and synthesize peer work without gaining leader write authority. Stage 1/2 and the local 24-row directory exist; Stage 3, presence/lease epoch and pagination gaps remain explicit.
+First connect existing commitments/work basis to commit-time validation. Then version intent in this owner and implement one intent-preserving work-graph amendment class with policy/verifier, lease impact, conflicts and receipt recovery. Ordinary Todo edits retain their writer rather than being forced into amendments. A steward may organize and synthesize peer work without gaining leader write authority. Stage 1/2 and the local 24-row directory exist; §9.3 adds the bounded local commit owner. Automatic frontier/Turn adoption, presence/lease epoch and pagination gaps remain explicit.
+
+### 9.3 Bounded local implementation and operation
+
+`goal_amendment_authority.ts` owns the immutable `shared_goal_intent_v0` in the
+existing canonical head. It implements a new `goal_work_graph_amendment_v0`
+proposal and the single template operation in §9.2. Existing Stage 2 admission
+journals remain historical; their source-only proposals cannot be committed by
+this owner. Operation names are local to this TS dispatcher; Python CLI and
+HTTP transport do not define another decision owner.
+
+The supported source is an exact, active `source_session_v1` Goal with File or
+SQLite authority. A fresh project can explicitly initialize that authority with
+`project register --goal-instance-profile source_session_v1 --operation-id ID
+--registered-agent AGENT --canonical-storage sqlite` (or `file`), together with
+the existing required project/Goal declaration flags. This reuses the existing
+new-Goal creation owner, freezes hard leases, and requires an empty source. It
+neither migrates work nor grants execution. Omitting `--canonical-storage`
+preserves lifecycle-only creation. After an interrupted initialization, retry
+the original registration and target; its retained registration and storage
+receipt determine recovery. Existing Goals without original creation
+commitments need a source-owner migration; Markdown is not reconstructed into
+an original declaration.
+
+In the packaged workspace, select the Goal, open **Goal settings → Task
+ownership → Goal commitments and governed changes**, inspect the original
+objective/non-goals/acceptance/stop condition, fill the permitted work and
+permission/terminal envelope, review it and explicitly freeze it. The same
+operator HTTP route cannot impersonate a peer. Current readback lists actual
+peer basis acknowledgements and pending/settled replan observations. Saving a
+root or committing a Todo is not work execution or whole-Goal acceptance.
+Source metadata discovery works while generic status, chat execution and
+unqualified companion settings retain their existing refusal.
+
+Synthetic examples from the packaged interface (not live Goal or model evidence):
+
+![Review the fixed work policy](../../assets/goal-amendment/desktop-preview.png)
+
+[Unknown response and original-operation recovery](../../assets/goal-amendment/unknown-response.png) · [Current revision, peer adoption and replan readback on a narrow screen](../../assets/goal-amendment/mobile-readback.png)
+
+The CLI uses the same owner; writes preview unless `--execute` is supplied:
+
+```sh
+loopx --registry REGISTRY --format json goal-amendment-proposal \
+  --governed inspect --goal-id GOAL --goal-instance-id INSTANCE
+loopx --registry REGISTRY --format json goal-amendment-proposal \
+  --governed adopt --goal-id GOAL --goal-instance-id INSTANCE \
+  --agent-id AGENT --operation-id ADOPTION --request-json basis.json --execute
+```
+
+`basis.json` contains `base_goal_revision`, `base_intent_digest` and
+`base_work_digest` from the current inspect result. `propose` additionally
+requires a fresh `proposal_id`, an authorized `template_id`, the exact current
+`replan_obligation_id` and bounded `evidence_refs` (`evidence:ID` or
+`sha256:HEX`; raw evidence remains in its owning store). It accepts no replacement
+Todo text, permission, acceptance or request-derived source context. `commit`
+takes only the retained `proposal_id` and `proposal_digest`. Each mutation uses
+its own stable `--operation-id`; changed input under that id conflicts.
+
+A successful commit creates unclaimed work and advances the Goal revision in
+one CAS, preserving all prior Todos and leases. Peers must inspect and adopt the
+new basis. `claim` takes that basis, `todo_id`, `expected_provider_revision` and
+`lease_request` (the existing `idempotency_key`, `expected_version`, `ttl_seconds`
+contract). The existing claim owner enforces hard leases. Once its causal binding
+is recorded, reconfirming the claim or reacquiring an expired lease uses that
+owner without reopening the settled replan obligation. Only the original
+proposer's exact causal binding can satisfy its source-derived replan obligation;
+another peer's claim cannot settle it. This is replan consumption, not terminal
+acceptance of the created work. The original amendment receipt keeps its
+historical pending adoption/settlement fields; current observations are separate.
+
+For root/proposal/adoption/commit history, use `--governed receipt` with a JSON
+request containing `receipt_operation_id`. Claim recovery stays with its
+original claim operation/receipt. Retry the exact original mutation after a
+lost reply, never a fresh operation. The UI retains the reviewed request across
+reload and can read the original receipt or retry that same request. A missing
+receipt is not proof of no commit; stale basis requires a new inspected preview.
+The typed Goal owner supplies the operation outcome to both transports:
+`no_change` is a successful no-op, while missing current authority cannot make
+inspection or a mutation successful. Restore the original storage before retrying.
+
+Validation covers native registration/CLI/HTTP with real File/SQLite, an existing
+peer lease, stale or retired lifetimes, source commitment preservation,
+semantic corruption, response loss, same-operation recovery and claim/replan
+isolation. The shared claim changes also require the isolated real PostgreSQL
+suite. Packaged browser evidence must distinguish this named settings journey
+from unavailable generic runtime reads. Lark, automatic Turn/Vision adoption,
+request-derived reservation/abort, protected or acceptance amendments and live
+model collaboration remain separately unqualified. Disabling the entrypoint
+stops new operations; retain historical readers and fences and use the existing
+lifecycle owner for forward retirement. Never remove committed intent to resume
+an old writer.
 
 ## 10. Staged delivery
 

@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - 跟踪 Issue：[#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - 日期：2026-09-02
-- 最后更新：2026-10-08
+- 最后更新：2026-10-13
 - 范围：多个对等 Agent 围绕同一个共享 Goal 协作，同时保留 canonical
   intent、每个 Agent 的执行 frontier、claim/lease 所有权，以及可审计的
   replan/amendment 决策
@@ -20,7 +20,10 @@
 
 ## 1. 摘要与决策
 
-实现检查点（仅 Stage 1/2）：alignment 与 amendment admission 共用一份完整 Todo/lease
+§9.3 已实现显式本地 profile 的不可变 root、固定模板 commit、同操作恢复与 peer/replan 回读；
+通用运行和自动采纳仍保持边界，不能据此声称全部 Stage 3–5 完成。
+
+既有 Stage 1/2 读取与 admission 路径：alignment 与 amendment admission 共用一份完整 Todo/lease
 来源快照。Promotion 前仍为 legacy 读取；之后 canonical 空状态和 provider 失败都不
 回退 Markdown 或逐 Todo lease 文件。TS 筛选排除非 open、归档和恢复条件未满足的
 工作；Agent eligibility 还遵守 exclusion，但 amendment 影响范围可包含其他 Agent
@@ -628,10 +631,10 @@ proposal/admission 与提交不可用边界，无关工作继续。验收后，�
 随后验证已支持 commit 路径。本文保留 Stage 3–5 的实现与晋级责任；管家就绪不能
 悄悄把这些阶段标为完成。
 
-### 9.2 首个 commit 事务提案：一个受 policy 约束的工作项
+### 9.2 首个 commit 事务：一个受 policy 约束的工作项
 
-这是 §9.1 要求在 runtime 实现前评审的具体事务映射，不是已交付 commit API、新
-权限 profile 或激活批准。Stage 1/2 仍只接纳 proposal。首个 Stage 3 操作属于
+这是 §9.1 要求的具体事务映射；§9.3 记录有界本地实现和启用边界，不激活通用
+runtime profile。Stage 1/2 仍只接纳 proposal。首个 Stage 3 操作属于
 `shared_work_graph`：从 **owner 预授权的固定 template 创建一个未认领 Agent Todo**。
 不编辑 acceptance、权限、既有 Todo 语义、依赖或其他 Agent 的工作。普通 Todo 创建
 仍使用原 writer；只有 admitted proposal 需要在该 policy 下记录共享 Goal revision
@@ -734,7 +737,74 @@ manager 验收提供前置，不证明这些 milestone 或 G1 两轮真实协作
 
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) R1 修复团队计划的源基线约束，R4 拥有本 RFC Stage 3–5 的产品接续。当前 team-plan receipt 的 `intent_basis` 仅复用 `source_basis_digest`；后者是来源事实摘要，不覆盖完整 objective/non-goals/acceptance/permissions/stop envelope。该字段可缺失且不是 CAS precondition；不得声称计划已绑定完整 canonical intent revision。
 
-先把现有承诺/工作基线与 commit-time 校验接好，再在本 owner 版本化 intent 和一个保持 intent 的 work-graph amendment class，验证 policy/verifier、lease impact、冲突与 receipt recovery。普通 Todo 编辑继续走自己的 writer，不被强行升级为 amendment。管家可组织和综合 peer 工作，但不因此拥有 leader 写权威。Stage 1/2 以及本地 24 行 directory 已有实现；Stage 3 未交付、无 presence/lease epoch 和分页的部分继续显式列缺口。
+先把现有承诺/工作基线与 commit-time 校验接好，再在本 owner 版本化 intent 和一个保持 intent 的 work-graph amendment class，验证 policy/verifier、lease impact、冲突与 receipt recovery。普通 Todo 编辑继续走自己的 writer，不被强行升级为 amendment。管家可组织和综合 peer 工作，但不因此拥有 leader 写权威。Stage 1/2 以及本地 24 行 directory 已有实现；§9.3 增加有界本地 commit owner。自动 frontier/Turn 采纳、presence/lease epoch 和分页仍显式列缺口。
+
+### 9.3 有界本地实现与操作
+
+`goal_amendment_authority.ts` 在既有 canonical head 内拥有不可变
+`shared_goal_intent_v0`，实现新的 `goal_work_graph_amendment_v0` proposal 与
+§9.2 的固定模板操作。Stage 2 journal 保持历史事实，只有来源摘要的旧 proposal
+不能升级为可提交提案。操作名称归 TS dispatcher 本地所有；Python CLI/HTTP 不另建
+决策 owner。
+
+支持精确、活跃的 `source_session_v1` Goal 与 File/SQLite authority。新项目可在
+原有完整项目/Goal 声明参数之外，显式使用 `project register
+--goal-instance-profile source_session_v1 --operation-id ID --registered-agent AGENT
+--canonical-storage sqlite`（也可选 `file`）。它复用新 Goal 创建 owner，固定硬租约，
+要求空来源；不迁移现有工作、不授予执行权。省略 `--canonical-storage` 保留仅生命周期
+创建。初始化中断后重试原注册操作及原目标，由保留的注册和存储回执恢复。缺少原始创建
+承诺的旧 Goal 需要 source owner 迁移，不能从可变 Markdown 重建原始声明。
+
+打包工作区入口：**选择 Goal → Goal 设置 → 任务所有权 → 目标约束与受治理变更**。
+查看原始 objective/non-goals/acceptance/stop condition，填写允许的工作模板、权限和
+终止条件，检查后明确固定。HTTP 配置入口不能冒充 peer。当前回读展示真实基线确认和
+replan 待处理/已结算观察；固定 root、提交 Todo 均不代表执行或整 Goal 验收。
+来源元数据可发现，通用状态、聊天执行和未验证的相邻配置仍保留原拒绝边界。
+
+打包界面的合成示例，不代表真实 Goal 或模型运行证据：
+
+![检查固定工作策略](../../assets/goal-amendment/desktop-preview.png)
+
+[响应未知与原操作恢复](../../assets/goal-amendment/unknown-response.png) · [窄屏查看当前版本、peer 采纳及 replan 回读](../../assets/goal-amendment/mobile-readback.png)
+
+CLI 与界面复用同一 owner；写操作默认仅预览，须显式 `--execute`：
+
+```sh
+loopx --registry REGISTRY --format json goal-amendment-proposal \
+  --governed inspect --goal-id GOAL --goal-instance-id INSTANCE
+loopx --registry REGISTRY --format json goal-amendment-proposal \
+  --governed adopt --goal-id GOAL --goal-instance-id INSTANCE \
+  --agent-id AGENT --operation-id ADOPTION --request-json basis.json --execute
+```
+
+`basis.json` 包含当前 inspect 的 `base_goal_revision`、`base_intent_digest`、
+`base_work_digest`。`propose` 还要求新的 `proposal_id`、授权模板 `template_id`、
+当前精确 `replan_obligation_id` 和有界 `evidence_refs`（`evidence:ID` 或
+`sha256:HEX`，原始证据留在其 owner）；不能替换 Todo 文本、权限、验收或携带未支持的
+request-derived 来源。`commit` 只接受保留的 `proposal_id`、`proposal_digest`。
+每个 mutation 使用独立稳定的 `--operation-id`；同 id 改变内容会冲突。
+
+成功 commit 在一次 CAS 中创建未认领工作并推进 Goal revision，保留原 Todo/lease。
+Peer 须 inspect 并 adopt 新基线。`claim` 接受当前 basis、`todo_id`、
+`expected_provider_revision`、既有 `lease_request` 的 `idempotency_key`、
+`expected_version`、`ttl_seconds`；现有 claim owner 执行硬租约规则。因果绑定已记录后，再次确认 claim 或在租约过期后
+重新取得租约仍走这个 owner，不要求重新打开已经结算的 replan。只有原提案者的
+精确因果绑定能满足它的 source-derived replan，另一 peer 的 claim 不能替它结算。
+这是 replan 消费，不是新工作终局验收。原 amendment 回执保留历史 pending 字段，
+当前采纳/结算观察单独读取。
+
+Root/proposal/adoption/commit 历史用 `--governed receipt`，JSON 请求包含
+`receipt_operation_id`；claim 恢复使用原 claim 操作/回执。响应丢失后重试原 mutation，
+不新建 id。界面刷新保留已审阅请求，可读取原回执或重试同一操作。缺回执不证明没有提交；
+过期 basis 需要重新读取和检查。两种 transport 都使用 TS Goal owner 给出的操作结果：
+`no_change` 是成功的无变更操作；当前 authority 缺失不能算读取或写入成功，须先恢复原存储。
+
+验证涵盖真实 File/SQLite 的原生注册/CLI/HTTP、其他 peer 的既有租约、过期/退休实例、
+原始承诺保持、语义损坏、响应丢失、同操作恢复和 claim/replan 隔离。共享 claim 变更另需
+隔离真实 PostgreSQL 套件。打包浏览器证据须区分这个具名设置流程和仍不可用的通用运行
+状态。Lark、自动 Turn/Vision 采纳、request-derived reservation/abort、受保护/验收
+amendment 和真实模型协作仍单独待验。禁用入口只停止新操作；保留历史 reader/fence，
+使用既有生命周期 owner 前向退休，不能删除 intent 来恢复旧 writer。
 
 ## 10. 分阶段交付
 

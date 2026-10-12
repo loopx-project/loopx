@@ -631,7 +631,7 @@ def test_app_creation_selects_server_configured_non_git_workspace(environment, a
 @pytest.mark.parametrize("relative_runtime", [False, True])
 @pytest.mark.parametrize("mode", [None, "soft_claim", "hard_lease"])
 def test_app_creation_retries_storage_before_reporting_success(environment, app, monkeypatch, provider, relative_runtime, mode):
-    from loopx.capabilities.machine_configuration import goal_storage
+    from loopx.control_plane.coordination import new_goal_storage_transport as goal_storage
     from loopx.todos import add_goal_todo
 
     configure, _, marker, project, runtime = environment
@@ -828,6 +828,6 @@ def test_created_target_is_used_by_reviewed_promotion(environment, provider):
     assert ws.cli("todo", "list", "--todo-id", created["todo_id"])["authority_read"]["source_authority"] == f"{provider}_v0"
     # The initializer must not override a promoted selection. The separate legacy
     # bootstrap command still rejects a fenced Goal before reaching this helper.
-    from loopx.capabilities.machine_configuration.goal_storage import initialize_goal_storage_target
+    from loopx.control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
     goal = json.loads(registry.read_text())["goals"][0]
     assert initialize_goal_storage_target(runtime, goal)["status"] == "existing_authority_preserved"

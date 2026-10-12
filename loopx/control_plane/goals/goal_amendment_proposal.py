@@ -287,6 +287,7 @@ def _derive_open_replan_obligation_inventory(
     goal_id: str,
     goal: Mapping[str, Any],
     state_text: str,
+    goal_ref: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Derive the goal's open replan obligations from the authoritative
     quota run-history ledger, reusing the status projection's own
@@ -310,6 +311,9 @@ def _derive_open_replan_obligation_inventory(
     """
 
     runs, _ = load_index(runtime_root / "goals" / goal_id / "runs" / "index.jsonl")
+    if goal_ref is not None:
+        # An exact lifetime caller cannot borrow alias-only or retired runs.
+        runs = [run for run in runs if run.get("goal_ref") == dict(goal_ref)]
     newest_first_runs = [
         run
         for _, run in sorted(

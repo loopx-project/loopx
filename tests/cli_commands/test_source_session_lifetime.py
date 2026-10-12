@@ -362,6 +362,12 @@ def test_registration_publishes_fresh_v2_without_global_sync(
             "request_digest": payload["request_digest"],
             "goal_ref": payload["goal_ref"],
             "created_at": registry["updated_at"],
+            "root_commitments": {
+                "objective": "Deliver the Atlas import pipeline.",
+                "non_goals": [],
+                "acceptance": ["A verified import report is produced."],
+                "stop_condition": "Stop while Atlas is unavailable.",
+            },
         }
     ]
     assert payload["receipt"] == registry["lifetime_receipts"][0]
@@ -1553,3 +1559,45 @@ def test_lifetime_receipt_capacity_preserves_exact_replay_and_rejects_new_recrea
     rejection = json.loads(capsys.readouterr().out)
     assert "history_capacity_exhausted" in rejection["error"]
     assert registry_path.read_bytes() == at_capacity
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_source_authority_creation_recovers_original_after_response_loss(tmp_path, monkeypatch, capsys, provider):
+    from loopx.control_plane.coordination import new_goal_storage_transport as goal_storage
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous, restart_effect_runtime
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry = tmp_path / "project/.loopx/registry.json"
+    args = _registration_arguments(registry, tmp_path / "project", runtime_root=tmp_path / "runtime")
+    args += ["--registered-agent", "agent-a", "--canonical-storage", provider]
+    original = goal_storage.effect_runtime_result
+    dropped = []
+
+    def lose_reply(method, parameters, **kwargs):
+        result = original(method, parameters, **kwargs)
+        if result.get("authority_initialized") is True and not dropped:
+            dropped.append(result)
+            raise EffectRuntimeResponseAmbiguous(method, timeout=10)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_storage, "effect_runtime_result", lose_reply)
+        assert main(args) == 1
+        pending = json.loads(capsys.readouterr().out)
+    assert pending["changed"] is True and pending["storage_initialization"] is None
+    assert pending["recovery"]["retry_with_same_operation_id"] is True
+    assert pending["execution_authority"] is False
+    assert len(dropped) == 1
+    assert main(args) == 0
+    recovered = json.loads(capsys.readouterr().out)
+    assert recovered["replayed"] and recovered["goal_ref"] == pending["goal_ref"]
+    assert recovered["storage_initialization"]["status"] == "replayed"
+    assert recovered["storage_initialization"]["provider_revision"] == dropped[0]["provider_revision"]
+    assert recovered["storage_initialization"]["promotion_performed"] is False
+    # Reusing that identity with a different provider cannot retarget authority.
+    changed = args[:-1] + ["sqlite" if provider == "file" else "file"]
+    assert main(changed) == 1
+    capsys.readouterr()
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["storage_initialization"]["provider_revision"] == dropped[0]["provider_revision"]
+    restart_effect_runtime()

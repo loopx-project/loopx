@@ -7,6 +7,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
     "loopx/authority.py",
+    "loopx/control_plane/coordination/new_goal_storage_transport.py",
+    "loopx/chat_server.py",
+    "loopx/chat_status_api.py",
+    "loopx/control_plane/goals/goal_amendment_runtime.py",
+    "loopx/control_plane/goals/source_session_registration.py",
+    "loopx/presentation/goal_amendment_api.py",
     "loopx/attached_session.py",
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
@@ -48,6 +54,8 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
 
     assert callers == DIRECT_LOADER_ALLOWLIST
     source_session_owners = {
+        "loopx/control_plane/goals/goal_amendment_runtime.py",
+        "loopx/control_plane/goals/source_session_registration.py",
         "loopx/attached_session.py",
         "loopx/capabilities/manager_context/__init__.py",
         "loopx/capabilities/manager_context/roundtrip.py",
@@ -63,23 +71,25 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
         "loopx/control_plane/coordination/shadow_goal_scope.py",
         "loopx/control_plane/projects/registry.py",
     }
-    # Storage-location observation grants no runtime action. Keep this exception
-    # at its exact function; another direct loader in the module still fails.
-    metadata_reader = "loopx/capabilities/native_chat/project_context.py"
-    metadata_tree = ast.parse((REPO_ROOT / metadata_reader).read_text(encoding="utf-8"))
-    metadata_loader_functions = {
-        node.name
-        for node in ast.walk(metadata_tree)
-        if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id == "load_project_registry"
-            for call in ast.walk(node)
-        )
+    # Metadata discovery and named lifecycle/settings owners grant no generic
+    # runtime admission. Keep every exception at its exact function; HTTP and
+    # native creation tests additionally prove the executable refusal boundary.
+    named_readers = {
+        "loopx/capabilities/native_chat/project_context.py": {"coordination_runtime_root"},
+        "loopx/chat_server.py": {"serve_chat"},
+        "loopx/chat_status_api.py": {"_status"},
+        "loopx/control_plane/coordination/new_goal_storage_transport.py": {"initialize_goal_storage_target"},
+        "loopx/presentation/goal_amendment_api.py": {"_source_registry", "_amendment_inspect"},
     }
-    assert metadata_loader_functions == {"coordination_runtime_root"}
-    for relative in callers - source_session_owners - {metadata_reader}:
+    for relative, functions in named_readers.items():
+        tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        found = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+            and any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id == "load_project_registry" for call in ast.walk(node))
+        }
+        assert found == functions, relative
+    for relative in callers - source_session_owners - set(named_readers):
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert "require_runtime_compatible_project_registry(" in source, relative
     attached_owner = (REPO_ROOT / "loopx/attached_session.py").read_text(
