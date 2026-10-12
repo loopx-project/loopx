@@ -211,7 +211,27 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 看板与列表保持原有任务范围。切换页面后，任务筛选、已加载历史和各页滚动位置保留。
 右上角设置直接打开既有能力配置；返回后保留工作区。切换 Goal 或数据源则重新建立页面上下文。
 
-点击一次 **概览**，即可查看当前进展、需要处理的决定、执行记录和用量。
+点击一次 **概览**，即可查看方向、需要处理的决定、当前工作和成果。
+「当前工作」默认按实际负责人分组，未分配的任务单列；延后与完成记录保留在「全部工作」。
+可在同一区域切换既有看板与关系图。选择任务打开原有详情，关闭详情后保留选中项；
+URL 的 `todo` 参数支持刷新与返回恢复检查上下文。来源中已找不到的任务仅能读取完整要求，
+不能沿用旧快照的操作权限。
+
+「添加任务」就在当前工作区域：输入一次，检查后确认一次，创建结果通过刷新读回。
+检查或应用失败时保留草稿，可从原有动作流程重新检查和确认；选择视图不会执行任务。
+右侧「全部工作」可按状态筛选并搜索已载入的任务；完成记录沿用既有分页与虚拟化历史。
+「活动」显示时间线中已结束的执行、已返回成果和已记录决定，覆盖范围取决于来源。
+
+The Overview composes Direction, Needs you, Now and Results. Now groups work by its recorded owner,
+with an explicit Unassigned group. Board and Map are lenses of the same work. Selecting a task opens
+its existing inspector; closing it retains selection, and `todo` in the URL restores inspection after
+reload or browser back. A task absent from the current source can read its exact request without
+retaining stale action authority. Add task uses one input and the existing preview/confirmation path;
+a failed preview or apply retains the draft. All work filters/searches listed tasks and reuses paginated,
+virtualized completed history. Activity shows ended runs, returned results and recorded decisions from
+the available timeline; it makes no complete-history claim.
+
+工作指标保持明确的覆盖范围：
 工作指标只有在来源提供完成数、且未完成列表覆盖已知时显示“完成 / 总数”。
 缺失或有界数据会保留“总数未知”，显示当前所列未完成项而不绘制完成比例；实际报告的零仍是零。
 任务卡片与时间线区分已安排、执行中、等待、需检查、已中断和已完成；排队不表示已开始执行。
@@ -222,7 +242,7 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 不需要额外打开复盘弹窗。可按标题、负责人或引用搜索，选择节点沿关系追溯，
 并打开当前工作区中的任务、决定或执行记录。交付链默认列表，桌面可切换关系图。
 
-**工作地图：**交付链上方展示整个 Goal 的工作形状：全部未归档任务、决定和持续监控，
+**工作地图：**在当前工作的「关系图」中查看 Goal 的工作形状：全部未归档任务、决定和持续监控，
 以及已记录的依赖、延续与替代关系。默认「当前工作」显示进行中和受阻的事项、它们的直接前序
 （单项超过 2 个已完成前序时折叠为计数），以及待决定事项会解锁的工作；已完成或延后的其余工作
 隐藏并计数。「全部」包含早期已完成工作。互不相连的工作链分框排列，需要决定的链在前；
@@ -232,7 +252,7 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 
 **范围与刷新：**交付链覆盖当前选中工作及有限前序；完整 Goal 关系请看工作地图。
 缺失前序、来源裁剪与未展开决定可展开查看；任务完成或缺口列表为空都不代表通过验收。
-仅进入概览或点击「刷新快照」时读取交付链；离开概览取消未完成请求，
+概览与任务页共用一次交付快照读取；「刷新快照」可更新它，离开两页时取消未完成请求，
 不增加普通状态读取的图计算。状态变化后自动重读快照，重读完成前暂停来源跳转和导出；
 重读失败才提示快照已过期。
 读取失败保留其他概览内容并显示重试提示，不将失败视为工作已完成。

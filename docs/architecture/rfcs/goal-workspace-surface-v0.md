@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal. Goal Overview, Tasks, Chat and Files, the W1 work map, usage display, acceptance readback and lifecycle stop ship as separate regions. M1 (masthead, vitals and Stop readback) is proposed in [#6191](https://github.com/loopx-project/loopx/pull/6191) and not yet merged; M2–M4 are not implemented.
+- **Delivery maturity:** M1 merged in [#6191](https://github.com/loopx-project/loopx/pull/6191). M2 Now, rail, shared selection, task links, inline creation and Results are proposed in [#6255](https://github.com/loopx-project/loopx/pull/6255), pending maintainer review and merge. M3–M4 remain unimplemented; installed and live-team qualification is separate.
 - **Owners:** existing workspace presentation owner. Data and action owners named in Section 5 keep their authority.
 - **Created / normative revision:** 2026-10-11.
 - **Implementation baseline:** `5c62c5c03`.
@@ -456,7 +456,27 @@ second upgrade.
 | M3 Direction and return | Since-you-looked delta; target declaration through the acceptance owner | M2; D3 decided by its owner | V5, V8 | Hide declaration; delete marker |
 | M4 Live and expressive | W2 live state on rows and map from the execution observation owner; event motion; keyboard map and palette; dark inverse | M2; W2 observation available | V6 (motion, dark); live-team W2 acceptance | Disable motion/theme |
 
-**Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), not merged).**
+**Checkpoint 2026-10-12 (M2 candidate, #6255).**
+The existing TypeScript digest classifies responsibility, unassigned work and recorded decision dependencies;
+masthead, Now, rail and Board share it. Map and delivery evidence share the existing snapshot read.
+Only current typed dependencies affect waiting: lineage and Monitor generation conditions cannot become
+completion prerequisites. Selection is scoped to Goal and source; loss of a current task withdraws actions
+while retaining the existing exact-request reader. Inline creation is exercised through the packaged page,
+a disposable real HTTP/Todo owner and independent CLI readback, including failed apply, retained draft,
+regeneration and exactly one confirmed creation.
+
+Targeted evidence covers V2/V3 classification/order/relation counterexamples, the V7 real write path,
+V9 effect-free navigation and V10 local 200-item rendering. The V10 budget was frozen before measurement:
+usable Now within 2 seconds after status response and loaded lens changes within 1 second. It qualifies
+local packaged rendering, not cross-host latency or W2 live scale. V6 desktop/mobile and keyboard paths
+have been inspected; the PR's final validation record owns the full regression result. Activity covers
+material observations available in the existing timeline, not a complete audit or independent acceptance.
+Results keep their existing readback validators; run summaries cannot prove adoption.
+
+M3, W2/W3, installed behavior and real L1/G1 delivery/original-route return retain their existing owners.
+This candidate does not close those qualification gates.
+
+**Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), subsequently merged).**
 Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks
 and the packaged page on synthetic status; V2 strip and Board sharing the work
 predicate; V4 Stop, finishing readback and Resume against isolated real Chat
