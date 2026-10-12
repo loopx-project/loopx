@@ -145,8 +145,16 @@ producer modules using the qualified CLI startup isolation above.
 
 Shadow diagnostics now have an independent read-only boundary: retained outbox
 disk codecs live in `local_authority_shadow_history.py`, and status/candidate
-read transport in `local_authority_shadow_readback.py`. The public status CLI
-does not load source producers; drain still uses its existing orchestration.
+read transport in `local_authority_shadow_readback.py`. The public status and enabled
+`coordination-shadow inspect`/`qualify`/`read-candidate` commands call that owner
+without loading source producers. Full source and normal-wheel observations
+retain matched/refused, default-off, source-drift and missing/corrupt-store
+recovery behavior with all four producer modules absent. Historical imports
+remain exact aliases; bootstrap, rollback and promotion retain their live adapter.
+The existing TS qualifier now propagates provider read refusals before lineage
+validation can mislabel corruption as `bootstrap_required`; valid/missing stores
+retain their behavior. This is an explicit failure-diagnostic correction, with
+no new RPC or migration authority; drain still uses its existing orchestration.
 Original entry identity, malformed evidence, cursor residue and missing-store
 behavior remain unchanged. Python retains historical filesystem decoding and
 presentation IO; TS retains history proof, delivery and cleanup authority.

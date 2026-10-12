@@ -116,7 +116,14 @@ producer module。
 
 shadow 诊断现在有独立只读边界：历史 outbox 磁盘 codec 位于
 `local_authority_shadow_history.py`，status／candidate read transport 位于
-`local_authority_shadow_readback.py`。公开 status CLI 不加载源 producer；drain
+`local_authority_shadow_readback.py`。公开 status 和启用的
+`coordination-shadow inspect`／`qualify`／`read-candidate` 直接调用保留 owner，
+不加载源 producer。源码和正常 wheel 物理删除四个 producer 后，完整读回保持
+匹配／拒绝、默认关闭、源漂移、store 缺失／损坏及恢复结果；历史 import 保留
+同一函数 alias，bootstrap／rollback／promotion 的活跃 adapter 继续受支持。
+既有 TS qualifier 保留 provider 读取失败，避免把损坏 journal 误称尚未
+bootstrap；正常／缺失状态保留原结果。这是明确的失败诊断修复，无新 RPC 或
+迁移权限；drain
 仍走现有 orchestration。原 entry 身份、损坏证据、cursor 残留和缺失 store 行为
 保持。Python 保留历史文件解码及展示 IO；TS 保留历史证明、投递与清理权限。
 旧 producer 的已有导入为支持调用方保留 alias，不复制实现。源码及正常 wheel
