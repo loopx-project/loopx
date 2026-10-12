@@ -310,6 +310,27 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
 });
 
 
+test("versioned stride advice is opt-in and never a semantic discharge", () => {
+  const plain = {triggers: [{kind: "typed_progress_repeat"}]};
+  const base = projectReplanSemantics({operation: "requirements", obligation: plain});
+  const off = projectReplanSemantics({operation: "requirements", obligation: {
+    ...plain, replan_context: {stride_strategy: "off"}}});
+  assert.deepEqual(off, base);
+  const enabled = {...plain, replan_context: {stride_strategy: "evidence_conditioned_v1"}};
+  const withStrategy = projectReplanSemantics({operation: "requirements", obligation: enabled});
+  assert.deepEqual((withStrategy.planning_guidance as string[]).slice(0, 5), base.planning_guidance);
+  assert.equal((withStrategy.planning_guidance as string[]).length, 6);
+  assert.deepEqual(withStrategy.required_any_of, base.required_any_of);
+  assert.match((withStrategy.planning_guidance as string[])[5], /work-slice size, mechanism distance and validation breadth independently/);
+  assert.match((withStrategy.planning_guidance as string[])[5], /do not force a pivot from elapsed time or one noisy result/);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
+    planning_guidance: withStrategy.planning_guidance}).accepted, false);
+  for (const version of ["future_v2", null, 1]) {
+    assert.throws(() => projectReplanSemantics({operation: "requirements", obligation: {
+      ...plain, replan_context: {stride_strategy: version}}}), /stride_strategy/);
+  }
+});
+
 test("vision ACK freshness covers its durable run, never later gaps or unknown timestamps", () => {
   const at = "2026-08-13T09:00:00+08:00";
   const ack = {recorded: true, generated_at: at,
