@@ -121,7 +121,8 @@ def test_lossy_source_values_abort_without_replacing_previous_backup(environment
     plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
         output_dir=tmp_path / "previous-backup", include_skills=False, include_automations=False)
     from pathlib import Path
-    archive, manifest = Path(plan["archive_path"]), Path(plan["manifest_path"])
+    archive = Path(plan["archive_path"]).with_name("previous.tar.gz")
+    manifest = Path(plan["manifest_path"]).with_name("previous.manifest.json")
     archive.parent.mkdir()
     archive.write_bytes(b"previous verified archive")
     manifest.write_bytes(b"previous verified manifest")
