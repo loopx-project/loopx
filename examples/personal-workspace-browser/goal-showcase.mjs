@@ -29,7 +29,7 @@ export const goalShowcaseScenario = {
 
       assert.equal(await overview.getByRole("heading", { level: 2, name: "概览" }).count(), 0, "The tab already names the view; the body does not repeat it");
       assert.equal(await page.getByTestId("overview-composer-pill").count(), 1, "Overview folds the composer to one line");
-      assert.equal(await page.getByRole("textbox", { name: /发送消息|Send message/ }).count(), 0);
+      assert.equal(await page.getByRole("textbox", { name: /发送消息|Send a message/ }).count(), 0);
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-overview.png"), animations: "disabled" });
       const suggestions = page.locator(".personal-composer-folded .personal-composer-tools > summary");
       await suggestions.click();
@@ -79,21 +79,6 @@ export const goalShowcaseScenario = {
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
       await costCell.locator(".goal-vital-value").filter({hasText: "$25.40"}).waitFor();
 
-      // Focus belongs to the committed input, even before another frame runs.
-      // Freeze at a future virtual instant; a sampled "now" can already be
-      // in the past when the next browser command arrives.
-      const clockStart = Date.UTC(2030, 0, 1);
-      await page.clock.install({time: clockStart});
-      await page.clock.pauseAt(clockStart + 60_000);
-      await page.getByTestId("overview-composer-pill").click();
-      const composer = page.getByRole("textbox", { name: /发送消息|Send message/ });
-      await composer.waitFor();
-      assert.ok(await composer.evaluate((node) => node === document.activeElement), "Opening the folded composer focuses it");
-      await page.clock.resume();
-      await page.locator(".personal-goal-tabs button", { hasText: "任务" }).click();
-      await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
-      await page.getByTestId("overview-composer-pill").waitFor();
-
       await page.emulateMedia({ reducedMotion: "reduce" });
       const liveAnimation = await page.locator(".goal-vital-dot.is-live").evaluate((node) => getComputedStyle(node, "::after").animationName);
       assert.equal(liveAnimation, "none", "Reduced motion stops the live arc; the ring and core still mark it live");
@@ -103,8 +88,10 @@ export const goalShowcaseScenario = {
       await page.locator(".delivery-review-toolbar button").first().click();
       const failure = overview.getByRole("alert").filter({ hasText: "刷新失败" });
       await failure.waitFor();
-      const box = await failure.boundingBox();
-      assert.ok(box && box.height <= 28, `A region failure is one announced line, not a banner (${box?.height}px)`);
+      // Resolve and measure the current error node in one browser action:
+      // background readback can replace it between waitFor and boundingBox.
+      const errorHeight = await failure.evaluate(node => node.getBoundingClientRect().height);
+      assert.ok(errorHeight > 0 && errorHeight <= 28, `A region failure is one announced line, not a banner (${errorHeight}px)`);
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-region-error.png"), animations: "disabled" });
       state.deliveryFails = false;
 
@@ -131,6 +118,21 @@ export const goalShowcaseScenario = {
       if (!(await page.locator(".goal-overview").isVisible())) await openShowcaseGoal(page);
       await page.locator(".work-map").waitFor({ timeout: 15_000 });
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-en.png"), animations: "disabled" });
+      // Focus belongs to the committed input, even before another frame runs.
+      // Freeze at a future virtual instant; a sampled "now" can already be
+      // in the past when the next browser command arrives.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
+      await page.clock.pauseAt(clockStart + 60_000);
+      await page.getByTestId("overview-composer-pill").click();
+      const composer = page.getByRole("textbox", { name: /发送消息|Send a message/ });
+      await composer.waitFor();
+      assert.ok(await composer.evaluate((node) => node === document.activeElement), "Opening the folded composer focuses it");
+      await page.clock.resume();
+      await page.locator(".personal-goal-tabs button", { hasText: /^(任务|Tasks)$/ }).click();
+      await page.locator(".personal-goal-tabs button", { hasText: /^(概览|Overview)$/ }).click();
+      await page.getByTestId("overview-composer-pill").waitFor();
+
       assert.equal(session.errors.filter((error) => !/503/.test(error)).length, 0, session.errors.join(" | "));
       coverageEntries.push(...await session.close());
     } catch (error) {
