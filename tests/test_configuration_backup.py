@@ -16,7 +16,11 @@ from loopx.capabilities.configuration_backup import (
     capture_configuration_backup,
     restore_configuration_backup,
 )
-from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.effect_runtime import (
+    EffectRuntimeConflict,
+    EffectRuntimeRejected,
+    restart_effect_runtime,
+)
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -86,7 +90,48 @@ def test_cli_export_verify_restore_and_occupied_target(environment, tmp_path):
     restore = (*arguments, "restore", "--input", output, "--expected-sha256", exported["sha256"], "--destination", tmp_path / "restored")
     assert cli(*restore)[1]["written"] is False
     assert cli(*restore, "--execute")[1]["readback_verified"] is True
-    assert cli(*restore, "--execute")[0] == 1
+    code, occupied = cli(*restore, "--execute")
+    assert code == 1 and occupied["activation_performed"] is False
+    assert occupied["error"] == "configuration restore destination already exists"
+    saved = (tmp_path / "restored/configuration-backup.json").read_bytes()
+    assert json.loads(saved) == json.loads(original)
+    changed = (*arguments, "restore", "--input", output,
+        "--expected-sha256", "changed", "--destination", tmp_path / "changed")
+    code, mismatch = cli(*changed, "--execute")
+    assert code == 1 and mismatch["error"] == "reviewed configuration backup digest changed"
+    assert mismatch["activation_performed"] is False and not (tmp_path / "changed").exists()
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(json.dumps({**json.loads(original), "sha256": "changed"}))
+    code, rejected = cli(*arguments, "verify", "--input", tampered)
+    assert code == 1 and rejected["error"] == "configuration backup digest mismatch"
+    assert rejected["activation_performed"] is False
+    assert (tmp_path / "restored/configuration-backup.json").read_bytes() == saved
+
+
+@pytest.mark.parametrize("refusal", ["occupied", "tampered", "reviewed_digest"])
+def test_configuration_refusals_keep_typed_errors_across_real_transport(environment, tmp_path, refusal):
+    source, runtime, registry, _ = environment
+    backup = capture_configuration_backup(registry_path=registry, runtime_root=runtime)
+    destination = tmp_path / "checkpoint"
+    expected_sha256 = backup["sha256"]
+    exception, kind, code = EffectRuntimeRejected, "request_rejected", "invalid_request"
+    if refusal == "occupied":
+        restore_configuration_backup(backup, destination=destination, expected_sha256=expected_sha256, execute=True)
+        saved = (destination / "configuration-backup.json").read_bytes()
+        exception, kind, code = EffectRuntimeConflict, "conflict", "state_conflict"
+    elif refusal == "tampered":
+        backup = {**backup, "sha256": "changed"}
+    else:
+        expected_sha256 = "changed"
+    original = source.read_bytes(), (runtime / "machine/configuration.json").read_bytes()
+    with pytest.raises(exception) as failure:
+        restore_configuration_backup(backup, destination=destination, expected_sha256=expected_sha256, execute=True)
+    assert failure.value.error_kind == kind and failure.value.diagnostic_code == code
+    if refusal == "occupied":
+        assert (destination / "configuration-backup.json").read_bytes() == saved
+    else:
+        assert not destination.exists()
+    assert original == (source.read_bytes(), (runtime / "machine/configuration.json").read_bytes())
 
 
 def test_full_state_backup_has_first_class_configuration_component(environment, tmp_path):
