@@ -115,7 +115,8 @@ def test_short_source_read_cannot_publish_partial_inventory_or_replace_backup(tm
     payload, state = plan(tmp_path)
     output = Path(payload["output_dir"])
     output.mkdir()
-    archive, manifest = Path(payload["archive_path"]), Path(payload["manifest_path"])
+    archive = Path(payload["archive_path"]).with_name("previous.tar.gz")
+    manifest = Path(payload["manifest_path"]).with_name("previous.manifest.json")
     archive.write_bytes(b"previous archive")
     manifest.write_bytes(b"previous manifest")
     addfile = tarfile.TarFile.addfile

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import errno
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import tarfile
 import tempfile
 from typing import Any, Protocol
 
 from . import __version__
 from .paths import _is_redirected_path, select_default_runtime_root
+from .presentation.markdown import markdown_scalar
 from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.runtime.document_io import fsync_state_directory
 
 
 STATE_BACKUP_SCHEMA_VERSION = "loopx_state_backup_v0"
@@ -541,6 +545,28 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _publish_backup_file(source: Path, destination: Path) -> None:
+    """Create a new name, retaining exclusive creation on link-less filesystems."""
+    try:
+        os.link(source, destination)
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EPERM):
+            raise
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        with os.fdopen(os.open(destination, flags, 0o600), "wb") as output:
+            with source.open("rb") as input_stream:
+                shutil.copyfileobj(input_stream, output)
+            output.flush()
+            os.fsync(output.fileno())
+    fsync_state_directory(destination)
+
+
+def _backup_name_conflict(path: Path) -> FileExistsError:
+    return FileExistsError(errno.EEXIST,
+        "backup output already exists; preserve existing files and choose "
+        "a new --backup-id or --output-dir", str(path))
+
+
 def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
     archive_path = Path(str(payload["archive_path"])).expanduser()
     manifest_path = Path(str(payload["manifest_path"])).expanduser()
@@ -553,6 +579,9 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
         updated["recommended_action"] = "no backup targets found; nothing was written"
         return updated
 
+    for path in (archive_path, manifest_path):
+        if os.path.lexists(path):
+            raise _backup_name_conflict(path)
     output_dir.mkdir(parents=True, exist_ok=True)
     exclude_roots = [_resolved(output_dir)]
     updated = dict(payload)
@@ -623,12 +652,26 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
             # the durability flush.
             with path.open("rb+") as handle:
                 os.fsync(handle.fileno())
-        os.replace(staged_archive, archive_path)
-        os.replace(staged_manifest, manifest_path)
+        # New names only: the preflight cannot reserve them against another
+        # producer. Prefer links to avoid copying; the fallback also creates
+        # exclusively. Publish the manifest first, then the archive.
+        # A crash may leave an incomplete pair; never delete an output path
+        # that another process could have replaced, or silently retry over it.
+        for staged, destination in ((staged_manifest, manifest_path), (staged_archive, archive_path)):
+            try:
+                _publish_backup_file(staged, destination)
+            except FileExistsError as exc:
+                raise _backup_name_conflict(destination) from exc
     return updated
 
 
 def render_state_backup_markdown(payload: dict[str, Any]) -> str:
+    if payload.get("error"):
+        return "\n".join([
+            "# LoopX State Backup", "", f"- OK: `{payload.get('ok')}`",
+            f"- Error: {markdown_scalar(payload['error'])}",
+            f"- Recommended action: {markdown_scalar(payload.get('recommended_action'))}",
+        ]) + "\n"
     summary = payload.get("summary")
     if not isinstance(summary, dict):
         summary = {}

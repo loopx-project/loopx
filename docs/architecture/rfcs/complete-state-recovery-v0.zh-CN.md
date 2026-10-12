@@ -64,7 +64,8 @@ session 和 effect owner 准入目标后，该 Goal 可以继续未完成工作�
    新目录并生成隔离审计，但每个结果都必须声明
    `execution_authority_granted=false`。
 
-当前备份创建行为保持不变。本 RFC 中没有任何命令可以把字节完整性转换为执行权限。
+现有备份 flag、输出路径和 v0 格式继续受支持；第 7 节说明不覆盖的发布与重试边界。
+本 RFC 中没有任何命令可以把字节完整性转换为执行权限。
 
 ## 2. 问题与动机
 
@@ -450,6 +451,14 @@ metadata 都是不可信输入。
 path 不变。安全时未知字段保留在私有证据中；未知 required semantic fail closed。
 旧 binary 不会获得 restore path，也不能通过 fallback discovery 打开 inert
 workspace。
+
+完整备份发布现在拒绝已占用的归档或清单名称，不再分别替换两者。优先通过排他
+文件系统硬链接先发布清单、再发布归档，并在 POSIX 上刷写目录项。不支持链接时，
+通过排他创建的私有文件复制，保持不覆盖；代价是多一次复制，且可能看到未完成文件。
+不会回退为覆盖。中断可能留下部分文件对，响应丢失也可能留下完整文件对；
+重试均不会静默覆盖或删除它们。应验证两个文件及其校验和关系，为新的捕获选择新
+backup id 或输出目录。这保留此前的验证单元，不证明 M2 capture profile 或跨 owner
+一致性。参见[备份发布指南](../../reference/configuration-backup.md#full-backup-publication-and-retries)。
 
 Archive 中的 credential 仍是私有历史字节。恢复不宣称它们当前有效，不把它们
 复制到 live credential store，也不使用它们探测 provider。跨机器转移、静态加密、
