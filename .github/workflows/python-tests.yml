@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, closed]
   # Trusted base-branch code only; never checks out or executes PR content.
   pull_request_target:
-    types: [closed]
+    types: [closed, synchronize]
   # Inert until the main ruleset enables a merge queue; queue runs are full.
   merge_group:
   workflow_dispatch:
@@ -43,8 +43,8 @@ env:
   LOOPX_USAGE_PING: "0"
 
 jobs:
-  cancel-closed-pr:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+  cancel-obsolete-pr:
+    if: github.event_name == 'pull_request_target' && (github.event.action == 'closed' || github.event.action == 'synchronize')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -59,36 +59,46 @@ jobs:
             const pull_number = context.payload.number;
             const readPR = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
             const pr = await readPR();
-            if (pr.state !== 'closed') return core.info('PR is open; retain its qualification.');
-            const cutoff = Date.parse(pr.closed_at);
-            if (!pr.head.repo?.id || !pr.head.ref || !Number.isFinite(cutoff)) {
-              throw new Error('Closed PR has no verifiable source repository, branch or close time.');
+            const closed = context.payload.action === 'closed';
+            if (!closed && context.payload.action !== 'synchronize') return core.info('No obsolete-run cleanup event.');
+            if (pr.state !== (closed ? 'closed' : 'open')) return core.info('PR state changed; retain qualification.');
+            if (!closed && context.payload.pull_request?.head.sha !== pr.head.sha) {
+              return core.info('Synchronize head changed; stop cleanup.');
             }
+            const cutoff = Date.parse(pr.closed_at);
+            if (!pr.head.repo?.id || !pr.head.ref || !pr.head.sha || (closed && !Number.isFinite(cutoff))) {
+              throw new Error('PR has no verifiable source repository, branch, head or close time.');
+            }
+            const unchanged = current => current.state === pr.state && current.head.sha === pr.head.sha &&
+              current.head.ref === pr.head.ref && current.head.repo?.id === pr.head.repo.id &&
+              (!closed || current.closed_at === pr.closed_at);
             // Another open PR may use the same source branch against a different base.
             const open = await github.paginate(github.rest.pulls.list,
               {...repo, state: 'open', head: pr.head.label, per_page: 100});
-            if (open.length) return core.info('Source branch has an open PR; retain its qualification.');
+            if (open.some(p => closed || p.number !== pull_number)) {
+              return core.info('Source branch has another open PR; retain its qualification.');
+            }
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns,
               {...repo, workflow_id: 'python-tests.yml', event: 'pull_request',
                 branch: pr.head.ref, per_page: 100});
             for (const run of runs) {
               const created = Date.parse(run.created_at);
               if (run.status === 'completed' || run.head_repository?.id !== pr.head.repo.id ||
-                  run.head_branch !== pr.head.ref || !Number.isFinite(created) || created > cutoff) continue;
+                  run.head_branch !== pr.head.ref || !run.head_sha || !Number.isFinite(created) ||
+                  (closed ? created > cutoff : run.head_sha === pr.head.sha)) continue;
               // GitHub can omit PR associations after merge. Only the exact closed head
               // is safe in that case; superseded heads remain in their concurrency lane.
               if (run.pull_requests?.length
                   ? !run.pull_requests.some(p => p.number === pull_number)
-                  : run.head_sha !== pr.head.sha) continue;
-              const current = await readPR();
-              if (current.state !== 'closed' || current.head.sha !== pr.head.sha ||
-                  current.closed_at !== pr.closed_at) return core.info('PR changed; stop cleanup.');
+                  : !closed || run.head_sha !== pr.head.sha) continue;
+              if (!unchanged(await readPR())) return core.info('PR changed; stop cleanup.');
               const params = {...repo, run_id: run.id};
               try {
                 await github.rest.actions.cancelWorkflowRun(params);
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 const {data: remaining} = await github.rest.actions.getWorkflowRun(params);
                 if (remaining.status !== 'completed') {
+                  if (!unchanged(await readPR())) return core.info('PR changed; stop force cancellation.');
                   await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', params);
                   let terminal = false;
                   for (let attempt = 0; attempt < 10; attempt++) {

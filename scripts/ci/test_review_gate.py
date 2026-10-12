@@ -43,6 +43,7 @@ class GateTests(unittest.TestCase):
             Loader=yaml.BaseLoader,
         )
         self.assertIn("closed", workflow["on"]["pull_request"]["types"])
+        self.assertEqual(workflow["on"]["pull_request_target"]["types"], ["closed", "synchronize"])
         concurrency = workflow["concurrency"]
         jobs = workflow["jobs"]
 
@@ -72,11 +73,12 @@ class GateTests(unittest.TestCase):
             for name in ("changes", "merge-gate"):
                 self.assertTrue(expression(jobs[name]["if"], "", event=event))
         self.assertEqual([name for name, job in jobs.items() if not job.get("needs")],
-                         ["cancel-closed-pr", "changes"])
+                         ["cancel-obsolete-pr", "changes"])
         for name in ("changes", "merge-gate"):
             self.assertFalse(expression(jobs[name]["if"], "closed", event="pull_request_target"))
-        cleanup = jobs["cancel-closed-pr"]
+        cleanup = jobs["cancel-obsolete-pr"]
         self.assertTrue(expression(cleanup["if"], "closed", event="pull_request_target"))
+        self.assertTrue(expression(cleanup["if"], "synchronize", event="pull_request_target"))
         self.assertFalse(expression(cleanup["if"], "closed"))
         self.assertFalse(expression(cleanup["if"], "reopened", event="pull_request_target"))
         self.assertNotEqual(lane("closed", event="pull_request_target"),
@@ -91,12 +93,12 @@ class GateTests(unittest.TestCase):
                 self.assertIn("needs.changes.outputs.", job["if"])
                 self.assertIn("== 'true'", job["if"])
 
-    def test_trusted_cleanup_executes_only_obsolete_closed_pr_runs(self):
+    def test_trusted_cleanup_retires_obsolete_heads_without_skipping_required_gates(self):
         workflow = yaml.load(
             (Path(__file__).resolve().parents[2] / ".github/workflows/python-tests.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
-        script = workflow["jobs"]["cancel-closed-pr"]["steps"][0]["with"]["script"]
+        script = workflow["jobs"]["cancel-obsolete-pr"]["steps"][0]["with"]["script"]
         # Execute the shipped transport script, independently supplying legal and
         # illegal lifecycle fixtures. No token or untrusted PR code is involved.
         harness = r"""
@@ -109,9 +111,10 @@ const pr = {state:'closed', closed_at:'2026-01-02T00:00:00Z',
 const old = {id:1, status:'queued', head_repository:{id:7}, head_branch:'fix',
   head_sha:'head', created_at:'2026-01-01T00:00:00Z', pull_requests:[]};
 async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=false,
-                    conflict=false, stuck=false, failure=false}={}) {
+                    conflict=false, stuck=false, failure=false, action='closed',
+                    eventHead=first.head.sha, beforeForce=current}={}) {
   const cancelled=[], forced=[], queries=[]; let reads=0;
-  const github = {rest:{pulls:{get:async()=>({data:reads++ ? current : first}), list:'pulls'},
+  const github = {rest:{pulls:{get:async()=>({data:reads++ ? (reads > 2 ? beforeForce : current) : first}), list:'pulls'},
     actions:{listWorkflowRuns:'runs',
       cancelWorkflowRun:async p=>{cancelled.push(p.run_id); if(conflict || failure)
         throw Object.assign(new Error('provider failure'), {status:conflict ? 409 : 403});},
@@ -120,7 +123,7 @@ async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=f
     paginate:async (method,params)=>{queries.push([method,params]); return method==='pulls' ? open : runs;},
     request:async (route,p)=>{assert.equal(route,
       'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel'); forced.push(p.run_id);}};
-  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17}},
+  await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17,action,pull_request:{head:{sha:eventHead}}}},
     {info:()=>{}}, fn=>fn());
   return {cancelled,forced,queries};
 }
@@ -139,6 +142,24 @@ for (const fixture of [{first:{...pr,state:'open'}}, {current:{...pr,state:'open
   {current:{...pr,head:{...pr.head,sha:'new'}}}, {open:[{number:18}]}]) {
   assert.deepEqual((await run(fixture)).cancelled,[]);
 }
+const active = {...pr,state:'open',closed_at:null};
+const associatedOld = {...old,head_sha:'previous',pull_requests:[{number:17}]};
+const updated = await run({action:'synchronize',first:active,open:[{number:17}],
+  runs:[associatedOld, {...associatedOld,id:2,head_sha:'head'},
+    {...associatedOld,id:3,pull_requests:[]}, {...associatedOld,id:4,pull_requests:[{number:18}]},
+    {...associatedOld,id:5,head_repository:{id:8}}, {...associatedOld,id:6,head_branch:'another'},
+    {...associatedOld,id:7,head_sha:''}, {...associatedOld,id:8,status:'completed'}]});
+assert.deepEqual(updated.cancelled,[1]); assert.deepEqual(updated.forced,[1]);
+for (const fixture of [{eventHead:'stale'}, {current:pr},
+  {current:{...active,head:{...active.head,sha:'new'}}}, {open:[{number:18}]},
+  {current:{...active,head:{...active.head,repo:{id:8}}}},
+  {current:{...active,head:{...active.head,ref:'another'}}}]) {
+  assert.deepEqual((await run({action:'synchronize',first:active,runs:[associatedOld],...fixture})).cancelled,[]);
+}
+const changedDuringCancel = await run({action:'synchronize',first:active,runs:[associatedOld],
+  beforeForce:{...active,head:{...active.head,sha:'previous'}}});
+assert.deepEqual(changedDuringCancel.cancelled,[1]); assert.deepEqual(changedDuringCancel.forced,[]);
+assert.deepEqual((await run({action:'reopened',first:active})).cancelled,[]);
 assert.deepEqual((await run({ordinaryDone:true})).forced,[]);
 assert.deepEqual((await run({conflict:true})).forced,[]);
 await assert.rejects(run({stuck:true}),/has not completed/);
