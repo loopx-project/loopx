@@ -420,10 +420,11 @@ async fn reinstall_bundled_runtime(app: &AppHandle) -> Result<Value, String> {
     }
     state.publish("installing_runtime", json!({}));
     let handle = app.clone();
-    let executable =
-        tauri::async_runtime::spawn_blocking(move || bundled_runtime::install_private(&handle))
-            .await
-            .map_err(|_| "runtime_install_failed".to_string())??;
+    let executable = tauri::async_runtime::spawn_blocking(move || {
+        bundled_runtime::install_private(&handle, &selection.executable)
+    })
+    .await
+    .map_err(|_| "runtime_install_failed".to_string())??;
     crate::runtime_selection::remember(
         app,
         &crate::runtime_selection::Selection {
@@ -685,7 +686,8 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     let state = app.state::<Maintenance>();
     let _guard = state.acquire()?;
     let bundled = bundled_runtime::identity(app)?;
-    let candidate = json!({"package_version":app.package_info().version.to_string(), "source_revision":bundled["source_revision"]});
+    let candidate =
+        crate::runtime_selection::bundled_runtime_candidate(app.package_info(), &bundled)?;
     let private_executable = bundled_runtime::private_executable(app)?;
     // Only a launch-time developer override pins a runtime. Ordinary launches
     // reconcile discovery, a previous choice, and the App-owned installation.
@@ -755,7 +757,10 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     if newer_bundle && !selection.environment_override {
         let mut prepared = None;
         let result = state.prepare_runtime(Instant::now(), || {
-            prepared = Some(bundled_runtime::install_private(app)?);
+            prepared = Some(bundled_runtime::install_private(
+                app,
+                &selection.executable,
+            )?);
             Ok(())
         });
         match result {

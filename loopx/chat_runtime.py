@@ -1734,7 +1734,7 @@ class ChatRuntimeController:
                 return
             if (not loopx_execution and parse_native_goal_command(message) is None
                     and isinstance(adapter, CodexAppServerAdapter)
-                    and exc.error_code in {"host_gate", "upstream_transport_failure"}
+                    and exc.error_code in {"host_gate", "upstream_transport_failure", "server_overloaded"}
                     and self._prepare_transport_retry(
                         session_id, turn_id, adapter, retry_binding, exc.native_error_info,
                     )):
@@ -1819,10 +1819,9 @@ class ChatRuntimeController:
                                 for row in self.store.events_after(session_id, turn_id, None)))
 
         try:
-            if not isinstance(native_error_info, dict):
-                return False
-            if retry_binding.get("attempt") or not current() or any(row.get("kind") == "transport.retry_planned"
-                                    for row in self.store.events_after(session_id, turn_id, None)):
+            if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded")
+                    or retry_binding.get("attempt") or not current() or any(row.get("kind") == "transport.retry_planned"
+                                    for row in self.store.events_after(session_id, turn_id, None))):
                 return False
             original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
             proof = adapter.session.transport_retry_readback(original) if original else None
@@ -1835,8 +1834,9 @@ class ChatRuntimeController:
                 "binding_sha256": retry_binding["sha256"], "readback": proof,
                 "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
             })
+            label = "模型暂时繁忙" if native_error_info == "serverOverloaded" else "连接暂时中断"
             self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
-                "phase": "retrying", "label": "连接暂时中断，已核验本轮未执行工具；正在原会话继续。",
+                "phase": "retrying", "label": f"{label}，已核验本轮未执行工具；正在原会话继续。",
             })
             if self.closed.wait(delay) or not current():
                 return False

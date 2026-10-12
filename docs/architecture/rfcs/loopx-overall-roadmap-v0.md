@@ -87,6 +87,13 @@ P0 blocks correctness or continuity in the current user journey. P1 enables repe
 | **S12 Release, developer experience and community governance · P0 hygiene/P1** | Install/source validation, registration, DCO/PR, test layers, contributor routes and bilingual docs exist | Qualify first work and upgrade/rollback from clean machines/release artifacts; host/OS support follows the release contract. Reduce localization/test/review effort for useful changes; preserve exact-head evidence, fixtures, compatibility, maintainer routing and contributor credit; retire duplicate protocols/stale evidence |
 | **S13 Adoption, ecosystem and sustainability · P1 discovery/P2 pilots** | Public adoption loop, showcases, licensing/governance and observer-first product contract exist; paid PMF is unproven | Gather independent first/repeat usage and exit reasons; reproducible cases and pilots with fixed budgets/acceptance/rollback. Retain reusable adapters/delivery guides. Account for model/compute/storage/support and maintenance costs; only repeated demand justifies commercial hosting/support/distribution decisions, with no invented SLA or open-source-term change |
 
+**S7 retry projection checkpoint.** Receipt waits introduced after stored resume
+lanes were built also need the claim-scoped full selection source. Synthetic
+composition and real File/SQLite CLI replay cover a pre-existing wait lane,
+visibility limits, ordinary notices, current cadence floors and unchanged
+canonical waits/monitor clocks. Installed adoption and live host readback remain
+separate from this source repair.
+
 ### Important Areas Outside RFCs and Their Owning Sources
 
 These directly determine whether a long-running team is usable. A directory or README provides an implementation/contract entry, not installed readiness; read availability from `loopx capability list/show` and the selected release.

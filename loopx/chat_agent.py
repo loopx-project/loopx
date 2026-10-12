@@ -1351,7 +1351,7 @@ class CodexChatAgentSession:
     def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
         """Read native terminal/effect facts; notification history is insufficient.
 
-        Only a failed, latest Turn with a typed connection error and a complete
+        Only a failed, latest Turn with a typed connection/overload error and a complete
         text-only inventory is eligible. Unknown items, tools (including reads),
         delivery, additional user input and unreadable inventories stop recovery.
         This is adapter IO evidence, never permission to reopen a Core Turn.
@@ -1381,6 +1381,8 @@ class CodexChatAgentSession:
                 self._control_wait(deadline)
             error = turns[0].get("error")
             info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+            if info == "serverOverloaded":
+                return {"codex_error_info": info}
             if not isinstance(info, dict) or len(info) != 1:
                 return None
             variant, detail = next(iter(info.items()))

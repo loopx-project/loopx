@@ -15,7 +15,8 @@ START = datetime(2026, 10, 1, tzinfo=UTC)
 DUE = "2026-10-01T00:05:00Z"
 
 
-def source(*, user_class="user_action", newer=False, cached_monitor=False, monitor_due="2026-10-01T00:25:00Z"):
+def source(*, user_class="user_action", newer=False, cached_monitor=False,
+           monitor_due="2026-10-01T00:25:00Z", existing_waits=0):
     retry = {"schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
              "todo_id": "todo_work", "observed_at": "2026-10-01T00:00:00Z",
              "due_at": DUE, "resume_when": f"resume_at:{DUE}"}
@@ -34,7 +35,14 @@ def source(*, user_class="user_action", newer=False, cached_monitor=False, monit
             "text": "Observe the independent source.", "watch_only": True,
             "cadence": "30m", "next_due_at": monitor_due,
             "target_key": "independent-source",
-        }] if cached_monitor else []),
+        }] if cached_monitor else []) + [{
+            "todo_id": f"todo_existing_wait_{index}", "status": "open", "role": "agent",
+            "task_class": "advancement_task", "claimed_by": "agent-a",
+            "text": "Wait for an independent prerequisite.",
+            "resume_when": "resume_at:2035-01-01T00:00:00Z", "resume_ready": False,
+            "next_due_at": "2035-01-01T00:00:00Z",
+            "resume_condition": {"kind": "resume_at", "satisfied": False},
+        } for index in range(existing_waits)],
         user_todo_items=[{"todo_id": "todo_notice", "status": "open", "role": "user",
             "task_class": user_class, "bound_agent": "agent-a",
             **({"blocks_agent": "agent-a"} if user_class == "user_gate" else {}),
@@ -53,16 +61,35 @@ def source(*, user_class="user_action", newer=False, cached_monitor=False, monit
 
 
 def packet(monkeypatch, *, seconds=120, user_class="user_action", newer=False, runtime=None, floor=0,
-           cached_monitor=False, monitor_due="2026-10-01T00:25:00Z"):
+           cached_monitor=False, monitor_due="2026-10-01T00:25:00Z", existing_waits=0,
+           retry_mismatch=None):
     now = START + timedelta(seconds=seconds)
     for path in ("loopx.control_plane.todos.quota_selection.now_utc",
                  "loopx.control_plane.todos.quota_summary.now_utc",
                  "loopx.control_plane.scheduler.monitor_todo.now_utc",
                  "loopx.control_plane.scheduler.scheduler_hint.now_utc"):
         monkeypatch.setattr(path, lambda: now)
-    raw = source(user_class=user_class, newer=newer, cached_monitor=cached_monitor, monitor_due=monitor_due)
+    raw = source(user_class=user_class, newer=newer, cached_monitor=cached_monitor,
+                 monitor_due=monitor_due, existing_waits=existing_waits)
     before = deepcopy(raw)
     projected = overlay_active_turn_retries(raw, goal_id="goal-a", agent_id="agent-a", observed_at=now.isoformat())
+    if retry_mismatch:
+        for item in projected["attention_queue"]["items"]:
+            for summary in (item["agent_todos"], item["project_asset"]["agent_todos"]):
+                for values in summary.values():
+                    for row in values if isinstance(values, list) else []:
+                        if not isinstance(row, dict) or row.get("todo_id") != "todo_work":
+                            continue
+                        if retry_mismatch == "claim":
+                            row["claimed_by"] = "agent-b"
+                        elif retry_mismatch == "agent":
+                            row["blocked_retry"] = {**row["blocked_retry"], "agent_id": "agent-b"}
+                        elif retry_mismatch == "excluded":
+                            row["excluded_agents"] = ["agent-a"]
+                        elif retry_mismatch == "retry_todo":
+                            row["blocked_retry"] = {**row["blocked_retry"], "todo_id": "todo_other"}
+                        elif retry_mismatch == "canonical_wait":
+                            row["resume_when"] = "todo_done:todo_dependency"
     result = build_quota_should_run(projected, goal_id="goal-a", agent_id="agent-a",
         scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
             runtime or SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT))
@@ -91,6 +118,25 @@ def test_pending_retry_is_not_a_nonblocking_notice_gate(monkeypatch):
     assert hint["pending_retry"]["turn_instance_id"] == "turn-old"
     assert hint["pending_retry"]["source"] == "turn_settlement"
     assert hint["pending_retry"]["execution_authority_granted"] is False
+
+
+@pytest.mark.parametrize("existing_waits", [1, 12])
+def test_receipt_retry_survives_preexisting_wait_lanes(monkeypatch, existing_waits):
+    result = packet(monkeypatch, cached_monitor=True, existing_waits=existing_waits, floor=6)
+    assert result["execution_obligation"]["kind"] == "blocked_wait"
+    assert result["interaction_contract"]["user_channel"]["non_gating_notice"] is True
+    assert result["scheduler_hint"]["cadence_class"] == "quiet_wait"
+    assert result["scheduler_hint"]["pending_retry"]["todo_id"] == "todo_work"
+    assert result["scheduler_hint"]["pending_retry"]["due_at"] == DUE
+    assert result["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 6
+
+
+@pytest.mark.parametrize("mismatch", ["claim", "agent", "excluded", "retry_todo", "canonical_wait"])
+def test_full_source_retry_keeps_scope_and_receipt_fences(monkeypatch, mismatch):
+    result = packet(monkeypatch, cached_monitor=True, existing_waits=1,
+                    retry_mismatch=mismatch)
+    assert "pending_retry" not in result["scheduler_hint"]
+    assert not result["agent_todo_summary"].get("blocked_retry_wait")
 
 
 @pytest.mark.parametrize("seconds,floor,interval", [(120, 0, 3), (295, 0, 1), (295, 6, 6)])

@@ -52,12 +52,17 @@ def install_transport_failure(fake, *, failures=1, info=None, item_type="userMes
 
 @pytest.mark.parametrize("failure,expected_starts,expected_status", [
     ({}, 2, "completed"), ({"failures": 2}, 2, "failed"),
+    ({"info": "serverOverloaded"}, 2, "completed"),
+    ({"info": "serverOverloaded", "failures": 2}, 2, "failed"),
+    ({"info": "serverOverloaded", "item_type": "commandExecution"}, 1, "failed"),
+    ({"info": "serverOverloaded", "readback_info": "other"}, 1, "failed"),
+    ({"info": "server overloaded"}, 1, "failed"),
     ({"info": "other"}, 1, "failed"), ({"info": "cyberPolicy"}, 1, "failed"),
     ({"info": "usageLimitExceeded"}, 1, "failed"), ({"info": "unauthorized"}, 1, "failed"),
     ({"item_type": "commandExecution"}, 1, "failed"), ({"unreadable": True}, 1, "failed"),
     ({"readback_info": {"responseStreamDisconnected": {"httpStatusCode": 503}}}, 1, "failed"),
 ])
-def test_core_recovers_one_effect_free_transport_attempt_without_reaccepting_request(
+def test_core_recovers_one_effect_free_transient_attempt_without_reaccepting_request(
     ordinary, failure, expected_starts, expected_status, monkeypatch,  # noqa: F811
 ):
     store, runtime, contexts, request, capture, fake, workspace = ordinary
@@ -85,18 +90,23 @@ def test_core_recovers_one_effect_free_transport_attempt_without_reaccepting_req
     if planned:
         assert planned[0]["payload"]["upstream_turn_id"] == "durable-turn-1"
         assert completed["upstream_turn_id"] == "durable-turn-2"
+        phases = [row["payload"] for row in store.events_after(sid, tid, None)
+                  if row["kind"] == "agent.phase" and row["payload"].get("phase") == "retrying"]
+        assert len(phases) == 1
+        assert ("模型暂时繁忙" in phases[0]["label"]) == (failure.get("info") == "serverOverloaded")
     runtime.close()
 
 
 @pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
 def test_steward_transport_retry_preserves_input_and_next_request_refreshes_context(
-    steward, monkeypatch, profile,  # noqa: F811
+    steward, monkeypatch, profile, info,  # noqa: F811
 ):
     from test_native_steward_runtime import apply_profile
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     fake = Path(runtime.codex_bin)
-    install_transport_failure(fake)
+    install_transport_failure(fake, info=info)
     apply_profile(store.root.parent, profile)
     monkeypatch.setattr(runtime.closed, "wait", lambda _: False)
 
@@ -126,11 +136,12 @@ def test_steward_transport_retry_preserves_input_and_next_request_refreshes_cont
 
 
 @pytest.mark.parametrize("change", ["grant", "scope"])
-def test_steward_transport_retry_still_stops_when_authority_changes(steward, monkeypatch, change):  # noqa: F811
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_steward_transport_retry_still_stops_when_authority_changes(steward, monkeypatch, change, info):  # noqa: F811
     from test_native_steward_runtime import apply_profile
 
     store, runtime, provider, transport, binding, capture, workspace = steward
-    install_transport_failure(Path(runtime.codex_bin))
+    install_transport_failure(Path(runtime.codex_bin), info=info)
     apply_profile(store.root.parent, "trusted_owner")
 
     def during_backoff(_):
@@ -179,9 +190,10 @@ def test_real_backoff_keeps_fifo_queue_and_gives_each_request_one_attempt(ordina
 
 
 @pytest.mark.parametrize("change", ["stop", "grant", "model", "session", "claim"])
-def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(ordinary, monkeypatch, change):  # noqa: F811
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(ordinary, monkeypatch, change, info):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
-    install_transport_failure(fake)
+    install_transport_failure(fake, info=info)
     sid = request("/api/chat/sessions", {"context_kind": "project",
                   "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
 
@@ -212,9 +224,10 @@ def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(
     runtime.close()
 
 
-def test_crash_after_retry_reservation_never_replays_the_uncertain_native_attempt(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_crash_after_retry_reservation_never_replays_the_uncertain_native_attempt(ordinary, monkeypatch, info):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
-    install_transport_failure(fake)
+    install_transport_failure(fake, info=info)
     sid = request("/api/chat/sessions", {"context_kind": "project",
                   "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
     dispatch = {}

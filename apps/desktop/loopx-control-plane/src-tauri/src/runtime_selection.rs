@@ -107,14 +107,33 @@ pub(crate) fn forget(app: &AppHandle) -> Result<(), String> {
     }
 }
 
+fn parse_like<T: std::str::FromStr>(_: &T, text: &str) -> Option<T> {
+    text.parse().ok()
+}
+
+// The updater's Main build number is a shell version, not a Core version.
+// New bundles carry the wheel version from their exact archived source. Old
+// bundles retain their existing shell-version fallback for compatibility.
+pub(crate) fn bundled_runtime_candidate(
+    package: &tauri::utils::PackageInfo,
+    bundled: &Value,
+) -> Result<Value, String> {
+    let version = match bundled.get("package_version") {
+        Some(value) => value
+            .as_str()
+            .filter(|text| parse_like(&package.version, text).is_some())
+            .ok_or("runtime_bundle_invalid")?
+            .to_owned(),
+        None => package.version.to_string(),
+    };
+    Ok(json!({"package_version": version, "source_revision": bundled["source_revision"]}))
+}
+
 fn compare_package_versions(
     package: &tauri::utils::PackageInfo,
     installed: &Value,
     candidate: &Value,
 ) -> Option<std::cmp::Ordering> {
-    fn parse_like<T: std::str::FromStr>(_: &T, text: &str) -> Option<T> {
-        text.parse().ok()
-    }
     let mut left = parse_like(&package.version, installed["package_version"].as_str()?)?;
     let mut right = parse_like(&package.version, candidate["package_version"].as_str()?)?;
     // Core wheels carry the release base; main-channel shell prereleases do
@@ -279,6 +298,59 @@ pub(crate) fn compare_official_commits(left: &str, right: &str) -> Option<std::c
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn main_shell_build_number_does_not_rank_the_bundled_core() {
+        use std::cmp::Ordering;
+        let package = tauri::utils::PackageInfo {
+            name: "LoopX".into(),
+            version: "0.0.0-main.42.1".parse().unwrap(),
+            authors: "contributors",
+            description: "desktop",
+            crate_name: "desktop",
+        };
+        let installed = json!({"package_version":"1.4.0", "source_revision":"installed"});
+        let bundled = json!({"package_version":"1.4.0", "source_revision":"bundle"});
+        let candidate = bundled_runtime_candidate(&package, &bundled).unwrap();
+        for (relation, expected) in [
+            (Some(Ordering::Less), true),
+            (Some(Ordering::Greater), false),
+            (Some(Ordering::Equal), false),
+            (None, false),
+        ] {
+            assert_eq!(
+                prefer_current_bundle(&package, &installed, &candidate, false, |left, right| {
+                    assert_eq!((left, right), ("installed", "bundle"));
+                    relation
+                }),
+                expected,
+                "source ancestry owns equal Core versions, even with a 0.0.0 shell"
+            );
+        }
+        for (version, expected) in [("1.3.0", false), ("1.5.0", true)] {
+            let candidate = bundled_runtime_candidate(
+                &package,
+                &json!({"package_version":version, "source_revision":"bundle"}),
+            )
+            .unwrap();
+            assert_eq!(
+                prefer_current_bundle(&package, &installed, &candidate, false, |_, _| panic!(
+                    "unequal Core versions need no ancestry lookup"
+                )),
+                expected
+            );
+        }
+        for invalid in [json!(null), json!(42), json!("invalid"), json!("")] {
+            assert_eq!(
+                bundled_runtime_candidate(&package, &json!({"package_version":invalid}))
+                    .unwrap_err(),
+                "runtime_bundle_invalid"
+            );
+        }
+        let legacy =
+            bundled_runtime_candidate(&package, &json!({"source_revision":"legacy"})).unwrap();
+        assert_eq!(legacy["package_version"], "0.0.0-main.42.1");
+    }
+
     #[test]
     fn newer_runtime_uses_versions_then_ancestry_and_never_install_time() {
         use std::cmp::Ordering;
