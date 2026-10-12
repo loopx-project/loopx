@@ -42,12 +42,14 @@ class Caller:
 
     def files(self) -> dict[str, str]:
         # All fixture files, including receipts. Locks are retained in raw evidence too.
-        return {str(p.relative_to(self.path)): p.read_bytes().hex()
+        # Keys use POSIX separators so prefix filters work on every host.
+        return {p.relative_to(self.path).as_posix(): p.read_bytes().hex()
                 for p in sorted(self.path.rglob('*')) if p.is_file()}
 
     def primary(self) -> dict[str, str]:
         return {k: v for k, v in self.files().items()
-                if k == 'STATE.md' or k.startswith('runtime/goals/') and not k.endswith('.lock')}
+                if k == 'STATE.md' or k.startswith('runtime/goals/')
+                and not k.endswith(('.lock', '.lock.holder'))}  # Windows keeps holder records apart.
 
     def call(self, *args: str, goal: str = 'observable') -> dict:
         command = [sys.executable, '-m', 'loopx.cli', '--registry', str(self.registry),
