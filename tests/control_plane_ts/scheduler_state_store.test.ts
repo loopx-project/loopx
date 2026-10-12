@@ -205,7 +205,7 @@ test("sanitized-equivalent scheduler scopes have distinct bounded paths", () => 
   assert.equal(new Set(agentPaths).size, agentPaths.length);
   assert.equal(new Set(surfacePaths).size, surfacePaths.length);
   for (const path of [...goalPaths, ...agentPaths, ...surfacePaths]) {
-    for (const segment of path.split("/")) assert.ok(segment.length <= 64);
+    for (const segment of path.split(/[\\/]/)) assert.ok(segment.length <= 64);
   }
 });
 
@@ -257,7 +257,7 @@ test("overlong legacy scope loads as missing state, not an effect rejection", as
     "canonical path components must stay bounded",
   );
   assert.ok(
-    Math.max(...canonical.split("/").map((part) => part.length)) <= 64,
+    Math.max(...canonical.split(/[\\/]/).map((part) => part.length)) <= 64,
     "canonical path component must not exceed the scoped-segment bound",
   );
 });

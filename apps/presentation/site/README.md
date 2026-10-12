@@ -46,9 +46,27 @@ Keep source-document exports, private references, and unreviewed media outside
 the public tree. Follow `docs/development/design.md` and obtain first-screen
 review before changing the Blog or its homepage entry.
 
-The header and primary homepage CTA download the latest Apple Silicon Mac App
-preview through the release's stable `LoopX.app.zip` asset name. The homepage
-states the Python 3.11+ prerequisite and links to the desktop first-launch guide.
+The header and primary homepage CTA download the complete Apple Silicon Mac App
+preview from the highest complete stable `vX.Y.Z` release at build time. Pages
+opts in with `LOOPX_SITE_RESOLVE_DESKTOP_RELEASE=1`. The resolver in
+`scripts/desktop-download.ts` follows the complete-set, manifest-last
+contract owned by `scripts/desktop_release_artifacts.py`: all four desktop
+artifacts must be uploaded, nonempty and versioned in the official repository,
+and `DESKTOP-SHA256SUMS` must match their GitHub SHA-256 digests exactly. Draft,
+prerelease, plugin and mutable updater tags are excluded. An empty or incomplete
+new release retains the previous complete version; API/download failure or no
+eligible release fails the build and preserves the existing deployment.
+
+The homepage shows the selected version, states the Python 3.11+ prerequisite
+and links to the first-launch guide. A successful public desktop-artifact
+publication triggers Pages to rebuild trusted current `main`; the existing
+six-hour schedule also refreshes inventory. `GH_TOKEN` optionally authenticates
+only build-time GitHub API requests and is never sent to asset redirects or
+included in the browser bundle. No visitor API calls are needed. Ordinary local
+builds and Vite dev use the known v1.4.0 preview without network access. Use
+`LOOPX_SITE_RESOLVE_DESKTOP_RELEASE=1 npm run build` to validate live selection
+locally; removing this build-time flag restores the offline preview.
+This selection does not change the App's signed update channel or its runtime.
 The adjacent first-run CTA opens one setup dialog with an Agent path and a
 manual Shell path. The Agent option copies the localized, public-safe setup
 contract; the Shell option copies the commands shown in the terminal section.
@@ -89,7 +107,9 @@ referral signal without sending query strings or adding tracking identifiers to 
 conversion attribution. Search Console access and indexing are external steps;
 a successful build does not establish ranking or traffic improvement.
 
-Run `npm run smoke:seo` and `node scripts/analytics-smoke.mjs` after a local build (the browser smoke uses the dashboard Playwright dependency). The Pages workflow also runs it on
+Run `node --test scripts/desktop-download.test.mjs`, `npm run smoke:seo` and
+`node scripts/analytics-smoke.mjs` after a local build (the browser smoke uses
+the dashboard Playwright dependency). The Pages workflow also runs it on
 the complete artifact with `--with-docs`. It checks static content, route-specific
 metadata, sitemap targets and public asset paths. Preview with `npm run preview`.
 

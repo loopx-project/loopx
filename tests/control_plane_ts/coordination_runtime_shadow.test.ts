@@ -28,6 +28,29 @@ async function qualify(f: ShadowFixture, head: JsonObject, extra: JsonObject = {
     minimum_operations: 3, required_event_kinds: ["todo_add"], ...extra });
 }
 
+test("retained observations refuse corrupt provider bytes without suggesting bootstrap", async (t) => {
+  const {f, head} = await qualifiedFixture(t);
+  const source = await sourceRequest(f, head);
+  const original = await readFile(f.store.path);
+  await writeFile(f.store.path, "{corrupt journal");
+  for (const [read, schema, extra] of [
+    [inspectCoordinationRuntimeShadow, schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA, {}],
+    [qualifyCoordinationRuntimeShadow, schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA,
+      {minimum_operations: 3, required_event_kinds: ["todo_add"]}],
+    [readCoordinationRuntimeShadowTodoCandidate, schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA,
+      {todo_id: "todo_1"}],
+  ] as const) {
+    const result = await read({...source, schema_version: schema, ...extra});
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "provider_protocol_violation");
+    assert.equal(result.qualified, false);
+    assert.equal(result.decision_read_from_shadow, false);
+    assert.equal(await readFile(f.store.path, "utf8"), "{corrupt journal");
+  }
+  await writeFile(f.store.path, original);
+  assert.equal((await qualify(f, head)).status, "qualified");
+});
+
 test("bootstrap is exactly replayable, has no mutation receipt and cannot overwrite a different baseline", async (t) => {
   const f = await fixture(t);
   const request = { ...await sourceRequest(f, f.baseline), schema_version: schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
