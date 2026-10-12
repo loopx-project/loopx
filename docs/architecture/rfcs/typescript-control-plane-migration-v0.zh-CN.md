@@ -55,6 +55,15 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 revision 保持。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
+生产 Todo 消费者不再经历史 `loopx.todos` 重导出：CLI 注册／操作、quota 与规划、
+能力写回、旧源租约读取及 Lark 源投影直接导入相同的 mutation、完整读取、路径或
+Markdown 显示 owner，不新增 wrapper、决策或 RPC。历史公开导入及其受支持的旧源
+IO 继续保留。隔离源码／正常 wheel 同时移除 facade、整个旧 Todo writer 和四个
+shadow producer，验证真实 File/SQLite CLI 生命周期、恰好一次结算、Monitor 重放
+及 App 冷导入／操作／重启；缺 provider／租约及源／备份变化须拒绝。Lark dry-run
+与 Explore 重放只验证本地消费者，不计 live 外部采用。此出口关闭生产重导出依赖，
+最后受支持的旧源 writer、历史恢复、安装 cohort 与发布验收继续保留。
+
 保留的 import-compatible field writer 在既有 typed field plan 中统一等待条件
 归一化及矛盾 clear 拒绝；保持 Python 空白输入省略和锁内 IO，只退役重复的
 normalization crossing，不删除仍受支持的 writer 或迁移 reader。

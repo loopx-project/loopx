@@ -64,6 +64,19 @@ without claiming code retirement:
 bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
+Production Todo consumers now bypass the historic `loopx.todos` re-export:
+CLI registration/actions, quota and planning, capability writeback, source lease
+reads and the Lark source projection import the same concrete mutation, full-read,
+path or Markdown display owners. No new wrapper, decision or RPC is introduced.
+The historic public imports and their supported unpromoted IO remain available.
+Disposable source/normal-wheel probes remove the facade, the whole legacy Todo
+writer and four shadow producers together; real File/SQLite CLI lifecycle,
+once-only settlement, Monitor replay and App cold-import/action/restart journeys
+must still work, with missing-provider/lease and changed-source/backup refusals.
+Lark dry-run and Explore replay qualify local consumers only, not live external
+adoption. This closes the production re-export dependency, while last supported
+source writers, historical recovery, installed cohort and release exits remain.
+
 The retained import-compatible field writer now composes resume normalization
 and contradictory-clear rejection in its existing typed field plan. Keep blank
 Python input omission and locked IO; retire the duplicate normalization crossing,
