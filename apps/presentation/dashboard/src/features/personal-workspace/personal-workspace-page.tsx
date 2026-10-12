@@ -885,6 +885,10 @@ export function PersonalWorkspacePage({
   const [lifecycleBusyGoalIds, setLifecycleBusyGoalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [quickCompletingTodoIds, setQuickCompletingTodoIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const refreshResetTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (refreshResetTimer.current !== null) window.clearTimeout(refreshResetTimer.current);
+  }, []);
   const refreshSequenceRef = useRef(0);
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
@@ -1983,6 +1987,10 @@ export function PersonalWorkspacePage({
   async function refreshWorkspace() {
     if (!callbacks.onRefresh || refreshState === "loading") return;
     const sequence = ++refreshSequenceRef.current;
+    if (refreshResetTimer.current !== null) {
+      window.clearTimeout(refreshResetTimer.current);
+      refreshResetTimer.current = null;
+    }
     setRefreshState("loading");
     try {
       await callbacks.onRefresh();
@@ -1991,7 +1999,8 @@ export function PersonalWorkspacePage({
     } catch {
       setRefreshState("error");
     }
-    window.setTimeout(() => {
+    refreshResetTimer.current = window.setTimeout(() => {
+      refreshResetTimer.current = null;
       if (refreshSequenceRef.current === sequence) setRefreshState("idle");
     }, 1800);
   }
