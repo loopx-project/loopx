@@ -73,9 +73,14 @@ jobs:
               current.head.ref === pr.head.ref && current.head.repo?.id === pr.head.repo.id &&
               (!closed || current.closed_at === pr.closed_at);
             // Another open PR may use the same source branch against a different base.
-            const open = await github.paginate(github.rest.pulls.list,
-              {...repo, state: 'open', head: pr.head.label, per_page: 100});
-            if (open.some(p => closed || p.number !== pull_number)) {
+            const hasOtherOpenPR = async (head = pr.head.label) => (await github.paginate(github.rest.pulls.list,
+              {...repo, state: 'open', head, per_page: 100}))
+              .some(p => closed || p.number !== pull_number);
+            const cancellationScopeUnchanged = async () => {
+              const current = await readPR();
+              return unchanged(current) && !(await hasOtherOpenPR(current.head.label));
+            };
+            if (await hasOtherOpenPR()) {
               return core.info('Source branch has another open PR; retain its qualification.');
             }
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns,
@@ -91,14 +96,14 @@ jobs:
               if (run.pull_requests?.length
                   ? !run.pull_requests.some(p => p.number === pull_number)
                   : !closed || run.head_sha !== pr.head.sha) continue;
-              if (!unchanged(await readPR())) return core.info('PR changed; stop cleanup.');
+              if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop cleanup.');
               const params = {...repo, run_id: run.id};
               try {
                 await github.rest.actions.cancelWorkflowRun(params);
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 const {data: remaining} = await github.rest.actions.getWorkflowRun(params);
                 if (remaining.status !== 'completed') {
-                  if (!unchanged(await readPR())) return core.info('PR changed; stop force cancellation.');
+                  if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop force cancellation.');
                   await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', params);
                   let terminal = false;
                   for (let attempt = 0; attempt < 10; attempt++) {

@@ -112,15 +112,24 @@ const old = {id:1, status:'queued', head_repository:{id:7}, head_branch:'fix',
   head_sha:'head', created_at:'2026-01-01T00:00:00Z', pull_requests:[]};
 async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=false,
                     conflict=false, stuck=false, failure=false, action='closed',
-                    eventHead=first.head.sha, beforeForce=current}={}) {
+                    eventHead=first.head.sha, beforeForce=current,
+                    beforeCancelOpen=open, beforeForceOpen=beforeCancelOpen,
+                    refreshFailure=false}={}) {
   const cancelled=[], forced=[], queries=[]; let reads=0;
+  let branchScope=open, openReads=0;
   const github = {rest:{pulls:{get:async()=>({data:reads++ ? (reads > 2 ? beforeForce : current) : first}), list:'pulls'},
     actions:{listWorkflowRuns:'runs',
       cancelWorkflowRun:async p=>{cancelled.push(p.run_id); if(conflict || failure)
-        throw Object.assign(new Error('provider failure'), {status:conflict ? 409 : 403});},
+        throw Object.assign(new Error('provider failure'), {status:conflict ? 409 : 403});
+        branchScope=beforeForceOpen;},
       getWorkflowRun:async p=>({data:{status:(conflict || ordinaryDone ||
         (forced.includes(p.run_id) && !stuck)) ? 'completed' : 'queued'}})}},
-    paginate:async (method,params)=>{queries.push([method,params]); return method==='pulls' ? open : runs;},
+    paginate:async (method,params)=>{queries.push([method,params]);
+      if(method==='pulls') {
+        if(openReads++ && refreshFailure) throw new Error('branch read unavailable');
+        return branchScope;
+      }
+      branchScope=beforeCancelOpen; return runs;},
     request:async (route,p)=>{assert.equal(route,
       'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel'); forced.push(p.run_id);}};
   await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17,action,pull_request:{head:{sha:eventHead}}}},
@@ -159,6 +168,25 @@ for (const fixture of [{eventHead:'stale'}, {current:pr},
 const changedDuringCancel = await run({action:'synchronize',first:active,runs:[associatedOld],
   beforeForce:{...active,head:{...active.head,sha:'previous'}}});
 assert.deepEqual(changedDuringCancel.cancelled,[1]); assert.deepEqual(changedDuringCancel.forced,[]);
+for (const fixture of [{beforeCancelOpen:[{number:18}]},
+  {action:'synchronize',first:active,open:[{number:17}],runs:[associatedOld],
+   beforeCancelOpen:[{number:17},{number:18}]}]) {
+  assert.deepEqual((await run(fixture)).cancelled,[]);
+}
+for (const fixture of [{beforeForceOpen:[{number:18}]},
+  {action:'synchronize',first:active,open:[{number:17}],runs:[associatedOld],
+   beforeForceOpen:[{number:17},{number:18}]}]) {
+  const changedBranch = await run(fixture);
+  assert.deepEqual(changedBranch.cancelled,[1]);
+  assert.deepEqual(changedBranch.forced,[]);
+}
+await assert.rejects(run({refreshFailure:true}),/branch read unavailable/);
+// A fresh retry after the sibling closes can retire the original run.
+assert.deepEqual((await run()).forced,[1]);
+const movedOwner = await run({current:{...pr,head:{...pr.head,label:'moved:fix'}}});
+assert.deepEqual(movedOwner.forced,[1]);
+assert.ok(movedOwner.queries.filter(([method])=>method==='pulls').slice(1)
+  .every(([,params])=>params.head==='moved:fix'));
 assert.deepEqual((await run({action:'reopened',first:active})).cancelled,[]);
 assert.deepEqual((await run({ordinaryDone:true})).forced,[]);
 assert.deepEqual((await run({conflict:true})).forced,[]);

@@ -182,7 +182,10 @@ It verifies the current closed PR, source repository/branch and close time;
 it preserves reopened PRs, another open PR on that branch, newer runs and
 foreign repositories. A missing run-to-PR association requires the exact closed
 head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
-nonterminal `always()` aggregates. The cleanup needs one short runner job;
+nonterminal `always()` aggregates. Before either cancellation stage it rereads
+both the target PR and open PRs sharing its source branch; a new sibling or
+unavailable lookup prevents the effect. A fresh retry can resume after the
+branch is no longer shared. The cleanup needs one short runner job;
 it releases obsolete capacity rather than reserving release capacity or
 providing a GitHub shared-pool priority guarantee.
 
@@ -191,7 +194,9 @@ PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pul
 清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
 状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
 运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
-`always()` 汇总使用强制取消 API。清理需要一个短 runner 任务；这会释放过期
+`always()` 汇总使用强制取消 API。普通及强制取消前都重读目标 PR 和同源分支的
+开放 PR；新出现的共享分支 PR 或读取失败会阻止副作用，分支不再共享后可重新
+触发清理。清理需要一个短 runner 任务；这会释放过期
 容量，不等于为发布预留容量或设置 GitHub 共享池优先级。
 
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
