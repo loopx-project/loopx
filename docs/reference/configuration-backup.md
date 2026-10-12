@@ -130,6 +130,37 @@ register it as a second live Goal or start a Host using an old grant. Explicit
 identity/path adoption, pending-effect disposition and authorized reactivation,
 including their App journey, remain separate acceptance work.
 
+## Full-backup publication and retries
+
+Full `backup-state --execute` now requires unused archive **and** manifest names.
+Unlike the earlier two-file replacement, it never overwrites either existing
+file, directory or dangling symlink. Reusing `--backup-id` in the same output
+directory fails; omit it for a new timestamp or choose a fresh id/output directory.
+A dry-run does not reserve these names.
+
+The producer publishes the manifest first and archive second, preferring exclusive
+links from private staging. If filesystem policy does not support linking, it
+copies through exclusively created private files instead; that fallback adds a
+file copy and may expose an unfinished file while writing. It never falls back
+to replacement. Concurrent producers cannot both publish the same names.
+This is not an atomic two-file transaction:
+interruption or an I/O error may leave an incomplete pair, and a lost response may
+leave a complete pair. Preserve those files and verify that both exist and the
+archive checksum matches the manifest before using them. A retry never deletes
+partial output or treats its presence as success; use fresh names for a new capture.
+Earlier backup pairs remain untouched.
+
+This protects captured bytes and their verification identity. It does not provide
+cross-owner capture consistency, recover volatile work, or reactivate a Goal.
+
+中文：完整备份现在拒绝复用已占用的归档或清单文件名，不再覆盖旧文件。预览不保留
+名称；执行以排他方式先发布清单、再发布归档，优先使用硬链接；不支持链接时，通过
+排他创建的私有文件复制，多一次文件复制，写入中可能看到未完成文件，但不会覆盖。
+并发同名备份至多一个成功。中断可能留下不完整文件对，响应丢失也可能留下完整文件对；
+应保留现有文件，先检查两者及归档校验和，再使用新的备份 id 或输出目录重新捕获。
+命令不会自动删除部分输出，也不会因文件存在就宣称成功。这不证明跨 owner 一致性
+或恢复后的执行权限。
+
 ## Privacy, consistency and limits
 
 Backups are **private by default**. Full Goal rows can contain private paths,

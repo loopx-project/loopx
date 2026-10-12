@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -192,6 +193,28 @@ def _archive_state_directory(
             "warning": (
                 "state directory is still registered by a retained goal; "
                 "archived only the selected state file"
+            ),
+        }
+    destination_path = Path(os.path.abspath(destination))
+    destination_is_nested = destination.resolve().is_relative_to(
+        state_dir_resolved
+    ) or any(
+        parent.resolve() == state_dir_resolved for parent in destination_path.parents
+    )
+    if destination_is_nested:
+        if not dry_run:
+            destination.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(state_file), str(destination / state_file.name))
+        return {
+            "goal_id": goal_id,
+            "state_file": str(state_file),
+            "state_dir": str(state_dir),
+            "archive_path": str(destination),
+            "action": "would-move-state-file" if dry_run else "moved-state-file",
+            "archived": not dry_run,
+            "warning": (
+                "state directory contains the archive destination; "
+                "only the recorded state file was archived"
             ),
         }
     if not dry_run:

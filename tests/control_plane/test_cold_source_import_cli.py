@@ -18,6 +18,9 @@ import pytest
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.coordination.cold_source_backup import read_cold_source_backup
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
+from test_canonical_todo_writer_isolation import (
+    isolated_todo_distribution, retirement_wheel,  # noqa: F401 -- distribution fixtures
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -200,17 +203,24 @@ print(json.dumps({{'package': loopx.__file__, 'observations': observations}}))
 
 
 @pytest.mark.parametrize("old_producers_present", [True, False])
-def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path, monkeypatch, old_producers_present):
+@pytest.mark.parametrize("readback_present", [True, False])
+def test_unconfigured_shadow_inspection_matches_full_cli_without_import(
+    tmp_path, monkeypatch, old_producers_present, readback_present, isolated_todo_distribution,  # noqa: F811 -- shared fixture
+):
+    monkeypatch.setenv("LOOPX_COLD_IMPORT_PACKAGE", str(isolated_todo_distribution[0]))
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     if not old_producers_present:
         for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
                      "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
             (receiver / "loopx/control_plane/coordination" / name).unlink()
+    if not readback_present:
+        (receiver / "loopx/control_plane/coordination/local_authority_shadow_readback.py").unlink()
     registry = tmp_path / "project/.loopx/registry.json"
     original = state.read_bytes()
     observations = []
+    env["PYTHONPATH"] = os.pathsep.join([env["PYTHONPATH"], os.environ["PYTHONPATH"]])
     for module in ("loopx.entrypoint", "loopx.cli"):
-        child = subprocess.run([sys.executable, "-c",
+        child = subprocess.run([sys.executable, "-S", "-c",
             f"import loopx,sys; print(loopx.__file__,file=sys.stderr); from {module} import main; raise SystemExit(main())",
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "coordination-shadow", "inspect", "--goal-id", "cold"],
@@ -228,14 +238,18 @@ def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path
 
 
 @pytest.mark.parametrize("command,action,missing,expected_ok", [
-    ("coordination-shadow", "inspect", "runtime_shadow", False),
+    ("coordination-shadow", "inspect", "runtime_shadow", True),
+    ("coordination-shadow", "inspect", "local_authority_shadow_readback", False),
+    ("coordination-shadow", "inspect-source", "local_authority_shadow_readback", True),
     ("authority-shadow", "status", "local_authority_shadow_adapter", True),
     ("authority-shadow", "status", "local_authority_shadow_readback", False),
     ("authority-shadow", "drain", "local_authority_shadow_adapter", False),
+    ("todo", "list", "local_authority_shadow_readback", True),
 ])
 def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
-    tmp_path, monkeypatch, command, action, missing, expected_ok,
+    tmp_path, monkeypatch, command, action, missing, expected_ok, isolated_todo_distribution,  # noqa: F811 -- shared fixture
 ):
+    monkeypatch.setenv("LOOPX_COLD_IMPORT_PACKAGE", str(isolated_todo_distribution[0]))
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     registry = tmp_path / "project/.loopx/registry.json"
     data = json.loads(registry.read_text())
@@ -248,7 +262,8 @@ def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
     before = {str(path.relative_to(tmp_path)): path.read_bytes()
               for root in (registry.parent, state.parent, runtime)
               for path in root.rglob("*") if path.is_file()}
-    child = subprocess.run([sys.executable, "-c",
+    env["PYTHONPATH"] = os.pathsep.join([env["PYTHONPATH"], os.environ["PYTHONPATH"]])
+    child = subprocess.run([sys.executable, "-S", "-c",
         "import loopx,sys; print(loopx.__file__,file=sys.stderr); "
         "from loopx.entrypoint import main; raise SystemExit(main())",
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",

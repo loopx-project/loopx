@@ -78,6 +78,12 @@ results retain the same TS owners. Source and normal-wheel checks remove all
 four old producers and compare byte-stable observations, insufficient coverage,
 missing Todo, source drift, unreadable/missing store and subsequent recovery.
 The historical `runtime_shadow.py` imports remain aliases to the same functions.
+The retained reader loads inside the selected observation's error boundary,
+after the shadow opt-in check. Command registration, disabled shadow and
+independent cold-source inspection/import/recovery do not require that reader.
+If a required observation reader is absent, its command reports a non-executed
+structured error; it does not abort unrelated command registration or substitute
+a source producer. Reader availability does not enable capture.
 The shared TS qualifier now preserves `provider_protocol_violation` and
 `provider_read_unavailable` rather than mislabelling a failed provider read as
 `bootstrap_required`. Consequently a corrupt journal makes inspection fail,
