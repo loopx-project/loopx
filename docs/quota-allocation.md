@@ -122,10 +122,14 @@ loopx configure-goal --goal-id example
 loopx configure-goal --goal-id example --clear-execution-replan-after-turns --execute
 ```
 
-The Dashboard exposes **Goal review cadence** in the Capability Center for
+The Dashboard exposes **Goal review and stride** in the Capability Center for
 both the device and selected Goal. The existing machine namespace
-`todo_replan_cadence_machine_defaults_v1` stores `count_unit` (`effective_turns`
-or `completed_todos`) and `count`. It is built into the control plane and needs
+`todo_replan_cadence_machine_defaults_v2` stores `count_unit` (`effective_turns`
+or `completed_todos`), `count` and optional strategy selection. Existing v0/v1
+configurations remain readable without migrating them on inspection. The
+strategy defaults off; `evidence_conditioned_v1` adds evidence-conditioned scope
+and route advice, with unchanged admission and semantic exits. See the
+[versioned strategy configuration and rollback](reference/protocols/goal-vision-replan-contract-v0.md#configure-and-roll-back-the-stride-strategy). It is built into the control plane and needs
 no provider installation. The CLI, settings readback, quota decision and
 writeback validation use the same effective configuration.
 

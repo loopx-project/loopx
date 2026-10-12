@@ -264,10 +264,39 @@ the same `agent_id` as the refresh run. This keeps `research-executor`,
 `evaluator-promoter`, and other roles from overwriting or satisfying each
 other's active vision.
 
+### Decision followthrough in replan context
+
+With `evidence_conditioned_v1` enabled, when the captured history contains a prior
+accepted evidence-linked Vision path,
+`replan_context.decision_followthrough` returns that path with the later recorded
+progress references. It uses the existing Goal/Agent/Turn binding and immutable
+history append order; timestamps do not decide causality. An explicit current
+Goal instance excludes retired-instance sources. The normal history read resolves
+its evidence references; private transport facts are not returned. The derived
+`replan-decision-*` reference binds the normalized path and its original
+`replan-evidence-*` history reference. Changed paths cannot resolve an old
+decision reference; existing history reference identities are unchanged.
+
+Details are bounded to six distinct progress fingerprints with the full recorded
+count, omitted count, source completeness and missing-order count. These are
+recorded observations, not settled-effective-Turn counts or independent trials.
+`execution_and_goal_gain=unknown` stays explicit: a changed progress identifier,
+accepted replan or serialized observation proves neither a new mechanism nor its
+execution, candidate adoption, scientific improvement or Goal completion. A
+missing, rejected or malformed basis adds no followthrough projection. No
+selection, trigger, quota, acceptance, lease or scheduler rule changes.
+
+启用 `evidence_conditioned_v1` 且历史中已有被接受、绑定证据的 Vision 路线时，replan context 返回上次决定与之后的
+进度引用，按原历史追加顺序关联，而非根据时间戳或文案猜测因果。显式当前 Goal
+实例排除已退休实例。详情最多六项，保留总数、遗漏数、源完整性与顺序缺失数；
+正常 history 入口可读取引用，私有 transport facts 不公开。这些是记录中的观测，
+不等于有效结算 Turn、独立试验或执行/收益证明；后者明确保持 unknown。缺失、
+拒绝或损坏的依据不产生投影；选择、触发、结算及权限规则不变。
+
 ### Replan planning guidance
 
-The shared `replan_action_packet.planning_guidance` carries five Agent
-instructions through full/compact quota and the host Turn envelope:
+The shared `replan_action_packet.planning_guidance` carries five existing Agent
+instructions and an optional sixth stride instruction through full/compact quota and the host Turn envelope:
 
 - Preserve the requested end state under current user direction. A bounded
   slice retains outstanding requirements; easier tests cannot redefine
@@ -294,15 +323,24 @@ instructions through full/compact quota and the host Turn envelope:
   Prefer a discriminating probe, keep negative evidence scoped to tested
   conditions and proxies scoped to their coverage, and reuse still-applicable
   evidence when no new uncertainty warrants repetition.
+- **Only with `evidence_conditioned_v1`:** Review the previous path decision against subsequent work and authoritative
+  outcomes. When local tuning or repeated validation leaves the goal gap
+  unexplained, compare a bounded alternative mechanism with continuation or
+  replication. Elapsed time and one noisy result do not force a pivot. Protect
+  the best qualified artifact; name the next probe's distinguishing prediction,
+  adoption criterion and bounded cost, then check actual execution and outcome
+  at the next review. Research scope changes use existing paths or successors.
 
-This guidance is included by default whenever a replan action packet is
-projected. It is Agent judgment guidance, not a new machine-enforced acceptance
-gate or a permission grant. Typed semantic outcomes, lifecycle transitions and
-non-replan turns are unchanged. The existing TypeScript replan owner supplies
-the text; CLI and host projections preserve it without a new setting or editor.
-Transport tests prove delivery and unchanged gates, not improved model behavior.
+The first five instructions remain the ordinary replan contract. The optional
+TypeScript strategy component adds the sixth and the followthrough read model;
+`off` (the default, including legacy configurations) preserves ordinary context
+identity, evidence selection and guidance. Unknown versions fail before mutation.
+This is Agent judgment advice, not a new machine-enforced acceptance gate,
+permission, adaptive scheduler or automatic route actuator. Typed semantic
+outcomes and non-replan Turns are unchanged. Tests prove delivery and isolation;
+model adoption and utility require matched experiments.
 
-共享 replan action packet 默认携带五条指引，并在完整/精简 quota 与
+共享 replan action packet 保留五条默认指引，可选策略增加第六条，并在完整/精简 quota 与
 Turn envelope 中保留：
 
 - 不能为了容易通过测试而缩小目标；阶段成果保留剩余要求，遵守用户范围、
@@ -319,10 +357,118 @@ Turn envelope 中保留：
   确认改动进入实际执行路径和当前产物。优先选择能区分剩余解释的探针；负证据
   只覆盖已测条件，局部代理指标只覆盖其代表的范围。没有新不确定性时复用
   仍然适用的证据。
+- **仅启用 `evidence_conditioned_v1` 时：** 将上次路线决定与后续工作、权威结果对照。若局部调参或重复验证仍无法解释目标
+  缺口，比较有界的新机制、原路线接续与重复测量；不因固定时长或一次噪声结果
+  强制转向。保留最佳已验证产物，为下一探针说明判别性预测、采用条件与有界成本，
+  下次复查真实执行和结果；实验范围通过现有 path/successor 改变，不改变权限或验收。
 
-这是 Agent 判断指引，不新增机器验收门禁、配置或权限，不改变已有语义写回
-规则及非重规划 Turn。文本复用既有 TypeScript owner；投影测试证明送达和
-门禁保持，不能证明模型采用或效果提升。
+默认 `off` 及旧配置保持普通 context 身份、证据选择和前五条指引；启用策略时
+增加第六条与上次决定回读。未知版本在写入前拒绝。它提供 Agent 判断建议，
+不新增机器验收门禁、执行权限、自动调度或路线执行器；送达和隔离测试不能
+证明模型采用及收益。
+
+### Configure and roll back the stride strategy
+
+Use the existing **Goal review and stride** capability editor, selecting device
+defaults or an explicit Goal target. Choose the review unit/count and strategy,
+preview once, confirm and read back the effective configuration/source. The
+whole Goal review override wins over the device review configuration; clearing
+it restores current device defaults. A legacy override without a strategy means
+`off`, even when the device strategy is enabled. No separate capability switch
+or per-field inheritance is added.
+
+![Versioned stride strategy in the existing capability editor](assets/stride-strategy-editor.png)
+
+Isolated packaged editor with the real revision-checked configuration handler;
+workspace discovery is synthetic. This demonstrates configuration readback, not
+installed-App adoption or research utility.
+
+CLI preview/apply and readback (replace `GOAL`):
+
+```sh
+loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1
+loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1 --execute
+loopx --format json configure-goal --goal-id GOAL
+loopx configure-goal --goal-id GOAL --execution-stride-strategy off --execute
+```
+
+Turning the strategy off retains the review interval and ordinary review. To
+restore device defaults for the entire review configuration, clear the cadence
+and strategy through the editor or `--clear-execution-replan-after-turns
+--clear-execution-replan-after-todos --clear-execution-stride-strategy --execute`.
+Historical evidence remains readable after disabling. Activation cannot authorize
+experiments, spend quota, clone a checkpoint, relax acceptance or rewrite a
+frozen experiment. Configuration is versioned; preregister the selected version
+and captured input scope for comparisons.
+
+在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，设置计数依据、
+周期和策略，预览、确认并回读生效来源。Goal 整体覆盖设备配置；旧 Goal 覆盖中
+没有策略则为 off。关闭策略保留复盘周期；清除整个覆盖恢复设备默认值。
+历史引用仍可读取。启用不会授权实验、消耗配额、复制 checkpoint、放宽验收或
+改写冻结实验；比较时预先记录策略版本与输入覆盖范围。
+
+### Structured stride control
+
+The opt-in component exposes `replan_action_packet.stride_control` through full,
+compact CLI and host envelopes. `evidence_conditioned_v1` consumes an explicitly
+**Agent-assessed** evidence basis and derives three coordinates in TypeScript:
+
+| Evidence basis | Work slice | Route distance | Validation scope |
+|---|---|---|---|
+| `supported_progress` | grow | hold | hold |
+| `unexplained_gap` | shrink | grow | shrink |
+| `uncertain_evidence` | shrink | hold | grow |
+| `useful_new_route` | grow | hold | grow |
+| `decision_failure` | shrink | hold | shrink |
+
+These are relative adjustments to the declared current method and next useful
+postcondition, not a universal novelty score, runtime budget or certified
+research verdict. Reducing validation scope cannot remove required acceptance
+checks. The model assesses the basis from applicable evidence; the strategy
+owns the vector. For example, an unexplained method gap calls for a small probe
+of a larger route departure, while conflicting evidence calls for more targeted
+validation without automatically changing route.
+
+Declare a top-level `agent_vision.stride_decision` attachment with
+`schema_version=stride_decision_v1`, the selected `strategy_version`,
+`reference_context_id`, `reference_obligation_id`, `basis` and `next_probe`
+(`scope`, `prediction`, `adoption_criterion`, `cost_bound`). Copy the actual
+reference ids from the live control packet. `axes` may be omitted; the strategy
+fills them. A supplied vector must match the version/basis. Unknown fields,
+versions, mismatched vectors, missing probe commitments, private text and
+oversized text are rejected during Vision authoring, before writeback. Attachment
+text counts toward the existing 1,800-character Vision budget.
+
+Declared proposals are structurally validated. Under enabled review the fresh Vision path exit requires this structured
+proposal; other source-specific successor, progress and terminal exits remain
+available. Missing proposals or a proposal referencing a different obligation
+cannot satisfy the fresh Vision path exit. The binding uses the admitted obligation, not the latest
+context hash: legitimate shared-pool changes must not invalidate the original
+Turn's settlement. The context id records the observed basis; it does not prove
+that the Agent's assessment or predicted gain is correct.
+
+A valid schema/vector alone cannot discharge a review, execute a Todo, spend
+quota or certify usefulness. The evidence-linked Path Delta and ordinary Todo/
+Next Action carry the proposal into authorized work. History and compact Vision
+readback retain the normalized decision; the next review returns it with later
+observations. Actual adoption, execution, gains and costs still need their
+own evidence. Off/legacy inputs with no declared attachment preserve ordinary
+projection and settlement. Explicit attachments are validated data even when
+ordinary review is selected; they do not enable automatic strategy projection.
+
+可选策略通过完整/精简 CLI 和 Host packet 提供结构化控制契约。Agent 根据证据
+判断 basis，TypeScript 策略计算工作大小、路线距离、验证范围的 grow/hold/shrink。
+例如目标缺口仍无法解释时，采用“小实验＋较大路线变化”；证据冲突时，“小实验＋
+路线保持＋扩大针对性验证”。它不依据运行时长或分数文案自动分类。
+
+结构化提案绑定当轮义务及观察到的 context，说明下一探针的范围、预测、采用条件
+与成本边界。启用后的新 Vision 路线复盘必须带结构化提案；其他 typed progress、successor
+和 terminal 出口保留。机器校验版本、向量、字段界限和来源绑定，沿用既有 Vision
+文本预算；
+只提交一个向量不能完成重规划。正常 Todo/Next Action 负责接续，下轮回读决定与
+真实观测。缩小验证范围不撤销硬验收；格式有效不证明实际采用或收益。关闭模式
+不自动投影策略；显式声明的附件仍须通过数据校验。策略建议与机器校验分别命名，
+执行权限及结算归属不扩大。
 
 ### Path Delta
 

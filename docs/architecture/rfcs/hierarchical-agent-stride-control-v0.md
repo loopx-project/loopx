@@ -6,9 +6,9 @@
 | Supersedes / closes | none |
 | Date | 2026-08-15 |
 | Authors | LoopX maintainers |
-| Scope | Effect feedback, bounded delivery, authority escalation, model qualification, and long-horizon efficiency |
+| Scope | Effect feedback, bounded delivery, research scope, authority escalation, and long-horizon outcome/cost |
 | Tracking issue | [#3203](https://github.com/huangruiteng/loopx/issues/3203) |
-| Source baseline | LoopX `8b8e7b248` |
+| Source baseline | LoopX `d03863fd0`; source-level decision followthrough refinement below |
 
 > Language note: the
 > [Chinese version](./hierarchical-agent-stride-control-v0.zh-CN.md) and this
@@ -39,11 +39,22 @@ gate, and human authority. An inner result may force an early delivery
 settlement; a delivery result may force an early authority escalation. A
 scheduler tick alone must not manufacture either semantic transition.
 
-This RFC proposes a measurement-first program. The smallest useful slice is a
-read-only, provider-neutral stride observation derived from existing receipts.
-It should characterize current standard and fine-grained execution before any
-runtime automatically widens or narrows a stride. Adaptive control begins in
-shadow mode and is promoted only after repeated, stable qualification.
+Research makes delivery stride a **vector**: work-slice size, distance from the
+current mechanism, and validation breadth. These coordinates can move
+independently. A long
+slice can perform many correct local checks without obtaining new information
+about the remaining goal gap. Fewer control events cannot fix that failure.
+Conversely, a small late gain near a task's attainable limit may be useful;
+elapsed time or a flat score alone cannot select a larger experiment.
+
+The delivery controller therefore closes **decision -> actual work -> evidence
+-> next decision**, while the existing owners retain execution and settlement.
+The current bounded implementation returns the previous accepted Vision path
+and subsequent recorded progress to replan, with goal gain explicitly unknown.
+This is decision input and Agent guidance, not adaptive scheduling, a result
+adoption gate or proof of research utility. Automatic policies remain opt-in
+proposals requiring repeated qualification. Research-state branches provide the
+counterfactual test without discarding the accumulated work.
 
 The core judgment is:
 
@@ -162,6 +173,7 @@ the research direction.
 | Delivery | Execution profiles distinguish standard and fine-grained Todo contracts; fine-grained mode uses a coherent-slice turn budget and evidence-sensitive successor creation. Every admitted heartbeat still performs full durable settlement. |
 | Continuation | In addition to same-Turn controller dispositions, a typed delivery-continuity reducer can preserve the latest accountable `outcome_progress` Todo across heartbeat wakes while that same Todo remains open, actionable, capability-ready, and owned by the same agent. |
 | Progress | Typed progress observations, repeat detection, semantic replan closure, and evidence projections can distinguish material delta from maintenance. |
+| Review feedback | The replan context source implementation can return the last accepted evidence-linked Vision path and subsequent recorded progress references. History append order and Goal/Agent/Turn lineage bind this input; missing execution and goal gains remain unknown. It does not certify that a proposed intervention ran. |
 | Research | The [Research Exploration Control Plane RFC](./research-exploration-control-plane-v0.md) defines an optional typed knowledge frontier and composition experiments. |
 | Authority | Goal vision, user gates, permission policy, and peer/supervisor boundaries remain separate from execution and scheduling. |
 
@@ -169,12 +181,13 @@ the research direction.
 
 | Gap | Consequence |
 |---|---|
-| No shared stride vocabulary | Host, Todo, scheduler, and human-attention changes are discussed as one generic "turn length" problem. |
-| No cross-layer observation | LoopX cannot tell whether low throughput came from model/tool roundtrips, over-frequent settlement, or authority churn. |
+| Incomplete outcome-linked observations | Read-only M1 counts and review followthrough exist, but they cannot explain task gains, model/tool cost, settlement cost or authority churn without provider evidence. |
+| No qualified research-scope policy | Continued local tuning can be mistaken for broad exploration; generic progress identifiers do not establish mechanism novelty or useful information. |
 | No model capability profile for stride | A fast tool-using model and a slower protocol-reliable model receive mostly static execution contracts. |
 | No semantic split/merge qualification | Todo granularity is configured or prompted, but not evaluated against observed decision changes and settlement cost. |
 | No interruption-value model | Periodic reports and genuine authority changes are not measured separately. |
-| No adaptive promotion path | There is no shadow recommendation -> bounded experiment -> promoted policy lifecycle for stride tuning. |
+| No qualified adaptive promotion path | Shadow input does not yet establish model adoption, matched continuation benefit or a promoted model/work-class policy. |
+| No qualified research-state branch | Code snapshots alone cannot preserve conversation, accumulated evidence and evaluation opportunities for a fair continuation comparison. |
 
 ## 5. The Three-Layer Model
 
@@ -482,6 +495,188 @@ through existing task/capability surfaces. CLI readback alone is a partial
 slice. Scientific usefulness follows the independent qualification in
 [research decisions](research-exploration-control-plane-v0.md#115-evidence-conditioned-experiment-decisions-proposed-refinement).
 
+### 7.6 Research scope and evidence-conditioned control
+
+Research stride has three independently chosen coordinates. The first two are
+the main controls; the third bounds the evidence and cost needed to act:
+
+- **Work-slice size:** the coherent outcome, scope and cost admitted before the
+  next decision. This includes Todo granularity, splitting a broad experiment
+  and continuing a supported route across a larger slice. Todo text length or
+  number of files is not size; a larger slice must retain an observable
+  postcondition and normal per-Turn settlement.
+
+- **Mechanism distance:** local parameter/implementation tuning versus a
+  materially different representation, model, search neighborhood or causal
+  explanation. A renamed hypothesis, a new file or more tests is not distance.
+- **Evidence breadth:** a cheap discriminating probe, a comparable pilot, then
+  the validation needed for actual adoption. More coverage is useful only when
+  it resolves an uncertainty that matters to the next decision.
+
+Replan reviews this vector without becoming another authority owner.
+Changing an agent-created method or provisional candidate rule inside the
+authorized goal is an ordinary research decision. Changing the task, acceptance,
+feedback protocol, budget, permission or stop conditions requires its existing
+owner. A request to explore more broadly never grants access to hidden data or
+permits rewriting the metric after failure.
+
+| Observed basis | Next decision to compare |
+|---|---|
+| A new result is missing, invalid or incomparable | Repair the observation or choose a probe with known coverage; keep utility unknown. |
+| One valid candidate loses or results conflict within uncertainty | Protect the incumbent; scope the negative evidence and compare replication, another uncovered condition and a different mechanism. Do not retire a family from one loss. |
+| Local checks succeed but do not explain the authoritative goal gap | Compare a bounded mechanism-changing probe with continued tuning. Name the distinguishing prediction and how it reaches the executed candidate. |
+| Known headroom is small or variance dominates the expected effect | Prefer a justified uncertainty reduction or a low-cost improvement; require evidence before spending a large new search budget. A theoretical ceiling is not a feasible optimum. |
+| No reasonable in-scope probe remains under the current evidence and stops | Record scoped exhaustion or a concrete hold through the existing owner; do not manufacture activity or claim the goal achieved. |
+
+The model chooses; generic code must not derive these scientific rows from prose
+substrings, a score slope, elapsed hours or a fixed failure count. The provider
+owns metric meaning, comparison validity, noise and task-specific headroom.
+Explore retains explicitly declared mechanism relations and scoped findings.
+The existing typed replan owner delivers the goal, evidence and prior path;
+ordinary task/successor and Vision writeback own the decision and its adoption.
+
+At each decision boundary:
+
+1. Reconcile the prior path with subsequent work, current artifact and
+   authoritative outcomes. Identify what actually ran, what changed knowledge,
+   what was adopted and what remains unknown. A progress receipt is insufficient.
+2. Compare continuation, a discriminating alternative and justified replication
+   when relevant. Rank expected goal/information gain against complete marginal
+   cost: model input/output, tool work, validation, control and opportunity cost.
+3. Choose one bounded next probe with its distinguishing prediction, comparison,
+   incumbent protection, adoption criterion and cost/stop bounds. A larger
+   mechanism change can start with a small pilot; it need not start with a large
+   validation sweep.
+4. Execute through the normal admitted task. Bind evidence to the tested input
+   and exact candidate; retain failed, negative and uncertain results distinctly.
+5. At the next review, use the new observation to retain, revise or stop the
+   scoped route. State why a repeat can resolve a new uncertainty. Do not reset
+   other trigger counters merely because the prompt was read.
+
+The source-level `replan_context.decision_followthrough` is the first reusable
+feedback slice. It references the last accepted evidence-linked Vision path and
+at most six later distinct progress fingerprints, retaining complete recorded
+counts and omissions. It uses immutable append order rather than timestamps,
+excludes other agents and explicitly retired Goal instances, and resolves refs
+through the existing history read. An absent or corrupt basis is not replaced
+with invented evidence. The field never qualifies execution, scientific novelty,
+utility, effective-Turn counts or acceptance; these remain independent checks.
+No new scheduler, selection rule, quota debit or per-result settlement is added.
+
+#### An iterative strategy and engineering boundary
+
+The first strategy is **model-guided, evidence-conditioned vector adjustment**.
+It proposes increasing, retaining or reducing each coordinate, with a reason
+and a falsifiable next probe. It does not optimize a universal novelty score:
+mechanism distance is relative to a declared reference method and goal, while
+slice size is relative to the next useful postcondition and decision risk.
+
+| Basis | Work slice | Mechanism distance | Evidence breadth |
+|---|---|---|---|
+| A supported method yields repeatable useful progress | Increase coherent work when decision risk permits | Retain unless a remaining gap justifies alternatives | Keep required checks; avoid redundant sweeps |
+| Current method leaves a substantive gap under applicable evidence | Start with a small discriminating pilot | Compare a larger departure with continuation | Narrow to the observation that distinguishes the routes |
+| Results conflict or expected gains are below uncertainty | Reduce work until the decision is clearer | Retain or compare alternatives without declaring refutation | Increase only a justified replication/uncertainty probe |
+| A larger departure produces attributable useful results | Expand the adopted method's next slice | Retain the useful departure, not novelty for its own sake | Expand validation needed for adoption |
+| Decision-relevant failure or an authority boundary appears | End/split the current slice through its owner | Reassess within the existing goal | Validate the specific failure; never widen authority |
+
+This table guides a model decision; it is not a prose classifier or a fixed
+numeric policy. The engineering design has four replaceable boundaries:
+
+1. **Observation adapters** produce exact candidate/result, validity/uncertainty,
+   coverage and cost facts. Domain providers own their meanings; they cannot
+   write generic policy or confer execution permission.
+2. **Strategy** consumes one source-bound review basis and proposes the stride
+   vector, next probe and expected benefit/cost. Version and record the strategy
+   with the experiment. Start with the table above; deterministic heuristics or
+   a learned strategy can later replace this function under the same inputs.
+   Do not build a plugin registry or train a controller before a second real
+   qualified strategy needs that seam.
+3. **Admission/adoption** validates the proposal through existing Todo, Vision,
+   replan, budget and authority owners. Work-slice changes use normal split/
+   continuation/successor operations. A route decision cannot execute a
+   successor during an original Turn's outstanding settlement.
+4. **Feedback** returns actual execution, results, retained artifact and complete
+   cost to the next review. Proposal, adoption and utility remain separately
+   replayable; missing feedback never becomes success.
+
+The present source slice implements the fourth boundary's recorded-decision
+input and the optional TypeScript strategy component `evidence_conditioned_v1`.
+The first version accepts a model-assessed evidence basis and deterministically
+derives three relative `grow | hold | shrink` coordinates. A versioned
+`agent_vision.stride_decision` carries that vector, the admitted obligation and
+observed context ids, and the next probe/adoption/cost commitments. Vision
+authoring validates the declared shape and vector before mutation. Enabled fresh
+Vision path reviews require the structured proposal; other source-specific exits
+remain unchanged. Existing
+Todo/Next Action admits work, and the next review returns the decision with
+actual observations. This is structured proposal control, not an automatic
+executor or a machine classifier of research merit. Its shared configuration
+vocabulary is `off | evidence_conditioned_v1`; unknown
+versions fail before mutation. The existing Goal review capability editor and
+CLI expose the version for a whole Goal override or inherited device default.
+`off` preserves ordinary evidence identity/selection and the five existing review
+instructions. Enablement adds the source-bound followthrough input and separate
+work-slice/mechanism-distance/validation-breadth advice. It has no automatic
+vector actuator. Use the existing bounded `path_delta` and task Next Action to
+record the first proposals; do not create another policy/state database. The explicit versioned attachment prevents parsing prose as a control vector.
+Future strategy versions preserve default-off parity, bounded fields and
+separate proposal/adoption authority; do not silently reinterpret old decisions. Promote each strategy after same-state ablations establish
+adoption and full-cost benefit; change one coordinate before studying their
+interaction. Six effective work Turns remains the existing review default,
+not the size of a Todo, experiment or mechanism change.
+
+Exploratory iteration may run only strategy-enabled test arms and reuse historical
+baselines as descriptive references. A fresh concurrent baseline is not required
+for every iteration; such runs establish route adoption and useful iteration
+signals, not an isolated causal effect or promotion qualification. Reserve
+matched continuation and replication for decisions that need those claims.
+
+### 7.7 Research-state branching and matched continuation
+
+A restorable research point combines **conversation position, research evidence,
+code/candidate artifacts and observation opportunities**. A code archive or
+trajectory prefix alone is not that point. Capture and verification reuse the
+existing [backup/recovery owners](complete-state-recovery-v0.md), Host session
+owner and artifact provider. This RFC supplies the research experiment's
+consistency and comparison requirements, not a second restore authority.
+
+Before capture, declare the point by elapsed research budget or a semantic event;
+do not choose it retrospectively for a favorable score. A later point such as
+ten hours is an experiment setting, not a product default or automatic pivot.
+Record the actual boundary and any skew:
+
+- native conversation cursor and a Host-qualified export/fork path; copied log
+  text does not establish a resumable session;
+- settled LoopX research evidence, original goal/priorities, prior decisions,
+  scoped negative results and unresolved questions;
+- exact working code, necessary authorized untracked files, incumbent artifact
+  and its qualifying result, kept separately from unmeasured candidates;
+- source/model/tool/evaluator pins and solver-visible feedback already consumed;
+- remaining total budget, accepted submission history and next feedback
+  opportunity under the original protocol.
+
+An inert verification unit grants no execution authority. The destination uses
+fresh experiment/Host identities and the existing Goal/session/state admission
+paths. Historical leases, quota, timers, pending effects and submission tokens
+cannot become destination authority. Reconcile unknown effects by original
+identity before any replay. A Host without a qualified fork reports that gap;
+an evidence-summary restart is a different treatment, not exact continuation.
+
+Validate digest/cursor/artifact consistency, partial capture, missing files,
+changed inputs, duplicate restore, conflicting writer, stopped source and lost
+result delivery before running a matched study. Resume must demonstrate actual
+use of the captured evidence and code, then useful new work. Successful tar
+verification or session opening alone is not acceptance.
+
+For the research ablation, branch the **same** qualified point into unchanged
+continuation and evidence-conditioned scope review, with equal continuation
+budgets and resources. Change one control factor; preserve feedback opportunity
+counts and cooldown timing through the evaluator owner. Label session restart,
+summary replacement, source upgrades or policy bundles as additional factors.
+Keep all branches and invalid/negative results; compare adopted native outcomes,
+information gained and full continuation cost. The result qualifies the scoped
+intervention, not all LoopX behavior or an optimal universal stride.
+
 ## 8. Measurement Model
 
 The first implementation should measure before it controls.
@@ -673,6 +868,18 @@ The first study should avoid a full three-dimensional combinatorial grid.
 - event-driven authority escalation;
 - identical effect and delivery contracts.
 
+**Stage E: compare research scope from the same captured state**
+
+- unchanged continuation versus the §7.6 evidence-conditioned scope review;
+- the same qualified §7.7 conversation/evidence/code point and feedback history;
+- equal continuation resources, budget and evaluation opportunities;
+- distinct native outcome, information/adoption and complete-cost measures;
+- a small recovery/adoption pilot first, repeated cells before promotion.
+
+Choose tasks with room for a genuinely different mechanism and retain a
+near-ceiling or noisy case as a limit check. Do not select checkpoints or omit
+branches after observing their scores.
+
 Only after these stages identify interactions should a factorial experiment
 combine promoted profiles.
 
@@ -687,21 +894,18 @@ keyword.
 
 ## 11. Smallest Useful Implementation Slice
 
-The first implementation is deliberately narrow and reversible:
+M1 read-only observation remains available. The next complete, reversible slice
+returns prior accepted decisions and subsequent evidence to the existing replan
+entry, with the guidance in §7.6. It does not add a classifier, scheduler or
+acceptance gate. Qualify the real CLI/Host projection, immutable reference
+readback, missing/corrupt/stale inputs and unchanged semantic discharge first.
 
-1. Add one public architecture vocabulary for effect, delivery, and authority
-   stride.
-2. Derive a read-only stride observation from existing Turn, settlement, Todo,
-   quota, and gate receipts where available.
-3. Add an offline evaluator that reports layer metrics and mismatch signals.
-4. Characterize standard and fine-grained LoopX profiles with public-safe
-   fixtures and at least one real model behavior qualification path.
-5. Emit shadow recommendations only. Do not alter Todo selection, scheduler
-   frequency, effect execution, or user notification.
-
-The first slice should extend the nearest existing Turn/status read model. It
-should not create a new built-in capability, executor, scheduler, or generic
-policy framework.
+Then qualify one research-state capture/continuation profile under §7.7. Keep
+verification, executable continuation, model adoption and scientific benefit as
+separate outcomes. Matched continuation pilots judge whether scope review
+produces discriminating experiments and adopted improvements; repeated studies
+and full-cost evidence precede adaptive-policy promotion. A partial Host export
+or a read-only decision projection does not close this implementation program.
 
 ## 12. Milestones
 
@@ -730,6 +934,9 @@ policy framework.
   transitions;
 - validate recommendations against independent acceptance rules;
 - retain Todo and replan as the only execution authorities.
+- qualify §7.6 decision followthrough at the real replan entry and observe
+  whether the next probe changes relevant information, rather than identifiers;
+- qualify one §7.7 research-state branch and matched continuation profile;
 - qualify the proposed §7.5 provider checkpoint/monitor binding in shadow;
   distinguish model decisions from experiment completion and Turn settlement.
 
@@ -768,6 +975,14 @@ The research program is qualified only when it can prove:
 9. promoted profiles improve end-to-end quality or cost across repeated runs,
    not only one layer-local count;
 10. failure cases remain honestly terminal and recoverable.
+11. research scope changes preserve the original task and acceptance; evidence
+    breadth is justified by decision value rather than repeated-check count;
+12. a restored research point retains conversation/evidence/code and equivalent
+    feedback opportunities without reviving source execution authority;
+13. prior decision, actual experiment, result interpretation and adopted action
+    are distinguishable; missing execution or utility remains unknown;
+14. matched continuation comparisons retain incumbent, uncertainty, failures and
+    full model/tool/control costs; a local proxy gain is not native goal gain.
 
 ## 14. Non-Goals
 
