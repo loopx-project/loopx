@@ -325,6 +325,17 @@ function utcIso(micros: bigint): string {
   const date = new Date(Number(seconds * 1000n)).toISOString().slice(0, -5);
   return `${date}${fraction ? `.${String(fraction).padStart(6, "0")}` : ""}+00:00`;
 }
+function scopedReceiptRetry(row: JsonObject, due: bigint, agent: string | null): JsonObject | null {
+  const retry = object(row.blocked_retry);
+  return row.status === "open" && row.task_class === "advancement_task" &&
+    row.resume_ready === false && retry?.source === "turn_settlement" &&
+    typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
+    retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
+    (!row.claimed_by || row.claimed_by === retry.agent_id) &&
+    row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
+    isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null)
+      ? retry : null;
+}
 function projectTodoFrontier(summary: JsonObject, now: bigint, agent: string | null): JsonObject {
   const projected = object(summary.frontier_deadline);
   const projectedTime = timestamp(projected?.next_due_at);
@@ -346,14 +357,8 @@ function projectTodoFrontier(summary: JsonObject, now: bigint, agent: string | n
       const id = identity(row), key = JSON.stringify([id, String(due)]);
       if (seen.has(key)) continue;
       seen.add(key);
-      const retry = object(row.blocked_retry);
-      const receiptRetry = row.status === "open" && row.task_class === "advancement_task" &&
-        row.resume_ready === false && retry?.source === "turn_settlement" &&
-        typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
-        retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
-        (!row.claimed_by || row.claimed_by === retry.agent_id) &&
-        row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
-        isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
+      const retry = scopedReceiptRetry(row, due, agent);
+      const receiptRetry = retry !== null;
       // A receipt wait owns one unfinished Todo; the earliest wakeup may
       // belong to a different monitor. Keep both facts from this full source.
       if (receiptRetry && (retryDue === null || due < retryDue)) {
@@ -418,6 +423,16 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const route = hasSourceContract ? routeContinuationLanes(request.route_items, agent, limit) : {};
   const lanes = requireJsonObject(selected.lanes, "selection lanes");
   const resumeBlocked = requireJsonObject(resume.resume_blocked_lanes, "resume blocked lanes");
+  // An overlay can add a receipt wait after the stored resume lane was built.
+  // Read its scoped full-source row; an existing nonempty display lane must
+  // neither hide that retry nor impose its visibility limit on retry clocks.
+  const receiptWaits = now === null ? [] : rows(selection.items,
+    selection.available === undefined ? undefined : requireStringArray(selection.available, "available"),
+    observedAt).filter(row => {
+      const due = timestamp(row.payload.next_due_at);
+      return executableBy(row, agent) && due !== null && due > now &&
+        scopedReceiptRetry(row.payload, due, agent) !== null;
+    }).map(row => row.payload);
   const frontier = now === null ? null : projectTodoFrontier({
     ...requireJsonObject(selected.claim_visibility, "claim visibility"),
     ...requireJsonObject(resume.deferred_lanes, "deferred lanes"),
@@ -427,6 +442,7 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
     resume_blocked_items: [
       ...(Array.isArray(resumeBlocked.resume_blocked_items) ? resumeBlocked.resume_blocked_items : []),
       ...(resume.blocked_successor_items as JsonObject[]),
+      ...receiptWaits,
     ],
     frontier_deadline: request.frontier_deadline ?? null,
     monitor_open_items: lanes.monitor_items,

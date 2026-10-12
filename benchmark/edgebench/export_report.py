@@ -215,6 +215,11 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if row.get("runner_revision") != receipt["runner_commit"]:
             raise ValueError("Board and runner revision disagree")
         _validate_feedback_payload(receipt, profile)
+        if receipt.get("stride_strategy") != profile.get("stride_strategy"):
+            raise ValueError("Profile disagrees with runtime: stride_strategy")
+        if "stride_strategy" in receipt:
+            from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+            normalize_stride_strategy(receipt["stride_strategy"])
         if number(final["best_score"]) != number(receipt["best_score"]):
             raise ValueError("Final and runtime scores disagree")
         score_entries = [
@@ -273,6 +278,9 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if "feedback_payload" in receipt:
             config["runner"]["feedback_payload"] = receipt["feedback_payload"]
             config["worker_profile"]["feedback_payload"] = profile["feedback_payload"]
+        if "stride_strategy" in receipt:
+            config["runner"]["stride_strategy"] = receipt["stride_strategy"]
+            config["worker_profile"]["stride_strategy"] = profile["stride_strategy"]
         row["status"], row["observed_at"] = "completed", observed_at
         row["metrics"]["best_score"] = {
             "value": final["best_score"],

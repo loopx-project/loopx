@@ -44,11 +44,13 @@ try {
   const { page } = session;
   try {
     await openShowcaseGoal(page);
+    await page.getByRole("region", {name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     const heading = page.locator('.personal-channel-title h1');
     assert.equal(await heading.innerText(), longTitle, 'The original Goal title remains complete');
     assert.doesNotMatch(await page.locator('.goal-masthead-breadcrumb').evaluate(element => [...element.children].filter(child => child.getBoundingClientRect().width > 2).map(child => child.textContent).join(' ')), /preserve all consumer/, 'Visible breadcrumb does not repeat the long request');
     assert.equal(await page.locator('.goal-masthead-breadcrumb [aria-current]').textContent(), longTitle, 'Assistive readers retain the complete current-page identity');
     assert.doesNotMatch(await page.getByTestId('overview-composer-pill').innerText(), /ledger|consumer/, 'The input invitation stays concise');
+    await page.locator('.goal-work-lenses').getByRole('button', {name: /^(关系图|Map)$/}).click();
     const map = page.locator('.work-map');
     await map.scrollIntoViewIfNeeded();
     const scroll = page.locator('.personal-channel-scroll');

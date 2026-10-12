@@ -715,6 +715,41 @@ valid same-family probes and default-off parity. Then independently qualify
 model adoption and scientific utility under matched total budgets. Lower
 control cost must not come from hiding useful negative evidence.
 
+### 11.6 Research scope review at the shared replan boundary
+
+The [stride control loop](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control)
+complements result adoption. It asks whether the next experiment should change
+the mechanism, the validation coverage, or the uncertainty being resolved.
+More correct tests and more named hypotheses cannot establish broader research.
+Native/provider outcomes, noise and headroom remain domain evidence, not kernel
+classifications. In-scope method changes do not require a new user gate; task,
+acceptance, permission, feedback and budget changes retain their existing owners.
+
+The bounded source prerequisite reuses accepted `goal_path_delta_v0` decisions
+and subsequent typed progress in `replan_context.decision_followthrough`, delivered
+at the existing review entry. It adds no mandatory Explore attachment or capture,
+works independently of Explore activation, and cannot satisfy or discharge any
+extra obligation. Progress is recorded evidence, never an execution/adoption or
+scientific novelty verdict. §11.5's opt-in result-adoption gate and composition
+lineage are still separate, unqualified work.
+
+The Agent should preserve the qualified incumbent, identify the unexplained
+goal gap and compare a discriminating alternative with continuation or justified
+replication. Bind the chosen probe's prediction, adoption criterion and cost to
+normal task/Vision continuation, then examine actual candidate execution and
+result at the next review. A changed input can reopen a scoped negative finding;
+unchanged conditions need a reason to repeat. No elapsed-hour or losing-score
+rule forces a pivot or retires a family.
+
+Qualify this intervention through the [same-state continuation study](hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),
+retaining conversation, negative evidence, code/incumbent and feedback
+opportunities. Measure whether the next probe resolves an uncertainty and its
+result enters an adopted artifact, then compare native outcomes and full cost.
+Session opening, path writeback and context delivery are prerequisite facts,
+not research effectiveness. Keep automatic ranking/enforcement default-off
+until the scoped profile qualifies; neither this input slice nor a blog claim
+closes M3/M4.
+
 ## 12. Write-Time Enforcement
 
 The write gate must reuse the same current goal-frontier and Explore gap

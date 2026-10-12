@@ -47,7 +47,7 @@ def test_sqlite_cli_reopens_updates_and_recovers_missing_markdown(tmp_path, monk
     def cli(*args, expected_code=0):
         process = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--format", "json", "todo", *args, "--goal-id", "sqlite-goal"],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert process.returncode == expected_code, process.stdout + process.stderr
         return json.loads(process.stdout)
 
@@ -172,7 +172,7 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_pa
         result = subprocess.run(
             [sys.executable, "-I", "-c", entry, "--registry", str(registry),
              "--runtime-root", str(runtime), "--format", "json", *args],
-            cwd=project, capture_output=True, text=True, timeout=90,
+            cwd=project, capture_output=True, text=True, encoding="utf-8", timeout=90,
         )
         assert result.returncode == expected_code, result.stdout + result.stderr
         return json.loads(result.stdout)
@@ -301,7 +301,7 @@ def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
         result = subprocess.run(
             [sys.executable, "-I", "-c", entry, "--registry", str(registry),
              "--runtime-root", str(runtime), "--format", "json", *args],
-            cwd=project, capture_output=True, text=True, timeout=90,
+            cwd=project, capture_output=True, text=True, encoding="utf-8", timeout=90,
         )
         assert result.returncode == expected_code, result.stdout + result.stderr
         payload = json.loads(result.stdout)

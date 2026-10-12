@@ -569,6 +569,9 @@ def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
     ({}, "replan_after_effective_turns", 6),
     ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
     ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
+    ({"stride_strategy": "off"}, "replan_after_effective_turns", 6),
+    ({"stride_strategy": "evidence_conditioned_v1"}, "replan_after_effective_turns", 6),
+    ({"stride_strategy": "evidence_conditioned_v1", "replan_after_todos": 2}, "replan_after_completed_todos", 2),
 ])
 def test_runner_cadence_persists_through_real_configure_goal(
     planning_env, tmp_path, monkeypatch, settings, field, value
@@ -609,4 +612,7 @@ def test_runner_cadence_persists_through_real_configure_goal(
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in profile
-    assert agent._replan_receipt() == {field: value}
+    strategy = settings.get("stride_strategy")
+    assert profile.get("stride_strategy", "off") == (strategy or "off")
+    assert agent._replan_receipt() == {field: value, **({"stride_strategy": strategy}
+                                                    if strategy is not None else {})}

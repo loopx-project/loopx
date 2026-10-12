@@ -1,3 +1,4 @@
+import type {GoalWorkMap} from "../../data/goal-work-map";
 import { AlertCircle, ChevronRight, Info, LoaderCircle, Pause, RotateCcw } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -17,22 +18,35 @@ function digestExecution(execution: WorkspaceGoal["execution"]): DigestExecution
   return { kind: "running", observed: !execution.hostClaimed, quiet: execution.quiet, lastActivityAt: execution.lastActivityAt };
 }
 
-export function useGoalWorkspaceDigest(goal: WorkspaceGoal, userTodos: WorkspaceModel["userTodos"], items: WorkspaceTimelineItem[]): GoalWorkspaceDigest {
-  return useMemo(() => compileGoalWorkspaceDigest({
-    observedAt: new Date().toISOString(),
-    activation: goal.activationState,
-    todos: goal.agentTodos.map((todo) => ({
-      todoId: todo.todoId, done: todo.done, status: todo.status, taskClass: todo.taskClass, dependencies: todo.dependencies,
-    })),
-    doneCount: goal.doneTodoCount,
-    openCount: goal.openTodoCount,
-    runningTodoIds: items.flatMap((item) => item.kind === "run" && item.run.goalId === goal.goalId && item.run.status === "running" && item.run.todoId ? [item.run.todoId] : []),
-    attention: goal.loadState === "error" ? null : userTodos.filter((item) => item.goalId === goal.goalId).map((item) => ({ blocking: item.blocking, updatedAt: item.updatedAt })),
-    attentionSummary: goal.attentionSummary,
-    usage: goal.usage,
-    execution: digestExecution(goal.execution),
-    activity: (goal.hostThreadActivity?.threads ?? []).map((thread) => ({ actor: hostSurfaceLabel(thread.hostSurface), at: thread.lastEventAt })),
-  }), [goal, userTodos, items]);
+export function useGoalWorkspaceDigest(goal: WorkspaceGoal | null, userTodos: WorkspaceModel["userTodos"], items: WorkspaceTimelineItem[], map?: GoalWorkMap | null): GoalWorkspaceDigest {
+  return useMemo(() => {
+    const nodes = new Map(map?.nodes.map(node => [node.node_id, node]));
+    const dependencies = new Map<string, string[]>();
+    for (const edge of map?.edges ?? []) {
+      if (edge.relation !== "depends_on" || edge.enforcement === "lineage_only") continue;
+      const from = nodes.get(edge.from_node_id)?.refs.todo_ids?.[0], target = nodes.get(edge.to_node_id);
+      const to = target?.refs.todo_ids?.[0];
+      // A monitor change condition cannot be translated into Todo completion.
+      if (from && to && target?.kind !== "monitor" && target?.state !== "done") {
+        dependencies.set(from, [...dependencies.get(from) ?? [], to]);
+      }
+    }
+    const byTodo = new Map(map?.nodes.flatMap(node => (node.refs.todo_ids ?? []).map(id => [id, node] as const)));
+    return compileGoalWorkspaceDigest({
+      observedAt: new Date().toISOString(),
+      activation: goal?.activationState ?? "active",
+      todos: (goal?.agentTodos ?? []).map(todo => ({
+        todoId: todo.todoId, done: todo.done, status: todo.status, taskClass: todo.taskClass,
+        dependencies: dependencies.get(todo.todoId) ?? todo.dependencies,
+        ownerId: todo.claimedBy, completedAt: todo.completedAt, dependencyOrder: byTodo.get(todo.todoId)?.depth,
+      })),
+      doneCount: goal?.doneTodoCount, openCount: goal?.openTodoCount,
+      runningTodoIds: items.flatMap(item => item.kind === "run" && item.run.goalId === goal?.goalId && item.run.status === "running" && item.run.todoId ? [item.run.todoId] : []),
+      attention: goal?.loadState === "error" ? null : userTodos.filter(item => item.goalId === goal?.goalId).map(item => ({todoId: item.todoId, blocking: item.blocking, updatedAt: item.updatedAt})),
+      attentionSummary: goal?.attentionSummary, usage: goal?.usage, execution: digestExecution(goal?.execution),
+      activity: (goal?.hostThreadActivity?.threads ?? []).map(thread => ({actor: hostSurfaceLabel(thread.hostSurface), at: thread.lastEventAt})),
+    });
+  }, [goal, userTodos, items, map]);
 }
 
 export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: { goal: WorkspaceGoal; onOpenWorkspace: () => void; onOpenDetails?: () => void }) {
@@ -121,7 +135,7 @@ export function GoalLifecycleControl({ busy, goal, onRequest, resumeReviewed }: 
 
 export type GoalVitalRegion = "overview" | "tasks" | "attention" | "usage";
 
-const ribbonOrder = ["done", "running_observed", "open", "waiting_dependency", "blocked", "deferred"] as const;
+const ribbonOrder = ["done", "running_observed", "needs_you", "open", "waiting_dependency", "blocked", "deferred"] as const;
 
 function Vital({ children, extra, label, onClick, sub, tone, valueKey }: {
   children: ReactNode; extra?: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string; valueKey?: string;
@@ -148,11 +162,13 @@ export function GoalVitalsSkeleton() {
   );
 }
 
-export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
+export function GoalVitals({ goal, items, onFocusRegion, userTodos, digest: sharedDigest }: {
+  digest?: GoalWorkspaceDigest;
   goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; onFocusRegion: (region: GoalVitalRegion) => void; userTodos: WorkspaceModel["userTodos"];
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const digest = useGoalWorkspaceDigest(goal, userTodos, items);
+  const localDigest = useGoalWorkspaceDigest(goal, userTodos, items);
+  const digest = sharedDigest ?? localDigest;
   const activity = presentGoalActivity(goal);
   const detail = useExecutionDetail(goal.execution);
   const finishing = digest.lifecycle.finishingTurn;
@@ -167,6 +183,7 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
     t("vitals.workOpen", { count: work.open }),
     work.classes.blocked ? t("vitals.workBlocked", { count: work.classes.blocked }) : null,
     work.done === null ? t("vitals.workDoneUnknown") : null,
+    work.coverage === "unknown" ? t("vitals.workCoverageUnknown") : null,
   ].filter(Boolean).join(" · ");
   const ribbonTotal = ribbonOrder.reduce((sum, name) => sum + work.classes[name], 0);
 
@@ -186,8 +203,11 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
       <Vital label={t("vitals.work")} onClick={() => onFocusRegion("tasks")} valueKey={`${goal.goalId}:${work.done}:${work.total}:${work.open}`}
         sub={work.coverage === "partial" && work.projectedOpen !== null
           ? <span className="goal-vital-partial">{t("vitals.workPartial", { listed: work.listedOpen, projected: work.projectedOpen })}</span> : workSub}
-        extra={ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
-          ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}>
+        extra={<>
+          {work.done === null || work.coverage !== "complete" ? <span className="goal-vital-qualifier">{t("vitals.workTotalUnknown")}</span> : null}
+          {work.total !== null && ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
+            ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}
+        </>}>
         {work.total === null ? work.open : <span>{work.done}<small>/{work.total}</small></span>}
       </Vital>
       <Vital label={t("vitals.needsYou")} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}

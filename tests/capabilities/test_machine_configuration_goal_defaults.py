@@ -329,3 +329,63 @@ def test_product_default_and_namespace_removal_use_six_settled_turns(tmp_path, m
     configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
         clear_execution_replan_after_todos=True, execute=True)
     assert _history_goal(registry_path, runtime_root)["execution_profile"]["replan_after_effective_turns"] == 6
+
+
+def test_stride_version_inherits_as_one_review_configuration_and_rolls_back(tmp_path: Path) -> None:
+    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.capabilities.goal_inspection import inspect_goal_capabilities
+
+    _repo, registry_path, runtime_root = _fixture(tmp_path)
+    owner = build_builtin_machine_configuration_registry()
+    configuration = _machine_configuration()
+    configuration["namespaces"]["todo_replan_cadence"] = {
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns", "count": 6,
+        "stride_strategy": "evidence_conditioned_v1",
+    }
+    before = registry_path.read_bytes()
+    preview = configure_machine_configuration(runtime_root=runtime_root,
+        registry=owner, configuration=configuration)
+    assert registry_path.read_bytes() == before
+    configure_machine_configuration(runtime_root=runtime_root, registry=owner,
+        configuration=configuration, execute=True, expected_plan_revision=preview["plan_revision"])
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "evidence_conditioned_v1"
+    # A legacy Goal override pins the whole review configuration, including off.
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+        execution_replan_after_turns=3, execute=True)
+    assert "stride_strategy" not in _history_goal(registry_path, runtime_root)["execution_profile"]
+    enabled = _goal_capability_options("todo_replan_cadence", {
+        "count_unit": "effective_turns", "count": 3, "stride_strategy": "evidence_conditioned_v1"})
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True, **enabled)
+    inspected = inspect_goal_capabilities(registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=GOAL_ID)["configuration"]
+    review = next(item for item in inspected["capability_catalog"]["capabilities"]
+        if item["capability_id"] == "todo_replan_cadence")
+    assert review["current"] == {"count_unit": "effective_turns", "count": 3, "stride_strategy": "evidence_conditioned_v1"}
+    assert review["effective_configuration"]["source"] == "goal_override"
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+        execution_stride_strategy="off", execute=True)
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "off"
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+        clear_execution_replan_after_turns=True, execute=True)
+    assert "stride_strategy" not in json.loads(registry_path.read_text())["goals"][0]["execution_profile"]
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["stride_strategy"] == "evidence_conditioned_v1"
+    # Unsupported versions fail before any registry mutation.
+    before = registry_path.read_bytes()
+    with pytest.raises(ValueError, match="stride_strategy"):
+        configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+            execution_replan_after_turns=3, execution_stride_strategy="future_v2", execute=True)
+    assert registry_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("schema_version, strategy", [
+    ("todo_replan_cadence_machine_defaults_v1", "evidence_conditioned_v1"),
+    ("todo_replan_cadence_machine_defaults_v2", "future_v2"),
+    ("todo_replan_cadence_machine_defaults_v2", None),
+])
+def test_stride_configuration_rejects_unsupported_or_ambiguous_versions(schema_version, strategy):
+    with pytest.raises(ValueError):
+        normalize_todo_replan_cadence_machine_defaults({
+            "schema_version": schema_version, "count_unit": "effective_turns",
+            "count": 6, "stride_strategy": strategy,
+        })

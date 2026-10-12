@@ -6,9 +6,9 @@
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-15 |
 | 作者 | LoopX maintainers |
-| 范围 | Effect 反馈、有界交付、权限升级、模型资格验证与长程效率 |
+| 范围 | Effect 反馈、有界交付、研究范围、权限升级与长程效果/成本 |
 | Tracking issue | [#3203](https://github.com/huangruiteng/loopx/issues/3203) |
-| 源码基线 | LoopX `8b8e7b248` |
+| 源码基线 | LoopX `d03863fd0`；下文包含源码层面的决策接续修订 |
 
 > 语言说明：
 > [英文版](./hierarchical-agent-stride-control-v0.md)与本文档是语义镜像，
@@ -33,10 +33,16 @@ interpreter 拥有，中层由 LoopX Turn/Todo/settlement 生命周期拥有，�
 goal、vision、gate 与人类权限拥有。内层结果可以迫使中层提前结算；中层结果
 可以迫使外层提前升级权限。一次 scheduler tick 本身不能制造任何一种语义迁移。
 
-本 RFC 提出一项 measurement-first 研究计划。最小有用切片是从现有 receipt
-派生只读、provider-neutral 的 stride observation。在任何 runtime 自动扩大或
-缩小步幅前，先刻画现有 standard 与 fine-grained execution。Adaptive control
-先进入 shadow mode，只有反复、稳定的资格验证成立后才 promotion。
+研究使 delivery stride 成为**向量**：工作切片大小、相对当前机制的距离与验证
+广度。各坐标可独立调节。很长的工作切片可以完成大量正确的局部检查，却未增加关于
+目标缺口的信息；减少控制事件不能修好这个问题。反过来，接近题目可达极限时，
+中后期的小收益也可能有价值；单凭时长或分数持平不能决定扩大实验。
+
+因此交付控制闭合**决定 -> 实际工作 -> 证据 -> 下一决定**，执行和结算仍归原
+owner。当前有界源码实现把上次被接受的 Vision 路线和后续记录进度返回给 replan，
+目标收益明确保持 unknown。这是决策输入和 Agent 指引，不是自适应调度、结果
+采用门禁或研究收益证明。自动策略仍是需要重复资格验证的 opt-in 提案；研究
+状态分支为反事实验证提供起点，而不丢弃已积累的工作。
 
 核心判断是：
 
@@ -146,6 +152,7 @@ bounded delivery slice。它必须诚实终止于以下之一：
 | Delivery | Execution profile 已区分 standard 与 fine-grained Todo contract；fine-grained mode 使用 coherent-slice turn budget，并基于 fresh evidence 创建 successor。每个获准 heartbeat 仍执行完整 durable settlement。 |
 | Continuation | 除同一 Turn 的 controller disposition 外，typed delivery-continuity reducer 可在 heartbeat wake 之间保留最近一次 accountable `outcome_progress` Todo，前提是同一 Todo 仍 open、actionable、capability-ready，且仍由同一 agent 拥有。 |
 | Progress | Typed progress observation、repeat detection、semantic replan closure 与 evidence projection 能区分 material delta 和 maintenance。 |
+| 复盘反馈 | replan context 源码实现可返回上次被接受、绑定证据的 Vision 路线与后续进度引用；按历史追加顺序和 Goal/Agent/Turn lineage 绑定输入。缺失的执行与目标收益仍为 unknown，不证明拟议干预实际运行。 |
 | Research | [研究型探索控制面 RFC](./research-exploration-control-plane-v0.zh-CN.md) 定义了可选的 typed knowledge frontier 与 composition experiment。 |
 | Authority | Goal vision、user gate、permission policy 与 peer/supervisor boundary 和 execution、scheduler 保持分离。 |
 
@@ -153,12 +160,13 @@ bounded delivery slice。它必须诚实终止于以下之一：
 
 | 缺口 | 后果 |
 |---|---|
-| 没有共享的 stride vocabulary | Host、Todo、scheduler 与 human-attention 的变化都被当成一个泛化的“turn length”问题。 |
-| 没有跨层 observation | LoopX 无法判断低吞吐究竟来自 model/tool 往返、过度频繁的 settlement，还是 authority churn。 |
+| 缺少与 outcome 绑定的完整观测 | 已有 M1 只读计数和决策接续输入，但仍需 provider 证据解释目标收益、model/tool、结算与权限变化成本。 |
+| 研究范围策略尚未资格化 | 持续局部调参可能被误认为广泛探索；通用进度标识不证明机制创新或有效信息。 |
 | 没有面向步幅的 model capability profile | 快速 tool-using model 与较慢但协议可靠的模型大体收到静态 execution contract。 |
 | 没有语义 split/merge qualification | Todo 粒度由配置或 prompt 决定，却不按真实 decision change 与 settlement cost 评估。 |
 | 没有 intervention value model | Periodic report 与真正 authority change 没有分开测量。 |
-| 没有 adaptive promotion path | 还没有 shadow recommendation -> bounded experiment -> promoted policy 生命周期。 |
+| adaptive promotion 尚未资格化 | shadow 输入尚不能证明模型采用、匹配接续收益或已 promotion 的 model/work-class 策略。 |
+| 研究状态分支尚未资格化 | 单独源码快照不能保留会话、积累证据及评测机会，无法建立公平接续对照。 |
 
 ## 5. 三层模型
 
@@ -433,6 +441,139 @@ readback 属于 partial slice。科学效用遵循
 [研究决策](research-exploration-control-plane-v0.zh-CN.md#115-由证据驱动的实验决策修订提案)
 的独立资格验证。
 
+### 7.6 研究范围与证据驱动控制
+
+研究步幅包含三个独立选择的坐标。前两个是主要控制量，第三个限定采取行动所需
+证据与成本：
+
+- **工作切片大小**：下次决定前获准执行的连贯 outcome、范围和成本，包括 Todo
+  粒度、拆分过大的实验、在已支持路线上扩大连贯切片。Todo 文本长度和文件数
+  不是大小；扩大仍要有可观察 postcondition 和正常逐 Turn 结算。
+
+- **机制距离**：局部参数/实现微调，或明显不同的表示、模型、搜索邻域、因果
+  解释。假设改名、新文件和更多测试不构成距离。
+- **证据广度**：低成本的判别性探针、可比 pilot，再到真正采用所需的验证。
+  只有解决与下一决定有关的不确定性，扩大覆盖才有价值。
+
+replan 复查这个向量，不成为新的权限 owner。在授权目标内改变 Agent 自建方法
+或暂定候选规则是正常研究决定；改变题目、验收、反馈协议、预算、权限或停止
+条件仍要经过原 owner。扩大探索不授权读取隐藏数据，也不允许失败后重写指标。
+
+| 已观察依据 | 应比较的下一决定 |
+|---|---|
+| 新结果缺失、无效或不可比 | 修复观测，或选覆盖已知的探针；收益保持 unknown。 |
+| 单个有效候选退步，或结果在不确定性内冲突 | 保留 incumbent，限定负证据范围，比较重复测量、未覆盖条件与不同机制；不能因一次失败退休整个 family。 |
+| 局部检查通过，却不能解释权威目标缺口 | 比较有界的机制变化与继续微调，说明判别性预测以及它如何进入真实执行候选。 |
+| 已知空间很小，或方差大于预期效应 | 优先有理由的不确定性消减或低成本改进；大量新增搜索预算要有依据。理论上界不是可行最优解。 |
+| 现有证据与停止条件下已无合理范围内探针 | 通过原 owner 记录有范围的耗尽或具体 hold；不制造活动，也不因此宣布目标达成。 |
+
+由模型选择；通用代码不得根据文案子串、分数斜率、已过小时数或固定失败次数
+推导这些科学判断。指标含义、可比性、噪声和题目空间归 provider；显式机制关系
+与有范围 finding 归 Explore。既有 typed replan owner 投递目标、证据及上次路线；
+正常 task/successor 与 Vision 写回拥有决定和采用。
+
+每个决策边界执行：
+
+1. 将上次路线与后续工作、当前产物和权威结果对照；区分实际运行、知识变化、
+   真实采用与 unknown。进度回执不足以证明这些关系。
+2. 按需要比较原路线接续、判别性替代与有理由的重复测量，权衡预期目标/信息
+   收益及完整边际成本：模型输入输出、工具、验证、控制与机会成本。
+3. 选择一个有界探针，说明判别性预测、比较对象、incumbent 保护、采用条件和
+   成本/停止界限。较大机制变化可从小 pilot 开始，不必先做大范围验证。
+4. 通过正常获准 task 执行，证据绑定到受测输入与精确候选；失败、负结果及
+   不确定结果分别保留。
+5. 下次复盘用新观测保留、修订或停止有范围路线；重复必须说明能解决什么新
+   不确定性。不因 prompt 已读就重置其他触发计数。
+
+源码层面的 `replan_context.decision_followthrough` 是首个可复用反馈切片：引用
+上次被接受、绑定证据的 Vision 路线，以及最多六个后续不同进度 fingerprint，
+保留完整记录计数与遗漏信息。按不可变追加顺序而非时间戳关联，排除其他 Agent
+及显式退休的 Goal 实例；引用由现有 history 入口解析。依据缺失或损坏时不虚构
+替代证据。此字段不资格化执行、科学创新、收益、有效 Turn 计数或验收，后者仍
+独立验证；不增加 scheduler、选择规则、quota 消耗或逐结果结算。
+
+#### 可迭代策略与工程边界
+
+第一版策略是**模型依据证据调节向量**：为各坐标提出扩大、保持或缩小，附上理由
+和可证伪的下一探针。不优化一个通用 novelty 分数：机制距离相对于明确的参照
+方法和目标，切片大小相对于下一有用 postcondition 与决策风险。
+
+| 依据 | 工作切片 | 机制距离 | 证据广度 |
+|---|---|---|---|
+| 已支持方法持续产生可复现的有用进展 | 决策风险允许时扩大连贯工作 | 保持，除非剩余缺口支持替代方案 | 保留必需检查，避免冗余扫测 |
+| 适用证据下当前方法仍有明显目标缺口 | 从小型判别性 pilot 开始 | 比较更大偏离与原路线接续 | 缩到能区分路线的观测 |
+| 结果冲突或预期收益小于不确定性 | 决策明确前缩小工作 | 保持或比较替代，不宣布已反驳 | 仅扩大有理由的重复/不确定性探针 |
+| 较大偏离产生可归因的有用结果 | 扩大已采用方法的下一切片 | 保留有效偏离，不为新颖而新颖 | 扩大采用所需验证 |
+| 决策相关失败或权限边界出现 | 经原 owner 结束/拆分当前切片 | 在原目标内重新审视 | 验证具体失败，不扩大权限 |
+
+此表指导模型决定，不是文案分类器或固定数字策略。工程设计保留四个可替换边界：
+
+1. **观测适配器**提供精确候选/结果、有效性/不确定性、覆盖与成本事实；含义归
+   垂域 provider，不能写通用策略或授予执行权。
+2. **策略**消费一份绑定来源的复盘依据，提出步幅向量、下一探针与预期收益/
+   成本；实验记录策略版本。先采用上表，后续确定性启发式或学习策略可在相同
+   输入下替换此函数。第二个真实、已资格化策略需要接缝前，不建 plugin registry
+   或训练 controller。
+3. **准入/采用**通过既有 Todo、Vision、replan、预算和权限 owner 验证提案。
+   工作大小变化使用正常 split/continuation/successor；原 Turn 结算未完时，
+   路线决定不能执行 successor。
+4. **反馈**将实际执行、结果、保留产物与完整成本返回下次复盘。提案、采用和
+   收益分别可回放；缺失反馈不能变成成功。
+
+当前源码切片实现第四个边界的已记录决定输入和可选 TypeScript 策略组件
+`evidence_conditioned_v1`。第一版消费 Agent 判断的证据 basis，确定性计算三个
+坐标的 grow/hold/shrink；versioned `agent_vision.stride_decision` 保存向量、当轮
+义务与观测 context 引用、下一探针及采用/成本条件。Vision authoring 在写入前
+校验声明的结构和向量；启用后的新 Vision 路线复盘必须提交结构化提案，其他
+来源专属出口保留。正常 Todo/Next Action 接续执行，下轮对照真实观测。
+这是结构化提案调控，不是自动执行器或研究效果分类器。共享配置词表为 `off | evidence_conditioned_v1`，未知
+版本在写入前拒绝。通过既有 Goal 复盘能力的编辑器与 CLI 设置完整 Goal 覆盖
+或沿用设备默认；off 保持普通证据身份、选择和原有五条指引，启用时才增加
+决定回读及工作大小、机制距离、验证范围的独立建议。没有
+自动向量执行器。先用既有有界 `path_delta` 与 task Next Action 记录提案，不新建
+策略/状态数据库。显式 versioned attachment 避免从文案解析控制向量。未来策略版本继续验证
+default-off parity 与字段界限，不静默重释旧决定；提案与采用权限保持分离。每版策略经同起点
+消融证明采用和完整成本收益再 promotion；先改一个坐标，再研究交互。六个有效
+工作 Turn 仍是现有复盘默认周期，不是 Todo、实验或机制变化的大小。
+
+敏捷探索可只跑启用策略的测试组，以历史基线作描述性参照；不要求每次迭代都
+重启并发基线。这类运行用于观察路线采用与迭代收益，不单独证明因果净收益或
+promotion 资格。需要相应结论时，再执行匹配接续与重复验证。
+
+### 7.7 研究状态分支与匹配接续
+
+可恢复研究点包含**会话位置、研究证据、代码/候选产物与观测机会**。单独源码
+归档或轨迹前缀不是完整研究点。捕获与验证复用既有[备份/恢复 owner](complete-state-recovery-v0.zh-CN.md)、
+Host 会话 owner 和 artifact provider；本 RFC 定义研究实验的一致性及可比性要求，
+不新建 restore 权威。
+
+捕获前按已分配研究预算或语义事件声明位置，不事后挑分数有利的点。十小时等
+中后期位置属于实验设置，不是产品默认值或自动转向条件。记录实际边界与 skew：
+
+- 原生会话 cursor 和已资格化的 Host export/fork 路径；复制日志不证明能恢复
+  session；
+- 已结算的 LoopX 研究证据、原目标/优先级、既有决定、有范围负结果及未解问题；
+- 精确工作源码、必要且获授权的未跟踪文件、incumbent 与其 qualifying result；
+  尚未测量的候选与 incumbent 分开保留；
+- source/model/tool/evaluator pins 与已消费的 solver-visible feedback；
+- 剩余总预算、已受理提交历史及原协议下的下一次反馈机会。
+
+inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
+Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
+submission token 不能变成目标侧权限；未知效果先按原身份 reconcile，再决定
+是否 replay。Host 尚无已资格化 fork 就报告缺口；证据摘要重启是另一种 treatment，
+不能称为精确接续。
+
+匹配实验前先验证 digest/cursor/artifact 一致性、partial capture、缺失文件、
+输入变化、重复恢复、竞争 writer、来源停止和结果丢失投递。恢复要证明实际采用
+所保存的证据和代码，并完成新工作；tar 验证或打开 session 本身不是验收。
+
+研究消融从**同一份**已资格化研究点分成原策略接续与证据驱动范围复盘，使用
+等额接续预算与资源，只改变一个控制因素；通过 evaluator owner 保留反馈机会数
+与冷却时机。Session 重启、摘要替换、版本升级或策略组合属于额外变量。保留
+所有分支及无效/负结果，比较实际采用的原生成绩、新信息与完整接续成本。结果
+只资格化这项有范围干预，不证明整个 LoopX 或一个通用最优 stride。
+
 ## 8. 测量模型
 
 第一版实现应先测量，再控制。
@@ -613,6 +754,17 @@ Stride qualification 至少应区分：
 - event-driven authority escalation；
 - effect 与 delivery contract 保持一致。
 
+**Stage E：从同一捕获状态比较研究范围**
+
+- 原策略接续与 §7.6 的证据驱动范围复盘；
+- 同一份经 §7.7 资格化的会话/证据/代码研究点与反馈历史；
+- 等额接续资源、预算与评测机会；
+- 原生目标结果、新信息/采用及完整成本分别测量；
+- 先做小规模恢复/采用 pilot，重复 cell 之后才 promotion。
+
+选取确有不同机制空间的任务，同时保留接近上界或噪声较大的 case 检查适用界限。
+不能在看到分数后挑 checkpoint 或省略分支。
+
 只有这些阶段识别出 interaction 后，factorial experiment 才组合已 promotion 的
 profile。
 
@@ -625,19 +777,14 @@ authority。测试不能仅因输出包含某个关键词就通过。
 
 ## 11. 最小有用实现切片
 
-第一版实现有意保持窄小、可逆：
+M1 只读观测仍可用。下一完整、可逆切片把既有被接受的决定与后续证据投递到现有
+replan 入口，配合 §7.6 指引；不新增分类器、调度器或验收门。先验证真实 CLI/Host
+投影、不可变引用回读、缺失/损坏/陈旧输入及不变的语义 discharge。
 
-1. 为 effect、delivery、authority stride 增加一套 public architecture vocabulary。
-2. 在可用处从现有 Turn、settlement、Todo、quota 与 gate receipt 派生只读 stride
-   observation。
-3. 增加 offline evaluator，报告各层 metric 与 mismatch signal。
-4. 用 public-safe fixture 刻画 standard/fine-grained profile，并至少保留一条真实
-   model behavior qualification 路径。
-5. 只输出 shadow recommendation，不改变 Todo selection、scheduler frequency、
-   effect execution 或 user notification。
-
-第一版应扩展最近的现有 Turn/status read model，不能新建 built-in capability、
-executor、scheduler 或 generic policy framework。
+随后按 §7.7 资格化一个研究状态捕获/接续 profile，区分归档验证、可执行接续、
+模型采用和科学收益。匹配接续 pilot 判断范围复盘能否产生判别性实验与真实采用
+的改进；重复研究及完整成本证据先于自适应策略 promotion。部分 Host export 或
+只读决定投影都不闭合整项实现计划。
 
 ## 12. Milestone
 
@@ -665,6 +812,9 @@ executor、scheduler 或 generic policy framework。
 - 从 typed postcondition/evidence transition 建议 split、keep 或 merge；
 - 用独立 acceptance rule 验证建议；
 - Todo 与 replan 仍是唯一 execution authority。
+- 在真实 replan 入口资格化 §7.6 决策接续，观察下一探针是否改变有用信息，
+  而非仅改变标识；
+- 资格化一个 §7.7 研究状态分支与匹配接续 profile；
 
 - 在 shadow 中验证 §7.5 的 provider checkpoint/monitor binding，区分模型
   决策、实验完成与 Turn settlement。
@@ -702,6 +852,11 @@ executor、scheduler 或 generic policy framework。
 8. shadow mode 不改变 scheduling、quota spend、notification、gate 或 execution；
 9. promoted profile 在 repeated run 中改善 end-to-end quality/cost，而不只是局部计数；
 10. failure case 保持 honest terminal 且可恢复。
+11. 研究范围变化保留原题目与验收，证据广度由决策价值而非重复检查数解释；
+12. 恢复研究点保留会话/证据/代码及等价反馈机会，不复活来源执行权；
+13. 既有决定、真实实验、结果解释与采用动作分别可观察；缺失执行/收益保持 unknown；
+14. 匹配接续比较保留 incumbent、不确定性、失败及完整 model/tool/control 成本，
+    局部代理指标收益不当作原生目标收益。
 
 ## 14. 非目标
 

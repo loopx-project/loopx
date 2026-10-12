@@ -4,8 +4,10 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
-import {requiredSemanticOutcomes} from "./replan_semantics.ts";
+import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semantics.ts";
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
+import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
+import {normalizeStrideDecision, normalizeStrideStrategy} from "./stride_policy.ts";
 
 const CONTEXT_SCHEMA = "replan_context_v0";
 // Replan is an infrequent decision, not the ordinary guard's display window.
@@ -102,6 +104,97 @@ function coreGoal(value: unknown): JsonObject {
     objective_missing: objective === null, acceptance_contract: acceptance};
 }
 
+function acceptedDecisionSource(row: JsonObject): boolean {
+  const source = objectOrNull(row._source_facts);
+  const identity = objectOrNull(source?.settlement_identity);
+  const vision = objectOrNull(source?.agent_vision);
+  const ack = objectOrNull(source?.autonomous_replan_ack);
+  const delta = objectOrNull(ack?.semantic_delta);
+  return !!source && identity?.schema_version === "quota_settlement_identity_v0" &&
+    ["goal_id", "agent_id", "todo_id"].every(key => identity[key] === row[key]) &&
+    identity.turn_instance_id === source.turn_instance_id &&
+    typeof identity.turn_instance_id === "string" && ID.test(identity.turn_instance_id) &&
+    !objectOrNull(source.quota_spend_commit) &&
+    vision?.schema_version === "goal_vision_replan_contract_v0" && vision.agent_id === row.agent_id &&
+    (vision.goal_id == null || vision.goal_id === row.goal_id) &&
+    ack?.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
+    delta?.schema_version === "replan_semantic_delta_v0" && delta.accepted === true &&
+    Array.isArray(delta.satisfying_outcomes) && delta.satisfying_outcomes.includes("fresh_vision_path_outcome");
+}
+
+function recordedDecision(row: JsonObject): JsonObject | null {
+  if (!acceptedDecisionSource(row)) return null;
+  const source = objectOrNull(row._source_facts)!;
+  let path: JsonObject | null;
+  try {
+    [path] = normalizeGoalPathDelta(objectOrNull(source.agent_vision)?.path_delta);
+  } catch { return null; }
+  if (!path || !FRESH_PATH_DISPOSITIONS.has(String(path.outcome)) ||
+      !Array.isArray(path.evidence_refs) || !path.evidence_refs.length) return null;
+  const ref = objectOrNull(source.goal_ref);
+  if (source.goal_ref != null && (!ref || ref.goal_id !== row.goal_id ||
+      typeof ref.goal_instance_id !== "string" || !ID.test(ref.goal_instance_id))) return null;
+  let stride: JsonObject | null;
+  try { [stride] = normalizeStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
+  catch { return null; }
+  const decision = {history_evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
+    generated_at: row.generated_at, todo_id: row.todo_id, turn_instance_id: source.turn_instance_id,
+    goal_ref: ref ? {goal_id: ref.goal_id, goal_instance_id: ref.goal_instance_id} : null,
+    path_delta: path, ...(stride ? {stride_decision: stride} : {})};
+  // Existing history refs keep their identity. This derived ref additionally
+  // binds the path itself, so a changed decision cannot resolve old evidence.
+  return {evidence_ref: "replan-decision-" + digest(decision), ...decision};
+}
+
+/** Return a recorded decision to the next review, without judging its utility.
+ * Append order belongs to the captured history, not timestamps or prose. A
+ * progress observation proves neither execution nor scientific improvement.
+ */
+function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullIndex: boolean): JsonObject | null {
+  const currentRef = objectOrNull(objectOrNull(goalFacts)?.goal_ref);
+  const scoped = rows.filter(row => {
+    const source = objectOrNull(row._source_facts);
+    const ref = objectOrNull(source?.goal_ref);
+    return source && Number.isSafeInteger(source.history_position) &&
+      Number(source.history_position) >= 0 &&
+      (!currentRef || (ref?.goal_id === currentRef.goal_id &&
+        ref?.goal_instance_id === currentRef.goal_instance_id));
+  }).sort((a, b) => Number(objectOrNull(b._source_facts)!.history_position) -
+    Number(objectOrNull(a._source_facts)!.history_position));
+  const previous = scoped.find(acceptedDecisionSource);
+  if (!previous) return null;
+  // Do not fall back to an older decision when the latest basis is corrupt.
+  const decision = recordedDecision(previous);
+  if (!decision) return null;
+  const source = objectOrNull(previous._source_facts)!;
+  const subsequent = new Map<string, JsonObject>();
+  for (const row of scoped) {
+    const facts = objectOrNull(row._source_facts)!;
+    if (Number(facts.history_position) <= Number(source.history_position) || !row.progress_observation) continue;
+    const progress = row.progress_observation as JsonObject;
+    if (!subsequent.has(String(progress.fingerprint))) subsequent.set(String(progress.fingerprint), row);
+  }
+  // The complete denominator is retained even when the review details are capped.
+  const observations = [...subsequent.values()];
+  return {
+    previous_decision: decision,
+    source_history_complete: fromFullIndex,
+    unsequenced_progress_count: rows.filter(row => row.progress_observation &&
+      !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
+    recorded_progress_count: observations.length,
+    observations: observations.slice(0, 6).map(row => ({
+      evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
+      generated_at: row.generated_at, todo_id: row.todo_id,
+      coverage_ref: (row.progress_observation as JsonObject).fingerprint,
+    })),
+    omitted_observation_count: Math.max(0, observations.length - 6),
+    execution_and_goal_gain: "unknown",
+    guidance: "Compare the previous path decision with subsequent work and authoritative outcomes. " +
+      "Recorded progress and changed identifiers do not prove execution, a new mechanism, or goal gain. " +
+      "Resolve evidence before deciding what to retain, change, or test next.",
+  };
+}
+
 export function validateReplanContext(value: unknown): JsonObject {
   const context = requireJsonObject(value, "replan_context");
   if (context.schema_version !== CONTEXT_SCHEMA) {
@@ -124,6 +217,26 @@ export function validateReplanContext(value: unknown): JsonObject {
   const frontier = requireJsonObject(context.uncovered_frontier, "replan_context.uncovered_frontier");
   if (!Array.isArray(frontier.required_any_of)) {
     throw new EffectRuntimeRequestError("replan_context uncovered_frontier requires required_any_of");
+  }
+  if (context.stride_strategy !== undefined) normalizeStrideStrategy(context.stride_strategy);
+  if (context.decision_followthrough !== undefined) {
+    const follow = requireJsonObject(context.decision_followthrough, "decision_followthrough");
+    if (context.stride_strategy !== "evidence_conditioned_v1" || follow.execution_and_goal_gain !== "unknown") {
+      throw new EffectRuntimeRequestError("decision followthrough requires the enabled strategy and unknown utility");
+    }
+    const observations = objects(follow.observations, "decision_followthrough.observations");
+    if (observations.length > 6 || typeof follow.source_history_complete !== "boolean" ||
+        ["recorded_progress_count", "omitted_observation_count", "unsequenced_progress_count"].some(
+          key => !Number.isSafeInteger(follow[key]) || Number(follow[key]) < 0) ||
+        Number(follow.recorded_progress_count) !== observations.length + Number(follow.omitted_observation_count)) {
+      throw new EffectRuntimeRequestError("decision followthrough requires bounded detail and explicit coverage counts");
+    }
+    const previous = requireJsonObject(follow.previous_decision, "decision_followthrough.previous_decision");
+    identifier(previous.evidence_ref, "previous_decision.evidence_ref");
+    identifier(previous.history_evidence_ref, "previous_decision.history_evidence_ref");
+    identifier(previous.turn_instance_id, "previous_decision.turn_instance_id");
+    normalizeGoalPathDelta(previous.path_delta);
+    normalizeStrideDecision(previous.stride_decision);
   }
   return context;
 }
@@ -173,7 +286,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   if (request.operation === "resolve") {
     if (!agent) throw new EffectRuntimeRequestError("evidence resolution requires agent_id");
     const ref = identifier(request.evidence_ref, "evidence_ref");
-    const match = unique.get(ref);
+    const match = unique.get(ref) ?? rows.map(recordedDecision).find(decision => decision?.evidence_ref === ref);
     if (!match) throw new EffectRuntimeRequestError(
       "evidence reference is unavailable in this Goal and Agent history window; refresh replan_context",
       "replan_evidence_unavailable");
@@ -252,7 +365,12 @@ export function projectReplanContext(value: unknown): JsonObject {
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
   const core = coreGoal(request.goal_facts);
-  const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier});
+  const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
+  const followthrough = agent && strideStrategy !== "off"
+    ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true) : null;
+  const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
+    ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
+    ...(followthrough ? {decision_followthrough: followthrough} : {})});
   const context: JsonObject = {
     schema_version: CONTEXT_SCHEMA, context_id: contextId, goal_id: goal, agent_id: agent,
     obligation_id: obligationId, evidence_source: "compact_run_history", delivery: "host_projected",
@@ -263,6 +381,8 @@ export function projectReplanContext(value: unknown): JsonObject {
     coverage_ledger: ledger, coverage_count: coverage.size, coverage_truncated: coverage.size > ledger.length,
     uncovered_frontier: frontier,
   };
+  if (strideStrategy !== "off") context.stride_strategy = strideStrategy;
+  if (followthrough) context.decision_followthrough = followthrough;
   if (omitted.length) context.omitted_evidence = {
     distinct_observation_count: omitted.length,
     newest_at: omitted[0].row.generated_at, oldest_at: omitted.at(-1)!.first,

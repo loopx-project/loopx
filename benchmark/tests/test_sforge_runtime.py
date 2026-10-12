@@ -454,6 +454,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("native-goal", ["--replan-after-todos", "3"]),
     ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
     ("heartbeat-explore", ["--replan-after-todos", "0"]),
+    ("official", ["--stride-strategy", "off"]),
+    ("native-goal", ["--stride-strategy", "evidence_conditioned_v1"]),
+    ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')

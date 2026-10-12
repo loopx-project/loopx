@@ -1,0 +1,7 @@
+{
+  "schema_version": "stride_decision_v1",
+  "basis_options": ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"],
+  "axis_names": ["work_slice", "route_distance", "validation_scope"],
+  "adjustments": ["grow", "hold", "shrink"],
+  "probe_field_limits": {"scope": 120, "prediction": 120, "adoption_criterion": 120, "cost_bound": 100}
+}

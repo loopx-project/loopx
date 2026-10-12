@@ -444,7 +444,7 @@ def _build_state_refresh_output_projections(
             field: agent_vision.get(field)
             for field in (
                 "schema_version", "agent_id", "state", "vision_patch",
-                "todo_delta", "fallback_declarations", "vision_budget",
+                "todo_delta", "fallback_declarations", "stride_decision", "vision_budget",
             )
         }
         if isinstance(agent_vision.get("path_delta"), dict):

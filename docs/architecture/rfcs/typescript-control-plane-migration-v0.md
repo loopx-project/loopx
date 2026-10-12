@@ -31,9 +31,9 @@ T0–T4, not additional provider promotion or completed migration claims.
 
 <a id="current-delivery-frontier-2026-10-02"></a>
 
-## Current delivery frontier (2026-10-07)
+## Current delivery frontier (2026-10-12)
 
-Rechecked at main `06b6caa07`: #5413/#5466/#5283 and the affected creation,
+Rechecked at main `38cb407ed`: #5413/#5466/#5283 and the affected creation,
 Host-stop and UI-history owners #5500/#5805/#5308/#5398 are merged. Reuse
 their delivered boundaries rather than reopening the October 2 merge queue.
 The [current validation, migration and deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02)
@@ -76,6 +76,32 @@ must still work, with missing-provider/lease and changed-source/backup refusals.
 Lark dry-run and Explore replay qualify local consumers only, not live external
 adoption. This closes the production re-export dependency, while last supported
 source writers, historical recovery, installed cohort and release exits remain.
+
+The next T4 package is the [import-first normal-writer cutoff](../../reference/local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence),
+not another re-export or producer-loading extraction. At `38cb407ed`, live
+unpromoted callers remain in ordinary mutation, bootstrap/creation opt-out,
+team-plan, Monitor, ownership/source lease and active capture/binding. Reuse
+their typed admission/transaction owners; treat retained source capture,
+historical receipts and permanent document IO as recovery obligations.
+The existing delivery Todos should carry these concrete exits:
+
+- Qualify the installed import/backup/recovery journey for the declared source
+  matrix; importer implementation is already present and is not a missing-code
+  dependency. Do not reinterpret complete coordination backup as complete Goal
+  backup.
+- Run the bounded reversible core-developer SQLite trial before the breaking
+  cutoff, recording real Host adoption/use separately from conversion drills.
+- Deliver the cohesive 2.0 normal-writer cutoff: fresh unmigrated writes and
+  execution grants refuse before effects; canonical work and original-operation
+  recovery pass with the old writer physically absent. Keep the additive 1.x
+  import/deprecation line compatible.
+- After the last source caller exits, reconcile pending outboxes and delete
+  unused capture producers/private decisions together. Keep supported historical
+  readers and current-head rollback; do not wait for every external user to
+  migrate or claim full T4/D2/default qualification from internal deletion.
+
+This updates the existing R5/T4 frontier and release proposal; it creates no
+parallel migration owner, runtime gate or release activation.
 
 The retained import-compatible field writer now composes resume normalization
 and contradictory-clear rejection in its existing typed field plan. Keep blank

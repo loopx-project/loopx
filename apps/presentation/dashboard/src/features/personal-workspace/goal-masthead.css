@@ -29,6 +29,7 @@
 .goal-vital.is-danger .goal-vital-value { color: var(--pw-red); }
 .goal-vital.is-recede .goal-vital-value { color: var(--pw-faint); font-weight: 500; }
 .goal-vital-partial { color: var(--pw-amber); }
+.goal-vital-qualifier { display: block; color: var(--pw-amber); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .goal-vital-swap { display: inline-block; min-width: 0; overflow: hidden; text-overflow: ellipsis; animation: goal-value-swap var(--motion-base) var(--ease-out); }
 .goal-vitals-scope { align-self: center; padding-left: 12px; color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-caption); white-space: nowrap; }
 

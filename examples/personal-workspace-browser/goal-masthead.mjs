@@ -118,7 +118,7 @@ export const goalMastheadScenario = {
       await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "任务" }).waitFor();
       const openLane = page.locator(".personal-task-lane").filter({ has: page.locator("header strong", { hasText: "待执行 / 进行中" }) });
       assert.equal(await openLane.locator("header > span").innerText(), "5", "The board lists the same open work the strip counts");
-      await page.getByTestId("completed-task-lane").locator("header", { hasText: "4087" }).waitFor({ timeout: 10_000 });
+      await page.locator('[data-goal-panel="tasks"]').getByTestId("completed-task-lane").locator("header", { hasText: "4087" }).waitFor({ timeout: 10_000 });
       await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
       await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
       assert.equal(actionRequests.length, 0, "Opening the Goal, switching views and focusing vitals sends no action request");
@@ -207,6 +207,56 @@ export const goalMastheadScenario = {
     const native = JSON.parse(execFileSync(resolveTestPython(), [
       resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"),
     ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    // Exercise source -> parser -> adapter -> digest -> packaged rendering.
+    // Counts are removed from a real producer payload, not a prebuilt UI model.
+    for (const locale of ["zh-CN", "en"]) {
+      let countMode = "unknown";
+      const ui = await openWorkspacePage(browser, url, { collectCoverage,
+        viewport: { width: locale === "en" ? 390 : 1440, height: 900 },
+        beforeGoto: async (api, page) => {
+          await page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), locale);
+          populate(api, { hostTurn: false });
+          const previous = api.transformStatus;
+          api.transformStatus = fixture => {
+            previous(fixture);
+            const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
+            Object.assign(queue, structuredClone(native));
+            // The surrounding demo has its own current task for this Goal;
+            // isolate this case to the native producer's one work item.
+            fixture.agent_management_projection.agents = fixture.agent_management_projection.agents
+              .filter(agent => agent.current_todo?.goal_id !== goalId);
+            for (const [summary, done, open] of [[queue.agent_todos, "done_count", "open_count"],
+              [queue.project_asset.agent_todos, "done", "open"]]) {
+              delete summary.advancement_done_count;
+              if (countMode === "unknown") { delete summary[done]; delete summary[open]; }
+              else { summary.advancement_done_count = countMode === "zero" ? 0 : 2; summary[done] = summary.advancement_done_count; summary[open] = 1; }
+            }
+          };
+        },
+      });
+      try {
+        if (locale === "en") await ui.page.locator(".personal-mobile-menu").click();
+        await openGoal(ui.page, title);
+        for (const mode of ["unknown", "zero", "known", "unknown"]) {
+          countMode = mode;
+          await ui.page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
+          const expected = mode === "unknown" ? "1" : mode === "zero" ? "0/1" : "2/3";
+          const work = await vital(ui.page, locale === "en" ? "Work" : "工作");
+          await work.cell.locator(".goal-vital-value").filter({hasText: new RegExp(`^${expected}$`)}).waitFor().catch(async error => {
+            await ui.page.screenshot({ path: resolve(outputDir, `goal-work-count-failed-${locale}.png`), animations: "disabled" });
+            throw new Error(`${locale} ${mode}: expected ${expected}; observed ${await work.cell.innerText()}`, {cause: error});
+          });
+          if (mode === "unknown") {
+            await work.cell.getByText(locale === "en" ? "Total unknown" : "总数未知", {exact: true}).waitFor({state: "visible"});
+            assert.equal(await work.cell.locator(".goal-work-ribbon").count(), 0, "Unknown totals cannot imply a completion proportion");
+            await ui.page.screenshot({ path: resolve(outputDir, `goal-work-unknown-${locale}.png`), animations: "disabled" });
+          }
+        }
+        assert.equal(ui.api.turnRequests.length, 0);
+        assert.equal(ui.api.actionApplies.length, 0);
+        assert.equal(ui.errors.length, 0, ui.errors.join(" | "));
+      } finally { coverageEntries.push(...await ui.close()); }
+    }
     for (const locale of ["zh-CN", "en"]) for (const mode of ["bounded", "optional", "empty", "unknown"]) {
       const ui = await openWorkspacePage(browser, url, {
         collectCoverage,

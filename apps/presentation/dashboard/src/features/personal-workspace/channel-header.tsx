@@ -1,4 +1,4 @@
-import { Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { List, Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { GoalLifecycleControl, GoalMastheadIdentity } from "./goal-masthead";
 
 import { useWorkspaceI18n } from "./i18n";
@@ -16,6 +16,8 @@ export function ChannelHeader({
   mobileNavigationOpen,
   onOpenGoalCapabilities,
   onOpenGoalDetails,
+  onOpenAllWork,
+  allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
   onOpenWorkspace,
@@ -45,6 +47,8 @@ export function ChannelHeader({
   mobileNavigationOpen?: boolean;
   onOpenGoalCapabilities?: () => void;
   onOpenGoalDetails?: () => void;
+  onOpenAllWork?: () => void;
+  allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
   onOpenWorkspace?: () => void;
@@ -243,6 +247,7 @@ export function ChannelHeader({
         </nav>
       )}
       <div className="personal-channel-actions">
+        {selectedGoal && onOpenAllWork ? <button type="button" className="personal-icon-button goal-all-work-trigger" aria-label={locale === "zh-CN" ? "打开全部工作" : "Open all work"} aria-expanded={allWorkOpen} aria-haspopup="dialog" onClick={onOpenAllWork}><List size={17} aria-hidden/></button> : null}
         {selectedGoal && !selectedGoal.loadState && onRequestGoalLifecycle ? (
           <GoalLifecycleControl busy={goalLifecycleBusy ?? false} goal={selectedGoal} onRequest={onRequestGoalLifecycle} resumeReviewed={resumeReviewed ?? true} />
         ) : null}

@@ -650,6 +650,33 @@ input 改变后重开 scope、合法同 family probe 与 default-off parity。�
 matched 总预算下独立验证模型 adoption 和科学效用；降低控制成本不能靠隐藏
 有效负证据。
 
+### 11.6 共享 replan 边界的研究范围复盘
+
+[步幅控制闭环](hierarchical-agent-stride-control-v0.zh-CN.md#76-研究范围与证据驱动控制)
+补充结果采用：下一实验应改变机制、验证覆盖，还是需要解决的不确定性？更多
+正确测试和更多命名假设不证明研究更广。原生/provider outcome、噪声与收益空间
+仍是领域证据，不成为 kernel 分类。在原目标内改变方法不要求新的 user gate；
+题目、验收、权限、反馈与预算变更仍由既有 owner 决定。
+
+有界源码前置切片复用已接受的 `goal_path_delta_v0` 与后续 typed progress，在既有
+复盘入口投递 `replan_context.decision_followthrough`。不增加强制 Explore 附件或
+capture，独立于 Explore 是否启用，也不能满足或解除额外义务。Progress 是记录
+证据，不是执行/采用或科学创新的裁决。§11.5 的 opt-in 结果采用门禁与 composition
+lineage 仍是独立、未资格化的工作。
+
+Agent 应保留已资格化 incumbent、指出未解释的目标缺口，并比较判别性替代、
+原路线接续与有理由的重复测量。所选探针的预测、采用条件及成本绑定正常 task/
+Vision continuation，下次复盘检查实际候选执行与结果。输入变化可重新打开有范围
+负 finding；不变条件下重复要说明理由。没有按已过小时数或退步分数强制转向、
+退休 family 的规则。
+
+通过[同起点接续实验](hierarchical-agent-stride-control-v0.zh-CN.md#77-研究状态分支与匹配接续)
+资格化干预，保留会话、负证据、代码/incumbent 与反馈机会。观察下一探针是否
+解决不确定性、结果是否进入实际采用的产物，再比较原生目标结果和完整成本。
+打开 session、path 写回与 context 送达都是前置事实，不证明研究效果。自动排序/
+enforcement 在特定 profile 验证前保持 default-off；此输入切片或 blog 声明都不
+闭合 M3/M4。
+
 ## 12. 写时强制
 
 Write gate 必须复用 quota 所用的同一 current goal-frontier 与 Explore gap
