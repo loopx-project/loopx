@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rename, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {createInterface} from "node:readline";
-import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {testPythonCommand} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {openWorkspacePage} from "./scenario-context.mjs";
 
@@ -12,7 +12,13 @@ export const goalWorkspaceSelectionScenario = {
   id: "goal-workspace-selection",
   async run({browser, collectCoverage, url}) {
     const root = await mkdtemp(resolve(tmpdir(), "loopx-goal-workspace-"));
-    const child = spawn(resolveTestPython(), ["-u", resolve(repoRoot, "examples/personal-workspace-browser/goal-workspace-backend.py"), root],
+    // runpy keeps the fixture's __file__ while the shared launcher owns imports.
+    const backendCommand = testPythonCommand(`
+import runpy
+sys.argv = [${JSON.stringify(resolve(repoRoot, "examples/personal-workspace-browser/goal-workspace-backend.py"))}, ${JSON.stringify(root)}]
+runpy.run_path(sys.argv[0], run_name="__main__")
+`);
+    const child = spawn(backendCommand.command, backendCommand.args,
       {cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"]});
     const lines = createInterface({input: child.stdout});
     let diagnostics = "", context;
