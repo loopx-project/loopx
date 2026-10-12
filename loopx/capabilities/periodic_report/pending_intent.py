@@ -1352,7 +1352,7 @@ def _consume_pending_periodic_report_intent(
         path=publication_candidate_path,
         candidate=publication_candidate,
     )
-    from ...todos import add_goal_todo
+    from ...control_plane.todos.mutation_api import add_goal_todo
 
     delivery = add_goal_todo(
         registry_path=registry_path,

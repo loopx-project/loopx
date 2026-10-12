@@ -46,15 +46,15 @@ from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
-from ..todos import (
+from ..control_plane.todos.mutation_api import (
     add_goal_todo,
     archive_completed_todos,
     complete_goal_todo,
-    list_goal_todos,
-    resolve_todo_state,
     supersede_goal_todo,
     update_goal_todo,
 )
+from ..control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.todos.path_resolution import resolve_todo_state
 from .todo_argument_validation import (
     validate_capability_gap_options,
     validate_shared_todo_options,

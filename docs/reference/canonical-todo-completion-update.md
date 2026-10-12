@@ -551,6 +551,30 @@ Whole-writer retirement still needs the declared support cutoff, last callers
 and pending outbox disposition; this separation does not force an upgrade or
 change a provider default.
 
+Production callers import those same owners directly: `mutation_api` for the
+five operations and archive constant, `list_readback` for complete Todo reads,
+`path_resolution` for configured source routing, and `active_state_editing` for
+supported source-display parsing. This includes CLI registration, quota/planning,
+capability consumers and Lark. The historic `loopx.todos` public surface remains
+an alias to the same function objects; no source-format support is withdrawn.
+The consumer oracle adds physical facade removal to whole-writer/four-producer
+removal in source and normal-wheel copies. It reuses the lifecycle, creation,
+lease/once-only settlement and Monitor negative/replay oracles, plus real App
+HTTP cold import, later mutations and server restart. The Lark dry-run refuses
+remote execution; Explore projection replays without duplicate events. These
+local extension checks do not qualify live Lark adoption. Restoring imports is
+a code rollback with no new schema, provider selection or receipt conversion.
+
+生产调用方直接导入相同 owner：`mutation_api` 负责五种操作及归档常量，
+`list_readback` 负责完整 Todo 读取，`path_resolution` 负责已配置的源路径，
+`active_state_editing` 负责受支持的源显示解析；覆盖 CLI 注册、quota／规划、能力
+消费者与 Lark。历史 `loopx.todos` 仍重导出相同函数对象，旧格式支持未撤销。
+消费者检查在源码及正常 wheel 中同时物理移除 facade、整个 writer 和四个 producer，
+复用生命周期、创建、租约／恰好一次结算及 Monitor 负例／重放，另验真实 App HTTP
+冷导入、后续写入与服务重启。Lark dry-run 不执行远端命令，Explore 重放不重复事件，
+这些本地扩展检查不认证 live Lark 采用。回滚只恢复代码导入，不转换 schema、provider
+选择或回执；有真实调用的旧源 IO 和历史恢复仍保留。
+
 The retained field adapter preserves blank Python resume values as omission,
 timezone normalization, explicit clears and rejection before source mutation.
 Invalid supplied conditions use the typed owner's actionable diagnostic. This

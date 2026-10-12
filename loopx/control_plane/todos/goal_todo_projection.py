@@ -2,8 +2,8 @@
 
 The text is a parameter rather than a file read so a writer that still holds
 the state-file lock can project the exact bytes it is about to commit;
-``loopx.todos.list_goal_todos`` passes the on-disk text. Everything here is a
-projection of those bytes and rollout metadata. Retired event sources are
+``loopx.control_plane.todos.list_readback.list_goal_todos`` passes the on-disk
+text. Everything here is a projection of those bytes and rollout metadata. Retired event sources are
 rejected before any Markdown substitution.
 """
 

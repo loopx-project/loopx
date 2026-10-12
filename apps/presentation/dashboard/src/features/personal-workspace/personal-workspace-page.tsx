@@ -888,6 +888,7 @@ export function PersonalWorkspacePage({
   useEffect(() => () => {
     if (refreshResetTimer.current !== null) window.clearTimeout(refreshResetTimer.current);
   }, []);
+  const refreshSequenceRef = useRef(0);
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
@@ -1984,6 +1985,7 @@ export function PersonalWorkspacePage({
 
   async function refreshWorkspace() {
     if (!callbacks.onRefresh || refreshState === "loading") return;
+    const sequence = ++refreshSequenceRef.current;
     if (refreshResetTimer.current !== null) {
       window.clearTimeout(refreshResetTimer.current);
       refreshResetTimer.current = null;
@@ -1998,7 +2000,7 @@ export function PersonalWorkspacePage({
     }
     refreshResetTimer.current = window.setTimeout(() => {
       refreshResetTimer.current = null;
-      setRefreshState("idle");
+      if (refreshSequenceRef.current === sequence) setRefreshState("idle");
     }, 1800);
   }
 

@@ -1229,7 +1229,7 @@ def record_quota_monitor_poll(
         # Discovery/selection is an open-work projection, not the committed
         # Turn's lifecycle authority. Read the exact bound record, including
         # completed history; TS monitor admission owns its interpretation.
-        from .todos import list_goal_todos
+        from .control_plane.todos.list_readback import list_goal_todos
 
         if registry_path is not None:
             bound_records = list_goal_todos(

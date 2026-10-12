@@ -55,6 +55,15 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 revision 保持。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
+生产 Todo 消费者不再经历史 `loopx.todos` 重导出：CLI 注册／操作、quota 与规划、
+能力写回、旧源租约读取及 Lark 源投影直接导入相同的 mutation、完整读取、路径或
+Markdown 显示 owner，不新增 wrapper、决策或 RPC。历史公开导入及其受支持的旧源
+IO 继续保留。隔离源码／正常 wheel 同时移除 facade、整个旧 Todo writer 和四个
+shadow producer，验证真实 File/SQLite CLI 生命周期、恰好一次结算、Monitor 重放
+及 App 冷导入／操作／重启；缺 provider／租约及源／备份变化须拒绝。Lark dry-run
+与 Explore 重放只验证本地消费者，不计 live 外部采用。此出口关闭生产重导出依赖，
+最后受支持的旧源 writer、历史恢复、安装 cohort 与发布验收继续保留。
+
 保留的 import-compatible field writer 在既有 typed field plan 中统一等待条件
 归一化及矛盾 clear 拒绝；保持 Python 空白输入省略和锁内 IO，只退役重复的
 normalization crossing，不删除仍受支持的 writer 或迁移 reader。
@@ -116,7 +125,14 @@ producer module。
 
 shadow 诊断现在有独立只读边界：历史 outbox 磁盘 codec 位于
 `local_authority_shadow_history.py`，status／candidate read transport 位于
-`local_authority_shadow_readback.py`。公开 status CLI 不加载源 producer；drain
+`local_authority_shadow_readback.py`。公开 status 和启用的
+`coordination-shadow inspect`／`qualify`／`read-candidate` 直接调用保留 owner，
+不加载源 producer。源码和正常 wheel 物理删除四个 producer 后，完整读回保持
+匹配／拒绝、默认关闭、源漂移、store 缺失／损坏及恢复结果；历史 import 保留
+同一函数 alias，bootstrap／rollback／promotion 的活跃 adapter 继续受支持。
+既有 TS qualifier 保留 provider 读取失败，避免把损坏 journal 误称尚未
+bootstrap；正常／缺失状态保留原结果。这是明确的失败诊断修复，无新 RPC 或
+迁移权限；drain
 仍走现有 orchestration。原 entry 身份、损坏证据、cursor 残留和缺失 store 行为
 保持。Python 保留历史文件解码及展示 IO；TS 保留历史证明、投递与清理权限。
 旧 producer 的已有导入为支持调用方保留 alias，不复制实现。源码及正常 wheel
@@ -1041,6 +1057,13 @@ acceptance 和 vision。展示限制不能变成结算限制。在 legacy、File
   File/SQLite CLI 验证覆盖预览、写入、后续模式变化后的原操作回放及 provider
   故障时禁止 Markdown 回退。本批闭合 canonical setter 的 import 依赖；未晋升
   writer、lease capture 恢复及旧源迁移窗口仍保留独立退役验收。
+- 旧源 task-lease facts 直接复用 `todos/list_readback.py`，移除对历史 mutation
+  facade 的依赖。领取及生命周期决策仍由 TypeScript 拥有；Markdown IO、source
+  capture 与公开兼容 export 仍有实际 caller。CLI 分发反例移除 facade 并禁用
+  editable install finder，防止从 checkout 偷读已删除模块。源码与安装 wheel
+  覆盖 capture 关闭／开启、三种 handoff 模式、回放、owner/version 拒绝、转交、
+  释放及保留历史。本批闭合 reader 到 writer facade 的依赖；完整 writer 删除
+  仍须验收剩余 caller 与迁移窗口。
 
 **每张执行卡的验证与停止规则**
 

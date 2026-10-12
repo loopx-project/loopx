@@ -61,7 +61,9 @@ cd /path/to/your-project
 loopx connect
 loopx status`;
 
-const macAppDownloadUrl = "https://github.com/loopx-project/loopx/releases/latest/download/LoopX.app.zip";
+// Production builds resolve complete releases; local Vite dev uses a known preview.
+const macAppVersion = import.meta.env.VITE_LOOPX_MAC_APP_VERSION || "1.4.0";
+const macAppDownloadUrl = `https://github.com/loopx-project/loopx/releases/download/v${macAppVersion}/LoopX.app.zip`;
 const macAppGuideUrl = "https://github.com/loopx-project/loopx/blob/main/apps/desktop/loopx-control-plane/README.md";
 
 const content = {
@@ -78,7 +80,7 @@ const content = {
     mac: {
       download: "Download for Mac",
       compact: "Mac App",
-      note: "Apple Silicon preview (.app.zip) · Python 3.11+ required.",
+      note: `Apple Silicon preview v${macAppVersion} (.app.zip) · Python 3.11+ required.`,
       guide: "Install and first launch",
     },
     setup: {
@@ -197,7 +199,7 @@ const content = {
     mac: {
       download: "下载 Mac App",
       compact: "Mac App",
-      note: "Apple Silicon 预览版（.app.zip）· 需要 Python 3.11+。",
+      note: `Apple Silicon 预览版 v${macAppVersion}（.app.zip）· 需要 Python 3.11+。`,
       guide: "安装与首次启动",
     },
     setup: {

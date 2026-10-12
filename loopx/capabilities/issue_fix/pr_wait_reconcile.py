@@ -19,7 +19,7 @@ from ...paths import resolve_runtime_root
 from ...rollout_event_log import (
     append_rollout_event, build_rollout_event, rollout_event_log_path,
 )
-from ...todos import list_goal_todos
+from ...control_plane.todos.list_readback import list_goal_todos
 from . import pr_lifecycle
 from .pr_lifecycle_rollout import append_pr_merge_rollout_event
 

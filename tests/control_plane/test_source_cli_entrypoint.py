@@ -193,7 +193,9 @@ os.execv = replace_process
 def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
     tmp_path: Path, entry: str,
 ) -> None:
-    from examples.control_plane.quota_plan_fixtures import SCOPED_AGENT_ID, write_cli_fixture
+    from examples.control_plane.quota_plan_fixtures import (
+        SCOPED_AGENT_ID, write_cli_fixture, write_codex_heartbeat_fixture,
+    )
     from loopx.control_plane.scheduler.state import (
         APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY as state_key,
         load_scheduler_state,
@@ -207,6 +209,10 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
            "LOOPX_KUNLUNCODE_OUTER_AGENT_ID": SCOPED_AGENT_ID}
 
     def selected_ack(goal: str) -> list[str]:
+        write_codex_heartbeat_fixture(
+            Path(env["CODEX_HOME"]), goal_id=goal, agent_id=SCOPED_AGENT_ID,
+            rrule="FREQ=MINUTELY;INTERVAL=60",
+        )
         decision = run_entry(entry, [*prefix, "quota", "should-run", "--goal-id", goal,
                                     "--agent-id", SCOPED_AGENT_ID, "--codex-app",
                                     "--turn-instance-id", "scope-turn"], env=env)
@@ -217,6 +223,12 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
         payload = json.loads(decision.stdout)
         assert payload["mode"] == "should-run"
         assert payload["heartbeat_receipt"]["status"] == "committed"
+        expected_rrule = "FREQ=MINUTELY;INTERVAL=30" if goal == "needs-operator" else "FREQ=MINUTELY;INTERVAL=3"
+        assert payload["scheduler_hint"]["app_automation"]["recommended_rrule"] == expected_rrule
+        write_codex_heartbeat_fixture(
+            Path(env["CODEX_HOME"]), goal_id=goal, agent_id=SCOPED_AGENT_ID,
+            rrule=expected_rrule,
+        )
         return [*prefix, *payload["scheduler_hint"]["app_automation"]
                 ["ack_hint"]["cli_args"]]
 
@@ -253,6 +265,10 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
 
     # Release by the existing controller owner restores real receipt-bound
     # progress, not merely a different blocker or a mocked success payload.
+    write_codex_heartbeat_fixture(
+        Path(env["CODEX_HOME"]), goal_id="needs-operator", agent_id=SCOPED_AGENT_ID,
+        rrule="FREQ=MINUTELY;INTERVAL=30",
+    )
     recovered = run_entry(entry, protected_ack,
                           env={**env, "LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "0"})
     assert recovered.returncode == 0, recovered.stdout + recovered.stderr

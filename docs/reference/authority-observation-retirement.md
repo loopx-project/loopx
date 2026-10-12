@@ -71,6 +71,22 @@ counts are diagnostic hints: they do not authorize cleanup or prove delivery.
 A missing candidate stays missing; status never creates a replacement identity,
 repairs bytes, drains an outbox or grants a writer permission.
 
+The enabled `coordination-shadow inspect`, `qualify` and `read-candidate`
+commands likewise call `local_authority_shadow_readback.py` directly. Their
+complete source snapshot, default-off gate, bounded qualification and refusal
+results retain the same TS owners. Source and normal-wheel checks remove all
+four old producers and compare byte-stable observations, insufficient coverage,
+missing Todo, source drift, unreadable/missing store and subsequent recovery.
+The historical `runtime_shadow.py` imports remain aliases to the same functions.
+The shared TS qualifier now preserves `provider_protocol_violation` and
+`provider_read_unavailable` rather than mislabelling a failed provider read as
+`bootstrap_required`. Consequently a corrupt journal makes inspection fail,
+instead of reporting a missing baseline; qualification and candidate reads
+retain the provider refusal too. Missing and valid stores retain their existing
+behavior. Recovery restores the original bytes, without creating a new lineage.
+Bootstrap, rollback and promotion still load their supported management adapter;
+this reader exit grants no writer cutoff, import or promotion authority.
+
 The retained Python filesystem codecs preserve the existing wire and errors;
 candidate proof and drain effects remain in their TypeScript owners. Supported
 unpromoted writes and `authority-shadow drain` still need their current producer
