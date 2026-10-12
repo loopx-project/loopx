@@ -284,11 +284,25 @@ def test_cold_import_then_new_writes_full_backup_and_independent_history_readbac
         assert not (restored_runtime / "authority/file-v0").exists()
 
 
-@pytest.mark.parametrize("window", ["before_replace", "before_marker", "before_commit", "after_commit"])
-@pytest.mark.parametrize("policy", ["soft_claim", "hard_lease"])
+@pytest.mark.parametrize(
+    "partition,policy,window",
+    [
+        ("todos", policy, window)
+        for policy in ("soft_claim", "hard_lease")
+        for window in (
+            "before_replace",
+            "before_marker",
+            "before_commit",
+            "after_commit",
+        )
+    ]
+    + [
+        ("leases", "hard_lease", window) for window in ("before_commit", "after_commit")
+    ],
+)
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_restored_source_outbox_resumes_once_before_cold_import(
-    tmp_path, policy, window, provider
+    tmp_path, partition, policy, window, provider
 ):
     """Restore only the owned runtime at its original binding before import.
 
@@ -307,18 +321,42 @@ def test_restored_source_outbox_resumes_once_before_cold_import(
     fixture.cli("coordination-shadow", "bootstrap", "--execute")
     first = fixture.add("Keep the original requirement")["todo_id"]
     source_before = fixture.state.read_bytes()
-    fixture.crash(
-        window,
-        "todo",
-        "add",
-        "--role",
-        "agent",
-        "--text",
-        "Retain the interrupted original operation",
+    lease_identity = (
+        "--owner",
+        "agent-a",
+        "--idempotency-key",
+        "original-source-lease",
     )
+    interrupted = (
+        (
+            "task-lease",
+            "acquire",
+            "--todo-id",
+            first,
+            *lease_identity,
+            "--ttl-seconds",
+            "3600",
+        )
+        if partition == "leases"
+        else (
+            "todo",
+            "add",
+            "--role",
+            "agent",
+            "--text",
+            "Retain the interrupted original operation",
+        )
+    )
+    fixture.crash(window, *interrupted)
     source_after = fixture.state.read_bytes()
-    assert (source_after == source_before) == (window == "before_replace")
-    outbox = fixture.runtime / "authority-shadow/outbox" / fixture.goal / "todos"
+    source_unchanged = partition == "leases" or window == "before_replace"
+    assert (source_after == source_before) == source_unchanged
+    lease_path = (
+        fixture.runtime / "goals" / fixture.goal / "task-leases" / (first + ".json")
+    )
+    lease_bytes = lease_path.read_bytes() if partition == "leases" else None
+    original_lease = json.loads(lease_bytes) if lease_bytes is not None else None
+    outbox = fixture.runtime / "authority-shadow/outbox" / fixture.goal / partition
     prepared = next(outbox.glob("*.prepared.json"))
     operation = json.loads(prepared.read_bytes())["entry_id"]
     original = {
@@ -408,7 +446,23 @@ def test_restored_source_outbox_resumes_once_before_cold_import(
     assert transactions[-1]["receipts"][0]["no_op"] == (window == "before_replace")
     head = transactions[-1]["projection"]
     todos = {row["todo_id"]: row for row in head["todos"]}
-    assert first in todos and len(todos) == (1 if window == "before_replace" else 2)
+    assert first in todos and len(todos) == (1 if source_unchanged else 2)
+    if partition == "leases":
+        assert head["leases"] == [original_lease]
+        assert lease_path.read_bytes() == lease_bytes
+        recovered_lease = fixture.cli(
+            "task-lease",
+            "acquire",
+            "--todo-id",
+            first,
+            *lease_identity,
+            "--ttl-seconds",
+            "3600",
+        )
+        assert (
+            recovered_lease["idempotent"] and recovered_lease["lease"] == original_lease
+        )
+        assert lease_path.read_bytes() == lease_bytes
     assert fixture.state.read_bytes() == source_after
     revision = fixture.cli("coordination-shadow", "inspect")["inspection"][
         "provider_revision"
@@ -426,6 +480,36 @@ def test_restored_source_outbox_resumes_once_before_cold_import(
         "coordination-shadow", "rollback", "--provider-revision", revision, "--execute"
     )["rollback"]
     assert rollback["status"] == "applied"
+    if partition == "leases":
+        # Recovering an outbox neither releases nor renews its execution grant.
+        # A separate native owner settlement is required before cold import.
+        unsettled = backup("unsettled-lease")
+        refused = fixture.cli(
+            "coordination-shadow",
+            "prepare-import",
+            "--operation-id",
+            "unsettled-import",
+            "--backup-manifest",
+            unsettled["manifest_path"],
+            "--provider",
+            provider,
+            "--target-handoff-mode",
+            policy,
+            success=False,
+        )["cold_import"]
+        assert refused["reason_code"] == "cold_import_lease_requires_settlement"
+        assert not list(fixture.runtime.rglob("writer-fence.json"))
+        assert lease_path.read_bytes() == lease_bytes
+        released = fixture.cli(
+            "task-lease",
+            "release",
+            "--todo-id",
+            first,
+            *lease_identity,
+            "--expected-version",
+            str(original_lease["version"]),
+        )["lease"]
+        assert released["status"] == "released"
     settled = backup("settled-source")
     plan = fixture.cli(
         "coordination-shadow",
@@ -457,6 +541,27 @@ def test_restored_source_outbox_resumes_once_before_cold_import(
         imported["status"] == "applied"
         and imported["execution_authority_granted"] is False
     )
+    if partition == "leases":
+        assert (
+            fixture.cli("task-lease", "inspect", "--todo-id", first)["lease"]
+            == released
+        )
+        fresh_lease = fixture.cli(
+            "task-lease",
+            "acquire",
+            "--todo-id",
+            first,
+            "--owner",
+            "agent-a",
+            "--idempotency-key",
+            "fresh-canonical-lease",
+            "--expected-version",
+            str(released["version"]),
+            "--ttl-seconds",
+            "3600",
+        )["lease"]
+        assert fresh_lease["version"] == released["version"] + 1
+        assert fresh_lease["lease_epoch"] == released["lease_epoch"] + 1
     created = fixture.cli(
         "todo",
         "add",
@@ -484,6 +589,11 @@ def test_restored_source_outbox_resumes_once_before_cold_import(
         recovered["status"] == "replayed"
         and recovered["execution_authority_granted"] is False
     )
+    if partition == "leases":
+        assert (
+            fixture.cli("task-lease", "inspect", "--todo-id", first)["lease"]
+            == fresh_lease
+        )
     assert fixture.cli("todo", "list")["todos"] == before
     assert first in {row["todo_id"] for row in before} and created["todo_id"] in {
         row["todo_id"] for row in before
