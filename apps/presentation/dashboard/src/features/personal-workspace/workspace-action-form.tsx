@@ -16,10 +16,16 @@ export type WorkspaceActionDraft = {
 };
 
 // Mirrors the backend preview normalizer: whitespace is collapsed, then code points are counted.
-const todoTextLimit = 400;
+export const todoTextLimit = 400;
 const goalObjectiveLimit = 1000;
-function boundedLength(value: string) {
+export function boundedLength(value: string) {
   return Array.from(value.split(/\s+/u).filter(Boolean).join(" ")).length;
+}
+
+export function todoCreateRequest(text: string, goalId: string, summary: string): WorkspaceActionPreviewRequest {
+  return {actionKind: "todo.create", context: {kind: "goal", goal_id: goalId},
+    idempotencyKey: `workspace-todo.create-${crypto.randomUUID()}`,
+    normalizedParameters: {goal_id: goalId, text: text.trim()}, summary};
 }
 
 export function WorkspaceActionForm({ draft, workspaceGoals = [], onClose, onPreview }: {
@@ -80,9 +86,10 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], onClose, onPre
         timezone: "Asia/Shanghai",
         ...(draft.kind === "monitor" ? { target: target.trim(), target_key: `goal-${goalId}` } : {}),
       };
-      await onPreview({ actionKind, context: { kind: "goal", goal_id: draft.goalId },
-        idempotencyKey: `workspace-${actionKind}-${crypto.randomUUID()}`, normalizedParameters: parameters,
-        summary: title });
+      await onPreview(draft.kind === "todo" ? todoCreateRequest(objective, goalId, title)
+        : { actionKind, context: { kind: "goal", goal_id: draft.goalId },
+          idempotencyKey: `workspace-${actionKind}-${crypto.randomUUID()}`, normalizedParameters: parameters,
+          summary: title });
       onClose();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));

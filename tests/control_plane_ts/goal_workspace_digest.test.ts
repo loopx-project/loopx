@@ -49,7 +49,7 @@ test("work counts exclude monitors, take done from the owner and agree with the 
   assert.equal(digest.work.open, 3);
   assert.equal(digest.work.done, 54);
   assert.equal(digest.work.total, 57);
-  assert.deepEqual(digest.work.classes, { running_observed: 0, waiting_dependency: 0, open: 1, blocked: 1, deferred: 1, done: 54 });
+  assert.deepEqual(digest.work.classes, { running_observed: 0, needs_you: 0, waiting_dependency: 0, open: 1, blocked: 1, deferred: 1, done: 54 });
   const ribbon = GOAL_WORK_DISPLAY_CLASSES.reduce((sum, name) => sum + digest.work.classes[name], 0);
   assert.equal(ribbon, digest.work.total, "every counted Todo lands in exactly one segment");
   assert.equal(todos.filter(isGoalWorkTodo).filter((todo) => !todo.done).length, digest.work.open,
@@ -186,4 +186,50 @@ test("the reducer is deterministic and leaves its input untouched", () => {
     attention: Object.freeze([Object.freeze({ blocking: true })]), activity: Object.freeze([]) });
   assert.deepEqual(compileGoalWorkspaceDigest(input), compileGoalWorkspaceDigest(input));
   assert.equal(compileGoalWorkspaceDigest(input).schema, "goal_workspace_digest_v0");
+});
+
+test("one classification feeds responsibility groups and the all-work rail", () => {
+  const digest = compileGoalWorkspaceDigest({ ...base, execution: running(true), runningTodoIds: ["live"],
+    attention: [{ todoId: "decision", blocking: true }], todos: [
+      { todoId: "live", done: false, ownerId: "worker-b" },
+      { todoId: "held", done: false, ownerId: "worker-a", dependencies: ["decision"] },
+      { todoId: "blocked", done: false, ownerId: "worker-a", status: "blocked" },
+      { todoId: "waiting", done: false, ownerId: "worker-c", dependencies: ["live"] },
+      { todoId: "next", done: false },
+      { todoId: "later", done: false, ownerId: "worker-b", status: "deferred" },
+      { todoId: "done", done: true, ownerId: "worker-b" },
+      { todoId: "monitor", done: false, taskClass: "continuous_monitor" },
+    ],
+  });
+  assert.deepEqual(digest.work.groups.map(group => group.ownerId), ["worker-a", "worker-b", "worker-c", null]);
+  assert.deepEqual(digest.work.groups[0].todoIds, ["held", "blocked"]);
+  assert.deepEqual(digest.work.rail.open, ["live", "next", "waiting"]);
+  assert.deepEqual(digest.work.rail.needsYou, ["held"]);
+  assert.deepEqual(digest.work.rail.blocked, ["blocked", "later"]);
+  assert.deepEqual(digest.work.rail.done, ["done"]);
+  assert.equal(digest.work.classes.needs_you, 1);
+  assert.equal(digest.work.rows.find(row => row.todoId === "monitor"), undefined);
+  assert.equal(digest.work.groups.flatMap(group => group.todoIds).length, 5);
+  assert.equal(digest.work.rows.length, 7);
+});
+
+test("responsibility order is deterministic and follows provided dependency depth before Todo id", () => {
+  const todos = [
+    { todoId: "b", done: false, ownerId: "worker", dependencyOrder: 0 },
+    { todoId: "a", done: false, ownerId: "worker", dependencyOrder: 1 },
+    { todoId: "z", done: false, ownerId: "worker", dependencyOrder: 0 },
+  ];
+  const digest = compileGoalWorkspaceDigest({ ...base, todos });
+  assert.deepEqual(digest.work.groups[0].todoIds, ["b", "z", "a"]);
+  assert.deepEqual(compileGoalWorkspaceDigest({ ...base, todos: [...todos].reverse() }).work.groups, digest.work.groups);
+});
+
+test("claims, missing dependencies and unrelated decisions cannot invent work state", () => {
+  const digest = compileGoalWorkspaceDigest({ ...base, attention: [{ todoId: "unrelated", blocking: true }],
+    runningTodoIds: ["claimed"], execution: { kind: "unknown" },
+    todos: [{ todoId: "claimed", done: false, ownerId: "worker", dependencies: ["missing"] }],
+  });
+  assert.equal(digest.work.rows[0].displayClass, "open");
+  assert.equal(digest.work.groups[0].displayClass, "open");
+  assert.equal(digest.work.classes.needs_you, 0);
 });

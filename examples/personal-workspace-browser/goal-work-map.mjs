@@ -130,6 +130,7 @@ export const goalWorkMapScenario = {
       const { page } = desktop;
       await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
       await page.getByRole("button", { name: "概览", exact: true }).click();
+      await page.locator(".goal-work-lenses").getByRole("button", {name: "关系图", exact: true}).click();
       const map = page.locator(".work-map");
       await map.getByRole("heading", { name: "工作地图" }).waitFor();
       const canvas = map.getByRole("region", { name: "工作地图画布" });
@@ -159,7 +160,7 @@ export const goalWorkMapScenario = {
       const dimmed = await canvas.locator(".work-map-node[data-dimmed] strong").allInnerTexts();
       assert.deepEqual(new Set(dimmed), new Set(["Compare three venues", "Reprice catering"]), "Selection traces only recorded lineage");
       await page.screenshot({ path: resolve(outputDir, "goal-work-map.png"), animations: "disabled" });
-      await inspector.getByRole("button", { name: "打开详情" }).click();
+      // The shared selection opens the existing drawer on the same click.
       const drawer = page.getByRole("dialog", { name: "Todo 详情" });
       await drawer.getByText(finalRequirement, { exact: true }).waitFor();
       assert.deepEqual(await drawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs,
@@ -174,12 +175,13 @@ export const goalWorkMapScenario = {
         "A graph-only Task cannot present snapshot metadata as current or enable mutations");
       await page.screenshot({ path: resolve(outputDir, "goal-map-request-only-desktop.png"), animations: "disabled" });
       await page.getByRole("button", { name: /关闭详情/ }).click();
-      assert.equal(await canvas.locator('.work-map-node[aria-pressed="true"] strong').innerText(), "Reserve the hall", "Closing details returns to the same selection");
+      assert.equal(await canvas.locator('.work-map-node[aria-pressed="true"] strong').innerText(), "Reserve the hall", "Closing details returns to the same shared selection");
+      assert.equal(new URL(page.url()).searchParams.get("todo"), "todo_map_reserve");
 
       const hiddenRegistry = `${authority.registry}.hidden`;
       const errorsBeforeLoss = desktop.errors.length;
       await rename(authority.registry, hiddenRegistry);
-      await inspector.getByRole("button", { name: "打开详情" }).click();
+      await canvas.locator(".work-map-node", {hasText:"Reserve the hall"}).click();
       await drawer.getByRole("alert").filter({ hasText: "完整要求读取失败" }).waitFor();
       assert.deepEqual(desktop.errors.splice(errorsBeforeLoss), [
         "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
@@ -205,6 +207,7 @@ export const goalWorkMapScenario = {
       if (await navigation.isVisible()) await navigation.click();
       await phone.page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
       await phone.page.getByRole("button", { name: "概览", exact: true }).click();
+      await phone.page.locator(".goal-work-lenses").getByRole("button", {name: "关系图", exact: true}).click();
       const list = phone.page.locator(".work-map-list");
       await list.waitFor();
       assert.equal(await list.locator("li").count(), 5);
@@ -215,7 +218,6 @@ export const goalWorkMapScenario = {
       await list.scrollIntoViewIfNeeded();
       await phone.page.screenshot({ path: resolve(outputDir, "goal-work-map-mobile.png"), animations: "disabled" });
       await list.locator(".work-map-node", { hasText: "Reserve the hall" }).click();
-      await phone.page.getByRole("region", { name: "选中事项" }).getByRole("button", { name: "打开详情" }).click();
       const phoneDrawer = phone.page.getByRole("dialog", { name: "Todo 详情" });
       await phoneDrawer.getByText(finalRequirement, { exact: true }).waitFor();
       assert.deepEqual(await phoneDrawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs);

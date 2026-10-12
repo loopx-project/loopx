@@ -1,3 +1,6 @@
+import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
+import {useGoalWorkspaceDigest} from "./goal-masthead";
+import {goalWorkClassLabel} from "./goal-workspace-work";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Bot, Check, ChevronDown, ExternalLink, ListPlus, LoaderCircle, MessageSquareText, MoreHorizontal } from "lucide-react";
 
@@ -106,6 +109,7 @@ function TaskLane({
  * Columns are states; cards open the same typed-preview drawer as the chat.
  */
 export function GoalTasksView({
+  digest: sharedDigest,
   historyEnabled = false,
   historyRefreshRevision = 0,
   goal,
@@ -118,6 +122,7 @@ export function GoalTasksView({
   selectedTodoId = null,
   userTodos,
 }: {
+  digest?: GoalWorkspaceDigest;
   historyEnabled?: boolean;
   historyRefreshRevision?: number;
   goal: WorkspaceGoal;
@@ -130,7 +135,7 @@ export function GoalTasksView({
   selectedTodoId?: string | null;
   userTodos: WorkspaceModel["userTodos"];
 }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
   const [listView, setListView] = useState(false);
   const [laneSelection, setLaneSelection] = useState({ goalId: "", laneId: "all" });
   const selectedTodoRef = useRef<HTMLElement | null>(null);
@@ -164,6 +169,9 @@ export function GoalTasksView({
     ? laneSelection.laneId
     : "all";
   const laneMatches = (agentId?: string | null) => selectedLaneId === "all" || agentId === selectedLaneId;
+  const localDigest = useGoalWorkspaceDigest(goal, userTodos, items);
+  const workDigest = sharedDigest ?? localDigest;
+  const displayClasses = new Map(workDigest.work.rows.map(row => [row.todoId, row.displayClass]));
   const openAgentTodos = goal.agentTodos
     .filter((todo) => isGoalWorkTodo(todo) && !todo.done)
     .filter((todo) => laneMatches(todo.claimedBy))
@@ -250,14 +258,13 @@ export function GoalTasksView({
           const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? t("drawer.notAssigned") };
           const execution = executionRuns.find((item) => item.run.todoId === todo.todoId)?.run;
           return (
-            <div className={`personal-task-card${execution ? " has-session" : ""}${selectedTodoId === todo.todoId ? " is-selected" : ""}`} key={todo.todoId} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined}>
+            <div className={`personal-task-card${execution ? " has-session" : ""}${selectedTodoId === todo.todoId ? " is-selected" : ""}`} data-work-class={displayClasses.get(todo.todoId)} key={todo.todoId} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined}>
               <button aria-pressed={selectedTodoId === todo.todoId} onClick={(event) => selectFromButton(event.currentTarget, { item: enriched, kind: "todo" })} type="button">
                 <span>○</span><strong>{todo.text}</strong>
                 <small>
                   {todo.priority ? <span className={`personal-priority-badge is-${todo.priority.toLowerCase()}`}>{todo.priority}</span> : null}
-                  {todo.status === "blocked" ? <span className="personal-priority-badge is-blocked">{t("tasks.blocked")}</span> : null}
-                  {execution ? <span className="personal-task-session-status">{localizedSessionStatus(execution.status, t)}</span> : null}
-                  {todo.status === "deferred" ? <span className="personal-task-session-status">{t("drawer.taskStatusDeferred")}</span> : !execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
+                  <span className="personal-task-session-status">{goalWorkClassLabel(displayClasses.get(todo.todoId) ?? "open", locale === "zh-CN")}</span>
+                  {execution && execution.status !== "running" ? <span className="personal-task-session-status">{localizedSessionStatus(execution.status, t)}</span> : null}
                   <span>{enriched.ownerLabel}</span>
                 </small>
               </button>
@@ -292,7 +299,7 @@ export function GoalTasksView({
         ))}
         {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
       </TaskLane>
-      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}:${historyEnabled}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
+      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
       </div>
       {isEmpty ? (
         <p className="personal-task-empty">

@@ -1236,6 +1236,8 @@ function buildPersonalHomeModel(
 function PersonalGoalHome({
   goalArchiveLoadState,
   selectedView,
+  selectedTodoId,
+  onSelectTodo,
   onSelectView,
   isLoading,
   onGoalActivationStateChange,
@@ -1256,6 +1258,8 @@ function PersonalGoalHome({
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
   selectedView?: WorkspaceGoalTab;
+  selectedTodoId?: string | null;
+  onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -3092,6 +3096,7 @@ function PersonalGoalHome({
           onSelectAgent: chooseAgent,
           onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
           onSelectView,
+          onSelectTodo,
           onSendMessage: async (message, agentId, targetContextId, attachments) => sendManagerQuestion(message, { agentId, contextId: targetContextId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
@@ -3099,6 +3104,7 @@ function PersonalGoalHome({
         }}
         goalArchiveLoadState={goalArchiveLoadState}
         selectedView={selectedView}
+        selectedTodoId={selectedTodoId}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
@@ -3573,13 +3579,14 @@ export function DashboardPage() {
         ...current,
         goalId,
         workspace: undefined,
+        todo: undefined,
         view: view === "chat" ? "conversation" : view,
       }),
     });
   }
 
   function selectWorkspace(projectRef: string | null) {
-    void navigate({ search: (current) => ({ ...current, goalId: "", workspace: projectRef ?? undefined, view: "conversation" }) });
+    void navigate({ search: (current) => ({ ...current, goalId: "", todo: undefined, workspace: projectRef ?? undefined, view: "conversation" }) });
   }
 
   if (statusRequestActive) {
@@ -3598,6 +3605,12 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       goalArchiveLoadState={goalArchiveLoadState}
+      selectedTodoId={search.todo ?? null}
+      onSelectTodo={(todoId) => {
+        const goalId = search.goalId, statusUrl = search.statusUrl;
+        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+          ? {...current, todo: todoId ?? undefined} : current});
+      }}
       selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
       onSelectView={(view) => {
         void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });

@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { ArrowRight, CircleAlert, Download, ExternalLink, RefreshCw, Search } from "lucide-react";
-import { deliveryReviewMarkdown, fetchDeliveryReview, filterReviewNodes, reviewCoverageIncomplete, reviewNodeColumn, type DeliveryReviewSnapshot, type ReviewFocus, type ReviewGraph, type ReviewNode } from "../../data/delivery-review";
+import { deliveryReviewMarkdown, filterReviewNodes, reviewCoverageIncomplete, reviewNodeColumn, type ReviewFocus, type ReviewGraph, type ReviewNode } from "../../data/delivery-review";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { GoalAcceptanceContractSection } from "./goal-acceptance-contract";
@@ -8,11 +8,10 @@ import { GoalWorkMapView } from "./goal-work-map";
 import type { GoalWorkMapNode } from "../../data/goal-work-map";
 import { deliveryReviewCopy } from "./delivery-review-copy";
 import { useWorkspaceI18n } from "./i18n";
+import {useDeliveryReview, type DeliveryReviewRead} from "./delivery-review-state";
 import "./delivery-review.css";
 
 type Copy = typeof deliveryReviewCopy.en;
-type ReadState = { kind: "loading" | "error"; snapshot?: DeliveryReviewSnapshot; sourceKey?: string }
-  | { kind: "ready"; snapshot: DeliveryReviewSnapshot; sourceKey: string };
 
 function ReviewMap({ graph, nodes, selected, onSelect, copy }: {
   graph: ReviewGraph; nodes: ReviewNode[]; selected: string | null; onSelect: (id: string) => void; copy: Copy;
@@ -50,48 +49,29 @@ function ReviewMap({ graph, nodes, selected, onSelect, copy }: {
 
 type DeliveryReviewProps = {
   goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
-  onSelect: (selection: WorkspaceDrawerSelection) => void; active: boolean;
+  onSelect: (selection: WorkspaceDrawerSelection | null) => void; active: boolean;
 };
 
-export function DeliveryReview({ goal, items, userTodos, onSelect, active }: DeliveryReviewProps) {
+export function DeliveryReview(props: DeliveryReviewProps) {
+  const review = useDeliveryReview(props.goal, props.userTodos, props.active);
+  return <DeliveryReviewContent {...props} review={review} />;
+}
+
+export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review, hideWorkMap = false }: DeliveryReviewProps & {
+  review: DeliveryReviewRead; hideWorkMap?: boolean;
+}) {
   const { locale } = useWorkspaceI18n();
   const copy = deliveryReviewCopy[locale];
-  const [state, setState] = useState<ReadState>({ kind: "loading" });
-  const [refresh, setRefresh] = useState(0);
+  const {snapshot, stale, usable} = review;
+  const state = {kind: review.kind};
   const [query, setQuery] = useState("");
   const [focus, setFocus] = useState<ReviewFocus>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The work map is the spatial overview; the bounded chain defaults to its list.
   const [mapView, setMapView] = useState(false);
-  const [mapSelectedId, setMapSelectedId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const detailRef = useRef<HTMLElement>(null);
   const scopedAttention = userTodos.filter(todo => todo.goalId === goal.goalId);
-  // Polling can invalidate a snapshot without re-running the cold graph query.
-  const sourceKey = JSON.stringify([goal.agentTodos, goal.acceptanceObservation, scopedAttention]);
-  const currentSource = useRef(sourceKey);
-  currentSource.current = sourceKey;
-  useEffect(() => {
-    if (!active) return;
-    const controller = new AbortController();
-    const sourceAtStart = currentSource.current;
-    // Retain the prior view during a refresh so reading position does not collapse.
-    setState(current => ({ ...current, kind: "loading" }));
-    setFeedback("");
-    void fetchDeliveryReview(goal.goalId, controller.signal).then(snapshot => {
-      if (!controller.signal.aborted) setState({ kind: "ready", snapshot, sourceKey: sourceAtStart });
-    }).catch(() => { if (!controller.signal.aborted) setState(current => ({ ...current, kind: "error" })); });
-    return () => controller.abort();
-  }, [goal.goalId, refresh, active]);
-  const snapshot = state.snapshot?.goal_id === goal.goalId ? state.snapshot : null;
-  const stale = Boolean(snapshot) && state.sourceKey !== sourceKey;
-  useEffect(() => {
-    // Re-read once workspace facts settle instead of leaving a stale snapshot.
-    if (!active || state.kind !== "ready" || !stale) return;
-    const timer = window.setTimeout(() => setRefresh(value => value + 1), 600);
-    return () => window.clearTimeout(timer);
-  }, [active, state.kind, stale, sourceKey]);
-  const usable = Boolean(snapshot) && state.kind === "ready" && !stale;
   const graph = snapshot?.graph;
   const selected = graph?.nodes.find(node => node.node_id === selectedId);
   const effectiveFocus = focus === "related" && !selected ? "all" : focus;
@@ -114,22 +94,6 @@ export function DeliveryReview({ goal, items, userTodos, onSelect, active }: Del
     ];
   }
   const sources = selected ? linkedSources(selected) : [];
-  function mapSource(node: GoalWorkMapNode): WorkspaceDrawerSelection | null {
-    const id = node.refs.todo_ids?.[0];
-    if (!id) return null;
-    if (node.kind === "gate") {
-      const item = scopedAttention.find(todo => todo.todoId === id);
-      return item ? { kind: "attention", item } : null;
-    }
-    // The status window is bounded; its absence cannot revoke exact request reading.
-    const todo = goal.agentTodos.find(item => item.todoId === id) ?? {
-      todoId: id, sourceTodoId: id, detailMode: "request_only" as const,
-      text: node.title, done: node.state === "done", claimedBy: node.owner_agent ?? null,
-      status: node.state === "waiting" ? "deferred" : node.state === "blocked" || node.state === "done" ? node.state : "open",
-      taskDomain: node.task_domain ?? null, taskClass: node.kind === "monitor" ? "continuous_monitor" : null,
-    };
-    return { kind: "todo", item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy } };
-  }
   function download() {
     if (!snapshot || !usable) return;
     let url: string | undefined;
@@ -146,7 +110,7 @@ export function DeliveryReview({ goal, items, userTodos, onSelect, active }: Del
   return <section className="delivery-review" aria-label={copy.title}>
     <header className="delivery-review-toolbar">
       <h2>{copy.title}</h2>
-      <div><button type="button" disabled={state.kind === "loading"} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={15} />{copy.refresh}</button><button type="button" disabled={!usable} onClick={download}><Download size={15} />{copy.export}</button></div>
+      <div><button type="button" disabled={state.kind === "loading"} onClick={() => review.refresh()}><RefreshCw size={15} />{copy.refresh}</button><button type="button" disabled={!usable} onClick={download}><Download size={15} />{copy.export}</button></div>
     </header>
     {feedback ? <p role="status">{feedback}</p> : null}
     {!snapshot ? state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.error}</p>
@@ -155,9 +119,7 @@ export function DeliveryReview({ goal, items, userTodos, onSelect, active }: Del
       <p className="delivery-snapshot-time">{copy.observed} · <time dateTime={snapshot.observed_at}>{new Date(snapshot.observed_at).toLocaleString(locale)}</time>
         {state.kind === "loading" || (stale && state.kind !== "error") ? <span role="status"> · {copy.updating}</span> : null}</p>
       {stale && state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.changed}</p> : null}
-      {snapshot.goal_map ? <GoalWorkMapView map={snapshot.goal_map} copy={copy.workMap} selectedId={mapSelectedId} onSelect={setMapSelectedId}
-        canOpen={node => usable && mapSource(node) !== null} onOpen={node => { const source = mapSource(node); if (source) onSelect(source); }} />
-        : snapshot.goal_map === null ? <p className="delivery-notice">{copy.workMap.unavailable}</p> : null}
+      {!hideWorkMap ? <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={selection => {if (selection) onSelect(selection);}} /> : null}
       <p className="delivery-boundary">{copy.scope} {copy.acceptanceBoundary}</p>
       {graph ? <>
         {reviewCoverageIncomplete(graph) ? <details className="delivery-notice"><summary>{copy.incomplete}</summary><dl>
@@ -195,4 +157,51 @@ export function DeliveryReview({ goal, items, userTodos, onSelect, active }: Del
     <GoalAcceptanceContractSection goalId={goal.goalId} contract={snapshot?.acceptance?.goal_acceptance_contract} copy={copy.contract} current={usable} />
     <GoalAcceptanceObservationCard goal={snapshot ? { ...goal, acceptanceObservation: snapshot.acceptance } : goal} />
   </section>;
+}
+
+/** Same map and exact-request fallback, now usable as an Overview work lens. */
+export function DeliveryWorkMap({goal, userTodos, review, onSelect, selectedTodoId}: {
+  goal: WorkspaceGoal; userTodos: WorkspaceModel["userTodos"]; review: DeliveryReviewRead;
+  onSelect: (selection: WorkspaceDrawerSelection | null) => void; selectedTodoId?: string | null;
+}) {
+  const {locale} = useWorkspaceI18n();
+  const copy = deliveryReviewCopy[locale];
+  const [localSelection, setLocalSelection] = useState<string | null>(null);
+  const scopedAttention = userTodos.filter(todo => todo.goalId === goal.goalId);
+  function mapSource(node: GoalWorkMapNode): WorkspaceDrawerSelection | null {
+    const id = node.refs.todo_ids?.[0];
+    if (!id) return null;
+    if (node.kind === "gate") {
+      const item = scopedAttention.find(todo => todo.todoId === id);
+      return item ? { kind: "attention", item } : null;
+    }
+    // The status window is bounded; its absence cannot revoke exact request reading.
+    const todo = goal.agentTodos.find(item => item.todoId === id) ?? {
+      todoId: id, sourceTodoId: id, detailMode: "request_only" as const,
+      text: node.title, done: node.state === "done", claimedBy: node.owner_agent ?? null,
+      status: node.state === "waiting" ? "deferred" : node.state === "blocked" || node.state === "done" ? node.state : "open",
+      taskDomain: node.task_domain ?? null, taskClass: node.kind === "monitor" ? "continuous_monitor" : null,
+    };
+    return { kind: "todo", item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy } };
+  }
+  const map = review.snapshot?.goal_map;
+  if (!map) return <p role="status">{review.kind === "loading" ? copy.loading : copy.workMap.unavailable}</p>;
+  const selected = selectedTodoId === undefined ? localSelection
+    : selectedTodoId ? map.nodes.find(node => node.refs.todo_ids?.includes(selectedTodoId))?.node_id ?? null
+      : (() => {const node = map.nodes.find(node => node.node_id === localSelection);
+          return node && (node.kind === "gate" || !node.refs.todo_ids?.length) ? localSelection : null;}) ();
+  return <>
+    {!review.usable ? <p role="status">{review.kind === "error" ? copy.refreshError : copy.updating}</p> : null}
+    <GoalWorkMapView map={map} copy={copy.workMap} selectedId={selected}
+      onSelect={id => {
+        setLocalSelection(id);
+        if (id === null && selectedTodoId) onSelect(null);
+        if (selectedTodoId !== undefined && review.usable) {
+          const node = map.nodes.find(node => node.node_id === id);
+          const source = node ? mapSource(node) : null;
+          if (source) onSelect(source);
+        }
+      }} canOpen={node => review.usable && mapSource(node) !== null}
+      onOpen={node => {const source = mapSource(node); if (review.usable && source) onSelect(source);}} />
+  </>;
 }

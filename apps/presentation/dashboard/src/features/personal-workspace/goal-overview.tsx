@@ -1,10 +1,13 @@
+import {type ReactNode} from "react";
+import {type DeliveryReviewRead} from "./delivery-review-state";
+import {GoalWorkspaceWork} from "./goal-workspace-work";
 import { ArrowRight, CircleCheck, CircleDashed, CircleX, Hand, Info } from "lucide-react";
-import { DeliveryReview } from "./delivery-review";
+import { DeliveryReviewContent, DeliveryWorkMap } from "./delivery-review";
 import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
-import { useGoalWorkspaceDigest } from "./goal-masthead";
+import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
-import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
+import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
 import "./goal-overview.css";
 
@@ -22,9 +25,12 @@ function criterionStates(contract: Extract<NonNullable<NonNullable<WorkspaceGoal
   }));
 }
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView }: {
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest }: {
+  review: DeliveryReviewRead; digest: GoalWorkspaceDigest;
   active: boolean; goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
-  readOnly: boolean; onOpenDetails: () => void; onSelect: (selection: WorkspaceDrawerSelection) => void; onView: (view: WorkspaceGoalTab) => void;
+  selectedTodoId: string | null; board: ReactNode; results: ReactNode; historyRefreshRevision: number;
+  proposals: Record<string, WorkspaceActionPreview>; onPreview: (request: WorkspaceActionPreviewRequest) => Promise<WorkspaceActionPreview>;
+  readOnly: boolean; onOpenDetails: () => void; onSelect: (selection: WorkspaceDrawerSelection | null) => void; onView: (view: WorkspaceGoalTab) => void;
 }) {
   const { t, locale } = useWorkspaceI18n();
   const copy = locale === "zh-CN" ? {
@@ -41,7 +47,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
     remote: "This source provides synchronized status and acceptance observations. The delivery chain requires the live local source.",
   };
   const attention = userTodos.filter(item => item.goalId === goal.goalId);
-  const needs = useGoalWorkspaceDigest(goal, userTodos, items).needsYou;
+  const needs = digest.needsYou;
   const blocking = needs.availability === "ok" ? needs.blocking : null;
   const optional = needs.availability === "ok" ? needs.optional : null;
   const totalAttention = blocking !== null && optional !== null ? blocking + optional : null;
@@ -97,7 +103,10 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
+    <GoalWorkspaceWork goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
+      readOnly={readOnly} active={active} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
+      map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>
-      : <DeliveryReview active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />}
+      : <DeliveryReviewContent review={review} hideWorkMap active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />}
   </section>;
 }

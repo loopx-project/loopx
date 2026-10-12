@@ -118,7 +118,7 @@ export const goalMastheadScenario = {
       await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "任务" }).waitFor();
       const openLane = page.locator(".personal-task-lane").filter({ has: page.locator("header strong", { hasText: "待执行 / 进行中" }) });
       assert.equal(await openLane.locator("header > span").innerText(), "5", "The board lists the same open work the strip counts");
-      await page.getByTestId("completed-task-lane").locator("header", { hasText: "4087" }).waitFor({ timeout: 10_000 });
+      await page.locator('[data-goal-panel="tasks"]').getByTestId("completed-task-lane").locator("header", { hasText: "4087" }).waitFor({ timeout: 10_000 });
       await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
       await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
       assert.equal(actionRequests.length, 0, "Opening the Goal, switching views and focusing vitals sends no action request");

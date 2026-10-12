@@ -116,6 +116,8 @@ export const goalShowcaseScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
       if (!(await page.locator(".goal-overview").isVisible())) await openShowcaseGoal(page);
+      await page.locator(".goal-work-lenses").getByRole("button", {name: "Map", exact: true}).click();
+      await page.getByRole("region", {name:"Now",exact:true}).getByRole("button", {name:"Map",exact:true}).click();
       await page.locator(".work-map").waitFor({ timeout: 15_000 });
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-en.png"), animations: "disabled" });
       // Focus belongs to the committed input, even before another frame runs.

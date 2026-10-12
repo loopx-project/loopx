@@ -11,7 +11,7 @@ export const GOAL_WORKSPACE_DIGEST_SCHEMA = "goal_workspace_digest_v0";
 /** Display classes for open and done work. Local to this reducer until a second
  * consumer adopts the digest; then they register with the vocabulary owner. */
 export const GOAL_WORK_DISPLAY_CLASSES = [
-  "running_observed", "waiting_dependency", "open", "blocked", "deferred", "done",
+  "running_observed", "needs_you", "waiting_dependency", "open", "blocked", "deferred", "done",
 ] as const;
 export type GoalWorkDisplayClass = typeof GOAL_WORK_DISPLAY_CLASSES[number];
 
@@ -21,9 +21,13 @@ export type DigestTodo = {
   status?: string | null;
   taskClass?: string | null;
   dependencies?: readonly string[];
+  ownerId?: string | null;
+  completedAt?: string | null;
+  /** Current goal_task_map depth, when that owner has been read. */
+  dependencyOrder?: number;
 };
 
-export type DigestAttention = { blocking: boolean; updatedAt?: string | null };
+export type DigestAttention = { todoId?: string; blocking: boolean; updatedAt?: string | null };
 
 /** Counts from the attention owner's Goal group, with coverage of its item list.
  * A bounded list can carry exact totals but cannot establish the global oldest. */
@@ -79,6 +83,9 @@ export type GoalWorkspaceDigest = {
     done: number | null;
     total: number | null;
     classes: Record<GoalWorkDisplayClass, number>;
+    rows: Array<{ todoId: string; ownerId: string | null; displayClass: GoalWorkDisplayClass; prerequisiteIds: readonly string[] }>;
+    groups: Array<{ ownerId: string | null; displayClass: GoalWorkDisplayClass; todoIds: string[] }>;
+    rail: { needsYou: string[]; open: string[]; blocked: string[]; done: string[] };
     coverage: DigestCoverage;
     listedOpen: number;
     projectedOpen: number | null;
@@ -118,8 +125,10 @@ function classifyOpenWork(
   openIds: ReadonlySet<string>,
   runningIds: ReadonlySet<string>,
   executionObserved: boolean,
+  decisionIds: ReadonlySet<string>,
 ): GoalWorkDisplayClass {
   if (todo.status === "deferred") return "deferred";
+  if ((todo.dependencies ?? []).some(id => decisionIds.has(id))) return "needs_you";
   if (todo.status === "blocked") return "blocked";
   if (executionObserved && runningIds.has(todo.todoId)) return "running_observed";
   // Only a listed, unfinished prerequisite proves waiting; an unlisted one may be done.
@@ -136,7 +145,41 @@ export function compileGoalWorkspaceDigest(input: GoalWorkspaceDigestInput): Goa
   const openIds = new Set(openWork.map((todo) => todo.todoId));
   const runningIds = new Set(input.runningTodoIds ?? []);
   const classes = Object.fromEntries(GOAL_WORK_DISPLAY_CLASSES.map((name) => [name, 0])) as Record<GoalWorkDisplayClass, number>;
-  for (const todo of openWork) classes[classifyOpenWork(todo, openIds, runningIds, executionObserved)] += 1;
+  const decisionIds = new Set((input.attention ?? []).filter(item => item.blocking && item.todoId).map(item => item.todoId!));
+  const rowRank: Record<GoalWorkDisplayClass, number> = {
+    running_observed: 0, needs_you: 1, open: 2, waiting_dependency: 3, blocked: 4, deferred: 5, done: 6,
+  };
+  const groupRank: Record<GoalWorkDisplayClass, number> = {
+    blocked: 0, needs_you: 0, running_observed: 1, waiting_dependency: 2, open: 3, deferred: 4, done: 5,
+  };
+  const rows = work.map(todo => ({ todoId: todo.todoId, prerequisiteIds: todo.dependencies ?? [], ownerId: todo.ownerId?.trim() || null,
+    displayClass: todo.done ? "done" as const : classifyOpenWork(todo, openIds, runningIds, executionObserved, decisionIds),
+  }));
+  const byId = new Map(work.map(todo => [todo.todoId, todo]));
+  const compare = (left: typeof rows[number], right: typeof rows[number]) => rowRank[left.displayClass] - rowRank[right.displayClass]
+    || (byId.get(left.todoId)?.dependencyOrder ?? Number.MAX_SAFE_INTEGER) - (byId.get(right.todoId)?.dependencyOrder ?? Number.MAX_SAFE_INTEGER)
+    || left.todoId.localeCompare(right.todoId, "en");
+  rows.sort(compare);
+  const owners = new Map<string | null, typeof rows>();
+  for (const row of rows) {
+    classes[row.displayClass] += 1;
+    if (row.displayClass === "done" || row.displayClass === "deferred") continue;
+    const group = owners.get(row.ownerId) ?? [];
+    group.push(row);
+    owners.set(row.ownerId, group);
+  }
+  const groups = [...owners].map(([ownerId, members]) => ({ ownerId, todoIds: members.map(row => row.todoId),
+    displayClass: members.reduce((state, row) => groupRank[row.displayClass] < groupRank[state] ? row.displayClass : state, members[0].displayClass),
+  })).sort((left, right) => groupRank[left.displayClass] - groupRank[right.displayClass]
+    || (left.ownerId ?? "\uffff").localeCompare(right.ownerId ?? "\uffff", "en"));
+  const rail = {
+    needsYou: rows.filter(row => row.displayClass === "needs_you").map(row => row.todoId),
+    open: rows.filter(row => ["running_observed", "open", "waiting_dependency"].includes(row.displayClass)).map(row => row.todoId),
+    blocked: rows.filter(row => row.displayClass === "blocked" || row.displayClass === "deferred").map(row => row.todoId),
+    done: rows.filter(row => row.displayClass === "done").sort((left, right) =>
+      (timeOf(byId.get(right.todoId)?.completedAt) ?? 0) - (timeOf(byId.get(left.todoId)?.completedAt) ?? 0)
+      || left.todoId.localeCompare(right.todoId, "en")).map(row => row.todoId),
+  };
   const listedDone = work.length - openWork.length;
   const done = typeof input.doneCount === "number" && input.doneCount >= 0
     ? Math.max(input.doneCount, listedDone) : null;
@@ -197,7 +240,7 @@ export function compileGoalWorkspaceDigest(input: GoalWorkspaceDigestInput): Goa
       open: openWork.length,
       done,
       total: done === null || workCoverage !== "complete" ? null : done + openWork.length,
-      classes,
+      classes, rows, groups, rail,
       coverage: workCoverage,
       listedOpen,
       projectedOpen,

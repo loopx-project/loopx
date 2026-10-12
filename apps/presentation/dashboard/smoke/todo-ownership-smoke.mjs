@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import {useGoalWorkspaceDigest} from "../src/features/personal-workspace/goal-masthead.tsx";
 import { GoalTasksView } from "../src/features/personal-workspace/goal-tasks-view.tsx";
 import { CompletedTaskLane } from "../src/features/personal-workspace/completed-task-lane.tsx";
 import { todoItemSchema } from "../src/data/status.ts";
@@ -93,8 +94,36 @@ try {
       assert.ok(drawer.includes(`<dt>${owner}</dt><dd>${expected}</dd>`), "A stale display label cannot invent an absent claim");
       assert.equal(todo.claimedBy, claim, "Rendering never mutates the source claim");
     }
+    for (const detailMode of ["request_only", "missing_current"]) {
+      const drawer = render(ContextDrawer, {agents:[], callbacks:{}, onClose(){}, selection:{kind:"todo",item:{todoId:"missing",sourceTodoId:"missing",goalId:"test-goal",goalTitle:"Test Goal",text:"Past request",done:false,detailMode}}});
+      assert.ok(!drawer.includes("personal-task-inspector-actions"), "Unavailable inspection cannot retain effect controls");
+      assert.ok(drawer.includes(detailMode === "missing_current"
+        ? (locale === "en" ? "Current task state is unavailable." : "当前任务状态不可用。")
+        : (locale === "en" ? "outside the current summary" : "不在当前摘要中")));
+    }
+    // Exact typed relations, rather than graph adjacency, classify held work.
+    function DigestProbe({map}) {
+      const digest = useGoalWorkspaceDigest({goalId:"relations",agentTodos:[
+        {todoId:"held",text:"Held work",done:false,status:"blocked",claimedBy:"worker"},
+        {todoId:"lineage",text:"Historical lineage",done:false,status:"open"},
+        {todoId:"monitor-wait",text:"Monitor condition",done:false,status:"open"},
+      ]}, [{todoId:"decision",goalId:"relations",blocking:true,text:"Owner decision"}], [], map);
+      return JSON.stringify(digest.work.rows.map(row=>[row.todoId,row.displayClass]));
+    }
+    const node = (id,kind,state="open") => ({node_id:id,kind,state,depth:0,refs:{todo_ids:[id]}});
+    const map = {nodes:[node("decision","gate"),node("held","deliverable"),node("lineage","deliverable"),node("watch","monitor"),node("monitor-wait","deliverable")],
+      edges:[{from_node_id:"held",to_node_id:"decision",relation:"depends_on",enforcement:"typed_lifecycle"},
+        {from_node_id:"lineage",to_node_id:"held",relation:"continues",enforcement:"lineage_only"},
+        {from_node_id:"monitor-wait",to_node_id:"watch",relation:"depends_on",enforcement:"typed_condition"}]};
+    const relations = render(DigestProbe,{map});
+    assert.ok(relations.includes("needs_you"),"The actual adapter adopts the recorded decision dependency");
+    assert.ok(relations.includes('[&quot;lineage&quot;,&quot;open&quot;]'),"Lineage is not a completion prerequisite");
+    assert.ok(relations.includes('[&quot;monitor-wait&quot;,&quot;open&quot;]'),"Monitor generation change does not imply completion waiting");
+    const completedGate = render(DigestProbe,{map:{...map,nodes:map.nodes.map(node=>node.node_id==="decision"?{...node,state:"done"}:node)}});
+    assert.ok(!completedGate.includes("needs_you"),"A done map gate cannot keep a task held by that decision");
     const todo = {todoId: "run-task", text: "Inspect execution", done: false, status: "open"};
-    const goal = {goalId: "run-goal", title: "Execution facts", agentTodos: [todo]};
+    const goal = {goalId: "run-goal", title: "Execution facts", agentTodos: [todo],
+      execution: {kind: "running", hostClaimed: false, quiet: false, lastActivityAt: new Date().toISOString(), hostSurfaces: [], claimedAt: null}};
     for (const [status, en, zh] of [
       ["queued", "Scheduled", "已安排"], ["running", "Running", "执行中"],
       ["waiting", "Waiting", "等待条件"], ["failed", "Needs review", "需检查"],
@@ -106,6 +135,10 @@ try {
       const expected = locale === "en" ? en : zh;
       assert.ok(board.includes(`personal-task-session-status">${expected}</span>`), `Task cards preserve ${status}`);
       assert.ok(timeline.includes(expected), `Timeline and task cards agree for ${status}`);
+      if (status === "running") for (const execution of [{kind: "unknown"}, {...goal.execution, quiet: true}, {...goal.execution, hostClaimed: true}]) {
+        const unknown = render(GoalTasksView, {goal: {...goal, execution}, items: [{kind: "run", id: "execution", run}], userTodos: [], onSelect() {}});
+        assert.ok(!unknown.includes(`personal-task-session-status">${expected}</span>`), "A historical run cannot make unknown or stale work live");
+      }
     }
   }
 } finally {
