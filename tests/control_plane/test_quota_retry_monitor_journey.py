@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -19,7 +20,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "notice_independent", "due_monitor", "independent", "no_retry"])
+@pytest.mark.parametrize("scenario", ["waiting", "notice_waiting", "notice_independent", "due_monitor", "independent", "no_retry", "earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"])
 def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, scenario: str,
 ) -> None:
@@ -42,10 +43,10 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
             "- [ ] Validate an independent result.\n"
             f"  <!-- loopx:todo todo_id=todo_retry_independent status=open claimed_by={cli.AGENT_ID} "
             "task_class=advancement_task action_kind=validate -->\n"
-            if scenario in {"independent", "notice_independent"} else ""
+            if scenario in {"independent", "notice_independent", "earlier_independent"} else ""
         ))
 
-    if scenario in {"notice_waiting", "notice_independent"}:
+    if scenario in {"notice_waiting", "notice_independent", "earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"}:
         state.write_text(state.read_text() +
             "\n## User Todo\n\n- [ ] Review an independent draft.\n"
             f"  <!-- loopx:todo todo_id=todo_retry_notice status=open bound_agent={cli.AGENT_ID} "
@@ -82,6 +83,17 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
         assert code == 0, blocked
         assert blocked["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
         retry = blocked["blocked_retry"]
+        if scenario in {"earlier_notice", "equal_notice", "earlier_gate", "earlier_independent"}:
+            due = retry["due_at"] if scenario == "equal_notice" else (datetime.now(UTC) + timedelta(seconds=120)).isoformat()
+            code, updated = run("todo", "update", "--goal-id", cli.GOAL_ID,
+                "--todo-id", "todo_retry_watch", "--agent-id", cli.AGENT_ID,
+                "--next-due-at", due, "--execute")
+            assert code == 0 and updated["ok"], updated
+            if scenario == "earlier_gate":
+                code, updated = run("todo", "update", "--goal-id", cli.GOAL_ID,
+                    "--todo-id", "todo_retry_notice", "--agent-id", cli.AGENT_ID,
+                    "--task-class", "user_gate", "--blocks-agent", cli.AGENT_ID, "--execute")
+                assert code == 0 and updated["ok"], updated
 
     guards = []
     for _ in range(2):
@@ -90,19 +102,23 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
                           "--turn-instance-id", "turn-retry-next")
         assert code == 0 and guard["ok"], guard
         assert guard["heartbeat_receipt"]["status"] in {"committed", "replayed"}
-        if scenario in {"waiting", "notice_waiting"}:
+        if scenario in {"waiting", "notice_waiting", "earlier_notice", "equal_notice"}:
             assert guard["effective_action"] == "monitor_quiet_skip"
             assert guard["execution_obligation"]["must_attempt_work"] is False
-            if scenario == "notice_waiting":
+            if scenario in {"notice_waiting", "earlier_notice", "equal_notice"}:
                 assert guard["execution_obligation"]["kind"] == "blocked_wait"
                 assert guard["interaction_contract"]["user_channel"]["non_gating_notice"] is True
                 assert guard["scheduler_hint"]["cadence_class"] == "quiet_wait"
             pending = guard["scheduler_hint"]["pending_retry"]
             assert pending["todo_id"] == cli.TODO_ID
             assert pending["due_at"] == retry["due_at"]
+        elif scenario == "earlier_gate":
+            assert guard["scheduler_hint"]["cadence_class"] == "human_gate"
+            assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+            assert not guard["interaction_contract"]["user_channel"].get("non_gating_notice")
         else:
             assert guard["effective_action"] == "normal_run"
-            if scenario in {"independent", "notice_independent"}:
+            if scenario in {"independent", "notice_independent", "earlier_independent"}:
                 assert guard["selected_todo"]["todo_id"] == "todo_retry_independent"
         guards.append(guard)
     assert guards[0]["heartbeat_receipt"]["event_id"] == guards[1]["heartbeat_receipt"]["event_id"]

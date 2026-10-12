@@ -449,6 +449,10 @@ test("receipt retries precede later full-source caches without losing hidden ear
     .frontier_deadline as JsonObject).identity, "retry");
   const earlier = {...cache, next_due_at: "2026-10-01T00:01:00Z", extension: {retained: true}};
   assert.deepEqual(planningDeadline([], [], {frontier_deadline: earlier}, [row]).frontier_deadline, earlier);
+  for (const next_due_at of ["2026-10-01T00:01:00Z", due, "2026-10-01T00:25:00Z"]) {
+    const result = planningDeadline([], [], {frontier_deadline: {...cache, next_due_at}}, [...later, row]);
+    assert.deepEqual(result.blocked_retry_wait, retry, "the ninth retry retains identity independently of the earliest wakeup");
+  }
   const replaced = {...cache, identity: "retry", source: "turn_settlement", candidate_count: 1};
   assert.equal((planningDeadline([], [], {frontier_deadline: replaced}, [row]).frontier_deadline as JsonObject)
     .candidate_count, 1);
@@ -456,5 +460,6 @@ test("receipt retries precede later full-source caches without losing hidden ear
   for (const invalid of [{...row, claimed_by: "agent-b"}, {...row, blocked_retry: {...retry, agent_id: "agent-b"}},
     {...row, blocked_retry: {...retry, due_at: "2026-10-01T00:31:00Z"}}, {...row, resume_when: "todo_done:other"}]) {
     assert.deepEqual(planningDeadline([], [], {frontier_deadline: cache}, [invalid]).frontier_deadline, cache);
+    assert.equal(planningDeadline([], [], {frontier_deadline: cache}, [invalid]).blocked_retry_wait, undefined);
   }
 });

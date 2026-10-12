@@ -325,7 +325,7 @@ function utcIso(micros: bigint): string {
   const date = new Date(Number(seconds * 1000n)).toISOString().slice(0, -5);
   return `${date}${fraction ? `.${String(fraction).padStart(6, "0")}` : ""}+00:00`;
 }
-function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: string | null): JsonObject | null {
+function projectTodoFrontier(summary: JsonObject, now: bigint, agent: string | null): JsonObject {
   const projected = object(summary.frontier_deadline);
   const projectedTime = timestamp(projected?.next_due_at);
   const currentProjection = projected && projectedTime !== null && projectedTime > now ? projected : null;
@@ -333,6 +333,8 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: st
   let selected: JsonObject | null = currentProjection;
   let earliest: bigint | null = currentProjection ? projectedTime : null;
   let addedRetryCount = 0;
+  let retryWait: JsonObject | null = null;
+  let retryDue: bigint | null = null;
   for (const lane of currentProjection ? ["resume_blocked_items"] : frontierLanes) {
     const items = summary[lane];
     if (!Array.isArray(items)) continue;
@@ -352,6 +354,12 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: st
         (!row.claimed_by || row.claimed_by === retry.agent_id) &&
         row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
         isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
+      // A receipt wait owns one unfinished Todo; the earliest wakeup may
+      // belong to a different monitor. Keep both facts from this full source.
+      if (receiptRetry && (retryDue === null || due < retryDue)) {
+        retryDue = due;
+        retryWait = retry;
+      }
       if (currentProjection) {
         // The full-source cache retains deadlines omitted from visible lanes.
         // Only newly overlaid receipt retries can predate that current cache.
@@ -365,10 +373,11 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: st
       }
     }
   }
-  if (currentProjection && selected === currentProjection) return {...currentProjection};
   const candidateCount = currentProjection
     ? Math.max(1, Number(currentProjection.candidate_count) || 0) + addedRetryCount : seen.size;
-  return selected ? {schema_version: "todo_frontier_deadline_v0", ...selected, candidate_count: candidateCount} : null;
+  const deadline = currentProjection && selected === currentProjection ? {...currentProjection} :
+    selected ? {schema_version: "todo_frontier_deadline_v0", ...selected, candidate_count: candidateCount} : null;
+  return {frontier_deadline: deadline, ...(retryWait ? {blocked_retry_wait: retryWait} : {})};
 }
 
 /** One quota read boundary composes scope/claim selection, resume, hint
@@ -409,7 +418,7 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const route = hasSourceContract ? routeContinuationLanes(request.route_items, agent, limit) : {};
   const lanes = requireJsonObject(selected.lanes, "selection lanes");
   const resumeBlocked = requireJsonObject(resume.resume_blocked_lanes, "resume blocked lanes");
-  const frontier = now === null ? null : projectTodoFrontierDeadline({
+  const frontier = now === null ? null : projectTodoFrontier({
     ...requireJsonObject(selected.claim_visibility, "claim visibility"),
     ...requireJsonObject(resume.deferred_lanes, "deferred lanes"),
     ...resumeBlocked, ...handoff,
@@ -428,5 +437,5 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   if (now !== null) lanes.gate_items = (lanes.gate_items as JsonObject[]).slice(0, 3);
   return {schema_version: "todo_quota_planning_v0", resume_planning: resume, ...selected, ...closure,
     ...(hasSourceContract ? {handoff_lanes: handoff, route_lanes: route} : {}),
-    ...(now === null ? {} : {frontier_deadline: frontier})};
+    ...(now === null ? {} : frontier)};
 }

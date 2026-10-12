@@ -15,7 +15,7 @@ START = datetime(2026, 10, 1, tzinfo=UTC)
 DUE = "2026-10-01T00:05:00Z"
 
 
-def source(*, user_class="user_action", newer=False, cached_monitor=False):
+def source(*, user_class="user_action", newer=False, cached_monitor=False, monitor_due="2026-10-01T00:25:00Z"):
     retry = {"schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
              "todo_id": "todo_work", "observed_at": "2026-10-01T00:00:00Z",
              "due_at": DUE, "resume_when": f"resume_at:{DUE}"}
@@ -32,7 +32,7 @@ def source(*, user_class="user_action", newer=False, cached_monitor=False):
             "todo_id": "todo_watch", "status": "open", "role": "agent",
             "task_class": "continuous_monitor", "claimed_by": "agent-a",
             "text": "Observe the independent source.", "watch_only": True,
-            "cadence": "30m", "next_due_at": "2026-10-01T00:25:00Z",
+            "cadence": "30m", "next_due_at": monitor_due,
             "target_key": "independent-source",
         }] if cached_monitor else []),
         user_todo_items=[{"todo_id": "todo_notice", "status": "open", "role": "user",
@@ -47,20 +47,20 @@ def source(*, user_class="user_action", newer=False, cached_monitor=False):
                 summary["frontier_deadline"] = {
                     "schema_version": "todo_frontier_deadline_v0",
                     "identity": "todo_watch", "source": "continuous_monitor",
-                    "next_due_at": "2026-10-01T00:25:00Z", "candidate_count": 1,
+                    "next_due_at": monitor_due, "candidate_count": 1,
                 }
     return result
 
 
 def packet(monkeypatch, *, seconds=120, user_class="user_action", newer=False, runtime=None, floor=0,
-           cached_monitor=False):
+           cached_monitor=False, monitor_due="2026-10-01T00:25:00Z"):
     now = START + timedelta(seconds=seconds)
     for path in ("loopx.control_plane.todos.quota_selection.now_utc",
                  "loopx.control_plane.todos.quota_summary.now_utc",
                  "loopx.control_plane.scheduler.monitor_todo.now_utc",
                  "loopx.control_plane.scheduler.scheduler_hint.now_utc"):
         monkeypatch.setattr(path, lambda: now)
-    raw = source(user_class=user_class, newer=newer, cached_monitor=cached_monitor)
+    raw = source(user_class=user_class, newer=newer, cached_monitor=cached_monitor, monitor_due=monitor_due)
     before = deepcopy(raw)
     projected = overlay_active_turn_retries(raw, goal_id="goal-a", agent_id="agent-a", observed_at=now.isoformat())
     result = build_quota_should_run(projected, goal_id="goal-a", agent_id="agent-a",
@@ -179,3 +179,16 @@ def test_retry_projection_does_not_cross_scope_or_replace_a_canonical_wait(misma
         agent_id="agent-b" if mismatch == "agent" else "agent-a", observed_at="2026-10-01T00:02:00Z")
     assert result is raw
     assert result == before
+
+
+@pytest.mark.parametrize("monitor_due", ["2026-10-01T00:03:00Z", DUE, "2026-10-01T00:25:00Z"])
+def test_retry_identity_survives_the_independent_next_wakeup(monkeypatch, monitor_due):
+    result = packet(monkeypatch, cached_monitor=True, monitor_due=monitor_due)
+    assert result["execution_obligation"]["kind"] == "blocked_wait"
+    assert result["interaction_contract"]["user_channel"]["non_gating_notice"] is True
+    assert result["scheduler_hint"]["cadence_class"] == "quiet_wait"
+    assert result["agent_todo_summary"]["blocked_retry_wait"]["due_at"] == DUE
+    assert result["scheduler_hint"]["pending_retry"]["due_at"] == DUE
+    frontier = result["agent_todo_summary"]["frontier_deadline"]
+    assert frontier["identity"] == ("todo_watch" if monitor_due <= DUE else "todo_work")
+    assert result["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == (1 if monitor_due < DUE else 3)
