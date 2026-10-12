@@ -77,6 +77,10 @@ it cannot depend on a macOS Documents-folder consent prompt. Ordinary
 `loopx doctor` retains its full operator/integration diagnostics. Terminal
 installation still revalidates enabled extensions by default; the App sets
 `LOOPX_INSTALL_REVALIDATE_EXTENSIONS=0` for its bounded bootstrap.
+Runtime preparation isolates Git discovery to its verified export, so a
+developer's Git environment or a checkout enclosing `TMPDIR` cannot supply
+unrelated branch or dirty-state metadata. The bundled revision and digest
+remain the source of the installed snapshot's identity.
 Failed runtime preparation remains supervised, with at most three automatic
 install attempts per App process and at least 30 seconds between attempts.
 Existing recovery controls remain available after that budget is exhausted,

@@ -716,6 +716,13 @@ def build_finance_research_dashboard_packet(
     """Validate Finance semantics and map them to the generic research view."""
 
     _reject_forbidden_material(payload)
+    from .funding_presentation import (
+        FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION,
+        build_funding_event_research_packet,
+    )
+
+    if payload.get("schema_version") == FINANCE_FUNDING_RESEARCH_INPUT_SCHEMA_VERSION:
+        return build_funding_event_research_packet(payload)
     record = _record(
         payload,
         context="input",

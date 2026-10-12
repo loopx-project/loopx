@@ -1,0 +1,290 @@
+{
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "schema_version": {
+      "const": "finance_funding_event_pair_assessment_v1"
+    },
+    "input_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "input": {
+      "$ref": "https://loopx.dev/schemas/finance-funding-event-pair-input-v1.json"
+    },
+    "leg_assessments": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "\\S"
+            }
+          },
+          "rate_kind": {
+            "enum": [
+              null,
+              "forecast",
+              "realized"
+            ]
+          },
+          "rate_fraction": {
+            "$ref": "#/$defs/optionalDecimal"
+          },
+          "event_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "venue_ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "\\S"
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "\\S"
+                  },
+                  "settlement_at": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "venue_ref",
+                  "ref",
+                  "settlement_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "end": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "$ref": "#/$defs/optionalReference"
+          },
+          "candidate_signed_cash": {
+            "$ref": "#/$defs/optionalDecimal"
+          },
+          "conditional_signed_estimate": {
+            "$ref": "#/$defs/optionalDecimal"
+          },
+          "declared_realized_cash": {
+            "$ref": "#/$defs/optionalDecimal"
+          },
+          "normalized_clocks": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/optionalClock"
+            }
+          },
+          "payment_ref": {
+            "$ref": "#/$defs/optionalReference"
+          }
+        },
+        "required": [
+          "eligible",
+          "reason_codes",
+          "rate_kind",
+          "rate_fraction",
+          "event_identity",
+          "period",
+          "currency",
+          "candidate_signed_cash",
+          "conditional_signed_estimate",
+          "declared_realized_cash",
+          "normalized_clocks",
+          "payment_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "settlement_event_relation": {
+      "enum": [
+        "same",
+        "different",
+        "unknown"
+      ]
+    },
+    "native_period_relation": {
+      "enum": [
+        "same",
+        "different",
+        "unknown"
+      ]
+    },
+    "pair_operands_eligible": {
+      "type": "boolean"
+    },
+    "cash_currency": {
+      "$ref": "#/$defs/optionalReference"
+    },
+    "conditional_gross_estimate": {
+      "$ref": "#/$defs/optionalDecimal"
+    },
+    "conditional_net_estimate": {
+      "$ref": "#/$defs/optionalDecimal"
+    },
+    "declared_realized_gross_cash": {
+      "$ref": "#/$defs/optionalDecimal"
+    },
+    "net_cash": {
+      "$ref": "#/$defs/optionalDecimal"
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "pattern": "\\S"
+      }
+    },
+    "arithmetic_assurance": {
+      "const": "bounded_lexical_declared_linear_quote_notional_only"
+    },
+    "source_interpretation_assurance": {
+      "const": "caller_declared_not_authenticated"
+    },
+    "raw_rate_comparison_performed": {
+      "const": false
+    },
+    "source_evidence_authenticated": {
+      "const": false
+    },
+    "settlement_authenticated": {
+      "const": false
+    },
+    "source_lifecycle_assessed": {
+      "const": false
+    },
+    "pit_admitted": {
+      "const": false
+    },
+    "financial_admission": {
+      "const": false
+    },
+    "trading_allowed": {
+      "const": false
+    },
+    "external_reads_performed": {
+      "const": false
+    },
+    "external_writes_performed": {
+      "const": false
+    }
+  },
+  "required": [
+    "ok",
+    "schema_version",
+    "input_sha256",
+    "input",
+    "leg_assessments",
+    "settlement_event_relation",
+    "native_period_relation",
+    "pair_operands_eligible",
+    "cash_currency",
+    "conditional_gross_estimate",
+    "conditional_net_estimate",
+    "declared_realized_gross_cash",
+    "net_cash",
+    "reason_codes",
+    "arithmetic_assurance",
+    "source_interpretation_assurance",
+    "raw_rate_comparison_performed",
+    "source_evidence_authenticated",
+    "settlement_authenticated",
+    "source_lifecycle_assessed",
+    "pit_admitted",
+    "financial_admission",
+    "trading_allowed",
+    "external_reads_performed",
+    "external_writes_performed"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopx.dev/schemas/finance-funding-event-pair-assessment-v1.json",
+  "$defs": {
+    "optionalReference": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalClock": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalDecimal": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 1024
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

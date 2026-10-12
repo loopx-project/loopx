@@ -129,8 +129,16 @@ Codex App ACK commands must re-read the matched heartbeat after the host update.
 The requested RRULE and the hint's earlier observation cannot certify that update.
 The typed scheduler commit rejects missing or mismatched current observations
 before migration, identity reset or persistence. This applies to the console's
-native follow-up and the Python compatibility adapter; failure commands retain
-their original target/observed pair. Real App API updates and readback on
+native follow-up and the Python compatibility adapter. Unix and PowerShell
+launchers route Codex host-match ACKs through that same entrypoint's fresh read;
+other generated follow-ups keep their Node fast path. Outer-controlled writes
+retain the entrypoint's existing permission guard before native dispatch.
+The native decoder binds the host-match flag to the captured ACK fact, so
+dropping that flag cannot bypass the launcher's current-readback route.
+Other App adapters supply their own neutral current-RRULE argument; an explicit
+unavailable observation clears earlier facts, while absence preserves their
+bound observation. They never read Codex metadata to fill a missing observation.
+Failure commands retain their original target/observed pair. Real App API updates and readback on
 disposable File/SQLite Goals qualify this schedule boundary separately from
 elapsed timer wakeups, installed-runtime adoption and pre-model admission.
 The activation path must be qualified separately before advertising one-click

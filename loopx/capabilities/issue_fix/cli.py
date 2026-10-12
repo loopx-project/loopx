@@ -18,7 +18,7 @@ from ...domain_packs.issue_fix import (
     upsert_issue_fix_feasibility_ledger_jsonl,
     upsert_issue_fix_pr_lifecycle_ledger_jsonl,
 )
-from ...todos import add_goal_todo
+from ...control_plane.todos.mutation_api import add_goal_todo
 from .acceptance_loop import (
     build_issue_fix_acceptance_fixture_packet,
     build_issue_fix_caller_repo_branch_packet,

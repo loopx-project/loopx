@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { fetchLatestDesktopDownload } from "./desktop-download.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const { values } = parseArgs({ options: {
@@ -11,7 +12,14 @@ const { values } = parseArgs({ options: {
   outDir: { type: "string", default: "dist" },
 } });
 const outDir = resolve(root, values.outDir);
-const options = { root, base: values.base };
+// Resolve before replacing output; a failed API/readiness check keeps the prior build.
+// Pages opts in; ordinary offline builds/tests keep App.tsx's known preview.
+const desktopDownload = process.env.LOOPX_SITE_RESOLVE_DESKTOP_RELEASE === "1"
+  ? await fetchLatestDesktopDownload({ token: process.env.GH_TOKEN }) : undefined;
+if (desktopDownload) console.log(`Homepage Mac download: v${desktopDownload.version}`);
+const options = { root, base: values.base,
+  define: desktopDownload
+    ? { "import.meta.env.VITE_LOOPX_MAC_APP_VERSION": JSON.stringify(desktopDownload.version) } : {} };
 await build({ ...options, build: { outDir, emptyOutDir: true } });
 // Keep temporary SSR dependencies resolvable, but outside the published output.
 const cache = resolve(root, "node_modules/.cache");

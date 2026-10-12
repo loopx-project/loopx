@@ -865,6 +865,7 @@ export function PersonalWorkspacePage({
   const [lifecycleBusyGoalIds, setLifecycleBusyGoalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [quickCompletingTodoIds, setQuickCompletingTodoIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const refreshSequenceRef = useRef(0);
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
@@ -1935,6 +1936,7 @@ export function PersonalWorkspacePage({
 
   async function refreshWorkspace() {
     if (!callbacks.onRefresh || refreshState === "loading") return;
+    const sequence = ++refreshSequenceRef.current;
     setRefreshState("loading");
     try {
       await callbacks.onRefresh();
@@ -1943,7 +1945,9 @@ export function PersonalWorkspacePage({
     } catch {
       setRefreshState("error");
     }
-    window.setTimeout(() => setRefreshState("idle"), 1800);
+    window.setTimeout(() => {
+      if (refreshSequenceRef.current === sequence) setRefreshState("idle");
+    }, 1800);
   }
 
   const settingsPage = settingsOpen ? (

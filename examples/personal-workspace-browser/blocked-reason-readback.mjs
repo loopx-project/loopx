@@ -104,6 +104,7 @@ export const blockedReasonReadbackScenario = {
             "--resume-when", `todo_done:${authority.cyclic}`, "--successor-todo-id", authority.independent);
           let writes = 0;
           let omitReason = false;
+          let holdStatusRead = null;
           const context = await openWorkspacePage({ newPage: (options) => browser.newPage({ ...options, locale }) }, url, {
             collectCoverage, viewport: mobile ? { width: 390, height: 844 } : { width: 1512, height: 982 }, isMobile: mobile,
             beforeGoto: async (_api, page) => {
@@ -122,6 +123,9 @@ export const blockedReasonReadbackScenario = {
                   };
                   omit(payload);
                 }
+                const heldRead = holdStatusRead;
+                holdStatusRead = null;
+                if (heldRead) await heldRead;
                 await route.fulfill({ response, json: payload });
               });
               await page.route("**/api/chat/todo/detail?*", async route => {
@@ -192,8 +196,22 @@ export const blockedReasonReadbackScenario = {
               await refresh();
               await cause.getByText(CHANGED_REASON, { exact: true }).waitFor({ timeout: 8_000 });
               assert.doesNotMatch(await cause.innerText(), new RegExp(REASON));
-              omitReason = true;
               await refresh();
+              omitReason = true;
+              let releaseRead;
+              holdStatusRead = new Promise(resolveRead => { releaseRead = resolveRead; });
+              const pendingRefresh = refresh();
+              try {
+                await page.locator(".personal-refresh-control.is-loading").waitFor();
+                // Cross the previous refresh's 1.8s feedback lifetime while
+                // the new real status response is held at the transport.
+                await page.waitForTimeout(1900);
+                assert.equal(await page.locator(".personal-refresh-control.is-loading").count(), 1,
+                  "An older feedback timer cannot clear a newer in-flight refresh");
+              } finally {
+                releaseRead();
+                await pendingRefresh;
+              }
               await cause.getByText(locale === "en" ? /No reason was recorded/ : /未记录原因/).waitFor();
               omitReason = false;
               await authority.cli("todo", "update", "--goal-id", "goal-a", "--role", "agent", "--todo-id", authority.with_reason,
