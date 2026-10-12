@@ -18,9 +18,13 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
         return None
     if requested is not None and root is not None:
         raise QuotaCommandValidationError("choose one decision capture destination")
-    if args.quota_command != "should-run" or not getattr(args, "turn_instance_id", None):
+    if args.quota_command != "should-run" or not (
+        getattr(args, "turn_instance_id", None)
+        or bool(getattr(args, "begin_turn", False))
+    ):
         raise QuotaCommandValidationError(
-            "decision capture requires quota should-run and --turn-instance-id"
+            "decision capture requires quota should-run and either "
+            "--turn-instance-id or --begin-turn"
         )
     try:
         if root is not None:

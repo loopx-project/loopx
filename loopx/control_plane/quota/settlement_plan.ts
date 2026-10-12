@@ -53,7 +53,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
           " Pass a new packet with --agent-vision-json.") +
         " Route elimination needs evidence; failure alone is not progress. " +
-        "outcome_gap: blocked + blocker/evidence IDs; continuation checks. " +
+        "outcome_progress may use in_flight_continuation; outcome_gap requires " +
+        "semantic_closeout plus blocked + blocker/evidence IDs and continuation checks. " +
         "For an admitted open continuous Monitor whose observation is unavailable, " +
         "use this original identity for typed blocked outcome_gap; it settles without " +
         "poll or spend and preserves observation clocks/hash/generation. " +

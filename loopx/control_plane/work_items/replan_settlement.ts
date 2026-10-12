@@ -144,10 +144,10 @@ export function projectTodoLifecycleSettlementReentry(value: unknown): JsonObjec
   const nextCliActions = triggers.map((trigger) => {
     const todoId = String(trigger.todo_id);
     const completionIdentityKey = String(trigger.completion_turn_key);
-    const completionIdentityArgs =
-      trigger.completion_identity_source === "unscoped_completion"
-        ? ["--completion-identity-key", completionIdentityKey]
-        : ["--turn-instance-id", completionIdentityKey];
+    const completionIdentityArgs = [
+      "--completion-identity-key",
+      completionIdentityKey,
+    ];
     return (
       `when no real successor remains for completed Todo ${todoId}: ` +
       `${commandPrefix} todo complete --goal-id ${shellArgument(goalId)} ` +

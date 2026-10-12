@@ -986,7 +986,8 @@ def test_todo_lifecycle_rejection_projects_exact_direct_settlement() -> None:
     ]
     actions = transition["next_cli_actions"]
     assert "--todo-id todo_unsettled_completion" in actions[0]
-    assert "--turn-instance-id turn-unsettled" in actions[0]
+    assert "--completion-identity-key turn-unsettled" in actions[0]
+    assert "--turn-instance-id" not in actions[0]
     assert "--agent-id codex-replan-gate-agent" in actions[0]
     assert all("refresh-state" not in action for action in actions)
     assert all("spend-slot" not in action for action in actions)
@@ -1179,9 +1180,20 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
     assert terminal_quota["effective_action"] == "terminal_no_followup"
 
 
-def test_legacy_unscoped_completion_projects_executable_identity_repair(
+@pytest.mark.parametrize(
+    "stored_completion_key",
+    [
+        None,
+        (
+            f"{GOAL_ID}:{AGENT_ID}:todo_legacy_unscoped:"
+            "guided-start:025d252ade77fd3d202dd29188f5ff0d"
+        ),
+    ],
+)
+def test_completed_todo_projects_executable_identity_repair(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    stored_completion_key: str | None,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1198,7 +1210,12 @@ def test_legacy_unscoped_completion_projects_executable_identity_repair(
         "task_class=advancement_task "
         f"claimed_by={AGENT_ID} no_followup=false "
         "completion_continuation=active_goal "
-        "completed_at=2026-08-22T00%3A00%3A00%2B00%3A00 -->\n",
+        + (
+            f"completion_turn_key={stored_completion_key} "
+            if stored_completion_key is not None
+            else ""
+        )
+        + "completed_at=2026-08-22T00%3A00%3A00%2B00%3A00 -->\n",
         encoding="utf-8",
     )
     registry_path = tmp_path / "registry.json"
@@ -1258,14 +1275,23 @@ def test_legacy_unscoped_completion_projects_executable_identity_repair(
             "completion_turn_key": transition["triggers"][0][
                 "completion_turn_key"
             ],
-            "completion_identity_source": "unscoped_completion",
+            "completion_identity_source": (
+                "turn_settlement"
+                if stored_completion_key is not None
+                else "unscoped_completion"
+            ),
         }
     ]
     completion_key = transition["triggers"][0]["completion_turn_key"]
-    assert str(completion_key).startswith("local_completion_")
+    if stored_completion_key is None:
+        assert str(completion_key).startswith("local_completion_")
+    else:
+        assert completion_key == stored_completion_key
     action = next(
         item for item in transition["next_cli_actions"] if "loopx todo complete" in item
     )
+    assert "--completion-identity-key" in action
+    assert "--turn-instance-id" not in action
     action_tokens = shlex.split(action)
     loopx_index = action_tokens.index("loopx")
     assert cli_main(

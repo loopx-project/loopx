@@ -1884,9 +1884,10 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     first_writeback = guard["interaction_contract"]["cli_channel"]["next_cli_actions"][
         0
     ]
-    assert "--delivery-boundary in_flight_continuation" in first_writeback
+    assert "--delivery-boundary <boundary>" in first_writeback
     writeback_step = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
     assert "vision_authoring" not in writeback_step
+    assert "outcome_gap requires semantic_closeout" in writeback_step["precondition"]
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -1963,7 +1964,7 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     writeback = second_guard["interaction_contract"]["cli_channel"]["next_cli_actions"][
         0
     ]
-    assert "--delivery-boundary in_flight_continuation" in writeback
+    assert "--delivery-boundary <boundary>" in writeback
 
     second_refresh_rc, second_refresh = _run_cli(
         registry_path,

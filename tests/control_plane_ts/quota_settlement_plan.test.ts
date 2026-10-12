@@ -48,7 +48,10 @@ test("in-flight progress neither executes completion nor rewrites the declaratio
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
   assert.match(plan.steps[1].precondition, /failure alone is not progress/);
-  assert.match(plan.steps[1].precondition, /outcome_gap: blocked.*blocker\/evidence IDs.*continuation checks/);
+  assert.match(
+    plan.steps[1].precondition,
+    /outcome_gap requires semantic_closeout.*blocker\/evidence IDs.*continuation checks/,
+  );
   assert.equal(plan.steps[1].command_template, "writeback");
   assert.equal(plan.steps[2].command_template, "spend");
   assert.equal(plan.identity.turn_instance_id, "turn");
@@ -67,7 +70,10 @@ test("autonomous replan never manufactures a Todo completion step", () => {
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
   assert.match(plan.steps[1].precondition, /failure alone is not progress/);
-  assert.match(plan.steps[1].precondition, /outcome_gap: blocked.*blocker\/evidence IDs.*continuation checks/);
+  assert.match(
+    plan.steps[1].precondition,
+    /outcome_gap requires semantic_closeout.*blocker\/evidence IDs.*continuation checks/,
+  );
   assert.equal(plan.steps[1].command_template, "writeback");
   assert.equal(plan.steps[2].command_template, "spend");
   assert.equal(plan.identity.turn_instance_id, "turn");
