@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import zlib
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pytest
 import test_quota_settlement_cli as settlement
 from canonical_authority_fixture import isolate_sqlite_runtime
 from test_quota_authority_settlement_journey import _execute, _guard, _refresh, _source
+from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture
 
 from loopx.control_plane.scheduler import scheduler_hint
 from loopx.control_plane.scheduler.scheduler_hint import (
@@ -216,13 +218,20 @@ def test_legacy_hint_builder_without_host_facts_keeps_the_compatibility_route() 
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("caller", ["python", "native"])
+@pytest.mark.parametrize("caller", ["module", "launcher"])
 def test_failed_quota_invocation_keeps_receipt_ack_and_exact_settlement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, caller: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
+    # The ACK caller must freshly observe the bound App after the rejected
+    # quota probe; a missing Host and the old hint alone cannot prove a match.
+    write_codex_heartbeat_fixture(
+        codex_home, goal_id=settlement.GOAL_ID, agent_id=settlement.AGENT_ID,
+        rrule="FREQ=MINUTELY;INTERVAL=3",
+    )
     project, runtime, registry, _, _ = _source(
         tmp_path, provider=provider, extra=f"claimed_by={settlement.AGENT_ID}",
     )
@@ -248,12 +257,14 @@ def test_failed_quota_invocation_keeps_receipt_ack_and_exact_settlement(
     assert replay["heartbeat_receipt"]["event_id"] == receipt["event_id"]
 
     def acknowledge():
-        if caller == "python":
+        if caller == "module":
             return settlement._run_cli(registry, runtime, *hint_args, cwd=project)
         result = subprocess.run(
             [str(settlement.REPO_ROOT / "scripts" / "loopx"), "--format", "json", *hint_args],
             cwd=project, text=True, capture_output=True, check=False,
-            env={**os.environ, "LOOPX_PYTHON": str(tmp_path / "unavailable-python")},
+            # Codex App uses the existing Python Host-I/O adapter before the
+            # typed native commit. Python-free Trae dispatch is tested separately.
+            env={**os.environ, "LOOPX_PYTHON": sys.executable},
         )
         assert result.stdout, result.stderr
         return result.returncode, json.loads(result.stdout)

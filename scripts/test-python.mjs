@@ -75,3 +75,25 @@ export function resolveTestPython({ env = process.env, repoRoot = repositoryRoot
   }
   throw new Error("No Python 3.11+ interpreter found for LoopX tests. Run `uv sync --extra test` from this worktree or set LOOPX_TEST_PYTHON to a compatible executable.");
 }
+
+/** Keep browser backend imports on the selected source or installed package. */
+export function testPythonCommand(code, options = {}) {
+  const env = options.env ?? process.env;
+  const root = resolve(options.repoRoot ?? repositoryRoot);
+  const installed = Boolean(env.LOOPX_PYTHON_BIN);
+  const sourcePackage = JSON.stringify(join(root, "loopx"));
+  const bootstrap = `
+import sys
+from pathlib import Path
+${installed ? "" : `sys.path.insert(0, ${JSON.stringify(root)})`}
+import loopx
+package = Path(loopx.__file__).resolve().parent
+source_package = Path(${sourcePackage}).resolve()
+if ${installed ? "package == source_package" : "package != source_package"}:
+    raise RuntimeError("Browser backend resolved the wrong LoopX package source")
+`;
+  return {
+    command: resolveTestPython(options),
+    args: ["-I", "-u", "-c", bootstrap + code],
+  };
+}
