@@ -485,6 +485,14 @@ same actionable set. Inventory-only rows set `review_plan` and
 `review_template` to null and `evidence_commands` to an empty list so hosts
 cannot mistake readback metadata for execution authority.
 
+Draft PRs remain inventory-only until the author submits them for review.
+Follow [author submission](../../../AGENTS.md#author-submission-and-review-entry)
+for completed proposals: missing review or held CI/merge qualification must not
+prevent an authorized author from marking the PR ready. Read back the unchanged
+head and regenerate the packet after that transition. Reviewer action authority
+and exact-head merge qualification remain separate; this rule grants neither a
+reviewer permission to change another author's Draft nor permission to merge.
+
 It emits a
 `pull_request_review_todo_preview_v0` bound to its exact head. The preview may
 route to initial review, re-review after changes, or merge-readiness

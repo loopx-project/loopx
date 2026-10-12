@@ -88,6 +88,23 @@ Every tracked repository change must be pushed on a branch and reviewed through
 a pull request before it reaches `main`. Do not push broad mixed commits or
 direct commits to `main`.
 
+### Author Submission And Review Entry
+
+Open a completed, independently reviewable proposal as a normal PR. Missing
+review, pending or failed CI, change-quality holds, and unavailable merge
+readiness are not reasons to keep it Draft. Record those limits in the PR;
+entering review does not certify validation, adoption, approval or merge authority.
+Reserve Draft for genuinely unfinished author work with a concrete remaining
+implementation or integration step.
+
+For an authorized author delivery, mark an existing completed Draft ready,
+read back its state and unchanged head, and refresh the review packet. Drafts
+are excluded from the review queue, so waiting for a review before marking one
+ready creates a deadlock. A reviewer must still obey the packet's action
+authority and may not mark another author's Draft ready without authorization.
+Keep exact-head review, required validation, first-screen approval and explicit
+merge authorization as their separate gates.
+
 ### DCO Sign-Off
 
 Every commit in a pull-request branch must include a
