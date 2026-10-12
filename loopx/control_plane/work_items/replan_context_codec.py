@@ -29,11 +29,11 @@ def replan_history_from_status(status: Mapping[str, Any], goal_id: str) -> list[
     return snapshot
 
 
-def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, agent_id: str | None) -> list[dict[str, Any]]:
+def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, agent_id: str | None, include_decisions: bool = False) -> list[dict[str, Any]]:
     from .progress_observation import normalize_progress_observation
 
     rows = []
-    for run in runs:
+    for position, run in enumerate(runs):
         if not isinstance(run, Mapping):
             raise ValueError("replan history row must be an object")
         # Legacy compact records may omit the enclosing Goal id. Agent attribution
@@ -63,12 +63,20 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             text = public_safe_compact_text(run.get(key), limit=240)
             if text:
                 row[key] = text
-        if "settlement_identity" in run or "quota_spend_commit" in run:
+        if "settlement_identity" in run or "quota_spend_commit" in run or (include_decisions and "agent_vision" in run):
             # Transport facts, not a Python eligibility decision. Complete-text
             # digests prevent a shared display prefix from erasing distinct tails.
             # This private wire metadata is excluded from public reference identity.
             source: dict[str, Any] = {key: run.get(key) for key in (
                 "goal_id", "agent_id", "todo_id", "turn_instance_id")}
+            # Facts only: the typed replan owner qualifies the prior decision
+            # and orders subsequent observations. Do not classify research
+            # progress or infer adoption from prose in this transport codec.
+            if include_decisions:
+                source["history_position"] = position
+                source["goal_ref"] = run.get("goal_ref")
+                source["agent_vision"] = run.get("agent_vision")
+                source["autonomous_replan_ack"] = run.get("autonomous_replan_ack")
             for key, fields in (("settlement_identity", (
                 "schema_version", "goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id")),
                 ("quota_spend_commit", ("schema_version", "effect_id"))):
@@ -98,6 +106,8 @@ def _goal_facts(status: Mapping[str, Any] | None, goal_id: str, acceptance: Mapp
 
         goal = load_goal_from_registry(Path(str(status["registry"])), goal_id)
         if goal:
+            if goal.get("goal_instance_id"):
+                facts["goal_ref"] = {"goal_id": goal_id, "goal_instance_id": goal["goal_instance_id"]}
             facts["registry_objective"] = goal_text(goal.get("objective"))
             path = goal_state_path(goal)
             if path and path.exists():
@@ -119,8 +129,12 @@ def project_replan_context(
     obligation: Mapping[str, Any] | None = None, evidence_ref: str | None = None,
     source_status: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
+    stride_strategy: str = "off",
 ) -> dict[str, Any]:
     from .replan_history_codec import project_replan_request
+    from .stride_policy_codec import normalize_stride_strategy
+
+    strategy = normalize_stride_strategy(stride_strategy)
 
     prefix = ["loopx"]
     if source_status is not None:
@@ -133,7 +147,9 @@ def project_replan_context(
             "operation": "resolve" if evidence_ref is not None else "project",
             "goal_id": goal_id, "agent_id": agent_id,
             "obligation": dict(obligation) if obligation is not None else None,
-            "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id),
+            "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id,
+                include_decisions=strategy != "off" or bool(evidence_ref and evidence_ref.startswith("replan-decision-"))),
+            "stride_strategy": strategy,
             "evidence_ref": evidence_ref,
             "read_prefix": shlex.join(prefix),
             "goal_facts": _goal_facts(source_status, goal_id, goal_acceptance_contract) if evidence_ref is None else {},

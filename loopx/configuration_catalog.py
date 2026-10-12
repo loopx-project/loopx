@@ -162,13 +162,14 @@ def build_goal_configuration_catalog(
             },
             {
                 "feature_id": "todo_replan_cadence",
-                "display_name": "Goal review cadence",
+                "display_name": "Goal review and stride",
                 "availability": "supported_explicit_override",
                 "default": default_replan_cadence_configuration(),
                 "consider_when": "Direction needs regular review even while the same Todo remains open.",
                 "effect": (
                     "Choose 1–6 settled work Turns or 1–5 completed Todos per Agent. "
-                    "Legacy settings retain their completed-Todo units until explicitly changed."
+                    "Legacy settings retain their completed-Todo units until explicitly changed. "
+                    "The optional versioned stride strategy proposes work-slice and route adjustments; off retains ordinary review."
                 ),
                 "does_not": [
                     "create host continuation turns or interrupt running work",
@@ -185,10 +186,10 @@ def build_goal_configuration_catalog(
                         str(default_replan_cadence_configuration()["count"]), execute=True
                     ),
                     "preview_disable": _configure_command(
-                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns"
+                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns", "--clear-execution-stride-strategy"
                     ),
                     "apply_disable": _configure_command(
-                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns", execute=True
+                        goal_id, "--clear-execution-replan-after-todos", "--clear-execution-replan-after-turns", "--clear-execution-stride-strategy", execute=True
                     ),
                     "verify": [inspect_command],
                 },

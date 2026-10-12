@@ -70,6 +70,15 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-execution-replan-after-turns", action="store_true",
         help="Remove the Goal effective-Turn override and restore device/default inheritance.",
     )
+    from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
+    configure_goal_parser.add_argument(
+        "--execution-stride-strategy", choices=stride_strategy_options(),
+        help="Choose a versioned Agent stride strategy. Off preserves ordinary review; no automatic execution or authority change.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-stride-strategy", action="store_true",
+        help="Remove the strategy from the Goal review override (off). Clear the review cadence too to restore device defaults.",
+    )
     configure_goal_parser.add_argument(
         "--quota-compute",
         type=float,

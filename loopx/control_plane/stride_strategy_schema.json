@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stride strategy version",
+  "type": "string",
+  "enum": ["off", "evidence_conditioned_v1"],
+  "default": "off"
+}

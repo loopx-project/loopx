@@ -154,6 +154,12 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return profile
 
+    if "stride_strategy" in value:
+        from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+        profile["stride_strategy"] = normalize_stride_strategy(value["stride_strategy"])
+        if not any(key in value for key in ("replan_after_effective_turns", "replan_after_completed_todos")):
+            raise ValueError("a Goal stride strategy requires an explicit review cadence in the same profile")
+
     if "replan_after_effective_turns" in value and "replan_after_completed_todos" in value:
         raise ValueError("choose one review cadence unit")
     if "replan_after_effective_turns" in value:
@@ -243,6 +249,8 @@ def apply_goal_execution_profile_change(
     clear_replan_after_completed_todos: bool,
     replan_after_effective_turns: int | None = None,
     clear_replan_after_effective_turns: bool = False,
+    stride_strategy: str | None = None,
+    clear_stride_strategy: bool = False,
 ) -> None:
     if (
         clear_replan_after_completed_todos
@@ -256,16 +264,24 @@ def apply_goal_execution_profile_change(
         replan_after_completed_todos is not None or clear_replan_after_effective_turns
     ):
         raise ValueError("choose one review cadence override or clear operation")
+    if stride_strategy is not None and clear_stride_strategy:
+        raise ValueError("choose a stride strategy override or clear operation")
     raw = goal.get("execution_profile")
     profile = dict(raw) if isinstance(raw, dict) else {}
     if (
-        turn_granularity is None
+        stride_strategy is None
+        and not clear_stride_strategy
+        and turn_granularity is None
         and replan_after_completed_todos is None
         and replan_after_effective_turns is None
         and not clear_replan_after_effective_turns
         and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
     ):
         return
+    if clear_stride_strategy:
+        profile.pop("stride_strategy", None)
+    if stride_strategy is not None:
+        profile["stride_strategy"] = stride_strategy
     if clear_replan_after_effective_turns or replan_after_completed_todos is not None:
         profile.pop("replan_after_effective_turns", None)
     if replan_after_effective_turns is not None:
@@ -273,6 +289,11 @@ def apply_goal_execution_profile_change(
         profile.pop("replan_after_completed_todos", None)
     if clear_replan_after_completed_todos:
         profile.pop("replan_after_completed_todos", None)
+    if stride_strategy is None and (clear_replan_after_completed_todos or clear_replan_after_effective_turns) and not any(
+        key in profile for key in ("replan_after_effective_turns", "replan_after_completed_todos")
+    ):
+        # This capability is one review configuration, not per-field inheritance.
+        profile.pop("stride_strategy", None)
     goal["execution_profile"] = configure_execution_profile(
         profile,
         turn_granularity=turn_granularity,

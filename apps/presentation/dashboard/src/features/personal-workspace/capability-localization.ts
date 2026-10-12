@@ -22,7 +22,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "Model and executor",
       description: "Guides the steward executor, model, and selection boundary for this machine. A pinned route blocks substitution; a flexible pool permits only authorized fallback.",
     },
-    todo_replan_cadence: { displayName: "Goal review cadence", description: "Configures the Goal review cadence." },
+    todo_replan_cadence: { displayName: "Goal review and stride", description: "Set review frequency and optionally choose a versioned stride strategy for work scope and route changes." },
     change_quality_qualification: {
       displayName: "Change quality qualification",
       description: "Prepares a provider-neutral review packet, allows at most one policy-authorized safe-fix pass, and can require an exact-diff receipt.",
@@ -89,7 +89,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "模型与执行器",
       description: "配置本机管家的执行器、模型与选择边界；锁定路径禁止替代，灵活池只允许在已授权范围内回退。",
     },
-    todo_replan_cadence: { displayName: "Goal 复核周期", description: "配置 Goal 的复核周期。" },
+    todo_replan_cadence: { displayName: "Goal 复盘与步幅", description: "设置复盘周期，可选用带版本的步幅策略，调节工作大小与路线变化。" },
     change_quality_qualification: {
       displayName: "变更质量验证",
       description: "生成与 Provider 无关的审阅包，最多允许一次策略授权的安全修复，并可要求精确 diff 回执。",
@@ -159,6 +159,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_model: { label: "Model", description: "Optional model for the selected executor. Leave blank to keep the executor's own default." },
     executor_reasoning_effort: { label: "Reasoning effort", description: "Optional reasoning effort for the selected executor. Leave blank to keep the executor's own default." },
     count_unit: { label: "Review after", description: "Work Turns require accepted settlement; polls and retries do not count.", options: { completed_todos: "Completed Todos", effective_turns: "Settled work Turns" } },
+    stride_strategy: { label: "Stride strategy", description: "Structured work scope, route and validation proposals are required for enabled fresh Vision reviews. Does not grant execution authority.", options: { off: "Off", evidence_conditioned_v1: "Evidence-conditioned · v1" } },
     count: { label: "Number between reviews", description: "Settled work Turns: 1–6; completed Todos: 1–5. Goal overrides take precedence over device defaults." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
     coordinator_agent_id: { label: "Coordinator Agent", description: "Use an already registered Agent id; leave blank to disable coordination." },
@@ -191,6 +192,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_model: { label: "模型", description: "所选执行器使用的模型，可留空；留空表示沿用执行器自身的默认模型。" },
     executor_reasoning_effort: { label: "推理档位", description: "所选执行器使用的推理档位，可留空；留空表示沿用执行器自身的默认档位。" },
     count_unit: { label: "复核计数依据", description: "有效工作 Turn 须完成结算；轮询和重复重试不计数。", options: { completed_todos: "已完成 Todo", effective_turns: "已结算工作 Turn" } },
+    stride_strategy: { label: "步幅策略", description: "启用后，新的 Vision 路线复盘须提交工作大小、路线及验证范围的结构化提案，不授予执行权限。", options: { off: "关闭", evidence_conditioned_v1: "依据证据调整 · v1" } },
     count: { label: "两次复核间的数量", description: "已结算工作 Turn 为 1–6，已完成 Todo 为 1–5；Goal 显式设置优先于设备默认值。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
     coordinator_agent_id: { label: "协调 Agent", description: "填写一个已经注册的 Agent ID；留空表示关闭协调。" },

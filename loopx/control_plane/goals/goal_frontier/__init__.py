@@ -1781,6 +1781,7 @@ def build_goal_frontier_projection_context_from_status(
             goal_id=goal_id,
             agent_id=agent_id,
             newest_first_runs=(), source_status=status_payload,
+            stride_strategy=((project_asset or {}).get("execution_profile") or {}).get("stride_strategy", "off"),
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
         )
 

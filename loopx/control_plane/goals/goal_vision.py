@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from copy import deepcopy
 
 from .vision_checkpoint import (
     GOAL_VISION_BUDGET_ERROR as GOAL_VISION_BUDGET_ERROR,
@@ -149,6 +150,10 @@ def compact_goal_vision_packet(value: Any) -> dict[str, Any] | None:
                 todo_delta.append(text)
     if todo_delta:
         compact["todo_delta"] = todo_delta
+
+    # Preserve the TS-normalized, bounded control proposal; no Python policy.
+    if isinstance(value.get("stride_decision"), dict):
+        compact["stride_decision"] = deepcopy(value["stride_decision"])
 
     declarations = _compact_fallback_declarations(value.get("fallback_declarations"))
     if declarations:
