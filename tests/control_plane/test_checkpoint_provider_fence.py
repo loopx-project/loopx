@@ -90,9 +90,9 @@ def _replace_source_goal(registry: Path, instance_id: str) -> None:
         transaction.commit(payload)
 
 
-def fixture(tmp_path, monkeypatch, provider):
+def fixture(tmp_path, monkeypatch, provider, *, first_delivery=False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry, binding, delivery, original = _missing(tmp_path)
+    project, runtime, registry, binding, delivery, original = _missing(tmp_path, defer=first_delivery)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = [{"schema_version": "todo_item_v0", "todo_id": name, "index": index,
         "role": "agent", "status": "open", "done": False, "text": f"Synthetic page work {name}",
@@ -109,7 +109,7 @@ def fixture(tmp_path, monkeypatch, provider):
     def read():
         return context_io.read_checkpoint_context(registry_path=registry, runtime_root_override=str(runtime),
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
-            dependency_todo_ids=["todo_dependency"])
+            dependency_todo_ids=["todo_dependency"], purpose="first_delivery" if first_delivery else "supplement_checkpoint")
     return project, runtime, registry, state, read, original
 
 
@@ -248,8 +248,9 @@ def test_existing_cli_maintenance_guard_precedes_provider_commit(tmp_path, monke
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tmp_path, monkeypatch, provider):
-    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider)
+@pytest.mark.parametrize("first_delivery", [False, True])
+def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tmp_path, monkeypatch, record_property, provider, first_delivery):
+    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider, first_delivery=first_delivery)
     context = read()
     barrier = tmp_path / "barrier"
     barrier.mkdir()
@@ -281,7 +282,9 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
             assert saved["ok"] and not saved["replayed"]
             assert json.loads((barrier / "runtime-replay").read_text())["replayed"]
             finish(writer)
-            assert json.loads((barrier / "provider-result").read_text())["status"] == "applied"
+            provider_result = json.loads((barrier / "provider-result").read_text())
+            assert provider_result["status"] == "applied"
+            record_property("provider_commit_elapsed_ms", provider_result["elapsed_ms"])
             return saved
         finally:
             (barrier / "release").touch()
@@ -291,7 +294,7 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
                     child.communicate()
 
     monkeypatch.setattr(context_io, "effect_runtime_result", native)
-    result = refresh(registry, runtime, context["read_context_id"])
+    result = refresh(registry, runtime, context["read_context_id"], first_delivery=first_delivery)
     assert result["vision_checkpoint"]["satisfied"] and len(observed) == 1
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["provider_revision"] != observed[0]
     rows = [json.loads(line) for line in (runtime / f"goals/{GOAL_ID}/runs/index.jsonl").read_text().splitlines()]
@@ -300,7 +303,8 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("first_delivery", [False, True])
+def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, monkeypatch, provider, first_delivery):
     """Provider contract: a transaction without the CLI's outer M protection.
 
     The reviewed implementation accepts this old checkpoint. The native save
@@ -308,7 +312,7 @@ def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, mon
     hold M before committing; this test does not pretend to reproduce that path.
     """
     from loopx import state_refresh
-    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider)
+    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider, first_delivery=first_delivery)
     token = read()["read_context_id"]
     index = runtime / f"goals/{GOAL_ID}/runs/index.jsonl"
     before = index.read_bytes()
@@ -329,7 +333,7 @@ def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, mon
     monkeypatch.setattr(state_refresh, "reserve_unique_run_paths", race)
     try:
         with pytest.raises(context_io.CheckpointReadContextRejected) as rejected:
-            refresh(registry, runtime, token)
+            refresh(registry, runtime, token, first_delivery=first_delivery)
         assert rejected.value.code == "checkpoint_read_context_stale"
         assert index.read_bytes() == before
     finally:

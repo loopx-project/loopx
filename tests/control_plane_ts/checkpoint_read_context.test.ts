@@ -112,3 +112,57 @@ test("obligations cover the full frontier and a completed checkpoint cannot acqu
   assert.equal(read({prior: {vision_checkpoint: {decision: "patched", satisfied: true}}}).error_code,
     "checkpoint_context_not_missing");
 });
+
+test("first delivery has independent admission and cannot reuse a supplement receipt", () => {
+  const first = {purpose: "first_delivery", decision_scope: "agent_lane", prior: null, admitted_turn: true};
+  const receipt = read(first).receipt;
+  assert.equal(check(receipt, first).ok, true);
+  assert.equal(read({...first, admitted_turn: false}).error_code, "checkpoint_first_delivery_not_admitted");
+  assert.equal(read({...first, prior: {vision_checkpoint: {decision: "missing_required", satisfied: false}}}).ok, false);
+  assert.equal(check(receipt).ok, false);
+  assert.equal(check(read().receipt, first).ok, false);
+});
+
+test("first direction detects frontier membership while ignoring independent peer work", () => {
+  const first = {purpose: "first_delivery", decision_scope: "agent_lane", prior: null, admitted_turn: true};
+  const source = {...facts, todos: [...facts.todos, {todo_id: "peer", claimed_by: "other", status: "open"}] as JsonObject[]};
+  const receipt = read({...first, facts: source}).receipt;
+  const changed = structuredClone(source);
+  changed.todos[4].status = "done";
+  assert.equal(check(receipt, {...first, facts: changed}).ok, true);
+  changed.todos.push({todo_id: "new", claimed_by: "agent", status: "open"});
+  assert.deepEqual(check(receipt, {...first, facts: changed}).changed_components, ["frontier"]);
+  changed.todos.pop();
+  changed.todos[4].claimed_by = "agent";
+  assert.deepEqual(check(receipt, {...first, facts: changed}).changed_components, ["frontier"]);
+  const whole = read({...first, decision_scope: "goal", facts: source}).receipt;
+  assert.equal(check(whole, {...first, decision_scope: "agent_lane", facts: source}).error_code,
+    "checkpoint_read_context_scope_mismatch");
+  assert.equal(check(whole, {...first, decision_scope: "goal", facts: changed}).ok, false);
+});
+
+test("first result and direction bind authority, lease expiry, purpose and unknown fields", () => {
+  for (const purpose of ["first_delivery", "delivery_result"]) {
+    const request = {purpose, decision_scope: "goal", prior: null, admitted_turn: true};
+    const baseline = {...facts, execution_lease: {owner: "agent", active: true},
+      source: {authority: "file_v0", store_identity: "store-1", registry_goal: {registered_agents: ["agent"]}}};
+    const receipt = read({...request, facts: baseline}).receipt;
+    for (const change of [
+      {...baseline, execution_lease: {owner: "agent", active: false}},
+      {...baseline, execution_lease: {owner: "other", active: true}},
+      {...baseline, source: {...baseline.source, store_identity: "store-2"}},
+      {...baseline, source: {...baseline.source, registry_goal: {registered_agents: []}}},
+      {...baseline, todos: baseline.todos.map((row, i) => i === 0 ? {...row, future_business_rule: "changed"} : row)},
+    ]) assert.equal(check(receipt, {...request, facts: change}).error_code, "checkpoint_read_context_stale");
+    assert.equal(check(receipt, {...request, purpose: purpose === "first_delivery" ? "delivery_result" : "first_delivery"}).ok, false);
+  }
+});
+
+test("an uncertain direction cannot acquire a replacement read or reexecute", () => {
+  const request = {purpose: "first_delivery", decision_scope: "goal", prior: null, admitted_turn: true};
+  const receipt = {...read(request).receipt as JsonObject, commit_attempt: {json_path: "unindexed"}};
+  for (const result of [read({...request, receipt}), check(receipt, request)]) {
+    assert.equal(result.error_code, "checkpoint_commit_unknown");
+    assert.equal(result.reread_required, false);
+  }
+});

@@ -44,6 +44,9 @@ def guard_native_controller_writeback(control_plane: Any) -> None:
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict | None = None,
         vision_unchanged_reason: str = "",
+        first_delivery: bool = False,
+        delivery_read_context_id: str = "",
+        read_context_id: str = "",
     ) -> str:
         del (
             next_agent_todo,
@@ -53,6 +56,9 @@ def guard_native_controller_writeback(control_plane: Any) -> None:
             successor_todo_ids,
             agent_vision,
             vision_unchanged_reason,
+            first_delivery,
+            delivery_read_context_id,
+            read_context_id,
         )
         return _native_controller_rejection("complete_task")
 

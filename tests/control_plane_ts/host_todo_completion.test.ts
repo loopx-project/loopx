@@ -13,6 +13,13 @@ import {
 
 const todoId = "todo_abc123";
 
+test("PR1 rejects protected terminal intent before preparing provider effects", () => {
+  assert.throws(() => prepare({schema_version: "loopx_host_todo_completion_transaction_v2",
+    first_delivery: true}), /no effects were admitted/);
+  const ordinary = prepare();
+  assert.ok(ordinary.provider_effect);
+});
+
 test("vision refresh shares the original delivery command and identity without a spend", () => {
   const authored = {schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
     vision_path: "fixture-vision.json"};

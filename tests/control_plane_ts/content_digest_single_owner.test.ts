@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import test from "node:test";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 import ts from "typescript";
 
 import {
@@ -122,6 +122,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/effect_runtime_snapshot.ts",
   "control_plane/goals/acceptance_authority.ts",
   "control_plane/goals/acceptance_contract.ts",
+  "control_plane/goals/checkpoint_commit.ts",
   "control_plane/goals/goal_amendment_proposal.ts",
   "control_plane/goals/operator_actions.ts",
   "control_plane/goals/shared_goal_alignment.ts",

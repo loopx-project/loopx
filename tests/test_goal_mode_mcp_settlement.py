@@ -258,6 +258,25 @@ def _control(registry: Path) -> GoalModeMCPControlPlane:
     return control
 
 
+def test_real_mcp_unconnected_delivery_is_rejected_before_settlement(tmp_path: Path) -> None:
+    registry, state_file = _write_fixture(tmp_path)
+    registration = json.loads(registry.read_text(encoding="utf-8"))
+    registration["goals"][0]["adapter"].pop("status")
+    registry.write_text(json.dumps(registration), encoding="utf-8")
+    added = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Deliver the bounded fixture.", task_class="advancement_task", claimed_by=AGENT_ID)
+    before = state_file.read_bytes()
+
+    result = json.loads(_control(registry).complete_task(added["todo_id"], AGENT_ID, "Verified fixture."))
+
+    assert result["ok"] is False
+    assert result["settlement"]["failed_stage"] == "guard"
+    assert "delivery_not_allowed" in result["settlement"]["reason"]
+    assert state_file.read_bytes() == before
+    index = registry.parent / "runtime" / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    assert not index.exists() or not index.read_bytes()
+
+
 def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identity(
     tmp_path: Path,
 ) -> None:

@@ -207,6 +207,9 @@ class GoalModeMCPControlPlane:
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
+        first_delivery: bool = False,
+        delivery_read_context_id: str = "",
+        read_context_id: str = "",
     ) -> str:
         goal_id, _ = self.context()
         if not goal_id:
@@ -264,6 +267,9 @@ class GoalModeMCPControlPlane:
             scheduler_owner=self.config.scheduler_owner,
             execution_mode=self.config.execution_mode,
             completion_args=tuple(args),
+            first_delivery=first_delivery,
+            delivery_read_context_id=delivery_read_context_id or None,
+            checkpoint_read_context_id=read_context_id or None,
             no_follow_up=no_follow_up,
             goal_ref=self.goal_ref(),
         )
@@ -274,6 +280,7 @@ class GoalModeMCPControlPlane:
         self, todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
         read_context_id: str = "",
+        first_delivery: bool = False,
     ) -> str:
         goal_id, _ = self.context()
         if not goal_id:
@@ -288,6 +295,7 @@ class GoalModeMCPControlPlane:
             scheduler_owner=self.config.scheduler_owner, execution_mode=self.config.execution_mode,
             completion_args=(),
             checkpoint_read_context_id=read_context_id or None,
+            first_delivery=first_delivery,
             goal_ref=self.goal_ref(),
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
@@ -335,6 +343,7 @@ def create_fastmcp_server(
         todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
         read_context_id: str = "",
+        first_delivery: bool = False,
     ) -> str:
         """Supply a missing vision decision for a previously completed MCP Todo.
         First call with only todo_id and agent_id to read the current basis.
@@ -348,7 +357,7 @@ def create_fastmcp_server(
         An unchanged reason requires an existing valid vision. Recheck should_run;
         checkpoint success alone does not certify Goal completion or clear gates.
         """
-        return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason, read_context_id)
+        return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason, read_context_id, first_delivery)
 
     @server.tool()
     def complete_task(
@@ -362,8 +371,16 @@ def create_fastmcp_server(
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
+        first_delivery: bool = False,
+        delivery_read_context_id: str = "",
+        read_context_id: str = "",
     ) -> str:
-        """Complete verified work and settle once. Link existing planned successors
+        """Complete verified work and settle once. With first_delivery=true, first
+        call without Vision to read the result basis; verify it and echo its
+        delivery_read_context_id. Read the returned post-result direction basis,
+        then call with both original read identities and a newly judged Vision.
+        An interrupted call retains the same Todo/Turn; do not repeat work.
+        Link existing planned successors
         with successor_todo_ids; next_agent_todo creates a NEW Todo, not an id link.
         no_follow_up closes this Todo's continuation, NOT the Goal's vision.
         Do not duplicate existing work; only the fresh should_run contract can
@@ -385,6 +402,9 @@ def create_fastmcp_server(
             successor_todo_ids=successor_todo_ids,
             agent_vision=agent_vision,
             vision_unchanged_reason=vision_unchanged_reason,
+            first_delivery=first_delivery,
+            delivery_read_context_id=delivery_read_context_id,
+            read_context_id=read_context_id,
         )
 
     return server, control
