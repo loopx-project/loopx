@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 
 import pytest
 
@@ -46,7 +47,7 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     package_root = tmp_path / "package"
     package = package_root / "loopx"
-    command = [sys.executable, "-m", "loopx.cli"]
+    command = [sys.executable, "-S", "-m", "loopx.cli"]
     if request.param == "source":
         shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
                         ignore=shutil.ignore_patterns("__pycache__"))
@@ -59,10 +60,13 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
         assert installed.returncode == 0, installed.stdout + installed.stderr
         entry = package_root / "bin/loopx"
         assert entry.is_file()
-        command = [sys.executable, str(entry)]
-    monkeypatch.setenv("PYTHONPATH", str(package_root))
+        command = [sys.executable, "-S", str(entry)]
+    # Keep dependencies available without processing editable-install .pth files.
+    # Their import finder can silently borrow a deleted module from the checkout.
+    dependencies = dict.fromkeys(sysconfig.get_paths()[key] for key in ("purelib", "platlib"))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(package_root), *dependencies]))
     provenance = json.loads(subprocess.check_output(
-        [sys.executable, "-c", "import json,loopx; from importlib import metadata; "
+        [sys.executable, "-S", "-c", "import json,loopx; from importlib import metadata; "
          "print(json.dumps({'module':loopx.__file__, "
          "'distribution':str(metadata.distribution('loopx').locate_file(''))}))"],
         cwd=tmp_path, text=True,
@@ -122,7 +126,7 @@ def test_pending_source_outbox_survives_producer_retirement(
 
     def history():
         result = subprocess.run(
-            [sys.executable, "-c",
+            [sys.executable, "-S", "-c",
              "import json,sys;from pathlib import Path;"
              "from loopx.control_plane.coordination.local_authority_shadow_adapter "
              "import read_local_authority_shadow;"
@@ -253,7 +257,7 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
 
     def cli(*args, succeeds=True, override=False):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            [*without_source_todo_writers, "--format", "json", "--registry", str(registry),
              *(["--runtime-root", str(runtime)] if override else []), *args, "--goal-id", "goal-a"],
             cwd=caller, capture_output=True, text=True, timeout=45,
         )

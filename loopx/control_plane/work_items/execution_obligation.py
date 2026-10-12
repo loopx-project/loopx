@@ -219,7 +219,10 @@ def build_execution_obligation(
                 "only controls whether to interrupt the user"
             ),
         }
-    if should_run and blocked_retry_wait:
+    # A quiet monitor route still owns a pending retry, not a user-action gate.
+    if blocked_retry_wait and (
+        should_run or effective_action == EffectiveAction.MONITOR_QUIET_SKIP.value
+    ):
         return {
             "must_attempt_work": False,
             "kind": EffectiveAction.BLOCKED_WAIT.value,
