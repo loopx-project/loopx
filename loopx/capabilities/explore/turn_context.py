@@ -15,7 +15,7 @@ from ...control_plane.capability_hooks import (
 )
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...explore_graph import compact_explore_graph_policy
-from ...todos import list_goal_todos
+from ...control_plane.todos.list_readback import list_goal_todos
 from .result_log import (
     build_explore_result_projection,
     explore_result_log_path,

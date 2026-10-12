@@ -48,7 +48,7 @@ from ..control_plane.turn_driver import (
 )
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
-from ..todos import resolve_todo_state_path
+from ..control_plane.todos.path_resolution import resolve_todo_state_path
 from .turn_cadence import managed_cadence_start
 from .turn_decision import collect_turn_status_payload
 from .turn_dsh_host import build_dsh_host_runner

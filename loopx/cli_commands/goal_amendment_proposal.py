@@ -37,7 +37,7 @@ from ..control_plane.goals.shared_goal_alignment import (
 )
 from ..history import load_registry
 from ..runtime import validate_goal_id_path_segment
-from ..todos import resolve_todo_state_path
+from ..control_plane.todos.path_resolution import resolve_todo_state_path
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],

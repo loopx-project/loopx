@@ -19,7 +19,7 @@ from ...rollout_event_log import (
     load_rollout_events,
     rollout_event_log_path,
 )
-from ...todos import list_goal_todos
+from ...control_plane.todos.list_readback import list_goal_todos
 from .metadata_preview import normalise_github_issue_reference
 
 

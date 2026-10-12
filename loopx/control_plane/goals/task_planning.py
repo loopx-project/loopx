@@ -12,7 +12,7 @@ from ...agent_registry import require_registered_agent_id
 from ...execution_profile import execution_profile_is_fine_grained
 from ...history import load_registry
 from ...registry import find_registry_goal
-from ...todos import list_goal_todos
+from ...control_plane.todos.list_readback import list_goal_todos
 from ..todos.todo_semantics import todo_item_is_actionable_open
 from ..todos.contract import (
     TODO_STATUS_BLOCKED,

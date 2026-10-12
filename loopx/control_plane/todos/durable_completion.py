@@ -1,8 +1,8 @@
 """Project the durable completion continuation for the built-in Turn CLI provider.
 
 ``loopx turn run-once`` completes the selected Todo through
-:func:`loopx.todos.complete_goal_todo` and must report the continuation the Todo
-lifecycle durably recorded (``successor``, ``no_followup``, or ``active_goal``)
+:func:`loopx.control_plane.todos.mutation_api.complete_goal_todo` and must report
+the continuation the Todo lifecycle durably recorded (``successor``, ``no_followup``, or ``active_goal``)
 instead of normalizing every completion to ``active_goal``.
 
 Projection reads the persisted Todo lifecycle record only; it never trusts host

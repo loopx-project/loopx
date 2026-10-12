@@ -165,7 +165,7 @@ def _task_lease_authority_projection(
     state_file: Path | None,
     project_todos: bool = True,
 ) -> tuple[Any, list[Any], list[dict[str, Any]], dict[str, Any] | None]:
-    from ...todos import list_goal_todos
+    from ...control_plane.todos.list_readback import list_goal_todos
     from ..goals.active_state_metadata import parse_state_frontmatter
 
     if goal is None:

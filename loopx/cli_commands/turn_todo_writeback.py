@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..todos import complete_goal_todo, update_goal_todo
+from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 
 
 def write_turn_repair_update(
